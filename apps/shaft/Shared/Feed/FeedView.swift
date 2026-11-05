@@ -3,12 +3,12 @@ import SwiftUI
 
 /// The conversation, scrolled: it lands on the last message and stays there while what loads after grows the feed or
 /// moves it (pictures, the reply streaming, the keyboard), until the operator scrolls up. Scrolled up, a new message
-/// below shows "↓ New below" (drawn by the chat screen, in the fade above the composer). It reports when the newest item
-/// is on screen, which is when the chat may be marked seen.
+/// below shows "↓ New below" (drawn by the chat screen, in the fade above the composer). It reports when the end of the
+/// newest item is on screen, which is when the chat may be marked seen.
 struct FeedView: View {
     let feed: Feed
     let rows: [FeedRow]
-    /// The newest item is on screen (or not): the chat screen marks the chat seen.
+    /// The end of the newest item is on screen (or not): the chat screen marks the chat seen.
     var newestVisible: (Bool) -> Void
     @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -17,6 +17,9 @@ struct FeedView: View {
     @State private var distance: CGFloat = 0
     @State private var newBelow = false
     @State private var interacting = false
+    /// Which row's end is on screen. Keyed by row, so a report from the row that was newest cannot speak for the new one,
+    /// whichever order the two arrive in.
+    @State private var endOnScreen: String?
     /// "Show the N earlier messages" was tapped: land on the first of them once they are there.
     @State private var toTop = false
 
@@ -38,8 +41,14 @@ struct FeedView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, Design.Space.gutter)
                         .id(row.id)
-                        .onScrollVisibilityChange(threshold: 0.25) { visible in
-                            if row.id == newest { newestVisible(visible) }
+                        .background(alignment: .bottom) {
+                            if let newest, row.id == newest {
+                                Color.clear.frame(height: 1)
+                                    .id(newest)
+                                    .onScrollVisibilityChange { visible in
+                                        if visible { endOnScreen = newest } else if endOnScreen == newest { endOnScreen = nil }
+                                    }
+                            }
                         }
                 }
                 Color.clear.frame(height: 1).id(bottomID)
@@ -77,6 +86,7 @@ struct FeedView: View {
                 pinned = false
             }
         }
+        .onChange(of: newest != nil && endOnScreen == newest, initial: true) { _, onScreen in newestVisible(onScreen) }
         .onChange(of: screen.chat.showingAll) { _, all in
             guard all else { return }
             pinned = false

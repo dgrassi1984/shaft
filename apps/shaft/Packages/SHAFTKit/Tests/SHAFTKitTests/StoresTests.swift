@@ -70,6 +70,99 @@ struct StoresTests {
         #expect(server.requests.last?.path == "/app/v1/chat/wren/seen")
     }
 
+    @Test func aListPollThatBeganBeforeSeenLandedDoesNotBringTheDotBack() async throws {
+        let folder = try temporaryFolder("seen-poll")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let unread = fixtureText(try DecodingTests.fixture("instances"))
+        let server = StubServer { _ in .json(200, unread, headers: ["ETag": "\"initial\""]) }
+        let store = try makeStore(server, folder: folder)
+        var badges: [Int] = []
+        store.onBadge = { badges.append($0) }
+        await store.refresh()
+        #expect(store.row("wren")?.unread == true)
+
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var response = StubServer.Response.json(200, unread, headers: ["ETag": "\"dropped\""])
+        response.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = response
+        server.setAnswer { request in
+            request.method == "GET" ? held : .json(200, #"{"unread": false, "badge": 0}"#)
+        }
+        let poll = Task { await store.refresh() }
+        for await _ in began.stream { break }
+        #expect(await store.markSeen("wren", version: "shown"))
+        release.continuation.yield(())
+        await poll.value
+
+        #expect(store.row("wren")?.unread == false)
+        #expect(store.badge == 0)
+        #expect(badges == [1, 0])
+        server.setAnswer { _ in .notModified }
+        await store.refresh()
+        #expect(server.requests.last?.header("If-None-Match") == "\"initial\"")
+        #expect(badges == [1, 0, 0])
+    }
+
+    @Test func aSeenThatFailedIsTriedAgainUntilItLands() async throws {
+        let folder = try temporaryFolder("seen-retry")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let unread = fixtureText(try DecodingTests.fixture("instances"))
+        let steps = Steps()
+        let server = StubServer { request in
+            if request.method == "GET" { return .json(200, unread) }
+            if steps.next() == 1 { throw StubServer.NetworkDown() }
+            return .json(200, #"{"unread": false, "badge": 0}"#)
+        }
+        let store = InstancesStore(client: server.client,
+                                   outbox: try Outbox(directory: folder.appending(path: "outbox")),
+                                   drafts: DraftStore(directory: folder.appending(path: "drafts")),
+                                   sleep: { steps.sleep($0) })
+        await store.refresh()
+        let chat = store.chat("wren")
+        chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
+
+        #expect(await chat.markSeenUntilDone())
+        #expect(steps.sleeps == [.seconds(2)])
+        #expect(store.row("wren")?.unread == false)
+        #expect(store.badge == 0)
+        let posts = server.requests.filter { $0.method == "POST" }
+        #expect(posts.count == 2)
+        #expect(posts.allSatisfy { $0.path == "/app/v1/chat/wren/seen" })
+        #expect(posts.allSatisfy { $0.json?["version"] as? String == "109fd56053bf7c4d" })
+    }
+
+    @Test func markingSeenStopsWhenCancelled() async throws {
+        let folder = try temporaryFolder("seen-cancel")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let steps = Steps()
+        let sleeping = AsyncStream<Void>.makeStream()
+        defer { sleeping.continuation.finish() }
+        let store = InstancesStore(client: server.client,
+                                   outbox: try Outbox(directory: folder.appending(path: "outbox")),
+                                   drafts: DraftStore(directory: folder.appending(path: "drafts")),
+                                   sleep: { duration in
+                                       steps.sleep(duration)
+                                       sleeping.continuation.yield(())
+                                       try await Task.sleep(for: duration)
+                                   })
+        let chat = store.chat("wren")
+        chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
+        let task = Task { await chat.markSeenUntilDone() }
+        for await _ in sleeping.stream { break }
+        task.cancel()
+
+        #expect(await task.value == false)
+        #expect(steps.sleeps == [.seconds(2)])
+        #expect(server.requests.count == 1)
+        #expect(server.requests.first?.path == "/app/v1/chat/wren/seen")
+    }
+
     @Test func aSendClearsTheDraftAndAFailureStaysInTheChatAsNotSent() async throws {
         let folder = try temporaryFolder("stores")
         defer { try? FileManager.default.removeItem(at: folder) }

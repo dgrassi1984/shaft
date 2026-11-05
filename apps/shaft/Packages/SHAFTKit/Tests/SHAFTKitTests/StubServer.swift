@@ -29,6 +29,8 @@ final class StubServer: @unchecked Sendable {
         var status: Int
         var headers: [String: String] = ["Content-Type": "application/json; charset=utf-8"]
         var body: Data
+        /// Hold an answer without blocking other requests, for tests of responses arriving out of order.
+        var beforeReply: (@Sendable () async -> Void)?
 
         static func json(_ status: Int = 200, _ text: String, headers: [String: String] = [:]) -> Response {
             var response = Response(status: status, body: Data(text.utf8))
@@ -114,17 +116,29 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
                                           headers: request.allHTTPHeaderFields ?? [:], body: body)
         do {
             let response = try server.handle(recorded)
-            let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1",
-                                       headerFields: response.headers)!
-            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: response.body)
-            client?.urlProtocolDidFinishLoading(self)
+            if let beforeReply = response.beforeReply {
+                nonisolated(unsafe) let stub = self
+                Task {
+                    await beforeReply()
+                    stub.deliver(response, url: url)
+                }
+            } else {
+                deliver(response, url: url)
+            }
         } catch {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
         }
     }
 
     override func stopLoading() {}
+
+    private func deliver(_ response: StubServer.Response, url: URL) {
+        let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1",
+                                   headerFields: response.headers)!
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: response.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
 
     private static func read(_ stream: InputStream) -> Data {
         stream.open()

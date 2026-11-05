@@ -34,7 +34,10 @@ and "Forget the pairing here only" when the server cannot be reached.
   column and `.documentsInspector(shell, store:)` on its split view, outside the chat's navigation stack. A phone sets
   `sheetsDocuments`, so documents open in a system sheet instead of the inspector. The chat stops watching while it covers it.
 - **In front** (`chatInFront`, `Chat/ChatShell.swift`): the chat is marked seen only while its window is the one in
-  front; the Mac sets it from its window, and gives the chat a `scenePhase` that is active while the window shows it.
+  front and the end of the newest item is on screen, however tall the item is. Failed seen requests retry after 2, 4,
+  8, 16, then 30 seconds, capped at 30 seconds, using the current feed version; retries cancel when that end leaves the
+  screen, or the chat is covered or no longer in front. The Mac sets it from its window, and gives the chat a `scenePhase` that is active
+  while the window shows it.
 - **Menus**: `ChatScreenModel.sendRequest` (a send in a mode, through the composer's own send) and
   `confirmingNewChat` and `confirmingEnd`.
 - **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply

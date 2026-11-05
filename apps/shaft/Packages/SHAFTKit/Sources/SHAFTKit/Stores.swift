@@ -22,9 +22,10 @@ public final class InstancesStore {
     @ObservationIgnored public var onBadge: (@MainActor (Int) -> Void)?
     @ObservationIgnored private var badgeKnown = false
     @ObservationIgnored private var etag: String?
+    @ObservationIgnored private var seenGeneration = 0
     @ObservationIgnored private var chats: [String: ChatStore] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
-    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
+    @ObservationIgnored let sleep: @Sendable (Duration) async throws -> Void
 
     public init(client: APIClient, outbox: Outbox, drafts: DraftStore,
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
@@ -37,11 +38,13 @@ public final class InstancesStore {
 
     /// Load the list once (`If-None-Match`: a `304` confirms the known badge too).
     public func refresh() async {
+        let generation = seenGeneration
         do {
             switch try await client.instances(etag: etag) {
             case .notModified:
                 if badgeKnown { onBadge?(badge) }
             case .value(let answer, let etag):
+                guard generation == seenGeneration else { return }
                 self.etag = etag
                 instances = answer.instances
                 reportBadge(answer.badge)
@@ -95,6 +98,7 @@ public final class InstancesStore {
     public func markSeen(_ name: String, version: String) async -> Bool {
         do {
             let answer = try await client.seen(name, version: version)
+            seenGeneration += 1
             reportBadge(answer.badge)
             if let index = instances.firstIndex(where: { $0.name == name }) {
                 instances[index].unread = answer.unread
@@ -455,6 +459,19 @@ public final class ChatStore {
     public func markSeen() async -> Bool {
         guard cid == nil, let version = feed?.version, let owner else { return false }
         return await owner.markSeen(instance, version: version)
+    }
+
+    /// Retry seen with the current feed version, backing off until it succeeds or the caller cancels.
+    public func markSeenUntilDone() async -> Bool {
+        var delay = 2
+        while !Task.isCancelled {
+            guard cid == nil, feed != nil, let sleep = owner?.sleep else { return false }
+            if await markSeen() { return !Task.isCancelled }
+            guard !Task.isCancelled, feed != nil, owner != nil else { return false }
+            do { try await sleep(.seconds(delay)) } catch { return false }
+            delay = min(delay * 2, 30)
+        }
+        return false
     }
 
     /// The chat left the screen (§7.6): pushes for it reach this device again at once.

@@ -11,6 +11,24 @@ struct NativeChromePinTests {
         return try String(contentsOf: app.appending(path: path), encoding: .utf8)
     }
 
+    /// A whole row taller than four screens never crossed the old visibility threshold.
+    @Test func theDotClearsAtTheEndOfTheNewestRowHoweverLongItIs() throws {
+        let source = try shared("Shared/Feed/FeedView.swift")
+        #expect(!source.contains("threshold: 0.25"))
+        #expect(source.contains("if let newest, row.id == newest {"))
+        #expect(source.contains(".id(newest)"))
+        #expect(source.contains(".onScrollVisibilityChange { visible in"))
+        // Both lost the dot in the simulator: a report from the row that was newest spoke for the new one, and a cancelled
+        // seen held its version until its task noticed, so the send for the new row was refused.
+        #expect(source.contains("@State private var endOnScreen: String?"))
+        #expect(source.contains(".onChange(of: newest != nil && endOnScreen == newest, initial: true)"))
+        let chat = try shared("Shared/Chat/ChatScreen.swift")
+        let stop = try #require(chat.range(of: "private func stopMarkingSeen()"))
+        #expect(chat[stop.upperBound...].prefix(120).contains("seenVersion = nil"))
+        // A retry must not outlive the chat being in front.
+        #expect(chat.contains("if watched && inFront { markSeen() } else { stopMarkingSeen() }"))
+    }
+
     /// Bug: thumbs showed only on the last answer, so a message sent proactively had none; and a turn that failed with no
     /// text asked for a rating of nothing.
     @Test func theThumbsAreInEveryFooterWithSomethingToRate() throws {
