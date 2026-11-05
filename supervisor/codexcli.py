@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import contextlib
+import fcntl
 import sqlite3
 import subprocess
 import tempfile
