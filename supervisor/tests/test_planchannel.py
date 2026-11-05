@@ -66,6 +66,34 @@ class OutageTest(unittest.TestCase):
         self.assertEqual(notify.call_args.args, ("Codex recovered", "Codex calls are succeeding again."))
 
 
+class KillFallbackTest(unittest.TestCase):
+    def test_bug_killpg_permission_error_falls_back_to_kill_and_close_cleans_up(self):
+        channel = planchannel.Channel("broker", "usage", mock.Mock())
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+        gone = False
+
+        def kill():
+            nonlocal gone
+            gone = True
+            process.poll.return_value = 0
+
+        process.kill.side_effect = kill
+        channel._process = process
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        channel._folder = folder.name
+        with mock.patch.object(planchannel.os, "killpg",
+                               side_effect=PermissionError(1, "Operation not permitted")):
+            channel.close()
+        self.assertTrue(gone)
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+        self.assertFalse(Path(folder.name).exists())
+        channel.log.assert_called_once()
+
+
 class BridgeChannel(planchannel.Channel):
     """In-memory backend: user deltas go into answers, without steering or RPC."""
     prefix, label = "bridge", "Bridge"

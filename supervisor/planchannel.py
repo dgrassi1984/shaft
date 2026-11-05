@@ -549,9 +549,12 @@ class Channel:
                 os.killpg(self._process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            except PermissionError:
-                if self._process.poll() is None:
-                    raise
+            except PermissionError as exc:
+                self.log(f"{self.label} killpg {type(exc).__name__}: {exc}")
+                try:
+                    self._process.kill()
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def close(self) -> None:
         with self._cv:
