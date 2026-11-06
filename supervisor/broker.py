@@ -797,6 +797,7 @@ class Broker:
         self.drive_opened: set[str] = set()
         self.drive_bytes = 0
         self.drive_members: dict[str, set[str]] = {}
+        self.drive_domains: dict[str, str] = {}
         self.token = secrets.token_hex(16)
         self._project_charges = []
         self.calls = 0
@@ -2405,13 +2406,15 @@ class Broker:
         acct = self._google_account(alias, google.DRIVE_READONLY)
         if alias not in self.drive_members:
             self.drive_members[alias] = gdrive.member_drives(acct)
-        return acct, grant["reach"], self.drive_members[alias]
+        if alias not in self.drive_domains:
+            self.drive_domains[alias] = gdrive.workspace_domain(acct)
+        return acct, grant["reach"], self.drive_domains[alias], self.drive_members[alias]
 
     def _drive_file(self, handle: str):
         from . import gdrive
         alias, _, fid = str(handle).strip().partition("/")
-        acct, reach, drives = self._drive_account(alias)
-        return alias, acct, gdrive.get_file(acct, reach, drives, fid, self.as_of)
+        acct, reach, domain, drives = self._drive_account(alias)
+        return alias, acct, gdrive.get_file(acct, reach, domain, drives, fid, self.as_of)
 
     def _drive_search(self, text: str = "", folder: str = "", modified_after: str = "", account: str = "",
                       max: int = 20, page: str = "") -> str:   # noqa: A002
@@ -2454,8 +2457,8 @@ class Broker:
                 continue
             start = states[alias] if states is not None else ""
             try:
-                acct, reach, drives = self._drive_account(alias)
-                found, dropped, next_page, partial = gdrive.search(acct, reach, drives, text, fid, modified_after,
+                acct, reach, domain, drives = self._drive_account(alias)
+                found, dropped, next_page, partial = gdrive.search(acct, reach, domain, drives, text, fid, modified_after,
                                                                   limit, self.as_of, start)
             except (google.AccountError, google.ApiError) as e:
                 failed.append(f"{alias}: {e}")
@@ -2471,7 +2474,8 @@ class Broker:
                 rows.setdefault(row["handle"], row)
         if not searched:
             raise RuntimeError("; ".join(failed))
-        ordered = sorted(rows.values(), key=lambda r: r["modified"], reverse=True)[:limit]
+        ordered = (list(rows.values()) if text else
+                   sorted(rows.values(), key=lambda r: r["modified"], reverse=True))[:limit]
         shown = {r["handle"] for r in ordered}
         for alias, (found, next_page) in continuations.items():
             state = json.loads(next_page) if next_page else {"pending": [], "token": ""}
