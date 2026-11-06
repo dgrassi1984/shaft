@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import json
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import apns, core, web, web_alerts, webpush
+from supervisor import apns, core, pushes, web, web_alerts, webpush
 
 TOKEN = "ab" * 32
 TOPIC = "io.example.shaft"
@@ -36,6 +37,7 @@ def raw_to_der(raw: bytes) -> bytes:
 
 class APNsTest(unittest.TestCase):
     def setUp(self):
+        self.enterContext(mock.patch.object(pushes, "QUIET_HOURS", None))
         tmp = tempfile.TemporaryDirectory(prefix="shaft-apns-")
         self.addCleanup(tmp.cleanup)
         self.sup = Path(tmp.name)
@@ -193,6 +195,27 @@ class APNsTest(unittest.TestCase):
                 "url": "/overview", "tag": "shaft-digest-held.md"}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
+    def test_digest_nighttime_gate_regression_delivers_apns_by_day(self):
+        """The live gate failed at 22:05 when an APNs delivery test used the wall clock."""
+        from supervisor import messages
+        self.register()
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+            "file": "held.md", "ts": "2026-11-05T23:00:00", "push_due": "2026-11-06T07:15:00"}) + "\n")
+        with mock.patch.object(pushes, "QUIET_HOURS", (22, 7)), \
+                mock.patch.object(pushes, "datetime", wraps=datetime) as clock, \
+                mock.patch.object(messages, "appended", return_value=([], 0)), \
+                mock.patch.object(web, "devices", return_value={"phone": {}}), \
+                mock.patch.object(apns, "_wake") as wake:
+            clock.now.return_value = datetime(2026, 11, 6, 22, 5)
+            self.assertEqual(web_alerts.forward_new(), 0)
+            wake.assert_not_called()
+            self.assertFalse((self.sup / "push-digest.json").exists())
+            clock.now.return_value = datetime(2026, 11, 7, 12)
+            self.assertEqual(web_alerts.forward_new(), 1)
+            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "thelos: held",
+                "url": "/overview", "tag": "shaft-digest-held.md"}])
+            self.assertEqual(web_alerts.forward_new(), 0)
+
     def test_unconfigured_apns_without_registration_does_not_log(self):
         (self.sup / "web" / "devices.json").write_text("{}")
         with mock.patch.object(apns, "TEAM_ID", ""):
@@ -201,14 +224,14 @@ class APNsTest(unittest.TestCase):
 
     def test_unconfigured_apns_registration_does_not_claim_digest(self):
         """Stored APNs registrations claimed and lost digests while native push was off."""
-        from supervisor import messages, pushes
+        from supervisor import messages
         self.register()
         (self.sup / "web" / "devices.json").write_text(json.dumps({"phone": {}}))
         (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
             "file": "held.md", "ts": "2020-01-01T00:00:00", "push_due": "2020-01-01T07:15:00"}) + "\n")
         claim = self.sup / "push-digest.json"
         for dispatch in (lambda: pushes.digest(webpush.notify), web_alerts.forward_new):
-            with self.subTest(dispatch=dispatch), mock.patch.object(pushes, "QUIET_HOURS", None), \
+            with self.subTest(dispatch=dispatch), \
                     mock.patch.object(messages, "appended", return_value=([], 0)), \
                     mock.patch.object(apns, "_wake") as wake:
                 claim.unlink(missing_ok=True)

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import messages, telegram
+from supervisor import messages, pushes, telegram
 
 TOK = {"wren": "111:wren-secret", "shaft": "222:shaft-secret"}
 ME, STRANGER = {"id": 42, "username": "operator"}, {"id": 666, "username": "someone"}
@@ -88,6 +88,7 @@ def _msg(user, text, mid=1, chat_type="private", reply_to=None):
 
 class TelegramTest(unittest.TestCase):
     def setUp(self):
+        self.enterContext(mock.patch.object(pushes, "QUIET_HOURS", None))
         self.project = Path(tempfile.mkdtemp(prefix="shaft-tg-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
         self.sup = self.project / ".supervisor"

@@ -117,6 +117,7 @@ class DeliverTest(Sandbox):
 
 class WebAlertsTest(Sandbox):
     def setUp(self):
+        self.enterContext(mock.patch.object(pushes, "QUIET_HOURS", None))
         super().setUp()
         web_chat._watched.clear()
         self.pushed = []

@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, messages
+from supervisor import broker, messages, pushes
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
 
@@ -103,6 +103,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
     """Against test_telegram's fake Bot API, extended with uploads and downloads."""
 
     def setUp(self):
+        self.enterContext(mock.patch.object(pushes, "QUIET_HOURS", None))
         from supervisor import telegram
         from supervisor.tests.test_telegram import FakeBotAPI, TOK
         self.telegram, self.tok = telegram, TOK
