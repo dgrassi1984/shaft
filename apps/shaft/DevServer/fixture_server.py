@@ -559,7 +559,8 @@ def seed(base: Path, web, web_chat, messages) -> None:
                    "reply": None, "turns": turns})
     msg(ts(15), "seed-from-thelos-q.md", "Should the nightly report keep the **per-account** lines?", "thelos",
         "operator", False, kind="question")
-    msg(ts(14), "seed-from-thelos-m.md", "The totals, as a file:", "thelos", "operator", True,
+    # Spaces distinguish the raw sent.file identity from the URL-encoded feed key.
+    msg(ts(14), "seed from thelos m.md", "The totals, as a file:", "thelos", "operator", True,
         attachments=[{"name": "totals.csv", "path": "instances/thelos/attachments/totals.csv", "bytes": 51}])
     msg(ts(12), "seed-from-operator-b.md", "Look at the March reconciliation when you have time.", "operator",
         "thelos", False, via=messages.BACKGROUND, mid="seed-b")

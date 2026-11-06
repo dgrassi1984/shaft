@@ -43,7 +43,7 @@ struct MessageMenu: ViewModifier {
                 if !source.isEmpty {
                     Button { Clipboard.copy(source) } label: { Label("Copy", systemImage: "doc.on.doc") }
                     if !screen.archived {
-                        Button { screen.reply(with: source) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+                        Button { screen.reply(with: source, file: file) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     }
                     #if os(iOS)
                     Button { screen.select(RenderedText.plain(source)) } label: {
@@ -308,7 +308,7 @@ struct AnswerFooter: View {
                 #if os(iOS)
                 if keepActions && !source.isEmpty {
                     CopyButton(text: source)
-                    if !screen.archived && !asksReply { ReplyIcon(source: source) }
+                    if !screen.archived && !asksReply { ReplyIcon(source: source, file: file) }
                 }
                 #endif
                 if rateable {
@@ -319,12 +319,12 @@ struct AnswerFooter: View {
                 }
                 #if os(macOS)
                 // After the thumbs: hidden, they keep their room, which must not open a gap before the thumbs.
-                if !source.isEmpty { HoverActions(source: source, shown: hovering, reply: !asksReply) }
+                if !source.isEmpty { HoverActions(source: source, file: file, shown: hovering, reply: !asksReply) }
                 #endif
             }
             Spacer(minLength: 0)
             if asksReply && !source.isEmpty && !screen.archived {
-                Button { screen.reply(with: source) } label: {
+                Button { screen.reply(with: source, file: file) } label: {
                     Label("Reply", systemImage: "arrowshape.turn.up.left")
                         .font(Design.Text.pill)
                         .foregroundStyle(Color.brand)
@@ -342,10 +342,11 @@ struct AnswerFooter: View {
 /// Reply for a whole message.
 private struct ReplyIcon: View {
     let source: String
+    var file: String? = nil
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
-        Button { screen.reply(with: source) } label: { QuietIcon(symbol: "arrowshape.turn.up.left") }
+        Button { screen.reply(with: source, file: file) } label: { QuietIcon(symbol: "arrowshape.turn.up.left") }
             .buttonStyle(.plain)
             .help("Reply")
             .accessibilityLabel("Reply")
@@ -357,6 +358,7 @@ private struct ReplyIcon: View {
 /// out, so the feed does not move as the pointer passes.
 struct HoverActions: View {
     let source: String
+    var file: String? = nil
     let shown: Bool
     /// False where the footer's own Reply stands at the row's end (a question).
     var reply = true
@@ -365,7 +367,7 @@ struct HoverActions: View {
     var body: some View {
         HStack(spacing: 0) {
             CopyButton(text: source).help("Copy")
-            if reply && !screen.archived { ReplyIcon(source: source) }
+            if reply && !screen.archived { ReplyIcon(source: source, file: file) }
         }
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)

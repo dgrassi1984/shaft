@@ -154,6 +154,7 @@ def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> d
     except ValueError as e:
         _log(purpose, model, usage, time.monotonic() - started, f"bad json: {text[:200]}")
         raise JudgeError(f"judge {model} returned non-JSON: {text[:200]!r}") from e
+    normalize_anticipated(out)
     _log(purpose, data.get("model") or model, usage, time.monotonic() - started, None)
     return out
 
@@ -209,11 +210,20 @@ def second_available() -> bool:
     return JUDGE2_EVERY > 0 and bool(secrets_env().get("OPENROUTER_API_KEY"))
 
 
+def normalize_anticipated(verdict: object) -> None:
+    """Keep this optional observation only when the model supplied a boolean."""
+    if isinstance(verdict, dict) and not isinstance(verdict.get("anticipated"), bool):
+        verdict.pop("anticipated", None)
+
+
 def _valid(out: object, schema: dict) -> str:
     """'' if `out` matches the (flat) schema, else what is wrong."""
     if not isinstance(out, dict):
         return "not a JSON object"
+    normalize_anticipated(out)
     for k, spec in schema["properties"].items():
+        if k == "anticipated":
+            continue
         if k not in out:
             return f"missing {k}"
         v, t = out[k], spec.get("type")

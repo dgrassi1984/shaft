@@ -1452,10 +1452,10 @@ def _message_item(name: str, it: dict, archived: bool) -> Html:
     what = ("a question" if asks else "a message") + (" (answered)" if asks and it["read"] else "")
     return h('<div class="turn sent" data-k="{key}" data-raw="{raw}"{at}><div class="who">{n} sent you '
              '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
-             'class="reply small icon" data-reply-message title="Reply to the message" '
+             'class="reply small icon" data-reply-message="{identity}" title="Reply to the message" '
              'aria-label="Reply to the message">{reply}</button>{feedback}</div>{t}'
              '<div class="atts">{a}</div></div>', key=it["key"], n=name, f=q(it["file"]), raw=it["text"], what=what,
-             ts=_turn_time(it["ts"]), reply=ICONS["reply"], t=markdown(it["text"]), a=atts,
+             ts=_turn_time(it["ts"]), identity=it["file"], reply=ICONS["reply"], t=markdown(it["text"]), a=atts,
              feedback=_thumbs(name, {"kind": "message", "file": it["file"]}, it["rating"]),
              at=h(' data-seen-inst="{n}" data-sent-at="{ts}"', n=name, ts=it["ts"]) if not archived else "")
 

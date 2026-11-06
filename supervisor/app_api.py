@@ -395,7 +395,7 @@ def _quotes(raw: str) -> list[dict]:
 def _send(req: Request, n: str) -> Response:
     """The web's /chat/<n>/send path: web_chat.send (a new reply, or an interjection while one runs), queue (after the
     running reply) or background (its next cycle). The same `mid` again is not sent twice (web_chat)."""
-    from . import web_chat
+    from . import web_chat, reply_links
     try:
         fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
     except web_chat.Refused as e:
@@ -412,6 +412,7 @@ def _send(req: Request, n: str) -> Response:
     try:
         if mode == "background":
             file, said = web_chat.background(n, login, text, files, mid=mid)
+            reply_links.record(n, fields.get("in_reply_to"), "app:" + mid)
             return _said(said, chat=None, file=file or None)
         if mode == "queue":
             chat, said = web_chat.queue(n, login, text, files, mid=mid)
@@ -419,6 +420,7 @@ def _send(req: Request, n: str) -> Response:
             chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of)
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
+    reply_links.record(n, fields.get("in_reply_to"), "app:" + mid)
     return _said(said, chat=(chat or {}).get("id"), file=None)
 
 

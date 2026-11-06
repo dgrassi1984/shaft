@@ -57,7 +57,7 @@ class SurpriseJudgeTest(unittest.TestCase):
     def test_schema_and_validation(self):
         self.assertEqual(set(metrics.SURPRISES), set(SURPRISE))
         schema = metrics.JUDGE_SCHEMA
-        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        self.assertEqual(set(schema["required"]), set(schema["properties"]) - {"anticipated"})
         item = schema["properties"]["expectations"]["items"]
         self.assertEqual(set(item["required"]), {"statement", "verdict", "evidence"})
         self.assertFalse(item["additionalProperties"])

@@ -215,13 +215,16 @@ Fresh judgments add these fields alongside the existing verdict, rating, value a
 | `delivery_supported` | `yes`, `no`, `na` | A successful call on the claimed channel carried this cycle's result to the operator; `no` means a failed claim, never a bonus; `na` means no channel or `none`. |
 | `deliverable_met` | `yes`, `partial`, `no` | The deliverable itself was produced and correct, apart from self-imposed process clauses. |
 | `self_imposed_clauses` | `met`, `partial`, `not_met`, `none` | Whether clauses that only check or document the instance's own process or records were met. |
+| `anticipated` | boolean, optional | Useful, unasked-for work for a need supported by the record, delivered or offered to the operator. Ordered work, self-maintenance, record-keeping and rechecks are false. Separate from all existing grades; 14-day counts exclude absent fields. Missing or malformed model values are stored as absent. |
 | `self_audit` | boolean | The cycle's main work checked, audited or kept books about its own records, verdicts, claims or checking tools. |
 | `should_have_waited` | `yes`, `no`, `na` | Whether any operator push could have waited for a morning digest; `no` means all pushes were time-critical, `na` means no push. Judged from the tool log, content and timing, never tone or politeness. |
 
-`criterion_met` still grades the whole criterion. Sleep receives these fields through `record(kind="judgments")`;
+`criterion_met` still grades the whole criterion. Sleep receives delivery and process fields through
+`record(kind="judgments")`;
 a partial/no with `deliverable_met=yes` is not a reason to add a rung to the improvement plan.
-Both judges and the surprise control request the new fields. Ordinary backfill still asks only for missing
-ratings and value fields; old verdicts do not become incomplete because these fields are absent.
+Both judges and the surprise control request the new fields. Ordinary backfill runs only for missing
+ratings and value fields and also requests `anticipated` when it runs; old verdicts do not become incomplete
+because these fields are absent.
 
 Talk, API and live prompts allow disagreement with the operator and require it when a request conflicts
 with a tool result. The instance must cite the call and what it showed. There is no quota.

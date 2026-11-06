@@ -587,7 +587,7 @@ def _post(req: Request, dev: str) -> Response:
         return _html(200, web_pages.h("<p>{t}</p>", t=said),
                      {"X-Feedback-Id": item["id"]} if item else {})
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
-        from . import web_chat
+        from . import web_chat, reply_links
         if m[1] not in _names():
             return _not_found(req.path)
         try:
@@ -598,6 +598,7 @@ def _post(req: Request, dev: str) -> Response:
             extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
+            reply_links.record(m[1], fields.get("in_reply_to"), "web:" + (fields.get("mid") or secrets.token_hex(16)))
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))

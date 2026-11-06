@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import apns, app_api, autonomy, commitments, core, docs, feedback, messages, panel, web
-from supervisor import web_chat, web_seen, webpush
+from supervisor import web_chat, web_seen, webpush, reply_links, outcomes
 from supervisor.tests.test_web import HOST, ME, WebTest, snap
 
 FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
@@ -665,6 +665,78 @@ class LongPollTest(AppTest):
 
 # -- sending (§6) and the chat's actions (§7) ----------------------------------------------------------------------------
 class SendTest(AppTest):
+    def test_reply_identity_is_stored_once_and_counts_without_a_quote(self):
+        ts = datetime.now().isoformat(timespec="seconds")
+        self.message(ts, "stable.md", "Keep this?", read=True)
+        before = (self.sup / "messages.jsonl").read_bytes()
+        r = self.send(text="Yes", in_reply_to="stable.md")
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(reply_links.records()[0]["in_reply_to"], "stable.md")
+        self.assertEqual((self.sup / "messages.jsonl").read_bytes(), before)
+        self.assertEqual(outcomes.records("wren")[0]["outcome"], "followed_up")
+        r = self.send(text="Yes", in_reply_to="stable.md")
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(len(reply_links.records()), 1)
+
+    def test_absent_or_invalid_reply_identity_does_not_change_the_turn(self):
+        self.message(datetime.now().isoformat(), "other.md", "Hi", frm="other")
+        for target in (None, "", "unknown.md", "../stable.md", "other.md", "x" * 256, "bad\nname"):
+            with self.subTest(target=target), mock.patch.object(core, "log") as log:
+                self.chat([])
+                r = self.send(mid="same", text="Yes", in_reply_to=target)
+                self.assertEqual(r.status, 200, r.body)
+                self.assertFalse((self.sup / "reply-links.jsonl").exists())
+                self.assertEqual(log.call_count, int(target is not None))
+                chat = web_chat.load(json.loads(r.body)["chat"])
+                self.assertEqual(chat["turns"][0]["shown"], "Yes")
+                self.assertNotIn("in_reply_to", chat["turns"][0])
+
+    def test_reply_identity_all_modes_and_refused_send(self):
+        self.message(datetime.now().isoformat(), "stable.md", "Keep this?")
+        r = self.send(text="", in_reply_to="stable.md")
+        self.assertEqual(r.status, 409, r.body)
+        self.assertEqual(reply_links.records(), [])
+        for mode in ("now", "queue", "background"):
+            r = self.send(mode=mode, mid=mode, text="Yes", in_reply_to="stable.md")
+            self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(len(reply_links.records()), 3)
+        with mock.patch.object(core, "log") as log:
+            for target in (42, [], {}, "bad\x7fname"):
+                reply_links.record("wren", target, "malformed")
+        self.assertEqual(log.call_count, 4)
+        self.assertEqual(len(reply_links.records()), 3)
+
+    def test_web_reply_button_and_send_use_raw_identity(self):
+        from supervisor import web_views
+        row = self.message(datetime.now().isoformat(), "raw identity.md", "Hi")
+        item = web_chat.message_item("wren", row, {})
+        self.assertIsInstance(item["read"], bool)
+        self.assertEqual(item["kind"], "message")
+        self.assertEqual(item["file"], "raw identity.md")
+        html = str(web_views._message_item("wren", item, False))
+        self.assertIn('data-reply-message="raw identity.md"', html)
+        body = b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nYes\r\n'
+        body += b'--B\r\nContent-Disposition: form-data; name="in_reply_to"\r\n\r\nraw identity.md\r\n--B--\r\n'
+        # Exercise the authenticated HTML route with the same fields as its composer.
+        cookie = self.paired()
+        response = self.req("/chat/wren/send", "POST", body=body,
+                            headers={"content-type": "multipart/form-data; boundary=B",
+                                     "sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)}, cookie=cookie)
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual(reply_links.records()[0]["in_reply_to"], "raw identity.md")
+
+    def test_reply_identity_optional_store_failure_does_not_refuse(self):
+        self.message(datetime.now().isoformat(), "stable.md", "Keep this?")
+        original = Path.open
+        def opening(path, *args, **kwargs):
+            if path.name == "reply-links.jsonl":
+                raise PermissionError("test denial")
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, "open", opening), mock.patch.object(core, "log") as log:
+            r = self.send(text="Yes", in_reply_to="stable.md")
+        self.assertEqual(r.status, 200, r.body)
+        log.assert_called_once_with("reply link: could not store optional evidence")
+
     def test_the_same_mid_is_sent_once_whatever_the_mode(self):
         r = self.send(text="hello", mid="m-1")
         got = json.loads(r.body)
