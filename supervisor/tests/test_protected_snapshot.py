@@ -32,7 +32,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
     def fake_broker(self):
         b = mock.Mock(port=1234, token="test", shared=None, env_root=None, handoffs=[], config_writes=[], counts={})
         b.egress.port = 1235
-        b.mail_env.return_value = b.calendar_env.return_value = ""
+        b.mail_env.return_value = b.calendar_env.return_value = b.gdrive_env.return_value = ""
         b.sandbox_env.return_value = {}
         return b
 
@@ -220,7 +220,8 @@ class ProtectedSnapshotTest(RunTransactionCase):
             b.egress = mock.Mock(port=0)
             with mock.patch.object(b, "sandbox_env", return_value={}), \
                     mock.patch.object(b, "mail_env", return_value=""), \
-                    mock.patch.object(b, "calendar_env", return_value=""):
+                    mock.patch.object(b, "calendar_env", return_value=""), \
+                    mock.patch.object(b, "gdrive_env", return_value=""):
                 out = b._run("python3 -E -s -m shaft.plugin_runner new")
             self.assertTrue(out.startswith("exit 0"), out)
             self.assertIn("new working plugin", out)

@@ -235,7 +235,8 @@ class RunStreamCutTest(JobCase):
         b = broker_mod.Broker("wren", self.project, {}, self.sup / "broker.log")
         b.egress = mock.Mock(port=0)
         with mock.patch.object(b, "sandbox_env", return_value={}), mock.patch.object(b, "mail_env", return_value=""), \
-                mock.patch.object(b, "calendar_env", return_value=""):
+                mock.patch.object(b, "calendar_env", return_value=""), \
+                mock.patch.object(b, "gdrive_env", return_value=""):
             out = b._run("python3 -c \"import sys; print('a' * 10000); print('e' * 7000, file=sys.stderr)\"")
         # Saved by the broker, so an instance on an older shaft/tools.py (6,000-character cut) keeps it too.
         self.assertLessEqual(len(out), broker_mod.RUN_SHOWN_CHARS)

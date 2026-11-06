@@ -145,15 +145,20 @@ def search(acct: google.Account, reach: str, domain: str, drives: set[str], text
         except NotVisible:
             dropped += 1
             continue
-        rows.append(_row(acct, f))
+        rows.append({**_row(acct, f), 'via': f"{acct.alias}/{fid}"})
     cursor = json.dumps({'pending': pending, 'token': token}, separators=(',', ':')) if pending or token else ''
     return rows, dropped, cursor, incomplete
 
 
 
-def _content(acct: google.Account, f: dict, *, reading: bool) -> tuple[str, str, bytes]:
+def check_servable(f: dict) -> None:
+    """Refuse content the owner has disabled downloading."""
     if (f.get('capabilities') or {}).get('canDownload') is False:
         raise Refused("capabilities.canDownload is false; the owner has disabled downloading")
+
+
+def _content(acct: google.Account, f: dict, *, reading: bool) -> tuple[str, str, bytes]:
+    check_servable(f)
     size = int(f.get('size') or 0)
     if size > DRIVE_FILE_MAX:
         raise Refused(f"file is {size} bytes, more than {DRIVE_FILE_MAX} bytes allowed")

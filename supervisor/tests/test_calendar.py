@@ -475,14 +475,16 @@ class ReplayTest(CalendarCase):
                                                 "2026-10-13T19:00:00+02:00", created="2026-10-12T05:30:00Z")
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "calendar_events", {})                # default window: from the replayed cycle's start
+        event_args = {"id": self.handle(PRIMARY, "early1")}
+        event_answer = self.ok(first, "calendar_event", event_args)
         self.cal.events[PRIMARY]["early1"]["summary"] = "Booked before, edited since"
         self.assertEqual(a, self.ok(second, "calendar_events", {}))   # the second run's answer came from the first's
         self.assertIn("from 2026-10-12 08:00 to 2026-10-19 08:00", a)
         self.assertIn("Booked before", a)
         self.assertNotIn("Booked later", a)
         self.assertEqual(self.refused(first, "calendar_event", {"id": self.handle(PRIMARY, "late1")}), HIDDEN)
-        self.cal.events[PRIMARY]["early1"]["summary"] = "Booked before"
-        self.assertIn("Booked before", self.ok(second, "calendar_event", {"id": self.handle(PRIMARY, "early1")}))
+        self.assertEqual(event_answer, self.ok(second, "calendar_event", {"id": " " + event_args["id"] + " "}))
+        self.assertNotIn("edited since", event_answer)
 
     def test_a_grant_changed_between_the_pair_is_not_answered_from_the_cache(self):
         cache, lock = {}, threading.Lock()

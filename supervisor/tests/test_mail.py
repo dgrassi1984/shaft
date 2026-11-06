@@ -294,6 +294,16 @@ class EnforcementTest(MailCase):
             b.call("mail_read", {"id": "work/aaa111"})
         self.assertIn(f"at most {broker.MAIL_CALLS_PER_RUN} mail calls", self.refused(b, "mail_read", {"id": "work/aaa111"}))
 
+    def test_zero_and_first_message_strings_count_against_mail_cap(self):
+        for args in ({'offset': '00'}, {'offset': ' 0 '}, {'offset': '+0'},
+                     {'message': '01'}, {'message': ' 1 '}, {'message': '+1'},
+                     {'message': 0}, {'message': -1}, {'offset': 1.5}, {'offset': True}):
+            with self.subTest(args=args):
+                b = self.broker()
+                for _ in range(broker.MAIL_CALLS_PER_RUN):
+                    self.ok(b, 'mail_read', {'id': 'work/aaa111'})
+                self.assertIn('mail calls', self.refused(b, 'mail_read', {'id': 'work/aaa111', **args}))
+
     def test_continuation_pages_do_not_count_against_the_mail_cap(self):
         """#134: at 6,000 characters a page, a 160,000-character thread needs ~28 pages; were each page counted
         against MAIL_CALLS_PER_RUN, one long thread would use up the run's mail budget and stop half-way. A
@@ -394,14 +404,16 @@ class ReplayTest(MailCase):
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "mail_read", {"id": "work/aaa111"})
         self.gmail.threads["aaa111"][0]["payload"]["parts"][0]["body"]["data"] = b64(b"changed since first read")
-        self.assertEqual(a, self.ok(second, "mail_read", {"id": "work/aaa111"}))   # shared text, fresh label check
+        self.assertEqual(a, self.ok(second, "mail_read", {"id": " work/aaa111 "}))   # shared text, fresh label check
         self.assertIn("Hello from the tagged thread", a)
         self.assertNotIn("a reply that came later", a)
         self.assertIn("not visible to you", self.refused(first, "mail_read", {"id": "work/fff666"}))
         found = self.ok(first, "mail_search", {"query": "in:anywhere"})
         self.assertNotIn("fff666", found)
         self.assertIn(f"before:{int(as_of.timestamp())}", self.gmail.lists()[-1]["q"])
-        saved = self.ok(second, "mail_attachment", {"id": "work/aaa111", "message": 1, "attachment": "report.pdf"})
+        self.ok(first, "mail_attachment", {"id": "work/aaa111", "message": 1, "attachment": "report.pdf"})
+        with mock.patch.object(second, '_mail_file', side_effect=AssertionError('cache missed')):
+            saved = self.ok(second, "mail_attachment", {"id": " work/aaa111 ", "message": 1, "attachment": "report.pdf"})
         self.assertIn("mail/work/aaa111/1-report.pdf", saved)
         self.assertEqual((second.root / "mail/work/aaa111/1-report.pdf").read_bytes(), b"%PDF-1 report")
         self.assertFalse((self.root / "mail").exists())            # never in the instance's own folder

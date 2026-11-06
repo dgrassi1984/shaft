@@ -197,7 +197,7 @@ class DriveTest(unittest.TestCase):
         rows = self.search()[0]
         self.assertEqual(next(r for r in rows if r['id'] == SHARED),
                          {'id': SHARED, 'handle': 'work/' + SHARED, 'name': SHARED, 'mimeType': 'text/plain',
-                          'owner': 'Shared Drive', 'modified': '2026-11-05T00:00:00Z'})
+                          'owner': 'Shared Drive', 'modified': '2026-11-05T00:00:00Z', 'via': 'work/' + SHARED})
 
     def test_reach_own_hides_file_in_another_orgs_shared_drive(self):
         self.fake.files[SHARED]['driveId'] = 'outside'
@@ -633,6 +633,21 @@ class GrantsTest(unittest.TestCase):
         self.assertEqual(self.requests, [google.DRIVE_ABOUT, google.DRIVE_ABOUT])
         self.assertIn('work (own)', self.cli()[1])
 
+    def test_narrowing_removes_copies(self):
+        self.grant('--all')
+        copies = self.copies('work')
+        out = self.grant()
+        self.assertFalse(copies.exists())
+        self.assertIn('copies removed', out)
+
+    def test_narrowing_reports_copy_removal_failure(self):
+        self.grant('--all')
+        with mock.patch.object(self.core, 'remove_gdrive_copies', side_effect=OSError('cannot remove')):
+            code, out = self.cli('wren', 'grant', 'work')
+        self.assertEqual(code, 1)
+        self.assertIn('copies left', out)
+        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+
     def test_all_prints_the_risk_line(self):
         out = self.grant('--all')
         self.assertIn('everything the account can reach, including files strangers share with it, reaches the instance', out)
@@ -839,6 +854,145 @@ class BrokerTest(MailCase):
             cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wren@trial:t',
             tools_log=self.sup / 't.log', max_calls=200)
 
+    def test_zero_strings_count_against_drive_cap(self):
+        for value in ('00', ' 0 ', '+0'):
+            b = self.broker(max_calls=200)
+            for _ in range(30):
+                self.ok(b, 'drive_read', {'id': self.handle})
+            self.assertIn('30 Drive calls', self.refused(b, 'drive_read', {'id': self.handle, 'offset': value}))
+
+    def test_replay_search_rechecks_folder(self):
+        self.fake.files[DOMAIN]['parents'] = [OWN]
+        cache = {}
+        first, second = self.replay(cache), self.replay(cache)
+        self.assertIn('work/' + DOMAIN, self.ok(first, 'drive_search', {'folder': self.handle}))
+        self.fake.files[OWN]['trashed'] = True
+        self.assertIn('not visible', self.refused(second, 'drive_search', {'folder': self.handle}))
+
+    def test_replay_search_rechecks_shortcut(self):
+        self.fake.files[SHORT]['shortcutDetails']['targetId'] = DOMAIN
+        self.fake.files = {k: v for k, v in self.fake.files.items() if k in (SHORT, DOMAIN)}
+        self.fake.files[DOMAIN]['ownedByMe'] = True
+        self.fake.files[DOMAIN]['parents'] = [SHORT]
+        cache = {}
+        first, second = self.replay(cache), self.replay(cache)
+        # Only the shortcut is listed; the target remains visible by direct lookup.
+        self.fake.files[SHORT]['parents'] = [OWN]
+        self.fake.files[OWN] = file(OWN, ownedByMe=True)
+        args = {'folder': self.handle}
+        listing = self.ok(first, 'drive_search', args)
+        self.assertIn('work/' + DOMAIN, listing)
+        self.assertNotIn('via', listing)
+        self.fake.files[SHORT]['trashed'] = True
+        self.assertNotIn('work/' + DOMAIN, self.ok(second, 'drive_search', args))
+
+    def test_narrow_during_fetch_leaves_no_copy(self):
+        import threading
+        from supervisor import gdrive
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+        started, resume = threading.Event(), threading.Event()
+        results = []
+        def fetch(*args):
+            started.set()
+            if not resume.wait(5):
+                raise AssertionError('fetch was not released')
+            return 'copy.txt', 'text/plain', b'hello'
+        with mock.patch.object(gdrive, 'fetch', side_effect=fetch):
+            thread = threading.Thread(target=lambda: results.append(self.broker().call('drive_download', {'id': self.handle})))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(5))
+                with self.core.gdrive_lock('wren'):
+                    self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}])
+                    self.core.remove_gdrive_copies('wren', 'work')
+            finally:
+                resume.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(results[0]['ok'], results)
+        self.assertFalse((self.root / 'gdrive').exists())
+
+    def test_spaced_handles_share_replay_content(self):
+        from supervisor import gdrive
+        for tool, method, value in (('drive_read', 'text_of', 'first body'),
+                                    ('drive_download', 'fetch', ('copy.txt', 'text/plain', b'first'))):
+            cache = {}
+            first, second = self.replay(cache), self.replay(cache)
+            with mock.patch.object(gdrive, method, return_value=value) as read:
+                self.assertEqual(self.ok(first, tool, {'id': self.handle}),
+                                 self.ok(second, tool, {'id': ' ' + self.handle + ' '}))
+                self.assertEqual(read.call_count, 1)
+        with mock.patch.object(gdrive, 'text_of', return_value='x' * 10000):
+            page = self.ok(self.broker(), 'drive_read', {'id': ' ' + self.handle + ' '})
+            self.assertIn("id=" + repr(self.handle), page)
+
+    def test_coder_hides_operator_copies(self):
+        from supervisor import coder
+        for directory in ('mail', 'gdrive'):
+            with self.subTest(directory=directory):
+                self.assertTrue(coder._hidden(directory + '/work/copy.txt'))
+
+    def test_gate_hides_operator_copies(self):
+        from supervisor import trial
+        for directory in ('mail', 'gdrive'):
+            path = self.root / directory / 'work'
+            path.mkdir(parents=True)
+            (path / 'copy.txt').write_text('private')
+        def check(scratch, *args, **kwargs):
+            self.assertFalse((scratch / 'mail').exists())
+            self.assertFalse((scratch / 'gdrive').exists())
+            return True, 'passed'
+        with mock.patch.object(trial, '_files', return_value={}), mock.patch.object(trial.gate, 'run_tests', side_effect=check):
+            self.assertEqual(trial.gate_check(self.project, 'wren', {'id': 'test'}), (True, 'passed'))
+
+    def test_download_bytes_checked_and_counted_under_lock(self):
+        from contextlib import contextmanager
+        from supervisor import broker
+        b = self.broker()
+        real_lock = self.core.gdrive_lock
+        @contextmanager
+        def concurrent_download(name):
+            with real_lock(name):
+                # Another download used five bytes while this fetch was in flight.
+                b.drive_bytes = 5
+                yield
+        with mock.patch.object(self.core, 'gdrive_lock', concurrent_download), mock.patch.object(broker, 'DRIVE_RUN_BYTES', 7):
+            self.assertIn('per run', self.refused(b, 'drive_download', {'id': self.handle}))
+        self.assertFalse((self.root / 'gdrive').exists())
+        b.drive_bytes = 0
+        @contextmanager
+        def observe_publication(name):
+            with real_lock(name):
+                yield
+                self.assertEqual(b.drive_bytes, 5)
+        with mock.patch.object(self.core, 'gdrive_lock', observe_publication):
+            self.ok(b, 'drive_download', {'id': self.handle})
+
+    def test_search_cursor_keeps_shortcut_id_without_via_field(self):
+        google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
+        self.fake.files[SHORT]['shortcutDetails']['targetId'] = DOMAIN
+        self.fake.files[SHORT]['modifiedTime'] = '2026-11-06T00:00:00Z'
+        self.fake.files[DOMAIN]['modifiedTime'] = '2026-11-06T00:00:00Z'
+        self.fake.files = {SHORT: self.fake.files[SHORT], DOMAIN: self.fake.files[DOMAIN]}
+        out = self.ok(self.broker(), 'drive_search', {'max': 1})
+        self.assertNotIn('via', out)
+        page = json.loads(re.search(r'page=(".*")\)', out)[1])
+        cursor = json.loads(page)
+        pending = json.loads(cursor['remaining']['home'])['pending']
+        self.assertEqual(pending, [SHORT])
+
+    def test_template_download_and_attention_wiring(self):
+        from supervisor.tests.test_mail import TEMPLATE
+        import subprocess
+        import sys
+        code = ("from shaft.tools import STATE_CHANGING; from shaft.live import ATTENTION; "
+                "assert 'drive_download' in STATE_CHANGING; "
+                "assert 'drive' in ATTENTION['description']")
+        result = subprocess.run([sys.executable, '-E', '-s', '-c', code], cwd=TEMPLATE,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_tools_offered_only_when_granted(self):
         from supervisor import broker
         b = self.broker()
@@ -913,8 +1067,10 @@ class BrokerTest(MailCase):
                     page = self.ok(b, 'drive_read', {'id': self.handle, 'offset': 6000})
                     self.assertIn('second page', page)
                     self.assertEqual(page, self.ok(b, 'drive_read', {'id': self.handle, 'offset': '6000'}))
-                    self.assertIn('invalid literal for int()',
-                                  self.refused(b, 'drive_read', {'id': self.handle, 'offset': 'abc'}))
+                    for value in ('abc', '', 1.5, True):
+                        with self.subTest(offset=value):
+                            self.assertIn('offset must be a nonnegative integer',
+                                          self.refused(b, 'drive_read', {'id': self.handle, 'offset': value}))
 
     def test_download_refused_while_gdrive_not_ignored(self):
         (self.root / '.gitignore').write_text('logs/\n')
@@ -973,7 +1129,7 @@ class BrokerTest(MailCase):
         self.assertTrue(all('2026-11-06' in k for k in cache))
 
     def test_replay_cached_answer_rechecks_file(self):
-        for hidden in ({'trashed': True}, {'ownedByMe': False}):
+        for hidden in ({'trashed': True}, {'ownedByMe': False}, {'capabilities': {'canDownload': False}}):
             for tool in ('drive_search', 'drive_read', 'drive_download'):
                 with self.subTest(hidden=hidden, tool=tool):
                     self.fake.files[OWN] = file(OWN, ownedByMe=True)
@@ -982,7 +1138,9 @@ class BrokerTest(MailCase):
                     args = {} if tool == 'drive_search' else {'id': self.handle}
                     self.ok(first, tool, args)
                     self.fake.files[OWN].update(hidden)
-                    if tool == 'drive_search':
+                    if tool == 'drive_search' and 'capabilities' in hidden:
+                        self.assertIn(self.handle, self.ok(second, tool, args))
+                    elif tool == 'drive_search':
                         self.assertNotIn(self.handle, self.ok(second, tool, args))
                     else:
                         self.refused(second, tool, args)

@@ -303,7 +303,7 @@ shaft gdrive example off
 ```
 
 Use `--client <name>` on login if the OAuth client differs from the alias. Grant checks Drive access before saving.
-Granting the same account again replaces its reach. Without `--all`, the reach is `own`.
+Granting the same account again replaces its reach. Narrowing from `all` to `own` also deletes that account's downloaded copies, because a copy doesn't record how it was reached. Without `--all`, the reach is `own`.
 Commands: [CLI](../supervisor/__main__.py).
 
 | Reach | Files shown |

@@ -753,6 +753,14 @@ def cmd_gdrive(target: str | None, action: str | None, alias: str | None, all_re
             reach = "all" if all_reach else "own"
             set_gdrive_grants(target, rest + [{"account": alias, "reach": reach}])
             log(f"{target}: gdrive grant {alias} ({reach}) added by the operator")
+            if reach == "own" and any(g["account"] == alias and g["reach"] == "all" for g in grants):
+                try:
+                    remove_gdrive_copies(target, alias)
+                except (OSError, UnsafePath) as e:
+                    print(f"grant narrowed, but copies left at {instance_root(target) / 'gdrive' / alias}: {e}",
+                          file=sys.stderr)
+                    return 1
+                print(f"{alias}: copies removed because the grant narrowed to own")
         else:
             if action == "revoke" and rest == grants:
                 print(f"{target} has no gdrive grant {alias}", file=sys.stderr)
