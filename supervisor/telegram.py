@@ -416,6 +416,11 @@ class Chat:
         if cmd == "/pair":
             return                                   # already paired (an unpaired account never gets here)
         quoted = msg.get("reply_to_message") or {}
+        from . import reply_links
+        state = load()
+        reply_key = f"{self.name}:{quoted.get('message_id')}"
+        target = (state.get("replies") or {}).get(reply_key) or (state.get("questions") or {}).get(reply_key)
+        reply_links.record(self.name, target, f"telegram:{msg['message_id']}")
         if quoted.get("text"):
             text = "> " + "\n> ".join(quoted["text"].splitlines()) + "\n\n" + text
             answer_question(self.name, quoted.get("message_id"))
@@ -880,6 +885,8 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
                         send(tok, owner, f"(could not send the attachment {a['name']}: {e})", ids[0])
                     except TelegramError:
                         pass
+            for message_id in ids:
+                update(lambda s: s.setdefault("replies", {}).__setitem__(f"{m['from']}:{message_id}", m["file"]))
             if m.get("kind") == "question":
                 update(lambda s: s.setdefault("questions", {}).__setitem__(f"{m['from']}:{ids[0]}", m["file"]))
             sent += 1

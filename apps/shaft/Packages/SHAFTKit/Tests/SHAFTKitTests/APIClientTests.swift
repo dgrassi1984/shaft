@@ -3,6 +3,24 @@ import Testing
 @testable import SHAFTKit
 
 struct APIClientTests {
+    @Test func replyIdentitySurvivesPersistenceAndIsSentAsMultipart() async throws {
+        var quote = Quote(quote: "Keep this?", answer: "Yes")
+        quote.inReplyTo = "stable.md"
+        let original = OutgoingMessage(mid: "reply-1", text: "", quotes: [quote])
+        let restored = try SHAFTJSON.decoder().decode(OutgoingMessage.self,
+                            from: SHAFTJSON.encoder().encode(original))
+        #expect(restored.inReplyTo == "stable.md")
+        let server = StubServer { _ in .json(200, #"{"said":"sent","chat":"web-1","file":null}"#) }
+        _ = try await server.client.send("thelos", restored)
+        let request = try #require(server.requests.first)
+        let form = try ParsedMultipart(body: request.body, contentType: #require(request.header("Content-Type")))
+        #expect(form.field("in_reply_to") == "stable.md")
+        let old = try SHAFTJSON.decoder().decode(Quote.self, from: Data(#"{"quote":"old","answer":"","doc":""}"#.utf8))
+        #expect(old.inReplyTo == nil)
+        let encoded = try #require(JSONSerialization.jsonObject(with: SHAFTJSON.encoder().encode(old)) as? [String: String])
+        #expect(encoded == ["quote": "old", "answer": "", "doc": ""])
+    }
+
     static let idle = try! DecodingTests.fixture("idle")
     static let live = try! DecodingTests.fixture("live")
     static let livePartial = try! DecodingTests.fixture("live-partial")
@@ -124,6 +142,7 @@ struct APIClientTests {
         #expect(form.field("mid") == "0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b")
         #expect(form.field("mode") == "queue")
         #expect(form.field("retry_of") == nil)
+        #expect(form.field("in_reply_to") == nil)
         let quotes = try JSONSerialization.jsonObject(with: Data(try #require(form.field("quotes")).utf8)) as? [[String: String]]
         #expect(quotes == [["quote": "Should the nightly report keep the per-account lines?", "answer": "Yes", "doc": ""]])
         let file = try #require(form.parts.first { $0.filename != nil })

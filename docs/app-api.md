@@ -554,8 +554,18 @@ The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multip
   | `mid` | str | required: the message's id (§1.3). The same `mid` again answers as the first send did, without sending twice — also across `now`, `queue` and `background` |
   | `mode` | str | `now` (default): a new reply, or an interjection while one runs ("Send now"). `queue`: after the running reply (sent now when idle). `background`: to the inbox for its next cycle, no reply now |
   | `quotes` | str | JSON list of `{quote, answer, doc}` (↩ Reply cards), `[]` or absent for none. `quote`: the selected text as shown; `answer`: its own answer, may be `""`; `doc`: the `notes/docs/`-relative path when it was quoted from a document, else `""` |
+  | `in_reply_to` | str | optional stable `file` identity of the delivered `sent` item being answered. Accepted sends append statistics-only evidence to `.supervisor/reply-links.jsonl`. Unknown, malformed or wrong-instance identities are ignored and logged; they never refuse a send. Absent leaves the send unchanged. |
   | `retry_of` | str | `retry.retry_of` of a failed reply (§4.4), with `mode=now` only; the text must be `retry.text` |
   | files | file parts | any part with a filename. At most 10 files, 20 MB each, 50 MB in all |
+
+Reply identity: `sent.file` is the raw `file` key from `.supervisor/messages.jsonl`,
+not the URL-encoded feed key. Native clients decode it optionally for older servers.
+A Reply card keeps its optional `in_reply_to` through draft and outbox persistence;
+`OutgoingMessage` sends the last card with an identity as multipart `in_reply_to`.
+The web Reply button carries the same raw identity. Telegram keeps each forwarded
+text part's message id mapped to that identity. Outcomes count accepted links only
+within 48 hours of delivery, as `followed_up`; otherwise items remain `no_link`
+after the window. These links have no grade, probation or reward consumers.
 
 - **The quotes become the message's text** on the server, exactly as the web's composer writes them (`web.js`
   `quoteText`, `takeQuote`), so both clients send the same text:

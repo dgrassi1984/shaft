@@ -125,7 +125,7 @@ struct MessageTextView: NSViewRepresentable {
                 })
                 if !screen.archived {
                     bottom.append(MenuAction.item(String(localized: "Reply to message"), symbol: "arrowshape.turn.up.left") {
-                        [weak self] in self?.screen.reply(with: source)
+                        [weak self] in self?.screen.reply(with: source, file: context.file)
                     })
                 }
             }

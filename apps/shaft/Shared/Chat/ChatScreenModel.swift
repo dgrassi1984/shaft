@@ -96,9 +96,10 @@ final class ChatScreenModel {
     // MARK: Message actions
 
     /// Reply on a whole message: its Markdown source as a quote card, its answer field focused.
-    func reply(with source: String, doc: String = "") {
+    func reply(with source: String, doc: String = "", file: String? = nil) {
         guard !archived else { return }
         let index = chat.addQuote(source.trimmingCharacters(in: .whitespacesAndNewlines), doc: doc)
+        chat.draft.quotes[index].inReplyTo = file
         focusQuoteRequest = index
     }
 

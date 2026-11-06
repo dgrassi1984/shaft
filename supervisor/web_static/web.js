@@ -527,6 +527,8 @@
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
     const payload = new FormData(form);
+    const replyIdentity = form.querySelector("input[name=in_reply_to]");
+    if (replyIdentity) replyIdentity.remove();
     if (queue) queue.value = "";              // the next send chooses its own mode
     const retryOf = form.querySelector("input[name=retry_of]");
     if (retryOf) retryOf.value = "";           // only the Retry that set it
@@ -537,6 +539,7 @@
         localStorage.setItem(draftKey(form), typed);
         // files: their names — a reload cannot keep the files themselves, so it says to attach them again
         localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed,
+                                                                ...(replyIdentity ? {in_reply_to: replyIdentity.value} : {}),
                                                                 files: sentFiles.map(f => f.name) }));
       } catch (e) { /* no storage: retry still works in this page */ }
     }
@@ -545,6 +548,7 @@
     // and the attempt stay saved; a send that fails puts the text back (unsent()).
     if (shown && box) { box.value = ""; grow(box); }
     const unsent = () => {
+      if (replyIdentity && !form.querySelector("input[name=in_reply_to]")) form.append(replyIdentity);
       if (!shown || !box || box.value === typed) return;
       box.value = box.value ? `${typed}\n\n${box.value}` : typed;   // what was typed meanwhile stays after it
       grow(box);
@@ -871,6 +875,11 @@
           localStorage.removeItem(pendingKey(form));
         } else {
           form.querySelector("input[name=mid]").value = attempt.mid;
+          if (typeof attempt.in_reply_to === "string") {
+            const field = document.createElement("input");
+            field.type = "hidden"; field.name = "in_reply_to"; field.value = attempt.in_reply_to;
+            form.append(field);
+          }
           const files = Array.isArray(attempt.files) ? attempt.files.filter(f => typeof f === "string") : [];
           // Files cannot outlive a reload: sent again as it stands, it would go without them, unsaid
           if (files.length) toast(`Not sent yet, and its files could not be kept: attach ${files.join(", ")} again`, true);
@@ -895,6 +904,7 @@
     sent(form);
   }
   function sent(form) {                          // the attempt went: neither its draft nor its retry id is kept
+    form.querySelector("input[name=in_reply_to]")?.remove();
     try {
       localStorage.removeItem(draftKey(form));
       localStorage.removeItem(pendingKey(form));
@@ -1297,7 +1307,8 @@
       const list = JSON.parse(kept);
       if (Array.isArray(list)) return list.map(q => typeof q === "string" ? {q, a: ""} : q)
         .filter(q => q && typeof q.q === "string" && q.q)
-        .map(({q, a}) => ({q, a: typeof a === "string" ? a : ""}));
+        .map(({q, a, in_reply_to}) => ({q, a: typeof a === "string" ? a : "",
+          ...(typeof in_reply_to === "string" ? {in_reply_to} : {})}));
     } catch (e) { /* kept before several quotes: one quote's Markdown */ }
     return [{q: kept, a: ""}];
   }
@@ -1355,12 +1366,13 @@
     }));
     chips.querySelectorAll("textarea.quoteanswer").forEach(answer => grow(answer));
   }
-  function quoteText(text, box, doc = "", focus = true) {
+  function quoteText(text, box, doc = "", focus = true, inReplyTo = null) {
     const from = doc ? `> (from notes/docs/${doc})\n` : "";     // a quote from a document names it
     const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n");
     const form = box.closest("form[data-draft]");
     const quotes = form._quotes || [];
-    if (!quotes.some(q => q.q === quoted)) form._quotes = [...quotes, {q: quoted, a: ""}];     // the same piece twice is one quote
+    if (!quotes.some(q => q.q === quoted)) form._quotes = [...quotes, {q: quoted, a: "", ...(inReplyTo ? {in_reply_to: inReplyTo} : {})}];     // the same piece twice is one quote
+    if (inReplyTo) form._quotes.find(q => q.q === quoted).in_reply_to = inReplyTo;
     quoteChips(form);
     window.getSelection().removeAllRanges();
     if (focus) {
@@ -1375,6 +1387,12 @@
   function takeQuote(form) {
     const box = form.querySelector("textarea[name=text]");
     if (!(form._quotes || []).length || !box) return;
+    const target = [...form._quotes].reverse().find(q => q.in_reply_to)?.in_reply_to;
+    if (target) {
+      let field = form.querySelector("input[name=in_reply_to]");
+      if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "in_reply_to"; form.append(field); }
+      field.value = target;
+    }
     const pairs = form._quotes.map(({q, a}) => a.trim() ? `${q}\n\n${a.trim()}` : q);
     const rest = box.value.trim();
     const answered = form._quotes.some(({a}) => a.trim());
@@ -1385,7 +1403,7 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-reply-message]");
     const box = document.querySelector("form.composer textarea[name=text]");
-    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);   // one tap to answer it: the keyboard comes, on a phone too
+    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box, "", true, b.dataset.replyMessage);   // one tap to answer it: the keyboard comes, on a phone too
   });
   // Retry sends the message that failed again, in one tap when the failed request cannot have run anything
   // (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14). When it may have

@@ -56,6 +56,7 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
     public var mode: SendMode
     public var quotes: [Quote]
     public var retryOf: Int?
+    public var inReplyTo: String? { quotes.last(where: { $0.inReplyTo != nil })?.inReplyTo }
     public var files: [OutgoingFile]
 
     public init(mid: String = OutgoingMessage.newMid(), text: String, mode: SendMode = .now, quotes: [Quote] = [],
@@ -152,6 +153,7 @@ public final class APIClient: Sendable {
             let quotes = try Self.encode(message.quotes, path: path)
             form.addField("quotes", String(decoding: quotes, as: UTF8.self))
         }
+        if let target = message.inReplyTo { form.addField("in_reply_to", target) }
         if let retryOf = message.retryOf { form.addField("retry_of", String(retryOf)) }
         for file in message.files {
             let data: Data

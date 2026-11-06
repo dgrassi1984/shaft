@@ -2,8 +2,10 @@
 
 No supervisor record links a delivered mail draft to a sent mail: `sent` is missing,
 not inferred from mail reads, feedback delivery, or unrelated operator activity.
-`no_link` is not "ignored": on real records (2026-11-06) he answered most items in chat, where nothing names the item,
-so 26 of 28 closed Thelos items had no link, including work he used. Read followed_up as a floor.
+`no_link` is not "ignored": only item-linked evidence counts. Explicit app, web and
+Telegram replies are linked by the delivered message's stable `file` identity;
+unlinked chat answers still make `followed_up` a floor. Links count only within
+OUTCOME_WINDOW_H of delivery. These statistics never grade, reward or impose probation.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import re
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 
-from . import core, doc_comments, feedback, pushes
+from . import core, doc_comments, feedback, pushes, reply_links
 
 OUTCOME_WINDOW_H = 48
 KINDS = ("followed_up", "edited", "sent", "no_link", "open")
@@ -61,6 +63,10 @@ def records(name: str, now: datetime | None = None, since: datetime | None = Non
         target = reply.get("in_reply_to") or (next(iter(matched)) if len(matched) == 1 else None)
         if target in by_file and at - window <= times[target] <= at:
             replies.setdefault(target, []).append((reply["ts"], "followed_up", f"message:{reply['file']}"))
+    for link in reply_links.records():
+        target = link["in_reply_to"]
+        if link.get("instance") == name and target in by_file:
+            replies.setdefault(target, []).append((link.get("ts"), "followed_up", f"reply:{link.get('key', '')}"))
     ratings = {}
     for rating in _ratings(name):
         if rating["target"].get("kind") == "message":
@@ -115,6 +121,7 @@ def lines(name: str, now: datetime | None = None) -> list[str]:
     rows = [r for r in records(name, now, since=since) if now - timedelta(days=7) <= pushes._time(r["ts"]) <= now]
     if not rows:
         return []
-    return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window; a floor, chat answers name no "
-            "item): " + ", ".join(f"{k} {sum(r['outcome'] == k for r in rows)}" for k in KINDS if k != "sent")
+    return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window; a floor, "
+            "unlinked chat answers remain unknown): "
+            + ", ".join(f"{k} {sum(r['outcome'] == k for r in rows)}" for k in KINDS if k != "sent")
             + "; sent: missing draft-to-sent record"]

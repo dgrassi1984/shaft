@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import commitments, core, doc_comments, feedback, judge, judge_probe, messages, metrics, outcomes, planchannel, projects, pushes
+from supervisor import commitments, core, doc_comments, feedback, judge, judge_probe, messages, metrics, outcomes, planchannel, projects, pushes, reply_links
 from supervisor.tests.test_judge2 import VERDICT
 
 NOW = datetime(2026, 11, 6, 12)
@@ -52,6 +52,19 @@ class Fixture(unittest.TestCase):
 
 
 class OutcomesTest(Fixture):
+    def test_explicit_chat_link_window_and_instance(self):
+        self.write('messages.jsonl', [self.message()])
+        for delta, instance, expected in [(0, 'm', 'followed_up'), (48, 'm', 'followed_up'),
+                                          (48 + 1/3600, 'm', 'no_link'), (-1, 'm', 'no_link'),
+                                          (1, 'other', 'no_link')]:
+            with self.subTest(delta=delta, instance=instance):
+                self.write('reply-links.jsonl', [{'instance': instance, 'in_reply_to': 'item.md',
+                           'ts': (NOW + timedelta(hours=delta)).isoformat(), 'key': 'app:reply'}])
+                result = outcomes.records('m', NOW + timedelta(hours=50))[0]
+                self.assertEqual(result['outcome'], expected)
+        self.write('reply-links.jsonl', [None, [], {'in_reply_to': []}, {'in_reply_to': 'item.md'}])
+        self.assertEqual(outcomes.records('m', NOW + timedelta(hours=50))[0]['outcome'], 'no_link')
+
     def test_m7a_unrelated_operator_message_never_counts(self):
         reply = self.message('operator', 'm', file='other.md', text='A different topic', ts=(NOW + timedelta(hours=1)).isoformat())
         self.assertEqual(self.outcome([reply])['outcome'], 'no_link')

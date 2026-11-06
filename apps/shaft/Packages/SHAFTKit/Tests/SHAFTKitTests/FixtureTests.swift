@@ -9,6 +9,20 @@ import Testing
 /// A fixture is matched to its model by its shape (its top-level keys), so a new one needs no code here. A fixture
 /// that matches no model fails: either the contract grew or the fixture is not an /app/v1 answer.
 struct FixtureTests {
+    @Test func sentIdentityUsesTheServerShapeAndIsOptionalForOlderServers() throws {
+        let fixture = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("sent")) as? [String: Any])
+        let items = try #require(fixture["items"] as? [[String: Any]])
+        var sent = try #require(items.first { $0["type"] as? String == "sent" })
+        #expect(sent["read"] is Bool)
+        #expect(sent["kind"] is String)
+        let identity = try #require(sent["file"] as? String)
+        let current = try SHAFTJSON.decoder().decode(SentItem.self, from: JSONSerialization.data(withJSONObject: sent))
+        #expect(current.file == identity)
+        sent.removeValue(forKey: "file")
+        let old = try SHAFTJSON.decoder().decode(SentItem.self, from: JSONSerialization.data(withJSONObject: sent))
+        #expect(old.file == nil)
+    }
+
     static var fixtureDirectory: URL {
         if let folder = ProcessInfo.processInfo.environment["SHAFT_APP_API_FIXTURES"] {
             return URL(filePath: folder)

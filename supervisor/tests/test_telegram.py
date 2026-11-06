@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import messages, pushes, telegram
+from supervisor import messages, pushes, telegram, core, reply_links
 
 TOK = {"wren": "111:wren-secret", "shaft": "222:shaft-secret"}
 ME, STRANGER = {"id": 42, "username": "operator"}, {"id": 666, "username": "someone"}
@@ -759,6 +759,32 @@ class TelegramTest(unittest.TestCase):
                 mock.patch("sys.stdin", io.StringIO(TOK["wren"] + "\n")), mock.patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(telegram.command("token", "wren"), 0)
         self.assertEqual(saved, {"TELEGRAM_TOKEN_WREN": TOK["wren"]})
+
+
+class ReplyIdentityTest(unittest.TestCase):
+    def test_every_forwarded_part_names_its_message(self):
+        state = {"sent_offset": 0}
+        row = {"from": "wren", "to": "operator", "alert": "telegram", "file": "stable.md", "text": "Keep?"}
+        with mock.patch.object(telegram, "load", return_value=state), \
+             mock.patch.object(telegram, "paired_id", return_value=42), \
+             mock.patch.object(telegram, "update", side_effect=lambda f: f(state)), \
+             mock.patch.object(messages, "appended", return_value=([(row, 100)], 100)), \
+             mock.patch.object(telegram, "send", return_value=[101, 102]), \
+             mock.patch.object(pushes, "digest", return_value=0):
+            self.assertEqual(telegram.forward_new(TOK), 1)
+        self.assertEqual(state["replies"], {"wren:101": "stable.md", "wren:102": "stable.md"})
+
+    def test_reply_to_forwarded_message_records_identity_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(core, "SUP_DIR", Path(tmp)):
+            row = {"file": "stable.md", "from": "wren", "to": "operator", "text": "Keep?",
+                   "ts": datetime.now().isoformat()}
+            (Path(tmp) / "messages.jsonl").write_text(json.dumps(row) + "\n")
+            with mock.patch.object(telegram, "load", return_value={"replies": {"wren:101": "stable.md"}}), \
+                 mock.patch.object(telegram, "answer_question"), \
+                 mock.patch.object(telegram.Chat, "_converse", return_value=True):
+                chat = telegram.Chat("wren", TOK["wren"])
+                chat.handle(_msg(ME, "Yes", mid=102, reply_to={"message_id": 101, "text": "Keep?"})["message"])
+            self.assertEqual(reply_links.records()[0]["in_reply_to"], "stable.md")
 
 
 class MarkdownTest(unittest.TestCase):

@@ -318,7 +318,7 @@ public struct RetriedItem: Codable, Sendable, Equatable {
 /// A message or question the instance sent the operator (key `s<file>`).
 public struct SentItem: Codable, Sendable, Equatable {
     public var key: String
-    public var file: String
+    public var file: String?
     public var ts: Date
     /// `"message"` or `"question"`.
     public var kind: String
@@ -437,6 +437,7 @@ public enum SendMode: String, Codable, Sendable, CaseIterable {
 
 /// A ↩ Reply card: the quoted text, its own answer, and the document it came from (`""` for the chat).
 public struct Quote: Codable, Sendable, Equatable, Hashable {
+    public var inReplyTo: String?
     public var quote: String
     public var answer: String
     public var doc: String
