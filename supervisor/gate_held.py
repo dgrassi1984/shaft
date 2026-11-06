@@ -4,8 +4,9 @@ A code change whose gate failed on the supervisor's side — its baseline red: t
 out of time, the gate's own error, a test of the supervisor's that fails on the approved code too (gate.Output) — is
 reverted as every failed change is, and held here, not lost: `.supervisor/gate-held/<name>/<id>/` keeps the bytes it
 wrote, the digest of each file as it stood before it (its base), the instance's commit then and a patch to read. When a
-later warm-up finds the baseline green, runner.regate_held puts each held change back on the code as it is then —
-only if every file it touched is still as it was when held — and gates it again like any run's change. The instance
+later shared pass for the current key finds the baseline green, runner.regate_held puts each held change back on
+the code as it is then — only if every file it touched is still as it was when held — and gates it again like any
+run's change. The instance
 cannot write here (its sandbox writes only its own folder): what is re-applied is what it wrote, byte for byte.
 
 `.supervisor/gate-runs/<name>.jsonl` records every gate an instance's change went through, for record(kind="gate"):
@@ -197,7 +198,7 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None) -> str:
             lines.append("  last output:\n" + "\n".join(f"    {l}" for l in r["output"].splitlines()))
     if as_of is None:
         held = pending(name)
-        lines.append(f"held changes: {len(held)}" + (" (re-gated automatically when a warm-up finds the gate's "
+        lines.append(f"held changes: {len(held)}" + (" (re-gated automatically when a fresh shared pass finds the "
                                                      "baseline green)" if held else ""))
         for m in held:
             lines.append(f"  {m['id']} held {m.get('held_at', '?').replace('T', ' ')}, re-gated {m.get('tries', 0)} of "

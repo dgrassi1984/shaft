@@ -417,13 +417,13 @@ class WarmTest(SharedFixtureCase):
         self.assertIn("test_counted", alerts[0])
         self.assertIn("every instance's code change fails its gate", alerts[0])
 
-    def test_a_warm_up_that_cannot_get_the_lock_fails_and_says_so(self):
+    def test_a_warm_up_lock_timeout_has_a_retryable_exit_code(self):
         import fcntl
         tree, _ = gate.committed_tree(self.project)
         with open(tree.parent / gate.SHARED_LOCK, "a") as held:
             fcntl.flock(held, fcntl.LOCK_EX)
             code, logged = self.warm(timeout_s=2)
-        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertEqual(code, gate.WARM_TIMED_OUT)
         self.assertTrue(any("FAILED" in l and "timed out after 2s" in l for l in logged), logged)
         self.assertEqual(self.runs(), 0)
 
@@ -464,7 +464,7 @@ class WarmTest(SharedFixtureCase):
         self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
         self.hang_flag.write_text("x")
         code, logged = self.warm(timeout_s=4)
-        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertEqual(code, gate.WARM_TIMED_OUT)
         self.assertTrue(any("FAILED" in l and "timed out after 4s" in l for l in logged), logged)
         self.assertFalse(self.record().exists())
 

@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import unittest
 from contextlib import ExitStack, contextmanager
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -357,6 +358,34 @@ class SchedulerTest(unittest.TestCase):
             autonomy.regate_after_warm(children, self.start)                    # running: not a second one
         self.assertEqual(self.started, [["gate", "regate"]])
 
+    def test_recorded_gate_pass_starts_one_regate_without_a_warm_up(self):
+        children, st = {}, autonomy.WarmState()
+        rec = {"passed_at": "2026-11-06T12:00:00"}
+        attempted = datetime.fromisoformat("2026-11-06T12:00:01").timestamp()
+        with mock.patch.object(gate_held, "waiting", return_value=["kant"]), \
+                mock.patch.object(gate, "commits_id", return_value="current"), \
+                mock.patch.object(gate, "shared_key", return_value={"commits": "current"}), \
+                mock.patch.object(gate, "recorded_pass", return_value=rec) as recorded, \
+                mock.patch.object(autonomy.time, "time", return_value=attempted):
+            autonomy.regate_recorded(children, st, self.start)
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"]])
+            children.clear()             # the change is still held after the attempt
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"]])
+            rec["passed_at"] = "2026-11-06T12:00:02"
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"], ["gate", "regate"]])
+            self.assertEqual(recorded.call_args.args[0],
+                             autonomy.PROJECT / gate.TREES / "current" / autonomy.PROJECT.name)
+
+    def test_recorded_pass_starts_no_regate_while_a_drain_is_requested(self):
+        with mock.patch.object(autonomy, "restart_request", return_value={"pid": autonomy.os.getpid()}), \
+                mock.patch.object(gate_held, "waiting") as waiting:
+            autonomy.regate_recorded({}, autonomy.WarmState(), self.start)
+        waiting.assert_not_called()
+        self.assertEqual(self.started, [])
+
     def test_nothing_held_starts_nothing(self):
         with mock.patch.object(gate_held, "waiting", return_value=[]):
             autonomy.regate_after_warm({}, self.start)
@@ -379,6 +408,7 @@ class SchedulerTest(unittest.TestCase):
             def poll(self):
                 return code
         seen, regates = {}, []
+        recorded = mock.Mock(return_value=None)
 
         def fake_warm(children, st, start, now=None):
             seen.setdefault("children", children)
@@ -388,9 +418,15 @@ class SchedulerTest(unittest.TestCase):
                 raise Stop
             seen["ticked"] = True
             seen["children"]["gate warm"] = (Done(), 0.0)
+            if code == 0:
+                recorded.return_value = {"passed_at": datetime.now().isoformat()}
         sup = Path(tempfile.mkdtemp(prefix="shaft-sched-"))
         self.addCleanup(shutil.rmtree, sup, True)
         with mock.patch.object(autonomy, "gate_warm", fake_warm), mock.patch.object(autonomy, "warm_ended"), \
+                mock.patch.object(gate_held, "waiting", return_value=["kant"]), \
+                mock.patch.object(gate, "commits_id", return_value="current"), \
+                mock.patch.object(gate, "shared_key", return_value={}), \
+                mock.patch.object(gate, "recorded_pass", recorded), \
                 mock.patch.object(autonomy, "regate_after_warm", lambda c, s: regates.append(s)), \
                 mock.patch.object(autonomy.time, "sleep", fake_sleep), \
                 mock.patch.object(autonomy, "SUP_DIR", sup), mock.patch.object(autonomy, "log"), \
