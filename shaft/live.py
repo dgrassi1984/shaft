@@ -46,7 +46,7 @@ DELIVERY_CHANNELS = ("message", "mail", "notion", "web_document", "none")
 MAX_PREDICTIONS = 3
 # declare_intent's attention schema (PLAN-consciousness B3), and finish_cycle's promises (C2)
 ATTENTION = {"type": "array", "description": "optional, up to 4: where you expect to look this cycle — a source "
-             "(web, memory, mail, calendar, notes/…, shaft/…, operator or another instance = a message to them, "
+             "(web, memory, mail, calendar, drive, notes/…, shaft/…, operator or another instance = a message to them, "
              "coder, record = the record tool) and why; it focuses your "
              "workspace, and the supervisor compares it with the calls you make",
              "items": {"type": "object", "properties": {"source": S, "why": S}, "required": ["source"]}}
