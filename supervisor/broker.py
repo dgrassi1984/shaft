@@ -775,6 +775,7 @@ class Broker:
         self.google_tokens: dict[str, tuple[str, float]] = {}   # its own Google keys: name -> (access token, expiry)
         self.google_lock = threading.Lock()
         self.mail_bytes = 0                     # attachment bytes downloaded this run
+        self.mail_opened: set[str] = set()      # threads a read got through to this run: their pages are off the mail cap
         self.token = secrets.token_hex(16)
         self._project_charges = []
         self.calls = 0
@@ -1112,9 +1113,13 @@ class Broker:
         self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
-        if tool == "mail_read" and (str(args.get("message") or 1) != "1" or str(args.get("offset") or 0) != "0"):
-            # a continuation page of a thread already opened (#134): it still checks the label and counts as a call,
-            # but not against the mail cap — at 6,000 characters a page, a 160,000-character thread needs ~28 pages
+        thread = str(args.get("id") or "").strip()
+        # a continuation page of a thread opened this run (#134): it still checks the label and counts as a call, but
+        # not against the mail cap — at 6,000 characters a page, a 160,000-character thread needs ~28 pages. Only a read
+        # that got through opens a thread: a message or offset alone proves nothing.
+        page = (tool == "mail_read" and thread in self.mail_opened
+                and (str(args.get("message") or 1) != "1" or str(args.get("offset") or 0) != "0"))
+        if page:
             self.counts["mail_read"] -= 1
             self.counts["mail_read_pages"] = self.counts.get("mail_read_pages", 0) + 1
         if tool in self.disabled:
@@ -1126,7 +1131,7 @@ class Broker:
             result = {"ok": False, "error": f"call budget for this run exhausted ({self.max_calls})"}
         elif tool in MAIL_TOOLS and not self.mail_grants():
             result = {"ok": False, "error": "no mail granted to you"}
-        elif tool in MAIL_TOOLS and sum(self.counts.get(t, 0) for t in MAIL_TOOLS) > MAIL_CALLS_PER_RUN:
+        elif tool in MAIL_TOOLS and not page and sum(self.counts.get(t, 0) for t in MAIL_TOOLS) > MAIL_CALLS_PER_RUN:
             result = {"ok": False, "error": f"at most {MAIL_CALLS_PER_RUN} mail calls per run"}
         elif tool in CALENDAR_TOOLS and not self.calendar_grants():
             result = {"ok": False, "error": "no calendar granted to you"}
@@ -1146,6 +1151,8 @@ class Broker:
                 result = {"ok": False, "error": f"bad arguments: {e}"}
             except Exception as e:
                 result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if tool == "mail_read" and result["ok"]:
+            self.mail_opened.add(thread)
         shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
         brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
@@ -2227,6 +2234,10 @@ class Broker:
         return config_values(text).get("OPERATOR_NAME") or "the operator"
 
     def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002 — the tool's name
+        return self._mail_listing(self._mail_found(query, account, max, page))
+
+    def _mail_found(self, query, account, max, page) -> dict:   # noqa: A002
+        """What a search found, as plain JSON (a trial saves it): _mail_listing writes it out."""
         from . import google, mail
         query, limit = str(query or ""), sorted((1, int(max), 50))[1]
         account = str(account or "").strip()   # an account alias, or one grant as account/label (as the grant is shown)
@@ -2277,16 +2288,22 @@ class Broker:
             state["pending"] = [r["handle"].split("/", 1)[1] for r in found if r["handle"] not in shown] + state["pending"]
             if state["pending"] or state["token"]:
                 remaining[where] = json.dumps(state, separators=(",", ":"))
-        out = [f"searched {', '.join(searched)}" + (f" for {query.strip()!r}" if query.strip() else "")
+        return {"query": query, "account": account, "limit": limit, "rows": ordered, "searched": searched,
+                "failed": failed, "remaining": remaining}
+
+    def _mail_listing(self, found: dict) -> str:
+        query, account, limit, ordered = found["query"], found["account"], found["limit"], found["rows"]
+        out = [f"searched {', '.join(found['searched'])}" + (f" for {query.strip()!r}" if query.strip() else "")
                + (f": {len(ordered)} thread(s), newest first" if ordered else ": no threads")]
-        out += [f"not searched: {f}" for f in failed]
+        out += [f"not searched: {f}" for f in found["failed"]]
         for r in ordered:
-            out += [f"\n{r['handle']} · {r['last']:%Y-%m-%d %H:%M} · {r['messages']} message(s)"
+            last = datetime.fromtimestamp(r["last"] / 1000)
+            out += [f"\n{r['handle']} · {last:%Y-%m-%d %H:%M} · {r['messages']} message(s)"
                     + (f", {r['attachments']} attachment(s)" if r["attachments"] else ""),
                     f"  Subject: {r['subject'] or '(none)'}", f"  From: {r['participants'] or '?'}",
                     f"  {' '.join(r['snippet'].split())[:200]}"]
-        if remaining:
-            token = json.dumps({"query": query, "account": account, "grants": remaining}, separators=(",", ":"))
+        if found["remaining"]:
+            token = json.dumps({"query": query, "account": account, "grants": found["remaining"]}, separators=(",", ":"))
             out.append(f"more: yes — mail_search(query={json.dumps(query)}, account={json.dumps(account)}, "
                        f"max={limit}, page={json.dumps(token)})")
         return "\n".join(out)
@@ -2298,8 +2315,11 @@ class Broker:
 
     def _mail_download(self, id: str, message, attachment) -> tuple[str, str, int, str, str, bytes]:   # noqa: A002
         """(alias, thread id, message number, file name, type, bytes) of one attachment of a visible thread."""
-        from . import mail
         alias, tid, _, msgs = self._mail_thread(id)
+        return self._mail_file(alias, tid, msgs, message, attachment)
+
+    def _mail_file(self, alias: str, tid: str, msgs: list[dict], message, attachment) -> tuple[str, str, int, str, str, bytes]:
+        from . import mail
         i = int(message)
         if not 1 <= i <= len(msgs):
             raise ValueError(f"message is 1 to {len(msgs)} in {alias}/{tid}")
@@ -2343,6 +2363,10 @@ class Broker:
 
     def _calendar_events(self, start: str = "", end: str = "", query: str = "", calendar: str = "",
                          max: int = 50) -> str:   # noqa: A002 — the tool's name
+        return self._calendar_listing(self._calendar_found(start, end, query, calendar, max))
+
+    def _calendar_found(self, start, end, query, calendar, max) -> dict:   # noqa: A002
+        """What a listing found, as plain JSON (a trial saves it): _calendar_listing writes it out."""
         from . import calendar as gcal, google
         limit = sorted((1, int(max), gcal.MAX_EVENTS))[1]
         t0, t1, notes = gcal.window(str(start or ""), str(end or ""), self.as_of or datetime.now())
@@ -2367,18 +2391,28 @@ class Broker:
         if not searched:
             raise RuntimeError("; ".join(failed))
         found.sort(key=lambda r: (r[0], r[1]))
-        shown = found[:limit]
-        more |= len(found) > limit
-        out = [f"searched {', '.join(searched)} from {t0:%Y-%m-%d %H:%M} to {t1:%Y-%m-%d %H:%M} {t1.tzname()}"
-               + (f" for {query!r}" if query else "")
-               + (f": {len(shown)} event(s), in time order" if shown else ": no events")]
-        out += notes + [f"not searched: {f}" for f in failed]
-        out += [gcal.render_row(h, where, ev, address) for _, h, where, address, ev in shown]
-        if more:
+        return {"head": f"searched {', '.join(searched)} from {t0:%Y-%m-%d %H:%M} to {t1:%Y-%m-%d %H:%M} {t1.tzname()}"
+                        + (f" for {query!r}" if query else ""),
+                "notes": notes + [f"not searched: {f}" for f in failed], "more": more or len(found) > limit,
+                "rows": [[h, where, address, ev] for _, h, where, address, ev in found[:limit]]}
+
+    def _calendar_listing(self, found: dict) -> str:
+        from . import calendar as gcal
+        shown = found["rows"]
+        out = [found["head"] + (f": {len(shown)} event(s), in time order" if shown else ": no events")] + found["notes"]
+        out += [gcal.render_row(h, where, ev, address) for h, where, address, ev in shown]
+        if found["more"]:
             out.append(f"\n[cut: more events in this window than the {len(shown)} shown; narrow the window or the query]")
         return "\n".join(out)
 
     def _calendar_event(self, id: str) -> str:   # noqa: A002
+        from . import calendar as gcal
+        alias, grant, eid, acct, ev = self._calendar_lookup(id)
+        return gcal.render_event(gcal.handle(alias, grant["calendar"], eid), f"{alias}/{grant['name']}", ev,
+                                 gcal.series(acct, grant["calendar"], ev), self._operator(), acct.address)
+
+    def _calendar_lookup(self, id: str) -> tuple[str, dict, str, object, dict]:   # noqa: A002
+        """(alias, grant, event id, account, event) of an event on a granted calendar now — or NotVisible."""
         from . import calendar as gcal, google
         alias, h, eid = (str(id).strip().split("/", 2) + ["", ""])[:3]
         grant = next((g for g in self.calendar_grants()
@@ -2386,9 +2420,7 @@ class Broker:
         if grant is None:   # an alias or calendar not granted, or a forged handle: nothing is asked of Google
             raise gcal.NotVisible(gcal.HIDDEN)
         acct = self._google_account(alias, google.CALENDAR)
-        ev = gcal.event(acct, grant["calendar"], eid, self.as_of)
-        return gcal.render_event(gcal.handle(alias, grant["calendar"], eid), f"{alias}/{grant['name']}", ev,
-                                 gcal.series(acct, grant["calendar"], ev), self._operator(), acct.address)
+        return alias, grant, eid, acct, gcal.event(acct, grant["calendar"], eid, self.as_of)
 
     def _calendar_create(self, calendar: str, title: str, start: str, end: str, timezone: str = "",
                          location: str | None = None, description: str | None = None, attendees=None) -> str:
@@ -2610,7 +2642,9 @@ class ReplayBroker(Broker):
     the world or the instance.
 
     Reads — web_search, fetch_page, decide, GET/HEAD http_request — are real, but shared by the two runs of a pair through
-    `cache`: the first run's answer is given to the second, byte for byte, so both see the same world. Writes —
+    `cache`: the first run's answer is given to the second, byte for byte, so both see the same world. The cache never
+    outranks what may be seen: of the operator's mail and calendars, what stopped being visible between the runs leaves
+    the answer (_shared's `still`, and the visible messages in the key of a mail read). Writes —
     messages, POST/PUT/PATCH/DELETE, keys — are not carried out; they pass the same checks and return what a real
     cycle would see (a run must not behave differently because it can tell it is a replay), and are recorded in
     `trace` for the judge. Its egress proxy refuses every connection (TLS hides whether a request writes), each
@@ -2669,16 +2703,24 @@ class ReplayBroker(Broker):
             self._tags.value = set()
         self._tags.value.add(tag)
 
-    def _shared(self, key, compute):
-        """The pair's shared answer to a read: computed once (errors are not kept), then the same for both runs."""
+    def _shared(self, key, compute, still=None):
+        """The pair's shared answer to a read: computed once (errors are not kept), then the same for both runs. Where
+        what may be seen can change with the grant unchanged, `still` is run on every answer the other run computed: it
+        returns what of it may be shown now, or raises if nothing may."""
         k = json.dumps(key, sort_keys=True, ensure_ascii=False, default=str)
         with self.cache_lock:
-            if k in self.cache:
-                self._tag("same answer as the other run")
-                return self.cache[k]
-        value = compute()
-        with self.cache_lock:
-            return self.cache.setdefault(k, value)
+            hit, value = k in self.cache, self.cache.get(k)
+        if not hit:
+            value = compute()
+            with self.cache_lock:
+                kept = self.cache.setdefault(k, value)
+            if kept is value:
+                return value
+            value = kept                     # the other run got there first: its answer, like any hit
+        now = still(value) if still else value
+        self._tag("same answer as the other run" if now == value
+                  else "the other run's answer, less what is no longer visible")
+        return now
 
     # -- the instance's copy, its history and record as of the replayed cycle -----------------------
     def _keys_root(self) -> Path:
@@ -2703,35 +2745,83 @@ class ReplayBroker(Broker):
         return self._shared(["fetch_page", url, int(max_chars)], lambda: Broker._fetch_page(self, url, max_chars))
 
     # The operator's mail as of the replayed cycle (Broker passes as_of: later threads and messages are hidden). The
-    # grant is part of the key: a grant changed between the two runs is not answered from the first run's reads.
+    # grant is part of the key: a grant changed between the two runs is not answered from the first run's reads. A label
+    # can come off with the grant unchanged, so every cached thread is checked again; a read's key holds the messages
+    # visible now, so one trashed since is not answered from the first run's read either.
     def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002
-        return self._shared(["mail_search", self.mail_grants(), query, account, max, page, self.as_of],
-                            lambda: Broker._mail_search(self, query, account, max, page))
+        return self._mail_listing(self._shared(["mail_found", self.mail_grants(), query, account, max, page, self.as_of],
+                                               lambda: self._mail_found(query, account, max, page), self._mail_still))
+
+    def _mail_still(self, found: dict) -> dict:
+        """`found` with each thread's row made again from its visible messages now, as mail_search would: a thread not
+        visible now, or that could not be checked, is dropped."""
+        from . import google, mail
+        rows, labels = [], {}
+        for r in found["rows"]:
+            alias, _, tid = r["handle"].partition("/")
+            try:
+                if alias not in labels:
+                    labels[alias] = set(self._mail_labels(alias).values())
+                msgs = mail.get_thread(self._mail_account(alias), labels[alias], tid, self.as_of)
+            except (mail.NotVisible, google.AccountError, google.ApiError):
+                continue
+            rows.append(mail.row(r["handle"], msgs))
+        if len(rows) < len(found["rows"]):
+            self._log(f"{self.name} mail_search: {len(found['rows']) - len(rows)} thread(s) of the other run's answer "
+                      "failed the label check, dropped")
+        return {**found, "rows": sorted(rows, key=lambda r: r["last"], reverse=True)}
 
     def _mail_read(self, id: str, message: int = 1, offset: int = 0) -> str:   # noqa: A002
         from . import mail
         alias, tid, labels, msgs = self._mail_thread(id)   # even a cached page must still be visible now
-        return self._shared(["mail_read", self.mail_grants(), id, message, offset, self.as_of],
+        return self._shared(["mail_read", self.mail_grants(), id, message, offset, self.as_of, labels,
+                             [m.get("id") for m in msgs]],
                             lambda: mail.render(f"{alias}/{tid}", labels, msgs, self._mail_account(alias),
                                                 self._operator(), message, offset))
 
     def _mail_download(self, id: str, message, attachment):   # noqa: A002 — a real read; written into the copy only
-        return self._shared(["mail_attachment", self.mail_grants(), id, message, attachment, self.as_of],
-                            lambda: Broker._mail_download(self, id, message, attachment))
+        alias, tid, _, msgs = self._mail_thread(id)        # even a cached file must still be visible now
+        return self._shared(["mail_attachment", self.mail_grants(), id, message, attachment, self.as_of,
+                             [m.get("id") for m in msgs]],
+                            lambda: self._mail_file(alias, tid, msgs, message, attachment))
 
     def _mail_dir_ignored(self, rel: str) -> bool:
         return True   # the replay's copy is thrown away, never committed
 
     # The operator's calendars, read live (a calendar cannot be rewound): events created after the replayed cycle began
-    # are hidden (Broker passes as_of); an older event edited since shows its edit. The grant is part of the key.
+    # are hidden (Broker passes as_of); an older event edited since shows its edit. The grant is part of the key. It
+    # covers what is on the calendar now, which can change with the grant unchanged (an event moved off it, or deleted;
+    # the calendar unshared), so a cached event is checked again; an edit since stays the first run's, for the pair.
     def _calendar_events(self, start: str = "", end: str = "", query: str = "", calendar: str = "",
                          max: int = 50) -> str:   # noqa: A002
-        return self._shared(["calendar_events", self.calendar_grants(), start, end, query, calendar, max, self.as_of],
-                            lambda: Broker._calendar_events(self, start, end, query, calendar, max))
+        def still(found: dict) -> dict:
+            return self._calendar_still(found, start, end, query)
+        return self._calendar_listing(self._shared(
+            ["calendar_found", self.calendar_grants(), start, end, query, calendar, max, self.as_of],
+            lambda: self._calendar_found(start, end, query, calendar, max), still))
+
+    def _calendar_still(self, found: dict, start: str, end: str, query: str) -> dict:
+        """`found` without the events no longer in the listing it came from; one that could not be checked is dropped."""
+        from . import calendar as gcal, google
+        t0, t1, _ = gcal.window(str(start or ""), str(end or ""), self.as_of)
+        grants = {f"{g['account']}/{g['name']}": g for g in self.calendar_grants()}
+        there: dict[str, set[str]] = {}
+        for where in {r[1] for r in found["rows"]} & grants.keys():
+            g = grants[where]
+            try:
+                acct = self._google_account(g["account"], google.CALENDAR)
+                items, _ = gcal.events(acct, g["calendar"], t0, t1, str(query or "").strip(), self.as_of)
+                there[where] = {ev.get("id") for ev in items}
+            except (google.AccountError, google.ApiError) as e:
+                self._log(f"{self.name} calendar_events {where}: not checked again, its events dropped: {e}")
+        return {**found, "rows": [r for r in found["rows"] if r[3].get("id") in there.get(r[1], ())]}
 
     def _calendar_event(self, id: str) -> str:   # noqa: A002
+        def still(answer: str) -> str:
+            self._calendar_lookup(id)              # NotVisible if it is no longer on the granted calendar
+            return answer
         return self._shared(["calendar_event", self.calendar_grants(), id, self.as_of],
-                            lambda: Broker._calendar_event(self, id))
+                            lambda: Broker._calendar_event(self, id), still)
 
     def _describe(self, media: str, data: bytes, question: str) -> str:
         """A real read of the replay's own copy of the image, shared by the pair (keyed by the image's bytes)."""

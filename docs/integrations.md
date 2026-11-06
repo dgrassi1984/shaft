@@ -148,7 +148,7 @@ Keep the query and account selection on continuations. The handle tracks each ac
 including threads left over after merging accounts; every continuation checks the current grant and label again.
 `shaft mail example grant work AssistantAccess` checks that the label exists and saves the grant in
 `.supervisor/tools/example.json`. `shaft mail example revoke work AssistantAccess` or `shaft mail example off` holds from example's
-next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start) counts as a call but not against those 30.
+next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start, of a thread already opened this run) counts as a call but not against those 30.
 `mail_read(id=…)` returns pages of at most 6,000 characters, including headers and footer, so the agent's tool-result
 cap preserves the whole page. Follow the footer's exact `mail_read(id=…, message=…, offset=…)` call until
 `End of thread`. `message` starts at 1, oldest first; `offset` is a character offset in that message's text,

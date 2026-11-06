@@ -464,13 +464,13 @@ class ReplayTest(CalendarCase):
                                                 "2026-10-13T19:00:00+02:00", created="2026-10-12T05:30:00Z")
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "calendar_events", {})                # default window: from the replayed cycle's start
-        asked = len(self.cal.requests)
-        self.assertEqual(a, self.ok(second, "calendar_events", {}))
-        self.assertEqual(len(self.cal.requests), asked)          # the second run's answer came from the first's
+        self.cal.events[PRIMARY]["early1"]["summary"] = "Booked before, edited since"
+        self.assertEqual(a, self.ok(second, "calendar_events", {}))   # the second run's answer came from the first's
         self.assertIn("from 2026-10-12 08:00 to 2026-10-19 08:00", a)
         self.assertIn("Booked before", a)
         self.assertNotIn("Booked later", a)
         self.assertEqual(self.refused(first, "calendar_event", {"id": self.handle(PRIMARY, "late1")}), HIDDEN)
+        self.cal.events[PRIMARY]["early1"]["summary"] = "Booked before"
         self.assertIn("Booked before", self.ok(second, "calendar_event", {"id": self.handle(PRIMARY, "early1")}))
 
     def test_a_grant_changed_between_the_pair_is_not_answered_from_the_cache(self):
@@ -479,6 +479,45 @@ class ReplayTest(CalendarCase):
         self.ok(first, "calendar_event", {"id": self.handle(PRIMARY, "own1")})
         core.set_calendar_grants("wren", [{"account": "work", "calendar": TEAM, "name": "Team"}])
         self.assertEqual(self.refused(second, "calendar_event", {"id": self.handle(PRIMARY, "own1")}), HIDDEN)
+
+    def test_event_moved_off_a_granted_calendar_between_the_pair_leaves_a_cached_read(self):
+        """The bug: a calendar's grant covers the events on it now, and Google answers that on every live call. The
+        cache skipped the question, so an event moved off the granted calendar between the two runs (the grant
+        unchanged, so the key too) still reached the second run."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        hdl = self.handle(PRIMARY, "own1")
+        window = {"start": "2026-10-12", "end": "2026-10-19"}
+        self.assertIn("Planning", self.ok(first, "calendar_event", {"id": hdl}))
+        a = self.ok(first, "calendar_events", window)
+        self.assertIn("Planning", a)
+        self.assertIn("Partnership", a)
+        self.cal.events[TEAM]["own1"] = self.cal.events[PRIMARY].pop("own1")
+        self.assertEqual(self.refused(second, "calendar_event", {"id": hdl}), HIDDEN)
+        b = self.ok(second, "calendar_events", window)
+        self.assertNotIn("Planning", b)
+        self.assertIn("Partnership", b)
+        self.assertNotIn("same answer as the other run", second.trace[-1]["tags"])
+        self.assertEqual(int(re.search(r": (\d+) event\(s\)", a)[1]) - 1, int(re.search(r": (\d+) event\(s\)", b)[1]))
+
+    def test_a_cached_calendar_listing_survives_the_saved_cache(self):
+        """A preempted pass saves the pair's cache as JSON (trial._cache_json) and reloads it for the other arm."""
+        from supervisor import trial
+        cache, lock = {}, threading.Lock()
+        first = self.replay(cache, lock, datetime(2026, 10, 12, 8, 0))
+        a = self.ok(first, "calendar_events", {})
+        saved = trial._cache_value(json.loads(json.dumps(trial._cache_json(cache))))
+        second = self.replay(saved, threading.Lock(), datetime(2026, 10, 12, 8, 0))
+        self.assertEqual(a, self.ok(second, "calendar_events", {}))
+        self.assertIn("same answer as the other run", second.trace[-1]["tags"])
+
+    def test_a_listing_recheck_that_cannot_reach_google_shows_nothing(self):
+        """An event that could not be checked is not known to be on the granted calendar."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        self.assertNotIn(": no events", self.ok(first, "calendar_events", {}))
+        with mock.patch.object(gcal, "events", side_effect=google.ApiError(500, "backend error")):
+            self.assertIn(": no events", self.ok(second, "calendar_events", {}))
 
 
 class CliTest(CalendarCase):
