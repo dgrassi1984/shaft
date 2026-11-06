@@ -232,12 +232,79 @@ def _instances(req: Request) -> Response:
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
                      "line": s.get("line") or "", "last": stamp(s.get("last")), "replying": replying,
                      "unread": unread.get(n, False), "next_cycle": web._next_cycle(n)})
-    body = json.dumps({"instances": rows, "badge": sum(unread.values())}, ensure_ascii=False).encode()
+    return _etagged(req, {"instances": rows, "badge": sum(unread.values())})
+
+
+def _etagged(req: Request, data: dict) -> Response:
+    body = json.dumps(data, ensure_ascii=False).encode()
     tag = '"' + hashlib.sha256(body).hexdigest()[:16] + '"'
     if req.headers.get("if-none-match") == tag:
         return Response(304, b"", {"ETag": tag, "Cache-Control": "no-store"})
     return Response(200, body, {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
                                 "ETag": tag})
+
+
+# -- cycles -----------------------------------------------------------------------------------------------------------
+def _due_stamp(value: str | None) -> str | None:
+    """Keep a valid plain date; offset a timestamp; leave unparseable text out of date fields."""
+    parsed = stamp(value)
+    return value if parsed and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else parsed
+
+
+def _plan(req: Request, n: str) -> Response:
+    from . import cycles
+    out = cycles.plan(n, web._live(n))
+    since = out["now"]["since"]
+    if since and re.match(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", since):
+        out["now"]["since"] = stamp(since)
+    for key in ("next_step", "improvement"):
+        if out[key] is not None:
+            out[key]["at"] = stamp(out[key].pop("ts"))
+    for item in out["commitments"]:
+        item["due"] = _due_stamp(item["due"])
+    for row in out["queue"]["rows"]:
+        due = row["due_at"]
+        row["due_at"] = _due_stamp(due)
+        if due is not None and row["due_at"] is None:
+            row["due_at_text"] = due
+    return _etagged(req, out)
+
+
+def _cycles(req: Request, n: str) -> Response:
+    from . import cycles
+    filt, before = req.query.get("filter", ""), req.query.get("before")
+    if filt not in cycles.FILTERS:
+        raise Refusal(400, "bad_request", 'filter must be "", "yours", "short" or "delivered".')
+    if before:
+        try:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", before):
+                raise ValueError
+            datetime.fromisoformat(before)
+        except ValueError:
+            raise Refusal(400, "bad_request", "before must be a valid date in YYYY-MM-DD form.") from None
+    out = cycles.days(n, before=before, filt=filt)
+    for day in out["days"]:
+        day["rows"] = [{**r, "at": stamp(r["ts"])} for r in day["rows"]]
+        for row in day["rows"]:
+            row.pop("ts")
+    return _etagged(req, out)
+
+
+def _cycle(req: Request, n: str, ts: str) -> Response:
+    from . import cycles
+    out = cycles.cycle(n, ts)
+    if out is None:
+        raise Refusal(404, "not_found", f"{n} has no cycle {ts}.")
+    out.pop("where")
+    out["at"] = stamp(out.pop("ts"))
+    if (planned := out["planned"]) is not None:
+        predictions = planned["predictions"]
+        planned["predictions"] = [p for p in predictions if isinstance(p, str)] if isinstance(predictions, list) else []
+        planned["attention"] = cycles.note_lines(planned["attention"], ("source", "why"))
+    if (result := out["result"]) is not None:
+        result["surprises"] = cycles.note_lines(result["surprises"], ("expected", "observed", "so_what"))
+        result["doubts"] = cycles.note_lines(result["doubts"], ("step", "what"))
+    return _etagged(req, out)
 
 
 # -- the feed (§4) and earlier chats (§5) -----------------------------------------------------------------------------
@@ -737,6 +804,9 @@ def _service_action(req: Request, service: str, act: str) -> Response:
 ROUTES: list[tuple[str, dict]] = [
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
+    (rf"/plan/{N}", {"GET": _plan}),
+    (rf"/cycles/{N}", {"GET": _cycles}),
+    (rf"/cycles/{N}/(?P<ts>\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}})", {"GET": _cycle}),
     (rf"/settings/{N}", {"GET": _get_settings, "POST": _set_settings}),
     (rf"/settings/{N}/(?P<act>pause|resume)", {"POST": _pause_resume}),
     (r"/services", {"GET": _get_services}),

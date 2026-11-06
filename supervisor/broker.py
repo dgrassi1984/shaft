@@ -779,10 +779,10 @@ class Broker:
         self._project_charges = []
         self.calls = 0
         self.counts: dict[str, int] = {}
-        self.codex = None
-        self.codex_down: str | None = None
-        self._codex_rate = None
-        self._codex_lock = threading.Lock()
+        self.channel = None
+        self.channel_down: str | None = None
+        self._channel_rate = None
+        self._channel_lock = threading.Lock()
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.handoffs: list[dict] = []           # coding tasks delegated during this run
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
@@ -812,45 +812,38 @@ class Broker:
             log(f"{name}: shared folder {granted} left out of this run — {e} (shaft share {name} off, or share another)")
             return None
 
-    def _codex_notify(self, title: str, text: str) -> None:
+    def _channel_notify(self, title: str, text: str, provider="codex") -> None:
         # Either device path may fail independently; model replies must still reach the instance.
         def phone():
             from . import webpush
-            webpush.notify({"title": title, "body": text, "url": "/overview", "tag": "provider:codex"})
+            webpush.notify({"title": title, "body": text, "url": "/overview", "tag": f"provider:{provider}"})
         for send in (lambda: notify(title, text), phone):
             try:
                 send()
             except Exception as e:
-                self._log(f"Codex notification failed: {e}")
+                self._log(f"{provider.title()} notification failed: {e}")
 
-    def _codex_report(self, exc=None) -> None:
-        from . import codexcli
-        from .core import SUP_DIR, log
+    def _channel_report(self, exc=None, model="codex") -> None:
+        from . import planchannel
+        from .core import log
+        label = planchannel.label(model)
+        provider = model.partition("/")[0]
+        def notify_provider(title, text):
+            self._channel_notify(title, text, provider)
         if exc is not None:
-            event = "Codex security event" if isinstance(exc, codexcli.CodexSecurity) else "Codex failure"
+            event = f"{label} security event" if isinstance(exc, planchannel.ChannelSecurity) else f"{label} failure"
             # Stderr can contain message content; log only the reason, on one line.
             reason = exc.reason.split("; stderr:", 1)[0]
             line = f"{self.name}: {event}: {reason!r}"
             log(line)
             self._log(line)
             if self.local_fallback:
-                self.codex_down = exc.reason
-            codexcli.report_failure(exc, self._codex_notify)
+                self.channel_down = exc.reason
+            planchannel.report_failure(exc, notify_provider, provider)
         else:
-            codexcli.report_success(self._codex_notify)
+            planchannel.report_success(notify_provider, provider)
         # The panel runs in another process. Save the latest observed weekly window on change.
-        rate = codexcli.rate_limit()
-        if rate is not None and rate != self._codex_rate:
-            SUP_DIR.mkdir(parents=True, exist_ok=True)
-            fd, path = tempfile.mkstemp(prefix="codex-rate-", dir=SUP_DIR)
-            try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(rate, f)
-                os.replace(path, SUP_DIR / "codex_rate.json")
-                self._codex_rate = rate
-            finally:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(path)
+        self._channel_rate = planchannel.save_rate(self._channel_rate, provider)
 
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> str:
@@ -940,7 +933,7 @@ class Broker:
                 self._reply(200, reply)
 
             def _llm(self):
-                from . import cloudllm, codexcli, selfhosted, vision
+                from . import cloudllm, planchannel, selfhosted, vision
                 body: dict = {}
                 if not broker.model_allowed:
                     broker._log(f"{broker.name} llm -> REFUSED (a scheduled job has no model)")
@@ -952,26 +945,26 @@ class Broker:
                         body = vision.prepare(body)
                         broker._log(f"{broker.name} llm {body.get('model')} carries {images} image(s)")
                     original = body.get("model")
-                    if codexcli.serves(original) and broker.codex_down is None:
+                    if planchannel.serves(original) and broker.channel_down is None:
                         try:
-                            with broker._codex_lock:
-                                if broker.codex is None:
-                                    broker.codex = codexcli.Channel(broker.name, broker.usage_name, broker._log)
-                            reply = broker.codex.complete(body)
-                            broker._codex_report()
-                        except codexcli.CodexClosed as e:
+                            with broker._channel_lock:
+                                if broker.channel is None:
+                                    broker.channel = planchannel.channel_for(original, broker.name, broker.usage_name, broker._log)
+                            reply = broker.channel.complete(body)
+                            broker._channel_report(model=original)
+                        except planchannel.ChannelClosed as e:
                             return self._reply(503, {"error": {"message": e.reason}})
-                        except codexcli.CodexFailure as e:
-                            broker._codex_report(e)
+                        except planchannel.ChannelFailure as e:
+                            broker._channel_report(e, original)
                             if not broker.local_fallback:
-                                raise cloudllm.CloudError(502, f"Codex failed: {e.reason}") from None
+                                raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {e.reason}") from None
                         else:
                             return self._llm_reply(body, reply)
                     label = None
-                    if codexcli.serves(original):
+                    if planchannel.serves(original):
                         if not broker.local_fallback:
-                            raise cloudllm.CloudError(502, f"Codex failed: {broker.codex_down}")
-                        body = {**body, "model": codexcli.FALLBACK_MODEL}
+                            raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {broker.channel_down}")
+                        body = {**body, "model": planchannel.fallback_model(original)}
                         try:
                             fallback_vision = not images or vision.sees_images(body["model"])
                         except vision.VisionError:
@@ -1064,8 +1057,8 @@ class Broker:
         return self.server.server_address[1] if self.server else 0
 
     def stop(self) -> None:
-        if self.codex is not None:
-            self.codex.close()
+        if self.channel is not None:
+            self.channel.close()
         if self.server:
             self.server.shutdown()
             self.server.server_close()

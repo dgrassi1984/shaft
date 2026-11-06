@@ -77,7 +77,7 @@ extension View {
         inspector(isPresented: isPresented ?? Binding(get: { shell.screen?.showDocuments ?? false },
                                                       set: { shell.screen?.showDocuments = $0 })) {
             if let screen = shell.screen, screen.showDocuments {
-                DocumentsPanel(store: store, instance: screen.instance, cid: screen.chat.cid)
+                SidePanel(store: store, instance: screen.instance, cid: screen.chat.cid)
                     .id("\(screen.instance)-\(screen.chat.cid ?? "")")
                     .environment(screen)
                     .environment(screen.preview)

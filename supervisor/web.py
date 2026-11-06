@@ -717,6 +717,11 @@ def _get(req: Request, csrf: str) -> Response | None:
         history = messages.history()
         return _html(200, web_pages.rail(names, qs.get("c", ""), overview(),
                                          {n: web_chat.summary(n, history) for n in names}))
+    if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/cycles-next$", path):
+        if m[1] not in names:
+            return None
+        from . import cycles
+        return _html(200, v.cycles_next(cycles.plan(m[1], _live(m[1]))))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
         if m[1] not in names:
             return None
@@ -1162,13 +1167,25 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
                 body = web_pages.h('<p role="status">{result}</p>{body}', result=qs["google"], body=body)
         return _html(200, v.instance_frame(name, tab, tab, body, names, csrf))
     if tab == "transcripts":
+        from . import cycles
+        if "ts" in qs:
+            cycle = cycles.cycle(name, qs["ts"])
+            return _html(200, v.cycle_page(name, cycle, names, csrf)) if cycle is not None else None
         filt = qs.get("f", "") if qs.get("f", "") in v.TX_FILTERS else ""
-        es = panel.transcripts(name)
-        if filt == "cycles":
-            es = [e for e in es if e["kind"] != "conversation"]
-        elif filt == "conversations":
-            es = [e for e in es if e["kind"] == "conversation"]
-        return _html(200, v.transcripts_page(name, es, filt, panel.transcript_summary, _live(name), names, csrf))
+        if filt == "conversations":
+            es = [e for e in panel.transcripts(name) if e["kind"] == "conversation"]
+            return _html(200, v.transcripts_page(name, es, filt, panel.transcript_summary, _live(name), names, csrf))
+        before = qs.get("before", "")
+        try:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", before):
+                before = None
+            else:
+                datetime.strptime(before, "%Y-%m-%d")
+        except ValueError:
+            before = None
+        filt = filt if filt in cycles.FILTERS else ""
+        return _html(200, v.cycles_page(name, cycles.plan(name, _live(name)),
+                                        cycles.days(name, before=before, limit=3, filt=filt), filt, names, csrf))
     if tab == "transcript":
         e = next((e for e in panel.transcripts(name) if e["id"] == qs.get("id")), None)
         if not e:

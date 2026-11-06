@@ -722,8 +722,24 @@ def _set_secret(name: str, value: str) -> None:
     path.chmod(0o600)
 
 
+def _outside_gui(r: "subprocess.CompletedProcess") -> bool:
+    """The Mac app's CLI refuses to run outside the GUI session, as a launchd job is: it exits 0 and says so on stdout
+    (web.tailnet_hosts). Nothing it was asked for happened."""
+    return "Tailscale GUI" in r.stdout and "failed to start" in r.stdout
+
+
+def _tailscale_status() -> dict | None:
+    """Tailscale's status, None when it would not answer here (_outside_gui)."""
+    r = _tailscale("status", "--json")
+    if _outside_gui(r):
+        return None
+    return json.loads(r.stdout or "{}")
+
+
 def url() -> str:
-    st = json.loads(_tailscale("status", "--json").stdout or "{}")
+    st = _tailscale_status()
+    if st is None:
+        return "(the tailnet address is not available from this session)"
     host = (st.get("Self", {}).get("DNSName") or "").rstrip(".")
     return f"https://{host}:{HTTPS_PORT}/v1" if host else "(tailscale is not running)"
 
@@ -754,15 +770,26 @@ def command(action: str) -> int:
         if not env.get("SHAFT_INBOX_KEY"):
             _set_secret("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
         if not env.get("SHAFT_API_LOGINS"):
-            st = json.loads(_tailscale("status", "--json").stdout or "{}")
+            st = _tailscale_status() or {}
             me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
             if not me:
                 print("cannot read your Tailscale login (is Tailscale running?)")
                 return 1
             _set_secret("SHAFT_API_LOGINS", me)
+        was_running = autonomy.running("api")
         if autonomy.service("api", "on"):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
+        if _outside_gui(r):
+            if was_running:       # the existing mapping stays in place on a restart
+                log("api restarted; tailscale serve left as it was (its CLI refuses to run outside the GUI session)")
+                print("API restarted; tailscale serve left as it was (its CLI refuses to run outside the GUI session)")
+                return 0
+            message = ("API started but is not exposed on the tailnet because Tailscale's CLI refuses to run "
+                       "outside the GUI session; run shaft api on in a terminal of the logged-in session.")
+            print(message, file=sys.stderr)
+            log(message)
+            return 1
         if r.returncode != 0:
             print(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}")
             return 1

@@ -95,10 +95,10 @@ def model_server(name: str) -> str | None:
     """The model server the instance's calls go to ('127.0.0.1:8780', or a self-hosted one through the broker:
     'gpu-box.example:8080'), or None when it thinks with a cloud model. Two instances compete for the model only when
     both use the same server."""
-    from . import codexcli, selfhosted
+    from . import planchannel, selfhosted
     cfg = instance_config(name)
     url = cfg.get("LLM_BASE_URL", "").strip()
-    if codexcli.serves(cfg.get("LLM_MODEL")):
+    if planchannel.serves(cfg.get("LLM_MODEL")):
         return None
     if url == "broker" and selfhosted.serves(cfg.get("LLM_MODEL")):
         return selfhosted.host_port(cfg["LLM_MODEL"])

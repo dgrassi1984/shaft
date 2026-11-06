@@ -311,6 +311,23 @@ public final class APIClient: Sendable {
         try await get("/app/v1/push/latest", query: instance.map { [URLQueryItem(name: "instance", value: $0)] } ?? [])
     }
 
+    // MARK: Cycles (§16)
+
+    public func plan(_ instance: String, etag: String? = nil) async throws -> Conditional<CyclePlan> {
+        try await conditionalGet("/app/v1/plan/\(instance)", etag: etag)
+    }
+
+    public func cycles(_ instance: String, before: String? = nil, filter: String = "",
+                       etag: String? = nil) async throws -> Conditional<CycleDaysResponse> {
+        var query = [URLQueryItem(name: "filter", value: filter)]
+        if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        return try await conditionalGet("/app/v1/cycles/\(instance)", etag: etag, query: query)
+    }
+
+    public func cycle(_ instance: String, ts: String) async throws -> CycleDetail {
+        try await get("/app/v1/cycles/\(instance)/\(ts)")
+    }
+
     // MARK: Settings and services (§15)
 
     public func settings(_ instance: String) async throws -> InstanceSettings {
@@ -405,8 +422,10 @@ public final class APIClient: Sendable {
         return try Self.decode(data, path: path)
     }
 
-    private func conditionalGet<T: Decodable & Sendable>(_ path: String, etag: String?) async throws -> Conditional<T> {
-        var request = makeRequest("GET", path)
+    private func conditionalGet<T: Decodable & Sendable>(
+        _ path: String, etag: String?, query: [URLQueryItem] = []
+    ) async throws -> Conditional<T> {
+        var request = makeRequest("GET", path, query: query)
         if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         let (data, response) = try await send(request, path: path)
         if response.statusCode == 304 { return .notModified }

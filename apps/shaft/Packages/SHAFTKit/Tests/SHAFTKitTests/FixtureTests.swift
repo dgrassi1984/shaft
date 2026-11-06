@@ -34,9 +34,69 @@ struct FixtureTests {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                     "send", "feedback-response", "retried"] {
+                     "send", "feedback-response", "retried", "plan", "cycles", "cycle"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
+    }
+
+    @Test func cycleFieldsKeepTheirWireMeaning() throws {
+        let planData = try DecodingTests.fixture("plan")
+        var object = try #require(JSONSerialization.jsonObject(with: planData) as? [String: Any])
+        object["now"] = ["state": "idle", "since": "12:05", "goal": NSNull()] as [String: Any]
+        let plan = try SHAFTJSON.decoder().decode(
+            CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(plan.now.since == "12:05")
+        #expect(plan.queue.rows[0].dueAt == SHAFTJSON.parseStamp("2099-11-04T12:00:00+01:00"))
+        #expect(plan.queue.rows[0].dueAtIsDate == false)
+        #expect(plan.queue.rows[1].dueAt == SHAFTJSON.parseStamp("2099-11-05T00:00:00Z"))
+        #expect(plan.queue.rows[1].dueAtIsDate)
+        #expect(plan.queue.rows[2].dueAt == nil)
+        #expect(plan.queue.rows[2].dueAtIsDate == false)
+        #expect(plan.queue.rows[2].dueAtText == "when ready")
+        let page = try SHAFTJSON.decoder().decode(CycleDaysResponse.self, from: DecodingTests.fixture("cycles"))
+        #expect(page.days[0].date == "2026-11-03")
+        #expect(page.days[0].rows[2].id == "2026-11-03T13:58:40")
+        #expect(page.days[0].rows[2].at == SHAFTJSON.parseStamp("2026-11-03T13:58:40+01:00"))
+        #expect(page.days[0].rows[2].claim == "yes")
+        #expect(page.days[0].rows[2].verdict == "partial")
+        let detail = try SHAFTJSON.decoder().decode(CycleDetail.self, from: DecodingTests.fixture("cycle"))
+        #expect(detail.did.usd == nil)
+        #expect(detail.result?.claim == "yes")
+        #expect(detail.result?.judge?.verdict == "partial")
+        #expect(detail.result?.judge?.firstError == "The totals were not checked before sending.")
+        #expect(detail.result?.doubts == ["step: 1; what: Check again"])
+    }
+
+    @Test func unreadableImprovementIsNotDecodedAsNoPlan() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("plan")) as? [String: Any])
+        object["improvement"] = NSNull()
+        object["improvement_error"] = "could not read memory/journal.md: denied"
+        let plan = try SHAFTJSON.decoder().decode(
+            CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(plan.improvement == nil)
+        #expect(plan.improvementError == "could not read memory/journal.md: denied")
+    }
+
+    @Test func aDayWithOnlySkippedLinesStillDecodesForDisplay() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("cycles")) as? [String: Any])
+        var days = try #require(object["days"] as? [[String: Any]])
+        days[0]["rows"] = []
+        days[0]["skipped_lines"] = 2
+        object["days"] = days
+        let page = try SHAFTJSON.decoder().decode(
+            CycleDaysResponse.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(page.days.count == 1)
+        #expect(page.days[0].rows.isEmpty)
+        #expect(page.days[0].skippedLines == 2)
+    }
+
+    @Test(arguments: ["2099-11-05", "2099-11-05T00:00:00Z"])
+    func queueDueDatesKeepTheirWireFormat(_ due: String) throws {
+        let object: [String: Any] = ["id": 1, "task": "Check", "due_at": due, "overdue": false]
+        let row = try SHAFTJSON.decoder().decode(
+            CyclePlan.Queue.Row.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(row.dueAt == SHAFTJSON.parseStamp("2099-11-05T00:00:00Z"))
+        #expect(row.dueAtIsDate == (due == "2099-11-05"))
     }
 
     @Test(arguments: fixtureFiles())
@@ -79,6 +139,9 @@ enum FixtureShape {
         func has(_ wanted: String...) -> Bool { wanted.allSatisfy(keys.contains) }
         if has("instance", "partial", "version", "live") { return roundTrip(Feed.self) }
         if has("instances", "badge") { return roundTrip(InstancesResponse.self) }
+        if has("now", "check", "queue") { return roundTrip(CyclePlan.self) }
+        if has("days", "next", "judge_error") { return roundTrip(CycleDaysResponse.self) }
+        if has("id", "at", "did") { return roundTrip(CycleDetail.self) }
         if has("chats") { return roundTrip(ChatsResponse.self) }
         if has("dir", "max_bytes", "docs") { return roundTrip(DocsList.self) }
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }

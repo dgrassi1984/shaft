@@ -51,7 +51,7 @@ SETTING_KEY = re.compile(r"^SHAFT_[A-Z0-9_]{1,60}$")
 # restarts; "runs" — cycles, sleeps, trials, batteries, write-ups, CLI commands — are fresh processes that read it
 # when they start.
 SERVICE_NAMES = ("api", "scheduler", "telegram", "web", "model", "embed")
-KNOB_GROUPS = ("Judging", "Models and spend", "Codex", "Trials", "Runs and conversations", "Inbox and benchmarks",
+KNOB_GROUPS = ("Judging", "Models and spend", "Codex", "Grok", "Trials", "Runs and conversations", "Inbox and benchmarks",
                "Local model", "Ports and paths")
 
 
@@ -195,11 +195,12 @@ def cloud_model(s: str) -> str:
 
 
 def instance_model(s: str) -> str:
-    """A broker model an instance or bake-off may run on: claude-…, openrouter/… or codex/…."""
-    from . import codexcli
+    """A cloud or registered plan model an instance or bake-off may run on."""
+    from . import planchannel
     s = model_name(s)
-    if not (s.startswith("claude-") or s.startswith("openrouter/") or codexcli.serves(s)):
-        raise ValueError(f"must be a claude-… or openrouter/… or codex/… model, not {s!r}")
+    if not (s.startswith("claude-") or s.startswith("openrouter/") or planchannel.serves(s)):
+        plans = " or ".join(f"{p}/…" for p in planchannel.PROVIDERS)
+        raise ValueError(f"must be a claude-… or openrouter/… or {plans} model, not {s!r}")
     return s
 
 

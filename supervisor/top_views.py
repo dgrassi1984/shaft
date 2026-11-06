@@ -462,6 +462,8 @@ def render_costs(snap, ui, width, height):
     jt.append(" · ".join(f"{k} ${v:.2f}" for k, v in sorted(c["judge_today"].items(), key=lambda kv: -kv[1])),
               style="red" if c["judge_today_total"] >= c["judge_alert"] else "")
     lines.append(jt)
+    if c.get("grok_api_equivalent"):
+        lines.append(Text(f"   Grok plan: ${c['grok_api_equivalent']:.6f} API equivalent (not money spent)"))
     if (rate := c.get("codex_rate")) is not None:
         lines.append(Text(f"   Codex plan: {rate['used_percent']}% of weekly allowance used"))
     if c["unpriced"]:

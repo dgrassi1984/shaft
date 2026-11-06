@@ -11,6 +11,26 @@ struct NativeChromePinTests {
         return try String(contentsOf: app.appending(path: path), encoding: .utf8)
     }
 
+    @Test func cycleConfidenceRemovesOnlyTheWholeNumbersDecimalSuffix() throws {
+        let source = try shared("Shared/Cycles/CycleDetailView.swift")
+        let format = ##"String($0).replacingOccurrences(of: #"\.0$"#, with: "", options: .regularExpression)"##
+        #expect(source.contains(format))
+    }
+
+    @Test func anImprovementReadErrorIsShownBeforeTheNoPlanState() throws {
+        let source = try shared("Shared/Cycles/CyclesPanel.swift")
+        #expect(source.contains("if !plan.improvementError.isEmpty { Text(plan.improvementError) }"))
+        #expect(source.contains("else if let improvement = plan.improvement"))
+    }
+
+    @Test func openingADocumentReturnsThePanelToDocuments() throws {
+        #expect(try shared("Shared/Chat/ChatScreenModel.swift").contains("sidePanel = .documents"))
+    }
+
+    @Test func theSidePanelUsesASystemSegmentedControl() throws {
+        #expect(try shared("Shared/Cycles/SidePanel.swift").contains(".pickerStyle(.segmented)"))
+    }
+
     /// Bug: an AppKit text view holding the keyboard left the Quick Look panel saying "No items selected".
     @Test func theMacPreviewsFilesWithoutTheResponderChain() throws {
         let preview = try shared("Shared/Attachments/FilePreviewView.swift")
@@ -248,7 +268,14 @@ struct NativeChromePinTests {
 
     @Test func dailyCapPlaceholderDoesNotRepeatItsLabel() throws {
         let source = try shared("Shared/Settings/InstanceSettingsView.swift")
-        #expect(source.contains(#"TextField(field == .cloudCap ? "Default" : label"#))
+        #expect(source.contains(#"prompt: Text(field == .cloudCap ? "Default""#))
+    }
+
+    /// Bug: a Mac settings field repeated "Your name" as a label beside an unmarked blank field.
+    @Test func aSettingsFieldHidesItsOwnLabelOnTheMac() throws {
+        let source = try shared("Shared/Settings/InstanceSettingsView.swift")
+        #expect(source.contains(".labelsHidden()"))
+        #expect(source.contains("prompt:"))
     }
 
     @Test func servicesTitleAndPidAvoidAmbiguousServerAndLocalizedNumbers() throws {

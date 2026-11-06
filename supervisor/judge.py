@@ -45,8 +45,9 @@ class JudgeError(Exception):
 
 def _norm(model: str) -> str:
     """'openrouter/xiaomi/mimo-v2.6-pro', 'xiaomi/mimo-v2.6-pro' and 'anthropic/claude-haiku-5.5' compare by model."""
-    m = ((model or "").strip().lower().removeprefix("openrouter/").removeprefix("codex/")
-         .removeprefix("openai/").removeprefix("anthropic/"))
+    from . import planchannel
+    m = planchannel.unprefix((model or "").strip().lower().removeprefix("openrouter/"))
+    m = m.removeprefix("openai/").removeprefix("anthropic/").removeprefix("x-ai/").removeprefix("xai/")
     return m.replace(".", "-")
 
 
