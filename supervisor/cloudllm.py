@@ -519,7 +519,8 @@ def as_sse(reply: dict) -> bytes:
     for i, c in enumerate(msg.get("tool_calls", [])):
         chunks.append({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": i, **c}]}, "finish_reason": None}]})
     chunks.append({"choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]})
-    chunks.append({"choices": [], "usage": reply["usage"]})
+    chunks.append({"choices": [], "usage": reply["usage"],
+                   **({"shaft_same_turn": reply["shaft_same_turn"]} if "shaft_same_turn" in reply else {})})
     from . import planchannel
     if planchannel.prefix(label := reply.get("model", "")) and " (fallback " in label:
         for chunk in chunks:

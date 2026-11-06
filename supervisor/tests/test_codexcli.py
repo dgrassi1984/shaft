@@ -785,6 +785,7 @@ class ChannelTest(unittest.TestCase):
         started = time.monotonic()
         reply = self.channel.complete(body())
         self.assertEqual(reply["choices"][0]["finish_reason"], "tool_calls")
+        self.assertIs(reply["shaft_same_turn"], True)
         self.assertGreaterEqual(time.monotonic() - started, 1.0)
 
     def test_model_polling_usage_during_hold_stays_on_held_step(self):

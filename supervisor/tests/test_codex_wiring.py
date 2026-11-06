@@ -44,6 +44,15 @@ class Case(unittest.TestCase):
 
 
 class BrokerTest(Case):
+    def test_same_turn_flag_survives_broker_json_and_stream(self):
+        self.channel.complete.return_value = {**reply(), "shaft_same_turn": True}
+        h, _ = self.call()
+        self.assertIs(json.loads(h.wfile.getvalue())["shaft_same_turn"], True)
+        h, _ = self.call(stream=True)
+        chunks = [json.loads(line[6:]) for line in h.wfile.getvalue().splitlines()
+                  if line.startswith(b"data: ") and line != b"data: [DONE]"]
+        self.assertEqual([c["shaft_same_turn"] for c in chunks if "shaft_same_turn" in c], [True])
+
     def setUp(self):
         super().setUp()
         # Capture the nested production Handler without binding any socket or reading instance configuration.

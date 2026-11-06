@@ -281,7 +281,9 @@ These arms are available for a later trial. No instance configuration changes au
 selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
-conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
+conversation step limit. `MAX_STEPS_*` count model turns. Plan-channel tool replies marked `shaft_same_turn`
+do not spend a turn; after 10 consecutive such replies, the next one spends a turn to bound missing end signals.
+Other replies count even without usage. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
 values are bounded by the operator's wake floor (default 10 minutes), and a wake at that interval runs only with
 something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wakes)). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
@@ -294,7 +296,7 @@ The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
 `WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),
 `ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to for promises to
-Daniele (`operator`) or peers from `list_instances`, settled in sleep against the record; own plans belong in goals/notes)
+Daniele (`operator`) or peers from `list_instances`, settled in live cycles or sleep against the record; own plans belong in goals/notes)
 and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.

@@ -476,7 +476,7 @@ action that has failed since it last worked, showing the comparable calls and th
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
-(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
+(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in live cycles or sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
 to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. Review I10: a promise to the operator needs a source the model does not
