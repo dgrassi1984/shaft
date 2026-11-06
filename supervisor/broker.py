@@ -2494,6 +2494,7 @@ class Broker:
         return "\n".join(out)
 
     def _drive_read(self, id: str, offset: int = 0) -> str:   # noqa: A002
+        offset = int(offset)
         from . import gdrive
         _, acct, f = self._drive_file(id)
         self._log(f"{self.name} drive_read {id} {f['name']}")
@@ -2988,6 +2989,7 @@ class ReplayBroker(Broker):
         return {**found, "rows": rows}
 
     def _drive_read(self, id: str, offset: int = 0) -> str:   # noqa: A002
+        offset = int(offset)
         from . import gdrive
         _, acct, f = self._drive_file(id)
         self._log(f"{self.name} drive_read {id} {f['name']}")

@@ -24,7 +24,7 @@ class FakeGoogle:
     """Google's token endpoint, Gmail's profile and the primary calendar, as login uses them. `granted` is what the
     operator left ticked on the consent page."""
 
-    def __init__(self, address: str = ME, granted: str = f"{google.GMAIL} {google.CALENDAR} {google.CALENDAR_EVENTS}"):
+    def __init__(self, address: str = ME, granted: str = " ".join(google.SCOPES)):
         self.address, self.granted = address, granted
         self.requests: list[tuple[str, dict]] = []
 
