@@ -448,6 +448,17 @@ class OfferedTest(CalendarCase):
         self.assertNotIn("SHAFT_CALENDAR", env)
 
 
+class DeletedEventTest(CalendarCase):
+    def test_deleted_event_is_refused_like_one_that_never_existed(self):
+        """The bug: Google answers a GET of a deleted event with the event, status cancelled, so calendar_event gave an
+        instance holding its id the title, description and attendees of an event the operator had deleted."""
+        self.assertEqual(self.refused(self.broker(), "calendar_event", {"id": self.handle(PRIMARY, "cancel1")}), HIDDEN)
+
+    def test_only_cancelled_is_refused(self):
+        self.cal.events[PRIMARY]["own1"]["status"] = "tentative"
+        self.assertIn("Status: tentative", self.ok(self.broker(), "calendar_event", {"id": self.handle(PRIMARY, "own1")}))
+
+
 class ReplayTest(CalendarCase):
     def replay(self, cache, lock, as_of):
         state = Path(tempfile.mkdtemp(dir=self.project, prefix="copy-"))
@@ -464,14 +475,16 @@ class ReplayTest(CalendarCase):
                                                 "2026-10-13T19:00:00+02:00", created="2026-10-12T05:30:00Z")
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "calendar_events", {})                # default window: from the replayed cycle's start
-        asked = len(self.cal.requests)
-        self.assertEqual(a, self.ok(second, "calendar_events", {}))
-        self.assertEqual(len(self.cal.requests), asked)          # the second run's answer came from the first's
+        event_args = {"id": self.handle(PRIMARY, "early1")}
+        event_answer = self.ok(first, "calendar_event", event_args)
+        self.cal.events[PRIMARY]["early1"]["summary"] = "Booked before, edited since"
+        self.assertEqual(a, self.ok(second, "calendar_events", {}))   # the second run's answer came from the first's
         self.assertIn("from 2026-10-12 08:00 to 2026-10-19 08:00", a)
         self.assertIn("Booked before", a)
         self.assertNotIn("Booked later", a)
         self.assertEqual(self.refused(first, "calendar_event", {"id": self.handle(PRIMARY, "late1")}), HIDDEN)
-        self.assertIn("Booked before", self.ok(second, "calendar_event", {"id": self.handle(PRIMARY, "early1")}))
+        self.assertEqual(event_answer, self.ok(second, "calendar_event", {"id": " " + event_args["id"] + " "}))
+        self.assertNotIn("edited since", event_answer)
 
     def test_a_grant_changed_between_the_pair_is_not_answered_from_the_cache(self):
         cache, lock = {}, threading.Lock()
@@ -479,6 +492,71 @@ class ReplayTest(CalendarCase):
         self.ok(first, "calendar_event", {"id": self.handle(PRIMARY, "own1")})
         core.set_calendar_grants("wren", [{"account": "work", "calendar": TEAM, "name": "Team"}])
         self.assertEqual(self.refused(second, "calendar_event", {"id": self.handle(PRIMARY, "own1")}), HIDDEN)
+
+    def test_event_moved_off_a_granted_calendar_between_the_pair_leaves_a_cached_read(self):
+        """The bug: a calendar's grant covers the events on it now, and Google answers that on every live call. The
+        cache skipped the question, so an event moved off the granted calendar between the two runs (the grant
+        unchanged, so the key too) still reached the second run."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        hdl = self.handle(PRIMARY, "own1")
+        window = {"start": "2026-10-12", "end": "2026-10-19"}
+        self.assertIn("Planning", self.ok(first, "calendar_event", {"id": hdl}))
+        a = self.ok(first, "calendar_events", window)
+        self.assertIn("Planning", a)
+        self.assertIn("Partnership", a)
+        self.cal.events[TEAM]["own1"] = self.cal.events[PRIMARY].pop("own1")
+        self.assertEqual(self.refused(second, "calendar_event", {"id": hdl}), HIDDEN)
+        b = self.ok(second, "calendar_events", window)
+        self.assertNotIn("Planning", b)
+        self.assertIn("Partnership", b)
+        self.assertNotIn("same answer as the other run", second.trace[-1]["tags"])
+        self.assertEqual(int(re.search(r": (\d+) event\(s\)", a)[1]) - 1, int(re.search(r": (\d+) event\(s\)", b)[1]))
+
+    def test_event_deleted_between_the_pair_leaves_a_cached_read(self):
+        """The bug: Google answers a GET of a deleted event with the event, status cancelled, details and all, so a check
+        that only asked whether it could be fetched passed it and gave the second run the first run's answer."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        hdl, window = self.handle(PRIMARY, "own1"), {"start": "2026-10-12", "end": "2026-10-19"}
+        self.assertIn("Planning", self.ok(first, "calendar_event", {"id": hdl}))
+        self.assertIn("Planning", self.ok(first, "calendar_events", window))
+        self.cal.events[PRIMARY]["own1"]["status"] = "cancelled"
+        self.assertEqual(self.refused(second, "calendar_event", {"id": hdl}), HIDDEN)
+        self.assertNotIn("Planning", self.ok(second, "calendar_events", window))
+
+    def test_an_edit_between_the_pair_stays_in_a_cached_listing(self):
+        """The bug: the listing was checked by running its query and window again, so an event renamed or moved in time,
+        still on the granted calendar, dropped out of the second run's answer. An edit stays the first run's."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        args = {"start": "2026-10-12", "end": "2026-10-19", "query": "Planning"}
+        a = self.ok(first, "calendar_events", args)
+        self.assertIn("Planning", a)
+        moved = self.cal.events[PRIMARY]["own1"]
+        moved.update(summary="Review", start={"dateTime": "2026-11-20T14:00:00+01:00", "timeZone": "Europe/Rome"},
+                     end={"dateTime": "2026-11-20T15:00:00+01:00", "timeZone": "Europe/Rome"})
+        self.assertEqual(a, self.ok(second, "calendar_events", args))
+        self.assertIn("same answer as the other run", second.trace[-1]["tags"])
+
+    def test_a_cached_calendar_listing_survives_the_saved_cache(self):
+        """A preempted pass saves the pair's cache as JSON (trial._cache_json) and reloads it for the other arm."""
+        from supervisor import trial
+        cache, lock = {}, threading.Lock()
+        first = self.replay(cache, lock, datetime(2026, 10, 12, 8, 0))
+        a = self.ok(first, "calendar_events", {})
+        saved = trial._cache_value(json.loads(json.dumps(trial._cache_json(cache))))
+        second = self.replay(saved, threading.Lock(), datetime(2026, 10, 12, 8, 0))
+        self.assertEqual(a, self.ok(second, "calendar_events", {}))
+        self.assertIn("same answer as the other run", second.trace[-1]["tags"])
+
+    def test_a_listing_recheck_that_cannot_reach_google_shows_nothing(self):
+        """An event that could not be checked is not known to be on the granted calendar."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        self.assertNotIn(": no events", self.ok(first, "calendar_events", {}))
+        with mock.patch.object(gcal, "event", side_effect=google.ApiError(500, "backend error")):
+            self.assertIn(": no events", self.ok(second, "calendar_events", {}))
 
 
 class CliTest(CalendarCase):
@@ -546,7 +624,9 @@ class CliTest(CalendarCase):
         kept = core.calendar_grants("wren")
         shared = Path(tempfile.mkdtemp(prefix="shaft-share-")).resolve()
         self.addCleanup(shutil.rmtree, shared, True)
-        for change in (lambda: core.set_mail_grants("wren", [{"account": "work", "label": "L"}]),
+        for change in (lambda: core.set_gdrive_grants("wren", [{"account": "work", "reach": "all"}]),
+                       lambda: core.set_gdrive_grants("wren", []),
+                       lambda: core.set_mail_grants("wren", [{"account": "work", "label": "L"}]),
                        lambda: core.set_mail_grants("wren", []), lambda: core.set_shared_folder("wren", shared),
                        lambda: core.set_shared_folder("wren", None), lambda: core.set_tool("wren", "decide", False),
                        lambda: core.set_tool("wren", "decide", True)):

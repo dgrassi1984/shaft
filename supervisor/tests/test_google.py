@@ -24,7 +24,7 @@ class FakeGoogle:
     """Google's token endpoint, Gmail's profile and the primary calendar, as login uses them. `granted` is what the
     operator left ticked on the consent page."""
 
-    def __init__(self, address: str = ME, granted: str = f"{google.GMAIL} {google.CALENDAR} {google.CALENDAR_EVENTS}"):
+    def __init__(self, address: str = ME, granted: str = " ".join(google.SCOPES)):
         self.address, self.granted = address, granted
         self.requests: list[tuple[str, dict]] = []
 
@@ -73,12 +73,12 @@ class LoginTest(GoogleCase):
 
     def test_login_asks_all_scopes_and_records_what_was_granted(self):
         saved = self.login(ME)
-        self.assertEqual(self.asked[0]["scope"].split(), [google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS])
+        self.assertEqual(self.asked[0]["scope"].split(), [google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS, google.DRIVE_READONLY])
         self.assertEqual(self.asked[0]["include_granted_scopes"], "true")
-        self.assertEqual(google.scopes(saved), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS})
+        self.assertEqual(google.scopes(saved), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS, google.DRIVE_READONLY})
         on_disk = json.loads((self.sup / "google" / "work.json").read_text())
-        self.assertEqual(google.scopes(on_disk), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS})
-        self.assertEqual(google.scope_text(on_disk), "gmail.readonly, calendar.readonly, calendar.events")
+        self.assertEqual(google.scopes(on_disk), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS, google.DRIVE_READONLY})
+        self.assertEqual(google.scope_text(on_disk), "gmail.readonly, calendar.readonly, calendar.events, drive.readonly")
 
     def test_partial_grant_recorded_as_such(self):
         # The operator unticked Calendar on the consent page: mail keeps working, a calendar call names the login.

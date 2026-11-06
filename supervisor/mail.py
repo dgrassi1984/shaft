@@ -86,6 +86,14 @@ def get_thread(acct: google.Account, label_ids: set[str], thread_id: str, before
     return msgs
 
 
+def row(handle: str, msgs: list[dict]) -> dict:
+    """One thread's search row, from its visible messages. Plain JSON (`last` in milliseconds): a trial saves it."""
+    last = msgs[-1]
+    return {"handle": handle, "last": int(last.get("internalDate") or 0), "subject": _header(msgs[0], "subject"),
+            "participants": _participants(msgs), "snippet": html.unescape(last.get("snippet") or ""),
+            "messages": len(msgs), "attachments": sum(len(attachments(m)) for m in msgs)}
+
+
 def search(acct: google.Account, label_id: str, query: str, limit: int, before: datetime | None = None,
            page: str = "") -> tuple[list[dict], int, str]:
     """Visible rows, dropped count and continuation. Cursors keep unconsumed IDs, never cached mail content."""
@@ -116,10 +124,7 @@ def search(acct: google.Account, label_id: str, query: str, limit: int, before: 
         except NotVisible:
             dropped += 1
             continue
-        last = msgs[-1]
-        rows.append({"handle": f"{acct.alias}/{tid}", "last": _date(last), "subject": _header(msgs[0], "subject"),
-                     "participants": _participants(msgs), "snippet": html.unescape(last.get("snippet") or ""),
-                     "messages": len(msgs), "attachments": sum(len(attachments(m)) for m in msgs)})
+        rows.append(row(f"{acct.alias}/{tid}", msgs))
     rows.sort(key=lambda r: r["last"], reverse=True)
     next_page = json.dumps({"pending": pending, "token": token}, separators=(",", ":")) if pending or token else ""
     return rows, dropped, next_page

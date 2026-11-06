@@ -131,7 +131,7 @@ class RunOutputTest(unittest.TestCase):
         self.b = broker.Broker.__new__(broker.Broker)
         self.b.root, self.b.env_root, self.b.name, self.b.counts = self.root, self.root, "test", {}
         self.b.shared, self.b.run_confined_to, self.b.egress = None, None, mock.Mock(port=0)
-        self.b.sandbox_env, self.b.mail_env, self.b.calendar_env = lambda: {}, lambda: "", lambda: ""
+        self.b.sandbox_env, self.b.mail_env, self.b.calendar_env, self.b.gdrive_env = lambda: {}, lambda: "", lambda: "", lambda: ""
         self.b._log = mock.Mock()
 
     def run_with(self, stdout, stderr):

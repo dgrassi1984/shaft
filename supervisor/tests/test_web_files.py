@@ -46,7 +46,7 @@ class FilesTest(WebTest):
 
     def test_issue_57_exclusions_traversal_and_links(self):
         """Reverting #57 removes explicit refusals and the filtered, link-safe listing."""
-        for name in ("secrets", ".git", "mail", ".browser"):
+        for name in ("secrets", ".git", "mail", "gdrive", ".browser"):
             # Synthetic fixtures only, never the workspace's runtime directories.
             (self.root / name).mkdir()
             (self.root / name / "private.txt").write_text("private")
@@ -56,9 +56,9 @@ class FilesTest(WebTest):
         (self.root / "alias").symlink_to(self.root / "visible.txt")
         (self.root / "nested").mkdir()
         (self.root / "nested" / "CONFIG.ENV").write_text("private")
-        for path in ("secrets/private.txt", ".git/private.txt", "mail/private.txt", ".browser/private.txt",
+        for path in ("secrets/private.txt", ".git/private.txt", "mail/private.txt", "gdrive/private.txt", ".browser/private.txt",
                      "config.env", "../outside", str(self.sup), "escape/outside", "alias", "x/../visible.txt",
-                     "nested/CONFIG.ENV", "SECRETS/private.txt", "MAIL/private.txt", ".GIT/private.txt",
+                     "nested/CONFIG.ENV", "SECRETS/private.txt", "MAIL/private.txt", "GDRIVE/private.txt", ".GIT/private.txt",
                      ".BROWSER/private.txt"):
             for tab in ("file", "files"):
                 with self.subTest(path=path, tab=tab):
@@ -67,7 +67,7 @@ class FilesTest(WebTest):
                     self.assertTrue(r.body)
         listing = self.get().body.decode()
         self.assertIn("visible.txt", listing)
-        for name in ("secrets", ".git", "mail", ".browser", "config.env", "escape", "alias"):
+        for name in ("secrets", ".git", "mail", "gdrive", ".browser", "config.env", "escape", "alias"):
             self.assertNotIn(f'>{name}', listing)
         self.assertNotIn("CONFIG.ENV", self.get(path="nested/").body.decode())
 

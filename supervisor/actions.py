@@ -43,6 +43,7 @@ CLASSES = ('reversible', 'staged', 'irreversible')
 # mail writes, Notion writes, Docs writes or delete tools today. http_request uses instance-owned keys, not
 # operator credentials. New operator write tools must be added here before being offered by the broker.
 OPERATOR_TOOLS = {
+    'drive_search': 'read', 'drive_read': 'read', 'drive_download': 'read',
     'mail_search': 'read', 'mail_read': 'read', 'mail_attachment': 'read',
     'calendar_events': 'read', 'calendar_event': 'read',
     'calendar_create': 'calendar', 'calendar_move': 'calendar', 'calendar_respond': 'staged',

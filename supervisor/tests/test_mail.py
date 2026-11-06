@@ -294,6 +294,16 @@ class EnforcementTest(MailCase):
             b.call("mail_read", {"id": "work/aaa111"})
         self.assertIn(f"at most {broker.MAIL_CALLS_PER_RUN} mail calls", self.refused(b, "mail_read", {"id": "work/aaa111"}))
 
+    def test_zero_and_first_message_strings_count_against_mail_cap(self):
+        for args in ({'offset': '00'}, {'offset': ' 0 '}, {'offset': '+0'},
+                     {'message': '01'}, {'message': ' 1 '}, {'message': '+1'},
+                     {'message': 0}, {'message': -1}, {'offset': 1.5}, {'offset': True}):
+            with self.subTest(args=args):
+                b = self.broker()
+                for _ in range(broker.MAIL_CALLS_PER_RUN):
+                    self.ok(b, 'mail_read', {'id': 'work/aaa111'})
+                self.assertIn('mail calls', self.refused(b, 'mail_read', {'id': 'work/aaa111', **args}))
+
     def test_continuation_pages_do_not_count_against_the_mail_cap(self):
         """#134: at 6,000 characters a page, a 160,000-character thread needs ~28 pages; were each page counted
         against MAIL_CALLS_PER_RUN, one long thread would use up the run's mail budget and stop half-way. A
@@ -304,6 +314,35 @@ class EnforcementTest(MailCase):
             b.call("mail_read", {"id": "work/aaa111"})
         self.assertIn("work/aaa111", self.ok(b, "mail_read", {"id": "work/aaa111", "message": 1, "offset": 1}))
         self.assertIn(f"at most {broker.MAIL_CALLS_PER_RUN} mail calls", self.refused(b, "mail_read", {"id": "work/aaa111"}))
+
+    def test_first_read_with_an_offset_does_not_escape_the_mail_cap(self):
+        """The bug: any mail_read with a non-default message or offset came off the cap, on the caller's word, so a
+        first read of a different thread at offset=1 went past MAIL_CALLS_PER_RUN. Only a thread a counted read
+        opened in this run pages free."""
+        b = self.broker()
+        for _ in range(broker.MAIL_CALLS_PER_RUN):
+            self.ok(b, "mail_read", {"id": "work/aaa111"})
+        cap = f"at most {broker.MAIL_CALLS_PER_RUN} mail calls"
+        self.assertIn(cap, self.refused(b, "mail_read", {"id": "work/eee555", "offset": 1}))
+        self.assertIn(cap, self.refused(b, "mail_read", {"id": "work/eee555", "message": 2}))
+        self.assertIn(cap, self.refused(b, "mail_read", {"id": "work/eee555"}))
+        # the refused reads above must not cost the thread already open its pages (#134): it is read as _mail_thread reads it
+        self.assertIn("work/aaa111", self.ok(b, "mail_read", {"id": " work/aaa111 ", "offset": 1}))
+
+    def test_only_a_read_that_succeeded_opens_a_thread(self):
+        """A refused read shows nothing, so it opens nothing: its next page counts like any first read."""
+        b = self.broker()
+        self.assertIn("not visible to you", self.refused(b, "mail_read", {"id": "work/bbb222"}))
+        self.refused(b, "mail_read", {"id": "work/bbb222", "offset": 1})
+        self.assertEqual(b.counts["mail_read"], 2)
+        self.assertEqual(b.counts.get("mail_read_pages", 0), 0)
+
+    def test_a_first_read_past_the_start_opens_its_thread(self):
+        """It counted, so #134 holds from there: the pages after it are free."""
+        b = self.broker()
+        self.ok(b, "mail_read", {"id": "work/aaa111", "offset": 1})
+        self.ok(b, "mail_read", {"id": "work/aaa111", "offset": 2})
+        self.assertEqual((b.counts["mail_read"], b.counts["mail_read_pages"]), (1, 1))
 
 
 class OfferedTest(MailCase):
@@ -365,14 +404,16 @@ class ReplayTest(MailCase):
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "mail_read", {"id": "work/aaa111"})
         self.gmail.threads["aaa111"][0]["payload"]["parts"][0]["body"]["data"] = b64(b"changed since first read")
-        self.assertEqual(a, self.ok(second, "mail_read", {"id": "work/aaa111"}))   # shared text, fresh label check
+        self.assertEqual(a, self.ok(second, "mail_read", {"id": " work/aaa111 "}))   # shared text, fresh label check
         self.assertIn("Hello from the tagged thread", a)
         self.assertNotIn("a reply that came later", a)
         self.assertIn("not visible to you", self.refused(first, "mail_read", {"id": "work/fff666"}))
         found = self.ok(first, "mail_search", {"query": "in:anywhere"})
         self.assertNotIn("fff666", found)
         self.assertIn(f"before:{int(as_of.timestamp())}", self.gmail.lists()[-1]["q"])
-        saved = self.ok(second, "mail_attachment", {"id": "work/aaa111", "message": 1, "attachment": "report.pdf"})
+        self.ok(first, "mail_attachment", {"id": "work/aaa111", "message": 1, "attachment": "report.pdf"})
+        with mock.patch.object(second, '_mail_file', side_effect=AssertionError('cache missed')):
+            saved = self.ok(second, "mail_attachment", {"id": " work/aaa111 ", "message": 1, "attachment": "report.pdf"})
         self.assertIn("mail/work/aaa111/1-report.pdf", saved)
         self.assertEqual((second.root / "mail/work/aaa111/1-report.pdf").read_bytes(), b"%PDF-1 report")
         self.assertFalse((self.root / "mail").exists())            # never in the instance's own folder
@@ -383,6 +424,88 @@ class ReplayTest(MailCase):
         self.ok(first, "mail_read", {"id": "work/aaa111"})
         core.set_mail_grants("wren", [{"account": "work", "label": "Other"}])
         self.assertIn("not visible to you", self.refused(second, "mail_read", {"id": "work/aaa111"}))
+
+    def pair(self):
+        cache, lock = {}, threading.Lock()
+        return cache, self.replay(cache, lock, T0.replace(hour=12)), self.replay(cache, lock, T0.replace(hour=12))
+
+    def unlabel(self, tid):
+        for m in self.gmail.threads[tid]:
+            m["labelIds"] = [i for i in m["labelIds"] if i != TAG]
+
+    def test_label_off_between_the_pair_drops_the_thread_from_a_cached_search(self):
+        """The bug: _shared answered mail_search from the cache without a label check, so a thread whose label came
+        off between the two runs (the grant unchanged, so the key too) still reached the second run."""
+        _, first, second = self.pair()
+        a = self.ok(first, "mail_search", {})
+        self.assertIn("work/aaa111", a)
+        self.assertIn("work/eee555", a)
+        self.assertEqual(first.trace[-1]["tags"], [])
+        self.unlabel("aaa111")
+        b = self.ok(second, "mail_search", {})
+        self.assertNotIn("work/aaa111", b)
+        self.assertNotIn("Project notes", b)
+        self.assertIn("work/eee555", b)
+        self.assertEqual(a.count("\nwork/") - 1, b.count("\nwork/"))
+        self.assertIn(f": {b.count(chr(10) + 'work/')} thread(s), newest first", b)
+        self.assertNotIn("same answer as the other run", second.trace[-1]["tags"])
+        self.assertTrue(second.trace[-1]["tags"], "the judge is told this run's answer differs from the other's")
+
+    def test_every_thread_of_a_cached_search_gone_says_no_threads(self):
+        _, first, second = self.pair()
+        self.assertIn("work/aaa111", self.ok(first, "mail_search", {}))
+        for tid in self.gmail.threads:
+            self.unlabel(tid)
+        self.assertIn(": no threads", self.ok(second, "mail_search", {}))
+
+    def test_an_unchanged_cached_search_is_the_same_answer_byte_for_byte(self):
+        _, first, second = self.pair()
+        a = self.ok(first, "mail_search", {})
+        self.assertEqual(a, self.ok(second, "mail_search", {}))
+        self.assertIn("same answer as the other run", second.trace[-1]["tags"])
+
+    def test_a_search_cached_for_the_pair_survives_the_saved_cache(self):
+        """A preempted pass saves the pair's cache as JSON (trial._cache_json) and reloads it for the other arm: a
+        cached search must round-trip, a datetime in a row would kill the save."""
+        from supervisor import trial
+        cache, first, _ = self.pair()
+        a = self.ok(first, "mail_search", {})
+        saved = trial._cache_value(json.loads(json.dumps(trial._cache_json(cache))))
+        second = self.replay(saved, threading.Lock(), T0.replace(hour=12))
+        self.assertEqual(a, self.ok(second, "mail_search", {}))
+
+    def test_a_recheck_that_cannot_reach_gmail_shows_nothing(self):
+        """A thread that could not be checked is not known to be visible."""
+        _, first, second = self.pair()
+        self.ok(first, "mail_search", {})
+        with mock.patch.object(mail, "get_thread", side_effect=google.ApiError(500, "backend error")):
+            self.assertIn(": no threads", self.ok(second, "mail_search", {}))
+
+    def test_label_off_between_the_pair_refuses_a_cached_download(self):
+        """The bug: as with mail_search, the cached bytes of an attachment came back with no label check."""
+        _, first, second = self.pair()
+        args = {"id": "work/aaa111", "message": 1, "attachment": "report.pdf"}
+        self.ok(first, "mail_attachment", args)
+        self.unlabel("aaa111")
+        self.assertIn("not visible to you", self.refused(second, "mail_attachment", args))
+        self.assertFalse((second.root / "mail/work/aaa111/1-report.pdf").exists())
+
+    def test_message_trashed_between_the_pair_leaves_every_cached_read(self):
+        """The rule is per message too: a thread still visible, with one of its messages trashed since, must not
+        give that message back from the cache, as a row, a page or an attachment."""
+        self.gmail.add("abc123", [msg("n1", "abc123", [TAG], 9, "Ann <a@example.com>", "Keep", text="STAYS"),
+                                  msg("n2", "abc123", [], 10, "Ann <a@example.com>", "Keep", text="BINNED-TEXT",
+                                      files=[("binned.pdf", b"%PDF-1 report")])])
+        self.gmail.threads["abc123"][1]["snippet"] = "BINNED-SNIPPET"
+        _, first, second = self.pair()
+        download = {"id": "work/abc123", "message": 2, "attachment": "binned.pdf"}
+        self.assertIn("BINNED-SNIPPET", self.ok(first, "mail_search", {}))
+        self.assertIn("BINNED-TEXT", self.ok(first, "mail_read", {"id": "work/abc123"}))
+        self.ok(first, "mail_attachment", download)
+        self.gmail.threads["abc123"][1]["labelIds"] = ["TRASH"]
+        self.assertNotIn("BINNED-SNIPPET", self.ok(second, "mail_search", {}))
+        self.assertNotIn("BINNED-TEXT", self.ok(second, "mail_read", {"id": "work/abc123"}))
+        self.refused(second, "mail_attachment", download)
 
 
 class AttachmentTest(MailCase):

@@ -14,6 +14,17 @@ Instances can spend money on cloud models and coding hand-offs. Per-instance dai
 
 The operator can grant read access to Gmail threads with selected labels and to selected calendars. The supervisor holds OAuth credentials and checks grants; Gmail's OAuth scope itself is not restricted to a label (`supervisor/mail.py:56`, `supervisor/broker.py:1295`, `supervisor/calendar.py:1`, `supervisor/google.py:3`). Mail and calendar text can contain prompt injection: a sender can try to make an instance follow instructions in material it reads. Granting read access exposes that content to the instance.
 
+The operator can also grant read-only Drive access per account. The supervisor holds a whole-Drive read token;
+`own` is a supervisor-enforced reach, not a label or a narrower OAuth scope. It includes files the account owns,
+files in Shared Drives it belongs to, and same-domain files only when Drive's `about` reports `canCreateDrives=true`
+for the account. A Workspace that blocks Shared Drive creation shows no same-domain files under `own` unless they
+qualify as owned files or files in a member Shared Drive.
+`--all` includes external shares. Both exclude trash. The broker checks the grant and reach before returning files
+(`supervisor/google.py:40`, `supervisor/broker.py:2401`, `supervisor/gdrive.py:46`, `supervisor/gdrive.py:52`). Drive content can carry prompt
+injection and reaches model providers when the instance reads it. Revoke removes the grant and downloaded copies
+under that account's `gdrive/` directory, reporting deletion failures. It does not erase what the instance remembers
+or copies elsewhere (`supervisor/__main__.py:749`, `supervisor/core.py:689`).
+
 The operator can also authorise an instance-owned Google account. Its Gmail scope allows reading, sending, labelling and trashing mail. Its Drive scope covers its files and files shared with it, and allows sharing, trashing and permanent deletion of its own files. This is broader authority than operator-mail label grants. The broker refuses an instance-owned Google key that belongs to a registered operator account (`supervisor/google.py:38`, `supervisor/google.py:47`, `supervisor/broker.py:1153`). Prompt injection can therefore lead to actions using the instance's granted authority even though the instance never sees the credential.
 
 Native push keeps the operator's APNs signing key at `.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`), outside instance sandboxes. APNs receives only the event title, instance name and badge, never the message body; the app fetches that over the tailnet. Signing uses `/usr/bin/openssl`; `/usr/bin/curl --http2` is the second stdlib-only exception because APNs requires HTTP/2 (`supervisor/apns.py`).

@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge, localmodel, metrics, sandbox
-from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
+from .broker import CALENDAR_TOOLS, MAIL_TOOLS, DRIVE_TOOLS, Broker
 from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
                    TreeTooBig, UnsafePath, config_values, copy_beneath, dir_beneath, instance_config, instance_root,
                    knob, positive_int, whole, model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write,
@@ -71,7 +71,7 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # Keyed by the instance's name, not its folder, so it acts on the live instance whatever copy the exam runs
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
-            *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
+            *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS}   # the operator's mail, calendars and Drive never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
 
@@ -155,7 +155,7 @@ def backup() -> Path:
 # sandbox never), its Python environment (.venv/, .uv/: linked, read in place and read-only, as in a trial replay),
 # its browser profile (the sessions of its own accounts), the operator's mail it downloaded (an exam gets no mail),
 # its jobs' caches, logs and run files (.tmp/, but for its memory index: a cache keyed by chunk hash).
-EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", ".jobs", "logs", ".tmp")
+EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", "gdrive", ".jobs", "logs", ".tmp")
 EXAM_KEEP = (".tmp", ".tmp/memory-index.json")
 
 

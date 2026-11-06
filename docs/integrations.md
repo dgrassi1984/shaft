@@ -87,10 +87,10 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 
 ## Google accounts (`shaft google …`)
 
-Mail and Calendar share your Google accounts ([PLAN-calendar.md](plans/PLAN-calendar.md)). An instance never holds a
+Mail, Calendar, and Drive share your Google accounts ([PLAN-calendar.md](plans/PLAN-calendar.md)). An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly`, `calendar.readonly`, and `calendar.events` together and records the scopes Google actually granted
+for `gmail.readonly`, `calendar.readonly`, `calendar.events`, and `drive.readonly` together and records the scopes Google actually granted
 (the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
 the login to run again; it never returns an empty result. The operator's mailbox access stays read-only; calendar
 writes require per-instance write grants ([calendar write plan](../docs/plans/PLAN-calendar-write.md)).
@@ -148,7 +148,7 @@ Keep the query and account selection on continuations. The handle tracks each ac
 including threads left over after merging accounts; every continuation checks the current grant and label again.
 `shaft mail example grant work AssistantAccess` checks that the label exists and saves the grant in
 `.supervisor/tools/example.json`. `shaft mail example revoke work AssistantAccess` or `shaft mail example off` holds from example's
-next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start) counts as a call but not against those 30.
+next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start, of a thread already opened this run) counts as a call but not against those 30.
 `mail_read(id=…)` returns pages of at most 6,000 characters, including headers and footer, so the agent's tool-result
 cap preserves the whole page. Follow the footer's exact `mail_read(id=…, message=…, offset=…)` call until
 `End of thread`. `message` starts at 1, oldest first; `offset` is a character offset in that message's text,
@@ -271,9 +271,88 @@ call per granted calendar per pass (the first one pages through the whole calend
 nothing). Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
 watch)`: each event's handle, time and title, never its description, location or attendees. `wake` uses the same
 wake path (`watch-calendar`) and the same per-instance limit; an expired token (410) starts from now. The instance's
-own `calendar_create` and `calendar_move` changes are reported too.
+own `calendar_create` and `calendar_move` changes are reported too. `calendar_event` refuses a deleted event like one
+that never existed.
 
 Source: [calendar tools](../supervisor/calendar.py).
+
+## The operator's Drive (`shaft gdrive`)
+
+An instance may search, read, and download files from your Google accounts through `drive_search`, `drive_read`,
+and `drive_download`. Access is read-only. The supervisor holds the credential and checks the account grant and
+file reach before returning content. This is separate from [an instance's own Drive](#an-instances-own-drive-sheets-docs-and-slides-shaft-secret-name-google--scope-drive).
+See [Drive tools](../supervisor/broker.py), [Drive access checks](../supervisor/gdrive.py), and the [plan](plans/PLAN-operator-drive.md).
+
+Enable the **Google Drive API** in each account's OAuth project. In Google Auth Platform → **Data Access**, add
+`https://www.googleapis.com/auth/drive.readonly`. Run `shaft google login` again and tick Drive on the consent page.
+The login requests this scope alongside mail and calendar scopes ([Google scopes](../supervisor/google.py)).
+For Workspace accounts, check both admin settings:
+
+- In the Admin console's API controls, Drive must not be Restricted for this app, or the app must be trusted.
+- In the Drive and Docs settings, "Allow users to access Google Drive with the Drive SDK API" must be on.
+
+```bash
+shaft google login work operator@work.example
+shaft google                         # check that drive.readonly was granted
+shaft gdrive example grant work      # own reach
+shaft gdrive example grant work --all
+shaft gdrive example                 # show this instance's grants
+shaft gdrive                         # show accounts and all instances' grants
+shaft gdrive example revoke work
+shaft gdrive example off
+```
+
+Use `--client <name>` on login if the OAuth client differs from the alias. Grant checks Drive access before saving.
+Granting the same account again replaces its reach. Narrowing from `all` to `own` also deletes that account's downloaded copies, because a copy doesn't record how it was reached. Without `--all`, the reach is `own`.
+Commands: [CLI](../supervisor/__main__.py).
+
+| Reach | Files shown |
+|---|---|
+| `own` | Files you own, files in Shared Drives you belong to, and files owned by an address in your account's domain only when Drive's `about` reports `canCreateDrives=true` for the account |
+| `all` | Every file the account can reach, including files shared by strangers |
+
+A Workspace that blocks Shared Drive creation shows no same-domain files under `own` unless they qualify as owned files or files in a member Shared Drive.
+Both reaches exclude trash. `own` is not a label or a selected folder. It can include files written by others.
+A shortcut and its target must both pass the visibility check. Shared Drive membership is cached for the run.
+
+Search covers all granted accounts unless given an `account` or a `folder` handle. It returns 20 files by default,
+at most 50, with handles in the form `<alias>/<fileId>`. Follow its continuation call for more results.
+Without search text, results are newest first by modification time; with text, they keep Google's relevance order within each account.
+It reports accounts it could not search and Google's incomplete-search flag.
+Reads return at most 6,000 characters per page, including attribution and the continuation call.
+They mark the owner and last editor and say that instructions in the file are not yours.
+
+There are at most 30 Drive calls per run. A read continuation with a nonzero offset does not use that allowance
+if the handle was already read successfully in this run.
+Each file fetch is limited to 50,000,000 bytes. Downloads also have a combined limit of 100 MiB per run;
+text reads do not use that byte allowance.
+These caps slow a bulk copy. They do not prevent one over many runs.
+
+`drive_read` exports Docs as Markdown, Sheets as CSV of the first tab, and Slides as plain text.
+It also reads text files, JSON, and XML. For PDFs, images, and other binary files, use `drive_download`, then the
+instance's local tools. Downloads export Docs as DOCX, Sheets as XLSX, Slides as PPTX, and Drawings as PNG.
+Folders and unsupported Google types, including Forms, Maps, Earth, and Sites, cannot be read or downloaded.
+Files with `canDownload=false` are refused. Google's export limit can also block a supported file.
+
+Copies go under `gdrive/<alias>/` in the instance's folder. Downloads refuse until that path is gitignored;
+run `shaft update example` to bring in the template rule.
+Revoke takes effect on the next Drive call and deletes `gdrive/<alias>/`. `off` removes all Drive grants and
+all of `gdrive/`. If deletion fails, the command reports that the grant was revoked but copies remain.
+It does not erase memories or copies the instance made elsewhere.
+
+### The risks you accept
+
+1. **Your files leave your machine.** What an instance reads goes to its model provider. Judges and other models
+   may see it too. What it remembers stays in its memory after you revoke, and `shaft gdrive <name> off` deletes
+   only the downloaded copies.
+2. **Prompt injection can lead to disclosure.** A document can carry instructions. An instance with permission to
+   email anyone, share its own files with anyone, or reach the public internet can send what it reads through those channels.
+   Nothing blocks those sends after a Drive read. `own` is the only limit on which files it can read here,
+   and it is weaker than mail's label limit.
+3. **Reads may leave a mark in the company's audit log.** On Workspace, Drive API reads should appear in the admin
+   audit log as "Item content accessed", with the app's OAuth client ID, per Google's documentation. This has not
+   been checked in the log itself. On two real accounts, a read did not change "last viewed" (`viewedByMeTime`)
+   or "modified" (`modifiedTime`) 20 seconds later, for one Doc export and one file download on each account.
 
 ## Scheduled jobs (`shaft jobs …`)
 

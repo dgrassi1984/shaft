@@ -565,11 +565,11 @@ class BatteryExamCopyTest(unittest.TestCase):
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
         self.root = self.project / "instances" / "b"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/b", str(self.root))
-        (self.root / ".gitignore").write_text(".tmp/\nlogs/\nsecrets/\n.venv/\nmail/\n.browser/\n" + IGNORE_MIND)
+        (self.root / ".gitignore").write_text(".tmp/\nlogs/\nsecrets/\n.venv/\nmail/\ngdrive/\n.browser/\n" + IGNORE_MIND)
         files = {"memory/journal.md": "# j\n\n---\n## old entry\n", "notes/keep.md": "keep", "plugins/p.py": "P = 1\n",
                  "skills/s.md": "a skill", "self/self.md": "me", "inbox/20261024-x-from-operator.md": "unread",
                  "config.env": 'LLM_MODEL="m"\n', "secrets/secrets.json": '{"k": {"value": "SECRET-KEY"}}',
-                 ".venv/bin/python": "py", ".browser/Cookies": "SESSION", "mail/a/1/x.pdf": "MAIL",
+                 ".venv/bin/python": "py", ".browser/Cookies": "SESSION", "mail/a/1/x.pdf": "MAIL", "gdrive/work/x.pdf": "DRIVE",
                  ".tmp/memory-index.json": "{}", ".tmp/activity.json": "{}", "logs/llm_usage.jsonl": "{}\n",
                  "plugins/__pycache__/p.cpython-312.pyc": "pyc"}
         for rel, text in files.items():
@@ -596,7 +596,7 @@ class BatteryExamCopyTest(unittest.TestCase):
         for rel in ("memory/journal.md", "notes/keep.md", "notes/uncommitted.md", "plugins/p.py", "skills/s.md",
                     "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json"):
             self.assertEqual(got.get(rel), (self.root / rel).read_bytes(), rel)
-        for top in (".git", "secrets", ".browser", "mail", "logs", ".tmp/activity.json", "plugins/__pycache__"):
+        for top in (".git", "secrets", ".browser", "mail", "gdrive", "logs", ".tmp/activity.json", "plugins/__pycache__"):
             self.assertFalse([k for k in got if k == top or k.startswith(top + "/")], top)
         self.assertEqual(got[".venv"], f"-> {self.root / '.venv'}")      # its environment: linked, read in place
         self.assertNotIn(b"SECRET-KEY", b"".join(v for v in got.values() if isinstance(v, bytes)))

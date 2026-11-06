@@ -428,7 +428,7 @@ class ModelsTest(Case):
         (self.root / "config.env").write_text('LLM_MODEL="claude-haiku-5-5"\n')
         b = mock.Mock(port=123, shared=None, env_root=self.root)
         b.egress.port = 124
-        b.mail_env.return_value = b.calendar_env.return_value = ""
+        b.mail_env.return_value = b.calendar_env.return_value = b.gdrive_env.return_value = ""
         b.sandbox_env.return_value = {}
         with mock.patch.object(runner.sandbox, "profile", return_value=""), \
                 mock.patch.object(runner.sandbox, "wrap", side_effect=lambda profile, args: args), \

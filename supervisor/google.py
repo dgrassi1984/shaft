@@ -37,13 +37,16 @@ GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR = "https://www.googleapis.com/auth/calendar.readonly"
 GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 DRIVE = "https://www.googleapis.com/auth/drive"
+DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS = "https://www.googleapis.com/auth/spreadsheets"
 DOCS = "https://www.googleapis.com/auth/documents"
 SLIDES = "https://www.googleapis.com/auth/presentations"
 CALENDAR_EVENTS = "https://www.googleapis.com/auth/calendar.events"
-SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS)             # operator consent; per-calendar write grants stay separate
+# Operator consent; per-calendar write grants stay separate.
+SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY)
 SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
-               GMAIL_MODIFY: "gmail.modify", DRIVE: "drive", SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
+               GMAIL_MODIFY: "gmail.modify", DRIVE_READONLY: "drive.readonly", DRIVE: "drive",
+               SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
@@ -215,8 +218,8 @@ def _error_text(e: urllib.error.HTTPError) -> str:
 
 
 def _over_quota(status: int, detail: str) -> bool:
-    return status == 429 or (status == 403 and any(k in detail for k in ("Quota exceeded", "ate Limit Exceeded",
-                                                                          "rateLimitExceeded")))
+    return status == 429 or (status == 403 and any(k in detail.casefold() for k in
+            ("quota exceeded", "rate limit exceeded", "ratelimitexceeded")))
 
 
 def _retry_after(e: urllib.error.HTTPError) -> float:
@@ -316,6 +319,23 @@ class Account:
     def _request(self, method: str, url: str, body: dict | None, *, headers: dict | None = None, **params) -> dict:
         """One door and the same refresh/quota handling for reads and writes (PLAN-calendar-write M0).
         Transport failures are not retried: an insert may already have reached Google."""
+        return self._response(method, url, body, json.load, 30, headers=headers, **params)
+
+    def download(self, url: str, max_bytes: int, timeout: int = 120, **params) -> bytes:
+        """GET bytes, reading at most one byte beyond the cap to detect an oversized response."""
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
+
+        def read(resp):
+            data = resp.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError(f"download is at least {len(data)} bytes, more than {max_bytes} bytes allowed")
+            return data
+
+        return self._response("GET", url, None, read, timeout, **params)
+
+    def _response(self, method, url, body, read, timeout, *, headers=None, **params):
+        """JSON and byte reads share refresh and quota handling; transport errors propagate unchanged."""
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")}, doseq=True)
         refreshed, waited, attempt = False, 0.0, 0
         while True:
@@ -324,8 +344,8 @@ class Account:
                                          headers={"Authorization": f"Bearer {self.token()}",
                                                   "Content-Type": "application/json", **(headers or {})})
             try:
-                with urlopen(req, timeout=30) as resp:
-                    return json.load(resp)
+                with urlopen(req, timeout=timeout) as resp:
+                    return read(resp)
             except urllib.error.HTTPError as e:
                 detail = _error_text(e)
                 if e.code == 401 and not refreshed:   # the access token expired early: refresh once
@@ -354,7 +374,7 @@ def _signed_in_as(access_token: str, granted: set[str]) -> str:
         url, read = GMAIL_PROFILE, lambda d: d.get("emailAddress")
     elif CALENDAR in granted:
         url, read = CALENDAR_PRIMARY, lambda d: d.get("id")
-    elif DRIVE in granted:
+    elif granted & {DRIVE, DRIVE_READONLY}:
         url, read = DRIVE_ABOUT, lambda d: (d.get("user") or {}).get("emailAddress")
     else:
         raise AccountError("Google granted no Gmail, Calendar or Drive scope: nothing saved")

@@ -261,6 +261,7 @@ class PredictionCopyTest(unittest.TestCase):
             broker.egress.port = fake.port
             broker.mail_env.return_value = ""
             broker.calendar_env.return_value = ""
+            broker.gdrive_env.return_value = ""
             broker.sandbox_env.return_value = {}
             with mock.patch("supervisor.core.LLM_PORTS", [fake.port]), mock.patch.object(runner, "stage_docs"):
                 result = p._exam(root, broker, STATE, "local", p.PREDICT, lambda: False)
