@@ -54,19 +54,19 @@ class Fixture(unittest.TestCase):
 class OutcomesTest(Fixture):
     def test_m7a_unrelated_operator_message_never_counts(self):
         reply = self.message('operator', 'm', file='other.md', text='A different topic', ts=(NOW + timedelta(hours=1)).isoformat())
-        self.assertEqual(self.outcome([reply])['outcome'], 'ignored')
+        self.assertEqual(self.outcome([reply])['outcome'], 'no_link')
 
     def test_m7a_explicit_reply_identity_counts_at_48h_boundary(self):
         reply = self.message('operator', 'm', file='answer.md', text='Yes', in_reply_to='item.md', ts=(NOW + timedelta(hours=48)).isoformat())
         row = self.outcome([reply])
         self.assertEqual((row['outcome'], row['evidence']), ('followed_up', 'message:answer.md'))
         reply['ts'] = (NOW + timedelta(hours=48, seconds=1)).isoformat()
-        self.assertEqual(self.outcome([reply], hours=49)['outcome'], 'ignored')
+        self.assertEqual(self.outcome([reply], hours=49)['outcome'], 'no_link')
 
     def test_m7a_quoted_reply_links_only_its_item(self):
         reply = self.message('operator', 'm', file='answer.md', text='> Should I rewrite the parser?\n\nYes')
         self.assertEqual(self.outcome([reply])['outcome'], 'followed_up')
-        self.assertEqual(self.outcome([reply], text='An unrelated delivered item')['outcome'], 'ignored')
+        self.assertEqual(self.outcome([reply], text='An unrelated delivered item')['outcome'], 'no_link')
 
     def test_m7a_feedback_names_the_file(self):
         rated = feedback.rate('m', 'operator', {'kind': 'message', 'file': 'item.md'}, 'up', '', '', '')
@@ -80,7 +80,7 @@ class OutcomesTest(Fixture):
         with mock.patch.object(doc_comments, 'threads', return_value=comments):
             self.assertEqual(self.outcome(text='Read [report](notes/docs/report.md)')['outcome'], 'edited')
             self.assertEqual(self.outcome(attachments=[{'path': 'birds/m/notes/docs/report.md'}])['outcome'], 'edited')
-            self.assertEqual(self.outcome(text='notes/docs/other.md')['outcome'], 'ignored')
+            self.assertEqual(self.outcome(text='notes/docs/other.md')['outcome'], 'no_link')
 
     def test_m7a_real_comment_store_uses_document_relative_path(self):
         doc_comments.add_thread('m', 'p-0000000000000001', 'notes/docs/report.md', None, 'sha', 'Please revise')
@@ -89,11 +89,11 @@ class OutcomesTest(Fixture):
     def test_m7a_ambiguous_quote_cannot_identify_one_of_two_items(self):
         reply = self.message('operator', 'm', file='answer.md', text='> Should I rewrite the parser?\nYes')
         self.write('messages.jsonl', [self.message(), self.message(file='duplicate.md'), reply])
-        self.assertEqual([r['outcome'] for r in outcomes.records('m', NOW + timedelta(hours=48))], ['ignored', 'ignored'])
+        self.assertEqual([r['outcome'] for r in outcomes.records('m', NOW + timedelta(hours=48))], ['no_link', 'no_link'])
 
     def test_m7a_window_is_open_until_boundary_and_sent_is_missing(self):
         self.assertEqual(self.outcome(hours=47)['outcome'], 'open')
-        self.assertEqual(self.outcome(hours=48)['outcome'], 'ignored')
+        self.assertEqual(self.outcome(hours=48)['outcome'], 'no_link')
         self.assertIn('sent: missing draft-to-sent record', '\n'.join(outcomes.lines('m', NOW)))
 
     def test_m7a_reply_header_survives_in_supervisor_record(self):

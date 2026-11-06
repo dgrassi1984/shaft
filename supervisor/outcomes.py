@@ -2,6 +2,8 @@
 
 No supervisor record links a delivered mail draft to a sent mail: `sent` is missing,
 not inferred from mail reads, feedback delivery, or unrelated operator activity.
+`no_link` is not "ignored": on real records (2026-11-06) he answered most items in chat, where nothing names the item,
+so 26 of 28 closed Thelos items had no link, including work he used. Read followed_up as a floor.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from datetime import datetime, timedelta
 from . import core, doc_comments, feedback, pushes
 
 OUTCOME_WINDOW_H = 48
-KINDS = ("followed_up", "edited", "sent", "ignored", "open")
+KINDS = ("followed_up", "edited", "sent", "no_link", "open")
 
 
 def _ratings(name: str) -> list[dict]:
@@ -76,7 +78,7 @@ def records(name: str, now: datetime | None = None) -> list[dict]:
         if links:
             at, outcome, evidence = links[0]
         else:
-            outcome, evidence = ("ignored" if now >= end else "open"), ""
+            outcome, evidence = ("no_link" if now >= end else "open"), ""
             at = end if now >= end else now
         out.append({"file": row["file"], "ts": row["ts"], "outcome": outcome,
                     "evidence": evidence, "at": at.isoformat(timespec="seconds")})
@@ -88,6 +90,6 @@ def lines(name: str, now: datetime | None = None) -> list[str]:
     rows = [r for r in records(name, now) if now - timedelta(days=7) <= pushes._time(r["ts"]) <= now]
     if not rows:
         return []
-    return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window): "
-            + ", ".join(f"{k} {sum(r['outcome'] == k for r in rows)}" for k in KINDS if k != "sent")
+    return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window; a floor, chat answers name no "
+            "item): " + ", ".join(f"{k} {sum(r['outcome'] == k for r in rows)}" for k in KINDS if k != "sent")
             + "; sent: missing draft-to-sent record"]
