@@ -641,7 +641,13 @@ differs from what the cycle originally saw is not the run's mistake. A run that 
 intent did not complete its cycle. Where a record marks a cut, the run saw more than you do: do not count the cut \
 as its omission. If the two runs are about equally effective, answer tie."""
 
+JUDGE_SYSTEM += ("\n\nFor each run, anticipated is true only when it produced something useful to the operator "
+                 "that the operator had not asked for, for a need supported by the record, and it reached the "
+                 "operator or was offered to them. Work the operator ordered, self-maintenance, record-keeping "
+                 "and rechecks are false. Keep this separate from the winner, margin and criterion grades.")
+
 _ARM = {"type": "object", "properties": {
+    "anticipated": {"type": "boolean"},
     "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
     "claim_supported": {"type": "boolean"}},
     "required": ["criterion_met", "claim_supported"], "additionalProperties": False}
@@ -717,7 +723,10 @@ def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str
     """One judgment of a pair in one order; the judge owns retries."""
     from . import judge
     case = judge_case(context, first, second)
-    return judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, model=model)
+    out = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, model=model)
+    for arm in ("first", "second"):
+        judge.normalize_anticipated(out.get(arm))
+    return out
 
 
 def _judge_usd(purpose: str) -> float:

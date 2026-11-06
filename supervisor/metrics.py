@@ -102,6 +102,11 @@ For every instance, value_for own_capability or own_record caps at 3 unless the 
 shows that work used in something delivered to the operator. When the cap applies, value_reason says so. \
 The operator-facing scale is unchanged.
 
+Anticipation, separately: anticipated is true only when this cycle produced something useful to the \
+operator that the operator had not asked for, for a need supported by the record, and it reached the \
+operator or was offered to them. Work the operator ordered, self-maintenance, record-keeping and \
+rechecks are false. This field never changes success, value, difficulty or any existing grade.
+
 Delivery: delivery_supported is yes only when a successful call on finish.delivered_via carries this \
 cycle's result to the operator; no when a channel is claimed with no matching successful call, a failed \
 claim, never a bonus; na when delivered_via is none or absent. message: send_message with to=operator. \
@@ -173,6 +178,7 @@ VALUE_PROPS = {
     "value_reason": {"type": "string", "description": "one sentence: the concrete output, or that there is none"},
 }
 VALUES = tuple(VALUE_PROPS)
+ANTICIPATED_PROPS = {"anticipated": {"type": "boolean"}}
 OUTCOME_PROPS = {
     "delivery_supported": {"type": "string", "enum": ["yes", "no", "na"]},
     "deliverable_met": {"type": "string", "enum": ["yes", "partial", "no"]},
@@ -194,7 +200,7 @@ ERRORS = tuple(ERROR_PROPS)
 
 
 def _schema(props: dict) -> dict:
-    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+    return {"type": "object", "properties": props, "required": [k for k in props if k != "anticipated"], "additionalProperties": False}
 
 
 SURPRISE_PROPS = {
@@ -208,13 +214,13 @@ SURPRISE_PROPS = {
     "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
 }
 SURPRISES = tuple(SURPRISE_PROPS)
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
-    """Backfill: only the rating and value fields a judged cycle is missing (its verdict stays as it is)."""
+    """Backfill missing ratings/value and optional anticipation, keeping the existing grades."""
     props = {**RATING_PROPS, **VALUE_PROPS}
-    return _schema({k: props[k] for k in props if k in missing})
+    return _schema({**{k: props[k] for k in props if k in missing}, **ANTICIPATED_PROPS})
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 CONFIDENCE_V2 = "criterion_met=yes"
@@ -377,6 +383,7 @@ def by_judge_trend(rows: list[dict], figure) -> str:
 
 def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES + PUSHES + PUSHBACKS + ERRORS) -> None:
     """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
+    judge.normalize_anticipated(verdict)
     absent = [k for k in fields if k not in verdict]
     if absent:
         raise judge.JudgeError(f"judge returned no {', '.join(absent)}")
@@ -996,7 +1003,7 @@ def backfill(name: str, limit: int | None = None) -> int:
         except judge.JudgeError as e:
             log(f"{name}: backfill of {j['episode_ts']} failed: {e}")
             break
-        out = {k: out[k] for k in missing}
+        out = {k: out[k] for k in (*missing, "anticipated") if k in out}
         if "origin_supported" in out and not (ep.get("intent") or {}).get("origin"):
             out["origin_supported"] = None       # declared nothing: before origins existed
         now = datetime.now().isoformat(timespec="seconds")
@@ -1203,7 +1210,7 @@ def surprise_baseline_report(name: str) -> str:
 # with the judge's own noise when asked the same thing twice. The control re-asks the same case, by the same judge, with
 # the question as it stands minus the fields — so the fields are the only difference between the two runs.
 CONTROL_SYSTEM = JUDGE_SYSTEM[:JUDGE_SYSTEM.index("\n\nExpectations, last and separately")]
-CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS})
+CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS})
 _MET_RANK = {"no": 0, "partial": 1, "yes": 2}
 
 
@@ -1623,10 +1630,21 @@ def self_audit_lines(rows: list[dict]) -> list[str]:
             f"Non-yes verdicts with deliverable met (self-imposed clauses only): {clauses}"]
 
 
+def anticipated_line(rows: list[dict], now: datetime) -> str:
+    known = [j for j in _window(rows, now - timedelta(days=14), now)
+             if isinstance(j.get("anticipated"), bool)]
+    if not known:
+        return ""
+    return (f"Anticipated a need (last 14 days): {sum(j['anticipated'] for j in known)}/{len(known)} "
+            "judged cycles with the field")
+
+
 def _value_section(js: list[dict]) -> list[str]:
     """What my cycles delivered, whatever the criterion I set myself — the measure busy work cannot raise."""
     rows = valued(js)
     lines = ["## What my cycles were worth (what would be lost if each had not run)"]
+    if line := anticipated_line(js, datetime.now()):
+        lines.append("- " + line)
     if not rows:
         return lines + ["- No cycle has a value grade yet.", ""]
     model = rows[-1].get("model")
@@ -1882,6 +1900,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         from . import consultstats
         if (consults := consultstats.review_line(name)):
             out.append(f"  consults: {consults}")
+        if line := anticipated_line(js, now):
+            out.append("  " + line)
         if not rows:
             out.append(f"  last judged cycle: {js[-1]['episode_ts'][:16].replace('T', ' ') if js else 'never'}")
             continue
