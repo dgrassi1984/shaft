@@ -598,7 +598,7 @@ def _post(req: Request, dev: str) -> Response:
             extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
-            reply_links.record(m[1], fields.get("in_reply_to"), "web:" + (fields.get("mid") or secrets.token_hex(16)))
+            reply_links.record(m[1], fields.get("in_reply_to"), f"send:{m[1]}:{fields.get('mid') or secrets.token_hex(16)}")
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))

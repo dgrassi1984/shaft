@@ -77,6 +77,11 @@ class ReviewFollowupsTest(InstanceFixture, unittest.TestCase):
         self.assertIn("no tools", seen[-1][0][0]["content"])
         self.assertNotIn("only tool is record_correction", seen[-1][0][0]["content"])
         self.assertIsNone(seen[-1][1])
+        for messages, _ in seen[:-1]:
+            self.assertIn(prompts.TALK_ORDERS, messages[1]["content"])
+        self.assertNotIn(prompts.TALK_ORDERS, seen[-1][0][1]["content"])
+        self.assertIn("Keep each ORDER line from the page summaries unless a later page shows it recorded.",
+                      seen[-1][0][1]["content"])
 
     def test_grants_do_not_advertise_tools_trimmed_out_of_sleep(self):
         grants = {"SHAFT_SHARED": "/shared", "SHAFT_MAIL": "mail", "SHAFT_GDRIVE": "drive",

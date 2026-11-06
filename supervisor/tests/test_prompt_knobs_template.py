@@ -188,9 +188,8 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
         with mock.patch.object(recovery, "orphan_talks", return_value=[("orders", turns)]):
             self.assertEqual(recovery.run(self.cfg, self.state, mock.Mock(stream=stream)), 1)
         instruction = seen[0][1]["content"]
-        self.assertIn("List any order made in this conversation that has no recorded commitment and no result", instruction)
-        self.assertIn("Use the conversation order records as evidence", instruction)
-        self.assertIn("No entry for a turn means no commitment was recorded in that turn.", instruction)
+        self.assertIn(prompts.TALK_ORDERS, instruction)
+        self.assertNotIn("No entry for a turn means", instruction)
         self.assertNotIn("UNRELATED-LOG", instruction)
         records = instruction.split("Conversation order records:\n", 1)[1].split("\n\n", 1)[0].splitlines()
         self.assertEqual(len(records), 3)
@@ -207,7 +206,8 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
                  {"ts": "2026-11-06T09:01:00", "role": "assistant", "content": "Understood."}]
         expected = ("Transcript page:\n[2026-11-06T09:00:00] the operator: Send the report tomorrow.\n\n"
                     "[2026-11-06T09:01:00] me: Understood.\n\n")
-        for tools in ([], [{"tool": "read_file", "args": "{}", "result": "UNRELATED-LOG" * 2700}]):
+        for tools in (None, "bad", 42, {}, [], [None, [], "bad", {}, {"tool": []}, {"tool": {}}],
+                      [{"tool": "read_file", "args": "{}", "result": "UNRELATED-LOG" * 2700}]):
             with self.subTest(tools_present=bool(tools)):
                 turns[1]["tools"] = tools
                 seen = []
@@ -221,6 +221,56 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
                 self.assertEqual(len(seen), 1)
                 transcript = seen[0][1]["content"].split("\n\nBefore the journal entry", 1)[0]
                 self.assertEqual(transcript, expected)
+
+    def test_missing_and_mock_knobs_keep_default_prompt_bytes_and_doubts_schema(self):
+        for cfg in (object(), mock.Mock()):
+            self.assertEqual(prompts.live_instructions(cfg), prompts.LIVE)
+        for value in (None, mock.Mock()):
+            self.cfg.values.pop("DOUBTS", None)
+            if value is not None:
+                self.cfg.values["DOUBTS"] = value
+            _, tools = self.capture_live()
+            finish = next(t["function"] for t in tools if t["function"]["name"] == "finish_cycle")
+            self.assertIn("doubts", finish["parameters"]["properties"])
+
+    def test_order_tool_names_are_exact_and_closed_commit_tool_falls_back_to_queue(self):
+        self.assertNotIn("record it with commit_to", prompts.conversation_orders({"my_commit_to_plugin"}))
+        self.assertIn("use queue_for_next_cycle", prompts.conversation_orders({"my_commit_to_plugin"}))
+        self.assertIn("If commit_to has closed because the reply budget ran out, use queue_for_next_cycle in its place",
+                      prompts.conversation_orders({"commit_to"}))
+
+    def test_talk_summary_keeps_its_original_bytes_without_order_wording(self):
+        self.assertEqual(prompts.TALK_SUMMARY, (
+            "The conversation is over. Write the journal entry your future self will read about it, "
+            "in first person: what was discussed, what you learned about {operator} or about "
+            "yourself, and anything you committed to or want to follow up on. Only what actually "
+            "happened in the conversation above. Plain markdown, no heading, under 250 words.") + prompts.SELF_CLAIMS)
+
+    def test_recovery_orders_are_operator_only_including_fallback(self):
+        for speaker in ("", "delegate"):
+            turns = [{"ts": "2026-11-06T09:00:00", "role": "user", "content": "Send the report tomorrow.",
+                      "speaker": speaker},
+                     {"ts": "2026-11-06T09:01:00", "role": "assistant", "content": "Understood.",
+                      "tools": [{"tool": "commit_to"}]}]
+            seen = []
+
+            def stream(messages, *args, **kwargs):
+                seen.append(copy.deepcopy(messages))
+                return Reply("<tool_call>not an entry" if len(seen) == 1 else "Journal entry.")
+
+            with self.subTest(speaker=speaker), \
+                 mock.patch.object(recovery, "orphan_talks", return_value=[("orders", turns)]):
+                self.assertEqual(recovery.run(self.cfg, self.state, mock.Mock(stream=stream)), 1)
+            self.assertEqual(len(seen), 2)
+            for request in seen:
+                self.assertEqual(prompts.TALK_ORDERS in request[1]["content"], not bool(speaker))
+
+    def test_order_audit_distinguishes_failed_records_and_requires_checking_results(self):
+        self.assertIn("A commit_to or queue_for_next_cycle line without ERROR counts as recorded; one with ERROR does not.",
+                      prompts.TALK_ORDERS)
+        self.assertIn("Other actions are not listed here, so check the conversation's text for a result before listing an order.",
+                      prompts.TALK_ORDERS)
+        self.assertIn("exact words marked ORDER, with a checkable criterion", prompts.TALK_ORDERS)
 
 
 if __name__ == "__main__":

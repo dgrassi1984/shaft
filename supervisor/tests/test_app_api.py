@@ -678,6 +678,25 @@ class SendTest(AppTest):
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(len(reply_links.records()), 1)
 
+    def test_same_mid_over_app_and_web_routes_records_one_reply_link(self):
+        self.message(datetime.now().isoformat(), "stable.md", "Keep this?")
+        response = self.send(mid="cross-route", text="Yes", in_reply_to="stable.md")
+        self.assertEqual(response.status, 200, response.body)
+        chat_id = json.loads(response.body)["chat"]
+        fields = {"text": "Yes", "mid": "cross-route", "in_reply_to": "stable.md"}
+        body = b"".join(f'--B\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode()
+                        for key, value in fields.items()) + b"--B--\r\n"
+        cookie = self.paired()
+        response = self.req("/chat/wren/send", "POST", body=body,
+                            headers={"content-type": "multipart/form-data; boundary=B",
+                                     "sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)}, cookie=cookie)
+        self.assertEqual(response.status, 200, response.body)
+        rows = reply_links.records()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["instance"], rows[0]["key"], rows[0]["in_reply_to"]),
+                         ("wren", "send:wren:cross-route", "stable.md"))
+        self.assertEqual(len(web_chat.load(chat_id)["turns"]), 1)
+
     def test_absent_or_invalid_reply_identity_does_not_change_the_turn(self):
         self.message(datetime.now().isoformat(), "other.md", "Hi", frm="other")
         for target in (None, "", "unknown.md", "../stable.md", "other.md", "x" * 256, "bad\nname"):

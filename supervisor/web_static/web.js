@@ -1403,7 +1403,7 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-reply-message]");
     const box = document.querySelector("form.composer textarea[name=text]");
-    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box, "", true, b.dataset.replyMessage);   // one tap to answer it: the keyboard comes, on a phone too
+    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box, "", true, b.dataset?.replyMessage);   // one tap to answer it: the keyboard comes, on a phone too
   });
   // Retry sends the message that failed again, in one tap when the failed request cannot have run anything
   // (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14). When it may have

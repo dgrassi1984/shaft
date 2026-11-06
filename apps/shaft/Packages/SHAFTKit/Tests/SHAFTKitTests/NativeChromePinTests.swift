@@ -87,7 +87,7 @@ struct NativeChromePinTests {
         let footer = try #require(source.range(of: "struct AnswerFooter"))
         let body = source[footer.lowerBound...]
         let thumb = try #require(body.range(of: #"ThumbButton(thumb: "up""#))
-        let hover = try #require(body.range(of: "HoverActions(source: source, shown: hovering"))
+        let hover = try #require(body.range(of: "HoverActions(source: source, file: file, shown: hovering"))
         #expect(thumb.lowerBound < hover.lowerBound)
         let row = body[..<thumb.lowerBound]
         #expect(row.contains("#if os(iOS)\n                if keepActions && !source.isEmpty {"))

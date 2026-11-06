@@ -412,7 +412,7 @@ def _send(req: Request, n: str) -> Response:
     try:
         if mode == "background":
             file, said = web_chat.background(n, login, text, files, mid=mid)
-            reply_links.record(n, fields.get("in_reply_to"), "app:" + mid)
+            reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
             return _said(said, chat=None, file=file or None)
         if mode == "queue":
             chat, said = web_chat.queue(n, login, text, files, mid=mid)
@@ -420,7 +420,7 @@ def _send(req: Request, n: str) -> Response:
             chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of)
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
-    reply_links.record(n, fields.get("in_reply_to"), "app:" + mid)
+    reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
     return _said(said, chat=(chat or {}).get("id"), file=None)
 
 
