@@ -2794,31 +2794,36 @@ class ReplayBroker(Broker):
     # the calendar unshared), so a cached event is checked again; an edit since stays the first run's, for the pair.
     def _calendar_events(self, start: str = "", end: str = "", query: str = "", calendar: str = "",
                          max: int = 50) -> str:   # noqa: A002
-        def still(found: dict) -> dict:
-            return self._calendar_still(found, start, end, query)
         return self._calendar_listing(self._shared(
             ["calendar_found", self.calendar_grants(), start, end, query, calendar, max, self.as_of],
-            lambda: self._calendar_found(start, end, query, calendar, max), still))
+            lambda: self._calendar_found(start, end, query, calendar, max), self._calendar_still))
 
-    def _calendar_still(self, found: dict, start: str, end: str, query: str) -> dict:
-        """`found` without the events no longer in the listing it came from; one that could not be checked is dropped."""
+    def _calendar_still(self, found: dict) -> dict:
+        """`found` without the events no longer on their granted calendar; one that could not be checked is dropped. Each
+        is asked after by its id: its listing's query and window would drop one that was only renamed or moved in time."""
         from . import calendar as gcal, google
-        t0, t1, _ = gcal.window(str(start or ""), str(end or ""), self.as_of)
-        grants = {f"{g['account']}/{g['name']}": g for g in self.calendar_grants()}
-        there: dict[str, set[str]] = {}
-        for where in {r[1] for r in found["rows"]} & grants.keys():
-            g = grants[where]
+        rows = []
+        for r in found["rows"]:
             try:
-                acct = self._google_account(g["account"], google.CALENDAR)
-                items, _ = gcal.events(acct, g["calendar"], t0, t1, str(query or "").strip(), self.as_of)
-                there[where] = {ev.get("id") for ev in items}
-            except (google.AccountError, google.ApiError) as e:
-                self._log(f"{self.name} calendar_events {where}: not checked again, its events dropped: {e}")
-        return {**found, "rows": [r for r in found["rows"] if r[3].get("id") in there.get(r[1], ())]}
+                self._calendar_there(r[0])
+            except (gcal.NotVisible, google.AccountError, google.ApiError):
+                continue
+            rows.append(r)
+        if len(rows) < len(found["rows"]):
+            self._log(f"{self.name} calendar_events: {len(found['rows']) - len(rows)} event(s) of the other run's answer "
+                      "failed the check, dropped")
+        return {**found, "rows": rows}
+
+    def _calendar_there(self, id: str) -> None:   # noqa: A002
+        """NotVisible unless the event is on a granted calendar now. Google answers a GET of a deleted event with the
+        event, details and all, status cancelled."""
+        from . import calendar as gcal
+        if self._calendar_lookup(id)[-1].get("status") == "cancelled":
+            raise gcal.NotVisible(gcal.HIDDEN)
 
     def _calendar_event(self, id: str) -> str:   # noqa: A002
         def still(answer: str) -> str:
-            self._calendar_lookup(id)              # NotVisible if it is no longer on the granted calendar
+            self._calendar_there(id)
             return answer
         return self._shared(["calendar_event", self.calendar_grants(), id, self.as_of],
                             lambda: Broker._calendar_event(self, id), still)

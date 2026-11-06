@@ -500,6 +500,32 @@ class ReplayTest(CalendarCase):
         self.assertNotIn("same answer as the other run", second.trace[-1]["tags"])
         self.assertEqual(int(re.search(r": (\d+) event\(s\)", a)[1]) - 1, int(re.search(r": (\d+) event\(s\)", b)[1]))
 
+    def test_event_deleted_between_the_pair_leaves_a_cached_read(self):
+        """The bug: Google answers a GET of a deleted event with the event, status cancelled, details and all, so a check
+        that only asked whether it could be fetched passed it and gave the second run the first run's answer."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        hdl, window = self.handle(PRIMARY, "own1"), {"start": "2026-10-12", "end": "2026-10-19"}
+        self.assertIn("Planning", self.ok(first, "calendar_event", {"id": hdl}))
+        self.assertIn("Planning", self.ok(first, "calendar_events", window))
+        self.cal.events[PRIMARY]["own1"]["status"] = "cancelled"
+        self.assertEqual(self.refused(second, "calendar_event", {"id": hdl}), HIDDEN)
+        self.assertNotIn("Planning", self.ok(second, "calendar_events", window))
+
+    def test_an_edit_between_the_pair_stays_in_a_cached_listing(self):
+        """The bug: the listing was checked by running its query and window again, so an event renamed or moved in time,
+        still on the granted calendar, dropped out of the second run's answer. An edit stays the first run's."""
+        cache, lock = {}, threading.Lock()
+        first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
+        args = {"start": "2026-10-12", "end": "2026-10-19", "query": "Planning"}
+        a = self.ok(first, "calendar_events", args)
+        self.assertIn("Planning", a)
+        moved = self.cal.events[PRIMARY]["own1"]
+        moved.update(summary="Review", start={"dateTime": "2026-11-20T14:00:00+01:00", "timeZone": "Europe/Rome"},
+                     end={"dateTime": "2026-11-20T15:00:00+01:00", "timeZone": "Europe/Rome"})
+        self.assertEqual(a, self.ok(second, "calendar_events", args))
+        self.assertIn("same answer as the other run", second.trace[-1]["tags"])
+
     def test_a_cached_calendar_listing_survives_the_saved_cache(self):
         """A preempted pass saves the pair's cache as JSON (trial._cache_json) and reloads it for the other arm."""
         from supervisor import trial
@@ -516,7 +542,7 @@ class ReplayTest(CalendarCase):
         cache, lock = {}, threading.Lock()
         first, second = (self.replay(cache, lock, datetime(2026, 10, 12, 8, 0)) for _ in range(2))
         self.assertNotIn(": no events", self.ok(first, "calendar_events", {}))
-        with mock.patch.object(gcal, "events", side_effect=google.ApiError(500, "backend error")):
+        with mock.patch.object(gcal, "event", side_effect=google.ApiError(500, "backend error")):
             self.assertIn(": no events", self.ok(second, "calendar_events", {}))
 
 
