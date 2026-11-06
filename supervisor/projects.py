@@ -115,7 +115,11 @@ def section(name: str) -> list[str]:
         items = _fold(core.safe_read(core.INSTANCES / name, FILE, ""))
         if not any(it["status"] == "open" for it in items.values()):
             return ["## Projects", "Open projects: 0"]
-        rows = lines(items, metrics.live_episodes(name), metrics.judgments(name), datetime.now())
+        rows = lines(items, metrics.live_episodes(name), metrics.judgments_for_stats(name), datetime.now())
+        from . import planchannel
+        cfg = core.config_values(core.safe_read(core.INSTANCES / name, "config.env", ""))
+        if cfg.get("LLM_BASE_URL") == "broker" and planchannel.prefix(cfg.get("LLM_MODEL")):
+            rows = [re.sub(r"USD [^;]+", "plan: no per-call cost", row) for row in rows]
         return ["## Projects", f"Open projects: {len(rows)}", *rows]
     except (OSError, ValueError, TypeError) as e:
         return [f"Projects could not be read: {type(e).__name__}: {e}"]

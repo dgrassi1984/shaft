@@ -63,7 +63,7 @@ def candidates(name: str, seed: str = "anchoring") -> list[dict]:
     """Eligible live episodes, shuffled reproducibly before sampling."""
     episodes = {ep["ts"]: ep for ep in metrics.live_episodes(name)}
     chosen = []
-    for j in metrics.judgments(name):
+    for j in metrics.judgments_for_stats(name):
         ep = episodes.get(j["episode_ts"])
         if j.get("judge") == "rule" or not metrics.by_current_judge(j) or not ep or not ep.get("intent"):
             continue

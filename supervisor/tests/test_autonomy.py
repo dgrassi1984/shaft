@@ -129,6 +129,21 @@ class GateWarmTest(unittest.TestCase):
         self.tick(children, st, 120 + autonomy.WARM_CHECK_S + 1)   # the hourly check of the same commit
         self.assertEqual(len(self.started), 3)
 
+    def test_timed_out_warm_up_retries_hourly_after_ending_indefinitely(self):
+        st, children = autonomy.WarmState(), {}
+        self.tick(children, st, 0)
+        for attempt in range(3):
+            children.clear()
+            with mock.patch.object(autonomy, "log"):
+                autonomy.warm_ended(st, autonomy.gate.WARM_TIMED_OUT, 300)
+            self.assertTrue(st.timed_out)
+            self.assertNotIn(self.pair, st.failed)
+            ended = st.started + 300
+            self.tick(children, st, ended + autonomy.WARM_RETRY_S - 1)
+            self.assertEqual(len(self.started), attempt + 1)
+            self.tick(children, st, ended + autonomy.WARM_RETRY_S)
+            self.assertEqual(len(self.started), attempt + 2)
+
     def test_a_failed_warm_up_is_not_retried_on_its_commit(self):
         st, children = autonomy.WarmState(), {}
         self.tick(children, st, 0)

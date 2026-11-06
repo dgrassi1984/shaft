@@ -76,6 +76,22 @@ class OrdersTest(unittest.TestCase):
             orders.add("m", "   ", "operator", "cli")
 
     # -- record_order --------------------------------------------------------------------------------------------------
+    def test_m8_missing_source_names_recent_operator_files_before_as_of(self):
+        files = [self.operator_message(at=NOW - timedelta(minutes=i)) for i in range(1, 5)]
+        future = self.operator_message(at=NOW + timedelta(minutes=1))
+        path = self.b.root / "inbox" / files[0]
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("From: operator\n\nRetire the paper.\n")
+        self.b.as_of = NOW
+        refused = self.b.call("record_order", {"text": "Retire the paper."})
+        self.assertFalse(refused["ok"])
+        for file in files[:3]:
+            self.assertIn(file, refused["error"])
+        self.assertNotIn(files[3], refused["error"])
+        self.assertNotIn(future, refused["error"])
+        self.assertIn("record(kind='runs')", refused["error"])
+        self.assertTrue(self.b.call("record_order", {"text": "Retire the paper.", "source": files[0]})["ok"])
+
     def test_record_order_needs_a_real_source_and_never_drops(self):
         refused = self.b.call("record_order", {"text": "Retire.", "source": "made-up.md"})
         self.assertFalse(refused["ok"])

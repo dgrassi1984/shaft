@@ -330,7 +330,9 @@ class LiveInvariants(InstanceCase):
                            "live", extra_env={"SHAFT_DEADLINE": str(int(time.time()) + 120)})
         self.assertEqual(r.returncode, 0, r.stderr)
         first = self.fake.requests[0]
-        self.assertEqual(sorted(t["function"]["name"] for t in first["tools"]), ["close_project", "declare_intent", "finish_cycle", "open_project"])
+        # settle_commitment: an instance on an older template has not got it yet (its gate runs this test too).
+        self.assertEqual(sorted(t["function"]["name"] for t in first["tools"] if t["function"]["name"] != "settle_commitment"),
+                         ["close_project", "declare_intent", "finish_cycle", "open_project"])
         self.assertIn("[supervisor] You have about", first["messages"][-1]["content"])
         self.assertIn("ran out of time", self.journal())
 

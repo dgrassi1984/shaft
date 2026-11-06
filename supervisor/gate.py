@@ -499,6 +499,7 @@ SHARED_RECORD = "shared-passed-{}.json"     # beside a committed tree, one per k
                                             # (docs/plans/PLAN-gate-cache.md)
 SHARED_LOCK = "shared.lock"                 # beside it too: one run of the shared part per commit at a time
 WARM_REFRESH_S = TREE_IDLE_S // 2           # a record this old is run again by the warm-up while gates still take it
+WARM_TIMED_OUT = 4                          # retryable: no test verdict within the operator's budget
 WARM_FAILED = 3                             # warm()'s exit when it failed and logged the alert itself
 
 
@@ -642,8 +643,8 @@ def warm(timeout_s: int = GATE_TIMEOUT_S) -> int:
     """The scheduler's warm-up (`shaft gate warm`, autonomy.gate_warm): run the shared part on the project's commits
     now unless a record of the gates' key is younger than WARM_REFRESH_S, so the first gate after a merge reads it
     instead of running it while holding its instance. A failure is logged as an alert — on main, every instance's code
-    change would fail its gate — and recorded nowhere. 0: passed or fresh; WARM_FAILED: failed, timed out or could not run,
-the alert logged (any other exit, such as a crash before this, is the scheduler's to report)."""
+    change would fail its gate — and recorded nowhere. 0: passed or fresh; WARM_TIMED_OUT: timed out; WARM_FAILED:
+    failed or could not run, the alert logged (any other exit is the scheduler's to report)."""
     label = "?"
     try:
         tree, label = committed_tree()
@@ -653,7 +654,7 @@ the alert logged (any other exit, such as a crash before this, is the scheduler'
         ok, _, full, ran = _shared_part(tree, label, env, timeout_s, WARM_REFRESH_S)
     except StageTimedOut as t:
         _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {t}")
-        return WARM_FAILED
+        return WARM_TIMED_OUT
     except Exception as e:
         _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {type(e).__name__}: {e}")
         return WARM_FAILED

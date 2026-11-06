@@ -190,6 +190,22 @@ def coming_due(name: str, since: datetime | None, until: datetime) -> list[dict]
     return sorted(out, key=lambda i: i["due_at"])
 
 
+def overdue_reminders(name: str, since: datetime | None, until: datetime) -> list[dict]:
+    """Unsettled promises whose latest daily due-time anniversary falls after the last cycle, with remind_at."""
+    if since is None:
+        return []
+    out = []
+    for item in ledger(name, until).values():
+        due = _at(item["due"])
+        if item["status"] not in ("open", "overdue") or due is None:
+            continue
+        days = (_local(until) - due) // timedelta(days=1)
+        at = due + timedelta(days=days)
+        if days >= 1 and at > _local(since):
+            out.append({**item, "remind_at": at})
+    return sorted(out, key=lambda i: i["remind_at"])
+
+
 def _episodes(name: str) -> list[dict]:
     return metrics.live_episodes(name) + metrics._episodes(name, "talk") + metrics._episodes(name, "sleep")
 

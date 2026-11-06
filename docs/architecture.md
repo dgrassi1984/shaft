@@ -100,17 +100,20 @@ remains `.tmp/memory-index.json`. Switching instance roots discards the previous
 
 The scheduler ([autonomy.py](../supervisor/autonomy.py)) looks at each instance every `WAKE_INTERVAL_MINUTES`, and
 wakes it only with something to do (`wake_gate`, a pure rule with no model): an unread message in its inbox (a watch
-result is one), an open commitment coming due before it looks again, a job run that delivered or published something
-since its last cycle, or no cycle for `SHAFT_IDLE_WAKE_MINUTES` (default 30). Otherwise the wake is skipped and the
-reason (`nothing to do: …`) logged, kept in `.supervisor/schedule.json` until the next cycle, and shown by
+result is one), an open commitment coming due before it looks again, a daily overdue reminder, a `can_wake` job run
+that delivered or published something since its last cycle, or no cycle for `SHAFT_IDLE_WAKE_MINUTES` (default 30).
+Otherwise the wake is skipped and the reason (`nothing to do: …`) logged, kept in `.supervisor/schedule.json` until the next cycle, and shown by
 `shaft autonomy status`, `shaft top` and the web overview. What used to wait for that interval wakes the instance as
 soon as it is idle instead (event wakes, through the jobs' wake path, never while it is paused or has
 `WAKE_INTERVAL_MINUTES=0`): a message from the operator, a message from another instance (inside the recipient's
 wake floor since its last cycle it is queued for the floor's end, so two instances answering each other are paced,
-not looped), and a commitment falling due. A cycle is stamped when it starts under the instance's run lock — a
-scheduled wake, `shaft live` or `shaft tick` alike; a wake that finds the instance busy stamps none — and an asked
-wake whose last request came before a cycle began is dropped, since that cycle saw it. `schedule.json` and `battery/schedule.json` are rewritten under a lock and replaced whole: the scheduler
-and every wake, sleep and battery write them. A scheduler child's stderr is read while it runs, and a pause a running
+not looped), and a commitment falling due or reaching a daily anniversary after its due time. A cycle is stamped
+when it starts under the instance's run lock — a scheduled wake, `shaft live` or `shaft tick` alike; a wake that finds the instance busy stamps none — and an asked
+wake whose last request came before a cycle began is dropped, since that cycle saw it. Job results and job inbox
+messages count toward timed wakes only if the job is currently declared with `can_wake: true`; other messages remain
+for the next cycle, including the idle wake. An unreadable declaration leaves mail counting toward a wake.
+`schedule.json` and `battery/schedule.json` are rewritten under a lock and replaced whole: the scheduler and every
+wake, sleep and battery write them. A scheduler child's stderr is read while it runs, and a pause a running
 cycle does not acknowledge within five minutes (or by its budget's end) becomes a request to wrap up.
 
 The scheduler's children share its process group, and a SIGTERM to it stops them on purpose (a wake's cycle is
@@ -476,7 +479,7 @@ action that has failed since it last worked, showing the comparable calls and th
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
-(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
+(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in live cycles or sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
 to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. Review I10: a promise to the operator needs a source the model does not

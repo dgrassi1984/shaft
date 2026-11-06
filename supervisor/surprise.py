@@ -185,7 +185,7 @@ def baseline(name: str, root: Path | None = None) -> dict:
     calls = {k: sum(len(ep.get("tools") or []) for ep in eps if ep.get("kind") == k) for k in ("live", "sleep", "talk")}
     flagged = {k: sum(1 for e in evts if e["episode_kind"] == k) for k in calls}
     cyc = cycles(name, root)
-    verdicts = {j["episode_ts"]: j for j in metrics.judgments(name)}
+    verdicts = {j["episode_ts"]: j for j in metrics.judgments_for_stats(name)}
     by_model: dict[str, dict] = {}
     for model in dict.fromkeys(c["model"] for c in cyc.values()):   # in order of first use
         mine = {ts: c for ts, c in cyc.items() if c["model"] == model}
@@ -296,7 +296,7 @@ INWARD = re.compile(
     r"|\b(?:read_file|write_file|append_file|list_files|search_memory|rewrite_facts|write_digest|retire_fact"
     r"|update_self_model|update_personality|view_image|commit_to|settle_commitment|declare_intent|confirm_confidence"
     r"|finish_cycle|close_surprise|open_project|close_project|list_instances|delegate_coding|set_config"
-    r"|secret_set|secret_list|secret_delete)\b"
+    r"|secret_set|secret_list|secret_delete|withdraw_held)\b"
     r"|`(?:run|remember|record|history|decide|trial)`|\b(?:run|remember|record|history|decide|trial)\(|"
     r"\bthe (?:run|remember|record|history|decide|trial) tool\b"
     r"|\b(?:my|our|own|the instance'?s)\s+(?:[\w-]+\s+){0,2}"
@@ -484,7 +484,7 @@ def stats_lines(name) -> list[str]:
     live = [e for e in eps if e.get("kind") == "live"]
     if not live:
         return []
-    js = metrics.judgments(name)
+    js = metrics.judgments_for_stats(name)
     judged = {j["episode_ts"] for j in js}
     stated = sum(len(_part(e, "intent").get("predictions") or []) for e in live if e["ts"] in judged)
     measured = [j for j in js if "expectations" in j]
@@ -569,7 +569,7 @@ def m5_report(name, since: datetime, until: datetime | None = None,
     until = until or datetime.now()
     frozen = baseline or {}
     base = frozen.get("instances", {}).get(name, {})
-    all_js = sorted(metrics.judgments(name), key=lambda j: j["episode_ts"])
+    all_js = sorted(metrics.judgments_for_stats(name), key=lambda j: j["episode_ts"])
     js = [j for j in all_js if since <= datetime.fromisoformat(j["episode_ts"]) < until]
     known_models = [j["model"] for j in js if j.get("model")]
     model = known_models[-1] if known_models else None

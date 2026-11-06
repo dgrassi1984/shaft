@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from . import metrics
 
-CONTROLS = ("declare_intent", "confirm_confidence", "finish_cycle")
+CONTROLS = ("declare_intent", "confirm_confidence", "settle_commitment", "finish_cycle")
 MEMORY_TOOLS = ("search_memory", "remember", "rewrite_facts", "write_digest", "update_self_model", "update_personality")
 # Where a tool looks when its arguments do not say: the supervisor's own tools. A plugin an instance built reaches what
 # its name says (PLUGIN_SOURCES: gmail and mail_tail are mail, cal-watch calendar, gdrive drive). Every tool touches

@@ -541,7 +541,8 @@ class Channel:
             if step.calls:
                 message["tool_calls"] = list(step.calls)
             return {"id": f"{self.prefix}-{id(step)}", "object": "chat.completion", "model": step.model,
-                    "choices": [{"index": 0, "message": message, "finish_reason": step.finish}], "usage": dict(step.usage)}
+                    "choices": [{"index": 0, "message": message, "finish_reason": step.finish}], "usage": dict(step.usage),
+                    "shaft_same_turn": bool(step.calls and not step.usage_received)}
 
     def _kill(self):
         if self._process:

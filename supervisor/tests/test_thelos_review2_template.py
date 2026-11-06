@@ -151,6 +151,31 @@ class CorrectionLedgerTest(InstanceFixture, unittest.TestCase):
         return {"what_was_wrong": "Wrote the recap in Italian", "what_operator_said": "Write recaps in English!",
                 "when": "[2026-10-29T09:12:00]", "reopens": "null", **over}
 
+    def test_writeup_with_correction_tool_must_not_claim_no_tools(self):
+        with mock.patch.dict("os.environ", {"SHAFT_MAIL": "mail", "SHAFT_GDRIVE": "drive",
+                                            "SHAFT_SHARED": "/shared", "SHAFT_CALENDAR": "calendar"}):
+            seen = self.writeup([Reply("Entry.")])
+        system = seen[0][0][0]["content"]
+        self.assertNotIn("no tools", system)
+        self.assertIn("only tool is record_correction", system)
+        self.assertEqual([t["function"]["name"] for t in seen[0][1]], ["record_correction"])
+        for ability in (prompts.MAIL.split("{")[0], prompts.GDRIVE.split("{")[0],
+                        prompts.SHARED.split("{")[0], "calendar_events", prompts.DELEGATION):
+            self.assertNotIn(ability, system)
+
+    def test_writeup_for_other_speaker_has_no_correction_tool(self):
+        turns = [{"ts": "2026-10-29T09:12:00", "role": "user", "speaker": "delegate", "content": "Hello"}]
+        with mock.patch.object(recovery, "orphan_talks", return_value=[("delegate-1", turns)]):
+            seen = self.writeup([Reply("Entry.")])
+        self.assertIn("no tools", seen[0][0][0]["content"])
+        self.assertNotIn("record_correction", seen[0][0][0]["content"])
+        self.assertIsNone(seen[0][1])
+
+    def test_writeup_fallback_without_tools_says_no_tools(self):
+        seen = self.writeup([Reply("<tool_call>not an entry"), Reply("Entry.")])
+        self.assertIn("no tools", seen[1][0][0]["content"])
+        self.assertIsNone(seen[1][1])
+
     def test_mimo_string_null_and_bracketed_when_are_recorded(self):
         echo = "<tool_call><function=record_correction><parameter=reopens>null</parameter></function></tool_call>"
         self.writeup([Reply(echo, tool_calls=[call("record_correction", self.mimo_args())]),

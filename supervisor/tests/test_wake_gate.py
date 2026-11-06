@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, battery, commitments, delete, jobs, messages, runner
+from supervisor import autonomy, battery, broker, commitments, core, delete, jobs, messages, runner
 from supervisor.autonomy import WakeFacts, decide_wakes, wake_gate
 
 D = datetime.fromisoformat
@@ -48,6 +48,12 @@ class GateTest(unittest.TestCase):
         self.assertTrue(why.startswith(autonomy.NOTHING_TO_DO))
         self.assertIn("no commitment due before 12:10", why)
         self.assertIn("last cycle at 11:50", why)
+
+    def test_overdue_promises_do_not_claim_no_commitment_due(self):
+        go, why = self.gate("2026-11-03T11:50:00", lambda: WakeFacts(overdue=2))
+        self.assertFalse(go)
+        self.assertIn("none newly due; 2 overdue", why)
+        self.assertNotIn("no commitment due before", why)
 
     def test_each_reason_wakes(self):
         for facts, said in ((WakeFacts(unread=2), "2 unread message(s) in its inbox"),
@@ -83,6 +89,9 @@ class FactsTest(unittest.TestCase):
     """wake_facts reads the real records: the inbox listing, commitments.jsonl, the jobs' run log."""
 
     def setUp(self):
+        p = mock.patch.object(jobs, "declared", return_value=([], []))
+        p.start()
+        self.addCleanup(p.stop)
         self.name = "gatex"
         self.root = autonomy.INSTANCES / self.name
         (self.root / "inbox" / "x.files").mkdir(parents=True)          # a job hand-off's folder is not a message
@@ -107,8 +116,50 @@ class FactsTest(unittest.TestCase):
                 {"ts": "2026-11-03T11:30:00", "plugin": "p", "delivered": False, "done": "2026-11-03T11:30:05"},
                 {"ts": "2026-11-03T11:40:00", "plugin": "p", "published": ["notes/b.md"], "done": "2026-11-03T11:40:05"}]
         (jobs._dir() / f"{self.name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-        self.assertEqual(autonomy.wake_facts(self.name, since, NOW + TEN),
-                         WakeFacts(unread=1, due="c1103-0001-3 due 12:05", results=1))
+        with mock.patch.object(jobs, "declared", return_value=([{"plugin": "p", "can_wake": True}], [])), \
+                mock.patch.object(autonomy, "datetime", mock.Mock(now=lambda: NOW)):
+            self.assertEqual(autonomy.wake_facts(self.name, since, NOW + TEN),
+                             WakeFacts(unread=1, due="c1103-0001-3 due 12:05", results=1, overdue=1))
+
+    def test_housekeeping_output_waits_for_idle_wake_and_stays_unread(self):
+        file = self.root / "inbox" / f"{jobs._stem(NOW, 'job grading_packet_refresh')}.md"
+        file.write_text("refresh ready")
+        rows = [{"ts": NOW.isoformat(), "plugin": plugin, **out} for plugin, out in
+                (("grading_packet_refresh", {"delivered": True}), ("briefing", {"published": ["notes/b.md"]}),
+                 ("briefing", {"delivered": True}))]
+        own = [{"plugin": p, "can_wake": False} for p in ("grading_packet_refresh", "briefing")]
+        with mock.patch.object(jobs, "declared", return_value=(own, [])), \
+                mock.patch.object(jobs, "_rows", return_value=rows):
+            facts = autonomy.wake_facts(self.name, NOW - TEN, NOW + TEN)
+        self.assertEqual(facts, WakeFacts())
+        self.assertFalse(wake_gate(NOW, NOW - TEN, NOW + TEN, IDLE, lambda: facts)[0])
+        self.assertEqual(wake_gate(NOW + IDLE, NOW - TEN, NOW + IDLE + TEN, IDLE, lambda: facts),
+                         (True, "no cycle for 40 min"))
+        self.assertEqual(file.read_text(), "refresh ready")
+
+    def test_job_mail_filter_keeps_waking_jobs_other_senders_and_read_failures(self):
+        own = [{"plugin": "wake_job", "can_wake": True}, {"plugin": "quiet-job", "can_wake": False}]
+        with mock.patch.object(jobs, "declared", return_value=(own, [])):
+            for sender, expected in (("job wake_job", True), ("job quiet-job", False), ("job removed", True),
+                                     ("operator", True), ("wren", True), ("watch", True)):
+                file = f"{jobs._stem(NOW, sender)}.md"
+                self.assertEqual(jobs.inbox_can_wake(self.name, file), expected, sender)
+        with mock.patch.object(jobs, "declared", side_effect=OSError("disk")):
+            self.assertTrue(jobs.inbox_can_wake(self.name, f"{jobs._stem(NOW, 'job quiet-job')}.md"))
+
+    def test_daily_overdue_reminder_also_opens_the_timed_gate(self):
+        self.commit("c1102-0001-1", "2026-11-02T10:00:00", "2026-11-02T11:00:00")
+        since = NOW - timedelta(hours=2)
+        with mock.patch.object(autonomy, "datetime", mock.Mock(now=lambda: NOW)):
+            facts = autonomy.wake_facts(self.name, since, NOW + TEN)
+        self.assertEqual(facts.due, "c1102-0001-1 overdue")
+        self.assertEqual(facts.overdue, 1)
+        before = NOW + timedelta(hours=23) - timedelta(minutes=5)
+        with mock.patch.object(autonomy, "datetime", mock.Mock(now=lambda: before)):
+            facts_before = autonomy.wake_facts(self.name, before - TEN, before + TEN)
+        self.assertEqual(facts_before.due, "")    # an early timed cycle would not clear the anniversary
+        self.assertEqual(wake_gate(NOW, NOW - TEN, NOW + TEN, IDLE, lambda: facts),
+                         (True, "commitment c1102-0001-1 overdue"))
 
     def test_an_unreadable_record_wakes_saying_why(self):
         with mock.patch.object(commitments, "ledger", side_effect=OSError("disk")):
@@ -319,6 +370,39 @@ class EventWakeTest(StateCase):
             coming.assert_called_with("evc", None, NOW)
         self.assertEqual(self.by("evc"), ["commitment c1103-0001-1 due"])
 
+    def test_overdue_reminder_fires_daily_instead_of_every_five_minutes(self):
+        due = NOW - timedelta(hours=25)
+        item = {"id": "c1102-0001-1", "status": "overdue", "due": due.isoformat()}
+        since = NOW - timedelta(hours=2)
+        with mock.patch.object(commitments, "ledger", return_value={item["id"]: item}), \
+                mock.patch.object(autonomy, "event_wake") as wake:
+            st = {"cycles": {"evc": since.isoformat()}}
+            autonomy.commitment_wakes(NOW, st, ["evc"], {}, {})
+            wake.assert_called_once_with("evc", "commitment c1102-0001-1 overdue")
+            self.assertEqual(commitments.overdue_reminders("evc", since, NOW)[0]["remind_at"],
+                             due + timedelta(days=1))
+            wake.reset_mock()
+            st["cycles"]["evc"] = NOW.isoformat()
+            for minutes in range(0, 23 * 60, 5):
+                autonomy.commitment_wakes(NOW + timedelta(minutes=minutes), st, ["evc"], {}, {})
+            wake.assert_not_called()
+            autonomy.commitment_wakes(NOW + timedelta(hours=23), st, ["evc"], {}, {})
+            wake.assert_called_once_with("evc", "commitment c1102-0001-1 overdue")
+            self.assertEqual(commitments.overdue_reminders("evc", None, NOW), [])
+
+    def test_cycle_after_latest_anniversary_clears_a_49_hour_overdue_promise(self):
+        item = {"id": "c1101-0001-1", "status": "overdue", "due": (NOW - timedelta(hours=49)).isoformat()}
+        with mock.patch.object(commitments, "ledger", return_value={item["id"]: item}), \
+                mock.patch.object(autonomy, "event_wake") as wake:
+            autonomy.commitment_wakes(NOW, {"cycles": {"evc": NOW.isoformat()}}, ["evc"], {}, {})
+        wake.assert_not_called()
+
+    def test_settled_promises_never_get_overdue_reminders(self):
+        items = {s: {"id": s, "status": s, "due": (NOW - timedelta(hours=25)).isoformat()}
+                 for s in ("kept", "broken", "void", "superseded", "expired")}
+        with mock.patch.object(commitments, "ledger", return_value=items):
+            self.assertEqual(commitments.overdue_reminders("evc", NOW - timedelta(hours=2), NOW), [])
+
     def test_the_jobs_tick_names_who_asked(self):
         jobs.request_wake("evj", "watcher")
         jobs.request_wake("evj", "message from the operator")
@@ -402,12 +486,17 @@ class CycleClockTest(StateCase):
 class ServeTest(StateCase):
     """The gate and the event wakes are wired into the scheduler's loop."""
 
-    def tick(self, facts: WakeFacts) -> tuple[list, list[str]]:
+    def tick(self, facts: WakeFacts, polls: int = 1) -> tuple[list, list[str]]:
         class Stop(Exception):
             pass
         started, logged = [], []
+        def log(message):
+            logged.append(message)
+            core.log(message)
+
         patches = [mock.patch.object(autonomy, "SUP_DIR", self.sup),
-                   mock.patch.object(autonomy, "log", lambda m: logged.append(m)),
+                   mock.patch.object(core, "SUP_DIR", self.sup),
+                   mock.patch.object(autonomy, "log", log),
                    mock.patch.object(autonomy, "stop_children_on_signal"),
                    mock.patch("supervisor.version.record_service"),
                    mock.patch("supervisor.browser.startup_note", return_value=""),
@@ -424,22 +513,41 @@ class ServeTest(StateCase):
                    mock.patch("supervisor.jobs.tick"), mock.patch("supervisor.watch.tick"),
                    mock.patch("supervisor.trial.has_work", return_value=False),
                    mock.patch.object(autonomy, "_start", lambda a: started.append(a) or object()),
-                   mock.patch.object(autonomy.time, "sleep", side_effect=Stop)]
+                   mock.patch.object(autonomy.time, "sleep", side_effect=[None] * (polls - 1) + [Stop])]
         with ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
             cw = stack.enter_context(mock.patch.object(autonomy, "commitment_wakes"))
             with self.assertRaises(Stop):
                 autonomy.serve(poll_s=0)
-        cw.assert_called_once()
+        self.assertEqual(cw.call_count, polls)
         return started, logged
+
+    def test_m3_skips_are_visible_only_in_own_record_and_throttled(self):
+        times = [NOW, NOW + timedelta(minutes=5), NOW + timedelta(hours=1), NOW + timedelta(hours=1, minutes=5)]
+        reasons = [f"nothing to do: no commitment due before {at + TEN:%H:%M}" for at in times[:3]]
+        reasons.append("already busy")
+        with mock.patch.object(autonomy, "datetime", wraps=datetime) as clock, \
+                mock.patch.object(autonomy, "decide_wakes", side_effect=[({}, {"wren": r}) for r in reasons]):
+            clock.now.side_effect = [at for at in times for _ in range(2)]   # scheduler and record("skip")
+            _, logged = self.tick(WakeFacts(), polls=4)
+        skips = [line for line in logged if "wake skipped" in line]
+        self.assertEqual(len(skips), 3, skips)
+        with mock.patch.object(core, "SUP_DIR", self.sup):
+            b = broker.Broker("wren", self.sup, {}, self.sup / "broker.log", root=self.sup, share=False)
+            answer = b.call("record", {"kind": "runs"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn("wren: wake skipped — nothing to do", answer["result"])
+            self.assertIn("wren: wake skipped — already awake (already busy)", answer["result"])
+            b.name = "kant"
+            self.assertNotIn("wake skipped", b.call("record", {"kind": "runs"})["result"])
 
     def test_nothing_to_do_skips_then_a_message_wakes(self):
         recent = (datetime.now() - timedelta(minutes=12)).isoformat(timespec="seconds")
         (self.sup / "schedule.json").write_text(json.dumps({"wakes": {"wren": recent}, "cycles": {"wren": recent}}))
         started, logged = self.tick(WakeFacts())
         self.assertEqual(started, [])                                      # the old loop started ["wake", "wren"]
-        self.assertTrue(any("wren's wake skipped — nothing to do" in l for l in logged), logged)
+        self.assertTrue(any("wren: wake skipped — nothing to do" in l for l in logged), logged)
         self.assertTrue(autonomy.last_skip("wren").startswith(autonomy.NOTHING_TO_DO))
         st = self.st()
         st["wakes"]["wren"] = recent                                       # its interval passed again

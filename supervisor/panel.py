@@ -179,6 +179,8 @@ def judgments(name: str) -> list[dict]:
     def read():
         out = []
         for j in reversed(metrics.judgments(name, SUP_DIR)):
+            if j.get("cited"):
+                continue
             try:
                 v = metrics.cycle_value(j)
             except KeyError:
@@ -244,7 +246,7 @@ def instance_detail(name: str) -> dict:
             "stats": stats or "(no stats yet)",
             "journal": heads, "probation": probation, "questions": questions,
             "changes": changes(name), "merges": template_merges(name)[:5], "traits": traits(name),
-            "judged": len(metrics.judgments(name))}
+            "judged": len(metrics.judgments_for_stats(name))}
 
 
 # -- self-changes and probation -------------------------------------------------------------------------------------

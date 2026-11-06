@@ -7,14 +7,17 @@ lost the change; nothing told it when the gate was green again (~14 h once), and
 """
 from __future__ import annotations
 
+import fcntl
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, broker, core, gate, gate_held, runner
+from supervisor import autonomy, broker, core, gate, gate_held, jobs, runner
 from supervisor.tests import test_gate as tg
 from supervisor.tests import test_run_transaction as trx
 
@@ -159,6 +162,86 @@ class HeldCase(trx.RunTransactionCase):
         self.assertEqual(self.cycle(EDITS), 0)
         held, = self.held()
         return held
+
+
+class WithdrawTest(HeldCase):
+    def hold_one(self) -> dict:
+        path = "plugins/text_stats/main.py"
+        with self.patched():
+            hid = gate_held.save("kant", "base", {path: trx.COMMITTED.encode()}, {path: NEW.encode()}, [path], "red", [])
+            gate_held.log_run("kant", "held", [path], "red", held=hid)
+        held, = self.held()
+        return held
+
+    def test_m4_withdraw_then_regate_never_restores_the_change(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        with self.patched(), runner.run_lock("kant", wait=False, kind="live"):
+            answer = b.call("withdraw_held", {"id": held["id"], "reason": "the operator said no"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn(held["id"], answer["result"])
+            self.assertEqual(gate_held.waiting(), [])
+        self.verdict = "pass"
+        self.gated.clear()
+        self.regate()
+        self.assertEqual(self.gated, [])
+        self.assertEqual(self.plugin(), trx.COMMITTED)
+        self.assertEqual((self.rows()[-1]["result"], self.rows()[-1]["why"]),
+                         ("withdrawn", "the operator said no"))
+        self.assertIn("withdrawn", self.record())
+
+    def test_m4_withdraw_refuses_another_instances_id_and_missing_reason(self):
+        held = self.hold_one()
+        with self.patched():
+            own = gate_held.save("wren", "base", {}, {"shaft/x.py": b"x"}, ["shaft/x.py"], "red", [])
+            b = broker.Broker("wren", self.project, {}, self.sup / "broker.log")
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn(own, refused["error"])
+            refused = b.call("withdraw_held", {"id": own, "reason": " "})
+            self.assertFalse(refused["ok"])
+            self.assertIn("reason is required", refused["error"])
+            b.unavailable = jobs.OFF_IN_JOBS
+            refused = b.call("withdraw_held", {"id": own, "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("decided by the cycle", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_withdraw_refuses_an_active_regate_with_retry(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        with self.patched(), runner.run_lock("kant", wait=False, kind="re-gate"):
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("retry withdraw_held", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_withdraw_refuses_a_regate_lock_held_outside_this_process_registry(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        locks = self.sup / "locks"
+        locks.mkdir(exist_ok=True)
+        with self.patched(), (locks / "kant.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("retry withdraw_held", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_replay_withdraw_answers_and_records_without_changing_held_state(self):
+        held = self.hold_one()
+        with self.patched():
+            b = broker.ReplayBroker("kant", self.project, {}, self.sup / "replay.log", state_root=self.root,
+                                    start_commit="base", as_of=datetime.now() + timedelta(seconds=1), cache={},
+                                    cache_lock=threading.Lock(), billed="trial", tools_log=self.sup / "broker.log")
+            before = gate_held.rows("kant")
+            answer = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn("withdrawn held change", answer["result"])
+            self.assertEqual(b.trace[-1]["tool"], "withdraw_held")
+            self.assertFalse(b.call("withdraw_held", {"id": held["id"], "reason": "no"})["ok"])
+            self.assertEqual(gate_held.rows("kant"), before)
+        self.assertEqual(len(self.held()), 1)
 
 
 class HoldTest(HeldCase):
@@ -357,6 +440,34 @@ class SchedulerTest(unittest.TestCase):
             autonomy.regate_after_warm(children, self.start)                    # running: not a second one
         self.assertEqual(self.started, [["gate", "regate"]])
 
+    def test_recorded_gate_pass_starts_one_regate_without_a_warm_up(self):
+        children, st = {}, autonomy.WarmState()
+        rec = {"passed_at": "2026-11-06T12:00:00"}
+        attempted = datetime.fromisoformat("2026-11-06T12:00:01").timestamp()
+        with mock.patch.object(gate_held, "waiting", return_value=["kant"]), \
+                mock.patch.object(gate, "commits_id", return_value="current"), \
+                mock.patch.object(gate, "shared_key", return_value={"commits": "current"}), \
+                mock.patch.object(gate, "recorded_pass", return_value=rec) as recorded, \
+                mock.patch.object(autonomy.time, "time", return_value=attempted):
+            autonomy.regate_recorded(children, st, self.start)
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"]])
+            children.clear()             # the change is still held after the attempt
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"]])
+            rec["passed_at"] = "2026-11-06T12:00:02"
+            autonomy.regate_recorded(children, st, self.start)
+            self.assertEqual(self.started, [["gate", "regate"], ["gate", "regate"]])
+            self.assertEqual(recorded.call_args.args[0],
+                             autonomy.PROJECT / gate.TREES / "current" / autonomy.PROJECT.name)
+
+    def test_recorded_pass_starts_no_regate_while_a_drain_is_requested(self):
+        with mock.patch.object(autonomy, "restart_request", return_value={"pid": autonomy.os.getpid()}), \
+                mock.patch.object(gate_held, "waiting") as waiting:
+            autonomy.regate_recorded({}, autonomy.WarmState(), self.start)
+        waiting.assert_not_called()
+        self.assertEqual(self.started, [])
+
     def test_nothing_held_starts_nothing(self):
         with mock.patch.object(gate_held, "waiting", return_value=[]):
             autonomy.regate_after_warm({}, self.start)
@@ -379,6 +490,7 @@ class SchedulerTest(unittest.TestCase):
             def poll(self):
                 return code
         seen, regates = {}, []
+        recorded = mock.Mock(return_value=None)
 
         def fake_warm(children, st, start, now=None):
             seen.setdefault("children", children)
@@ -388,9 +500,15 @@ class SchedulerTest(unittest.TestCase):
                 raise Stop
             seen["ticked"] = True
             seen["children"]["gate warm"] = (Done(), 0.0)
+            if code == 0:
+                recorded.return_value = {"passed_at": datetime.now().isoformat()}
         sup = Path(tempfile.mkdtemp(prefix="shaft-sched-"))
         self.addCleanup(shutil.rmtree, sup, True)
         with mock.patch.object(autonomy, "gate_warm", fake_warm), mock.patch.object(autonomy, "warm_ended"), \
+                mock.patch.object(gate_held, "waiting", return_value=["kant"]), \
+                mock.patch.object(gate, "commits_id", return_value="current"), \
+                mock.patch.object(gate, "shared_key", return_value={}), \
+                mock.patch.object(gate, "recorded_pass", recorded), \
                 mock.patch.object(autonomy, "regate_after_warm", lambda c, s: regates.append(s)), \
                 mock.patch.object(autonomy.time, "sleep", fake_sleep), \
                 mock.patch.object(autonomy, "SUP_DIR", sup), mock.patch.object(autonomy, "log"), \

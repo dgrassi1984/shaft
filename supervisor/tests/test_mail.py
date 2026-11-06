@@ -721,14 +721,14 @@ class TemplatePromptTest(unittest.TestCase):
         (root / "config.env").write_text('LLM_BASE_URL="http://127.0.0.1:1/v1"\nLLM_MODEL="m"\n')
         code = ("from shaft import prompts, config; from shaft.state import State; from pathlib import Path; import os\n"
                 "root = Path(os.environ['SHAFT_ROOT']); cfg = config.load(root, environ={}); s = State(root)\n"
-                "print(prompts.system_prompt(s, cfg, 'm', 'built-in: read_file'))")
+                "print(prompts.system_prompt(s, cfg, 'm', 'built-in: read_file; supervisor: mail_search'))")
         env = {"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}
         run = lambda e: subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=TEMPLATE, capture_output=True,  # noqa: E731
                                        text=True, env=e)
         with_it = run({**env, "SHAFT_MAIL": "work/AssistantAccess"})
         self.assertIn("You can read the operator's mail under the label(s) work/AssistantAccess", with_it.stdout, with_it.stderr)
         self.assertIn("not by the operator", with_it.stdout)
-        self.assertNotIn("mail_search", run(env).stdout)
+        self.assertNotIn("You can read the operator's mail", run(env).stdout)
 
     def test_template_ignores_mail(self):
         self.assertIn("mail/", (TEMPLATE / ".gitignore").read_text().split())

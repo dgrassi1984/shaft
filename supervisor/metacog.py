@@ -255,7 +255,7 @@ def _paired_line(p):
 
 def section(name: str) -> list[str]:
     """At most ten plain stats.md lines; no section below ten scored confidences."""
-    rows = metrics.judgments(name)
+    rows = metrics.judgments_for_stats(name)
     scored = [r for r in rows if metrics.by_current_judge(r)
               and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v2", "v3")
               and r.get("confidence") is not None]
@@ -294,7 +294,7 @@ def report(names: list[str]) -> str:
     """Full read-only report, including tool-log domains and the paired v3 test."""
     lines = []
     for name in names:
-        rows = metrics.judgments(name)
+        rows = metrics.judgments_for_stats(name)
         episodes = {ep["ts"]: ep for ep in metrics.live_episodes(name)}
         s = summary(rows, episodes)
         old = summary(rows, versions=("v1",))

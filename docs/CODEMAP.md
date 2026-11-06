@@ -32,6 +32,11 @@ is behind the code, regenerate it.**
 | `.claude/` | 1 |
 | `bin/` | 1 |
 
+## Outcome and judge checks
+
+- `supervisor/outcomes.py`: identity-linked 48-hour operator outcomes; weekly statistics only.
+- `supervisor/judge_probe.py`: blind delivery-refusal probes, capped at three per instance per seven days; `shaft judge catch`.
+
 ## Python
 
 300 modules expose a public class or function. Full list:
