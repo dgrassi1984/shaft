@@ -13,6 +13,29 @@ Never run both Macs at once. Two schedulers would wake the same instances on
 both machines, and their branches and minds would diverge. Two Telegram services
 would also compete for the same bots.
 
+## Two commands walk you through it
+
+The sections below are the manual route. Two commands run it for you:
+
+```bash
+bin/shaft migrate source --to <new-mac> [--check]   # on the old Mac
+bin/shaft migrate target [--check]                  # on the new Mac, from the copied folder
+```
+
+`source` stops the old Mac, freezes the environments and pushes the copy over
+SSH, so turn on **Remote Login** on the *new* Mac first (the reverse of the
+manual route, which pulls from the old one). `target` repairs the paths, rebuilds
+the environments and starts the services. Before starting, it asks you to confirm
+that the old Mac is stopped and stays stopped. It removes instance environments;
+the first `talk` rebuilds them on this Mac. Run `target` in **Terminal on the new
+Mac**, logged in at its screen — not over SSH — because the services load into the
+logged-in session and `on` records that terminal's `python3`. Run `--check` first
+on either: it runs the read-only checks and changes nothing. Each step prints what
+it will do and why, and waits — Enter runs, `q` stops, and a rerun resumes at the
+first unfinished step. If `source` stops partway it prints how to bring the old
+Mac back (safe only while `target` has not started). External disks and Migration
+Assistant stay manual (below).
+
 ## What lives where
 
 | What | Where | On the new Mac |
@@ -262,12 +285,10 @@ Check that the instances and their minds arrived intact:
 ```bash
 bin/shaft mind status
 bin/shaft status
-bin/shaft check <name>
 ```
 
 `mind status` should show each instance's commit count and date of its last
-commit. Compare these with the old Mac. `check` runs the test gate against an
-instance's code on this machine.
+commit. Compare these with the old Mac.
 
 ## 5. Start the services
 
@@ -308,9 +329,12 @@ Talk to every instance and see it answer before you start the scheduler.
 
 ```bash
 bin/shaft talk <name>
+bin/shaft check <name>
 ```
 
-After every instance has answered, resume and start the scheduler:
+Run `check` after `talk`: it does not rebuild a deleted `.venv`, so it needs the
+environment `talk` rebuilds. After every instance has answered and checked,
+resume and start the scheduler:
 
 ```bash
 bin/shaft resume
