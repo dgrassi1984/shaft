@@ -535,6 +535,7 @@ SPECS["drive_search"] = _spec(
     "Keep all arguments unchanged when following a page cursor.",
     {"text": {"type": "string"}, "folder": {"type": "string", "description": "account/fileId handle"},
      "modified_after": {"type": "string"}, "account": {"type": "string"},
+     "type": {"type": "string", "description": "doc, sheet, slides, pdf, folder; use when looking for a kind of file"},
      "max": {"type": "integer", "description": "default 20, at most 50"}, "page": {"type": "string"}}, [])
 SPECS["drive_read"] = _spec(
     "drive_read", _DRIVE_DESCRIPTION + "Read a file handle, at most 6,000 characters per page. Follow the footer "
@@ -2432,10 +2433,10 @@ class Broker:
         return alias, acct, gdrive.get_file(acct, reach, domain, drives, fid, self.as_of)
 
     def _drive_search(self, text: str = "", folder: str = "", modified_after: str = "", account: str = "",
-                      max: int = 20, page: str = "") -> str:   # noqa: A002
-        return self._drive_listing(self._drive_found(text, folder, modified_after, account, max, page))
+                      max: int = 20, page: str = "", type: str = "") -> str:   # noqa: A002
+        return self._drive_listing(self._drive_found(text, folder, modified_after, account, max, page, type))
 
-    def _drive_found(self, text, folder, modified_after, account, max, page) -> dict:   # noqa: A002
+    def _drive_found(self, text, folder, modified_after, account, max, page, type="") -> dict:   # noqa: A002
         from . import gdrive, google
         text, folder = str(text or ""), str(folder or "")
         modified_after, account = str(modified_after or ""), str(account or "").strip()
@@ -2452,7 +2453,7 @@ class Broker:
         grants = [g for g in self.gdrive_grants() if not selected or g["account"] == selected]
         if not grants:
             raise gdrive.NotVisible(f"Drive account {selected!r} is not granted to you; yours: {self.gdrive_env()}")
-        args = dict(text=text, folder=folder, modified_after=modified_after, account=account, max=limit, accounts=grants)
+        args = dict(text=text, folder=folder, modified_after=modified_after, account=account, max=limit, type=type, accounts=grants)
         states = None
         if page:
             try:
@@ -2474,7 +2475,7 @@ class Broker:
             try:
                 acct, reach, domain, drives = self._drive_account(alias)
                 found, dropped, next_page, partial = gdrive.search(acct, reach, domain, drives, text, fid, modified_after,
-                                                                  limit, self.as_of, start)
+                                                                  limit, self.as_of, start, kind=type)
             except (google.AccountError, google.ApiError) as e:
                 failed.append(f"{alias}: {e}")
                 remaining[alias] = start
@@ -2998,10 +2999,10 @@ class ReplayBroker(Broker):
         return True   # the replay's copy is thrown away, never committed
 
     def _drive_search(self, text: str = "", folder: str = "", modified_after: str = "", account: str = "",
-                      max: int = 20, page: str = "") -> str:   # noqa: A002
+                      max: int = 20, page: str = "", type: str = "") -> str:   # noqa: A002
         return self._drive_listing(self._shared(
-            ["drive_found", self.gdrive_grants(), text, folder, modified_after, account, max, page, self.as_of],
-            lambda: self._drive_found(text, folder, modified_after, account, max, page), self._drive_still))
+            ["drive_found", self.gdrive_grants(), text, folder, modified_after, account, max, page, type, self.as_of],
+            lambda: self._drive_found(text, folder, modified_after, account, max, page, type), self._drive_still))
 
     def _drive_still(self, found: dict) -> dict:
         from . import gdrive, google

@@ -62,6 +62,9 @@ class FakeDrive:
             parent = re.search(r"'([^']+)' in parents", params['q'])
             if parent:
                 files = [f for f in files if parent[1] in f.get('parents', [])]
+            mime = re.search(r"mimeType = '([^']+)'", params['q'])
+            if mime:
+                files = [f for f in files if f['mimeType'] == mime[1]]
             modified = re.search(r"modifiedTime > '([^']+)'", params['q'])
             if modified:
                 files = [f for f in files if f['modifiedTime'] > modified[1]]
@@ -174,6 +177,29 @@ class DriveTest(unittest.TestCase):
 
     def ids(self, **kw):
         return {r['id'] for r in self.search(**kw)[0]}
+
+    def test_search_type_filters_by_mime(self):
+        for kind, mime in (('doc', 'application/vnd.google-apps.document'),
+                           ('sheet', 'application/vnd.google-apps.spreadsheet'),
+                           ('slides', 'application/vnd.google-apps.presentation'),
+                           ('pdf', 'application/pdf'), ('folder', 'application/vnd.google-apps.folder')):
+            with self.subTest(kind=kind):
+                self.fake.files[OWN]['mimeType'] = mime
+                self.assertEqual(self.ids(kind=kind), {OWN})
+
+    def test_search_unknown_type_refused_before_google(self):
+        with self.assertRaisesRegex(ValueError, 'doc.*sheet.*slides.*pdf.*folder'):
+            self.search(kind='unknown', folder=OWN)
+        self.assertEqual(self.fake.requests, [])
+
+    def test_search_type_still_checks_visibility(self):
+        for fid in (OWN, EXTERNAL, TRASH):
+            self.fake.files[fid]['mimeType'] = 'application/vnd.google-apps.document'
+        rows, dropped, _, _ = self.search(kind='doc')
+        self.assertEqual({r['id'] for r in rows}, {OWN})
+        self.assertEqual(dropped, 2)
+        self.assertTrue({f'files/{fid}' for fid in (OWN, EXTERNAL, TRASH)} <=
+                        {path for path, _ in self.fake.requests})
 
     def test_reach_own_hides_external_share(self):
         self.assertEqual(self.ids(), {OWN, SHARED, DOMAIN})
@@ -1205,6 +1231,31 @@ class BrokerTest(MailCase):
         self.assertIn('not searched: missing:', self.ok(b, 'drive_search', {}))
         self.fake.files.clear()
         self.assertIn('no files', self.ok(b, 'drive_search', {}))
+
+    def test_search_type_kept_across_pages(self):
+        for fid in (OWN, DOMAIN):
+            self.fake.files[fid]['mimeType'] = 'application/vnd.google-apps.document'
+        b = self.broker()
+        out = self.ok(b, 'drive_search', {'max': 1, 'type': 'doc'})
+        self.assertIn('type="doc"', out.split('more: yes')[1])
+        page = json.loads(re.search(r'page=(".*")\)', out).group(1))
+        self.assertEqual(json.loads(page)['args']['type'], 'doc')
+        self.assertIn('arguments or accounts changed', self.refused(
+            b, 'drive_search', {'max': 1, 'page': page, 'type': 'pdf'}))
+        out = self.ok(b, 'drive_search', {'max': 1, 'page': page, 'type': 'doc'})
+        self.assertIn('work/' + DOMAIN, out)
+        self.assertNotIn('work/' + SHARED, out)
+
+    def test_replay_key_includes_type(self):
+        self.fake.files[OWN]['mimeType'] = 'application/vnd.google-apps.document'
+        self.fake.files[DOMAIN]['mimeType'] = 'application/pdf'
+        cache = {}
+        docs = self.ok(self.replay(cache), 'drive_search', {'type': 'doc'})
+        pdfs = self.ok(self.replay(cache), 'drive_search', {'type': 'pdf'})
+        self.assertIn('work/' + OWN, docs)
+        self.assertNotIn('work/' + DOMAIN, docs)
+        self.assertIn('work/' + DOMAIN, pdfs)
+        self.assertNotIn('work/' + OWN, pdfs)
 
     def test_cursor_bound_to_arguments_and_accounts(self):
         b = self.broker()

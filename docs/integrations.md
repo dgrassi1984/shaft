@@ -317,6 +317,7 @@ A shortcut and its target must both pass the visibility check. Shared Drive memb
 
 Search covers all granted accounts unless given an `account` or a `folder` handle. It returns 20 files by default,
 at most 50, with handles in the form `<alias>/<fileId>`. Follow its continuation call for more results.
+Use `type` (`doc`, `sheet`, `slides`, `pdf`, or `folder`) when looking for a kind of file.
 Without search text, results are newest first by modification time; with text, they keep Google's relevance order within each account.
 It reports accounts it could not search and Google's incomplete-search flag.
 Reads return at most 6,000 characters per page, including attribution and the continuation call.

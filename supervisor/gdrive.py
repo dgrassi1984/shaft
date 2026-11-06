@@ -14,6 +14,13 @@ FILE_FIELDS = ('id,name,mimeType,size,createdTime,modifiedTime,trashed,ownedByMe
                'lastModifyingUser(displayName,emailAddress)')
 GOOGLE_TYPE = 'application/vnd.google-apps.'
 SHORTCUT = GOOGLE_TYPE + 'shortcut'
+SEARCH_TYPES = {
+    'doc': GOOGLE_TYPE + 'document',
+    'sheet': GOOGLE_TYPE + 'spreadsheet',
+    'slides': GOOGLE_TYPE + 'presentation',
+    'pdf': 'application/pdf',
+    'folder': GOOGLE_TYPE + 'folder',
+}
 PAGE_CHARS = 6_000
 DRIVE_FILE_MAX = 50_000_000
 EXPORTS = {
@@ -108,9 +115,13 @@ def _row(acct: google.Account, f: dict) -> dict:
 
 
 def search(acct: google.Account, reach: str, domain: str, drives: set[str], text: str, folder: str, modified_after: str, limit: int,
-           before: datetime | None = None, page: str = '') -> tuple[list[dict], int, str, bool]:
+           before: datetime | None = None, page: str = '', *, kind: str = '') -> tuple[list[dict], int, str, bool]:
     """Visible metadata rows, dropped count, ID-only cursor and Google's incomplete-search flag."""
+    if kind and kind not in SEARCH_TYPES:
+        raise ValueError(f"unknown search type {kind!r}; allowed: {', '.join(SEARCH_TYPES)}")
     q = ['trashed = false']
+    if kind:
+        q.append(f'mimeType = {_literal(SEARCH_TYPES[kind])}')
     if text:
         q.append(f'fullText contains {_literal(text)}')
     if folder:
