@@ -219,7 +219,7 @@ def _error_text(e: urllib.error.HTTPError) -> str:
 
 def _over_quota(status: int, detail: str) -> bool:
     return status == 429 or (status == 403 and any(k in detail.casefold() for k in
-            ("quota exceeded", "rate limit exceeded", "ate limit exceeded", "ratelimitexceeded")))
+            ("quota exceeded", "rate limit exceeded", "ratelimitexceeded")))
 
 
 def _retry_after(e: urllib.error.HTTPError) -> float:
