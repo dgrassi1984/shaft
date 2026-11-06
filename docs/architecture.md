@@ -467,7 +467,9 @@ and the checks it makes are kept in that replay's broker, so its later messages 
 
 **Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
-mechanism behind a knob its kill test flips (`shaft experiment`). A live cycle's **workspace** (`shaft/workspace.py`)
+mechanism behind a knob its kill test flips (`shaft experiment`). `DOUBTS=off` removes `finish_cycle`'s optional
+`doubts` parameter; it defaults to on. `LOOK_AHEAD=on` adds a live step 1 question about what the operator will
+need within 7 days, to prepare and offer in one line; it defaults to off. A live cycle's **workspace** (`shaft/workspace.py`)
 lets deterministic codelets — memory hits, open surprises, inbox, improvement plan, kinds of action still failing,
 due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
 recorded in the episode and broadcast after every step (`python -m shaft front` prints, without a model call, what
@@ -481,7 +483,10 @@ action that has failed since it last worked, showing the comparable calls and th
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
-(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in live cycles or sleep, kept only with an
+(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) include conversation orders for later work,
+recorded with a due date and a checkable criterion. With `COMMITMENTS=off`, conversations queue the exact order marked
+ORDER and its criterion with `queue_for_next_cycle`. Blocked orders get a one-line reply. Conversation write-ups
+receive the tool results and list orders with neither a recorded commitment nor a result. Commitments are settled in live cycles or sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
 to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. Review I10: a promise to the operator needs a source the model does not

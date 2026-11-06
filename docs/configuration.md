@@ -228,6 +228,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
 | `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
+| `DOUBTS` | `'on'` | uses built-in default |
+| `LOOK_AHEAD` | `'off'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
 | `BRIEFING_CHARS` | `6000` | uses built-in default |
@@ -291,6 +293,11 @@ cycle in five, on average, a curiosity cycle while the instance has outward open
 A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and
 inbox; surprises about the instance's own tools, plugins, jobs, ledgers, gate or code are never drawn, and with none
 outward the prompt says so and the goal is free (review I7 in [architecture](architecture.md)).
+`DOUBTS` accepts `on` (default) or `off`. Off removes the optional `doubts` parameter from `finish_cycle`;
+no prompt asks for doubtful steps. `LOOK_AHEAD` accepts `on` or `off` (default). On adds a question to live step 1
+about what the operator will need within 7 days, asking the instance to prepare it and offer it in one line.
+Off leaves the live instructions unchanged.
+
 The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
@@ -304,6 +311,10 @@ Outcome-card shell families and inspection exclusions are described in [architec
 Under the same COMMITMENTS setting, an operator promise needs the conversation open now or a message delivered
 to the operator in the same live cycle; unsourced ones become self records with a note. Self records expire 24 hours after due and remain in history
 (review I10, [architecture](architecture.md)).
+In conversations, orders for later work must be recorded with `commit_to`, a due date and a checkable criterion.
+With `COMMITMENTS=off`, `queue_for_next_cycle` carries the exact order marked ORDER and its criterion instead.
+A blocked order gets a one-line reply. The conversation write-up lists orders with neither a commitment nor a result,
+using the conversation tool results as evidence.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 `WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
