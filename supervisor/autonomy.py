@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import plistlib
+import re
 import signal
 import subprocess
 import sys
@@ -449,6 +450,7 @@ def serve(poll_s: int = 30) -> int:
     children: dict[str, tuple[subprocess.Popen, float]] = {}
     warm = WarmState()
     commitment_errors: dict[str, str] = {}
+    wake_skips: dict[str, tuple[str, datetime]] = {}
     stop_children_on_signal(children)
     drain: dict | None = None   # the drain-restart under way (drain_tick)
     while True:
@@ -496,7 +498,11 @@ def serve(poll_s: int = 30) -> int:
             for name, why in skip.items():
                 why = why if why.startswith(NOTHING_TO_DO) else f"already awake ({why})"
                 record("skip", name, why)   # skipped, not queued: the next wake is a full interval later
-                log(f"scheduler: {name}'s wake skipped — {why}")
+                reason = re.sub(r"\b\d{2}:\d{2}\b", "<time>", why)   # a moving check time is the same reason
+                previous, at = wake_skips.get(name, ("", datetime.min))
+                if reason != previous or now - at >= timedelta(hours=1):
+                    log(f"{name}: wake skipped — {why}")
+                    wake_skips[name] = reason, now
             for name, why in start.items():
                 record("wake", name)
                 log(f"scheduler: waking {name} — {why}")

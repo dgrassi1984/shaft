@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shutil
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
@@ -147,6 +148,36 @@ def drop(name: str, hid: str) -> None:
     shutil.rmtree(_sup() / HELD / name / hid, ignore_errors=True)
 
 
+def withdrawal(name: str, hid: str, reason: str, held: list[dict]) -> tuple[dict, str]:
+    """Check a withdrawal and give the same answer to live and replay brokers."""
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("a reason is required to withdraw a held change")
+    meta = next((m for m in held if m["id"] == hid), None)
+    if meta is None:
+        raise ValueError(f"no held change {hid!r}; your held ids: " + (", ".join(m["id"] for m in held) or "none"))
+    return meta, f"withdrawn held change {hid}: {', '.join(sorted(meta['files']))}; {reason.strip()}"
+
+
+def withdraw(name: str, hid: str, reason: str) -> str:
+    from . import runner
+    # A cycle's broker uses the lock its own process already holds. The guard keeps that lock from being released
+    # during withdrawal; a re-gate, even in this process, must finish first.
+    with runner._run_lock_guard:
+        if runner._run_locks.get(name) == "re-gate":
+            raise ValueError("a re-gate is running; retry withdraw_held when it finishes")
+        try:
+            with nullcontext() if name in runner._run_locks else runner.run_lock(name, wait=False, kind="withdraw"):
+                meta, answer = withdrawal(name, hid, reason, pending(name))
+                # Rename out of pending before removing bytes: a failed removal cannot leave it waiting to re-gate.
+                path = _sup() / HELD / name / meta["id"]
+                path.rename(path.with_name(f".withdrawn-{meta['id']}"))
+                log_run(name, "re-gated", sorted(meta["files"]), reason.strip(), held=hid, result="withdrawn")
+                shutil.rmtree(path.with_name(f".withdrawn-{meta['id']}"), ignore_errors=True)
+                return answer
+        except runner.Busy:
+            raise ValueError("another run may be re-gating this change; retry withdraw_held when it finishes") from None
+
+
 def log_run(name: str, outcome: str, files: list[str], why: str = "", failing: list[str] | tuple = (),
             output: str = "", held: str = "", result: str = "") -> None:
     """One row of the instance's gate record. `outcome`: kept, candidate-failed, baseline-failed (nothing to hold),
@@ -198,7 +229,7 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None) -> str:
     if as_of is None:
         held = pending(name)
         lines.append(f"held changes: {len(held)}" + (" (re-gated automatically when a warm-up finds the gate's "
-                                                     "baseline green)" if held else ""))
+                                                     "baseline green; withdraw with withdraw_held(id, reason))" if held else ""))
         for m in held:
             lines.append(f"  {m['id']} held {m.get('held_at', '?').replace('T', ' ')}, re-gated {m.get('tries', 0)} of "
                          f"{TRIES} times: {', '.join(m['files'])} — {m.get('why', '')}")

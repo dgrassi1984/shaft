@@ -91,6 +91,7 @@ RUN_CONFINED, _ = knob(
 FAIL_REPORT = 3
 BACKOFF_CAP = timedelta(days=1)
 OFF_IN_JOBS = {"delegate_coding": "in a scheduled job (it is a script; your next cycle can delegate)",
+               "withdraw_held": "in a scheduled job (a held change is decided by the cycle)",
                "trial": "in a scheduled job (your next cycle can propose one)",
                "send_message": "in a scheduled job: what it returns reaches your inbox; the cycle it wakes can "
                                "write to the operator",
