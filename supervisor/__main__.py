@@ -1727,8 +1727,6 @@ def main(argv: list[str]) -> int:
     if args.cmd == "stats":
         instance_root(args.name)
         metrics.judge_pending(args.name)
-        from . import judge_probe
-        judge_probe.run(args.name)
         print(metrics.stats_text(args.name))
         return 0
     if args.cmd == "review":                 # read-only: judges nothing, so it costs nothing and waits for no run

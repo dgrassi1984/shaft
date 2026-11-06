@@ -12,8 +12,8 @@ gate tests it, the commit records it). SHAFT's scheduler service runs due jobs a
   - at most MAX_CALLS supervisor tool calls, TIMEOUT_S seconds, MAX_OUTPUT characters delivered.
 What it returns goes to the instance's inbox, from "job <plugin>"; nothing returned, nothing delivered. A run may
 ask to wake the instance — `{"message": …, "wake": true}` — which starts a cycle as soon as it is idle, if the job
-declared `can_wake`. Only currently declared jobs with `can_wake` contribute inbox messages or results to a timed
-wake; other output waits for another wake, including the idle rule. Explicit wakes have no rate limit (the operator,
+declared `can_wake`. Only jobs currently declared with `can_wake: false` are excluded from a timed wake; unknown jobs and
+unreadable declarations count. Quiet output waits for another wake, including the idle rule. Explicit wakes have no rate limit (the operator,
 2026-10-16). A job never overlaps itself: a run still going when the next comes due means that one is skipped and logged. Failures are visible: every run is logged in
 .supervisor/jobs/<instance>.jsonl; after FAIL_REPORT failures in a row the instance gets one message with the last
 error, and the job backs off (its interval doubles, up to a day) until it succeeds or its manifest changes.
@@ -708,25 +708,26 @@ def _wakers(by: list[str]) -> str:
     return "; ".join(([f"its job(s) {', '.join(plugins)}"] if plugins else []) + events)
 
 
-def inbox_can_wake(name: str, file: str) -> bool:
-    """Job mail follows its current can_wake declaration; other mail counts, as does an unreadable declaration."""
-    match = re.fullmatch(r"\d{8}-\d{6}-\d{6}-from-job-(.+)\.md", file)
-    if match is None:
-        return True
+def quiet_jobs(name: str) -> set[str]:
+    """Only known, declared quiet jobs suppress a timed wake; unavailable declarations suppress nothing."""
     try:
         own, _ = declared(name)
     except (Exception, SystemExit):
-        return True
-    return any(j["plugin"] == match[1] and j["can_wake"] for j in own)
+        return set()
+    return {j["plugin"] for j in own if not j["can_wake"]}
 
 
-def results_since(name: str, since: datetime) -> int:
-    """Runs of the instance's jobs that delivered a message or published a file after `since` (its last cycle): a
-    timed wake has something to do (autonomy.wake_gate). Only currently declared can_wake jobs count."""
-    own, _ = declared(name)
-    waking = {j["plugin"] for j in own if j["can_wake"]}
+def inbox_can_wake(name: str, file: str, quiet: set[str] | None = None) -> bool:
+    """Job mail counts unless its plugin is currently declared quiet. Other and unknown mail counts."""
+    match = re.fullmatch(r"\d{8}-\d{6}-\d{6}-from-job-(.+)\.md", file)
+    return match is None or match[1] not in (quiet_jobs(name) if quiet is None else quiet)
+
+
+def results_since(name: str, since: datetime, quiet: set[str] | None = None) -> int:
+    """Runs that delivered or published after `since`, excluding only currently declared quiet jobs."""
+    quiet = quiet_jobs(name) if quiet is None else quiet
     cut = since.isoformat(timespec="seconds")
-    return sum(1 for r in _rows(name, 500) if r.get("plugin") in waking
+    return sum(1 for r in _rows(name, 500) if r.get("plugin") not in quiet
                and (r.get("delivered") or r.get("published")) and _known(r) > cut)
 
 

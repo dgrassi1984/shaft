@@ -401,7 +401,7 @@ def _log_lines(pattern: str) -> list[str]:
 
 
 def truth(name: str, key: str) -> str:
-    js = metrics.judgments(name)
+    js = metrics.judgments_for_stats(name)
     if key == "model":
         return f"It runs on {instance_config(name).get('LLM_MODEL') or '(unset)'} (config.env LLM_MODEL)."
     if key == "judged_counts":

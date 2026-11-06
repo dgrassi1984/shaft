@@ -81,6 +81,8 @@ class OutcomesTest(Fixture):
             self.assertEqual(self.outcome(text='Read [report](notes/docs/report.md)')['outcome'], 'edited')
             self.assertEqual(self.outcome(attachments=[{'path': 'birds/m/notes/docs/report.md'}])['outcome'], 'edited')
             self.assertEqual(self.outcome(text='notes/docs/other.md')['outcome'], 'no_link')
+            comments[0]['doc'] = 'Quarterly report.md'
+            self.assertEqual(self.outcome(text='Read [report](notes/docs/Quarterly report.md)')['outcome'], 'edited')
 
     def test_m7a_real_comment_store_uses_document_relative_path(self):
         doc_comments.add_thread('m', 'p-0000000000000001', 'notes/docs/report.md', None, 'sha', 'Please revise')
@@ -112,6 +114,51 @@ class OutcomesTest(Fixture):
         self.assertIn('operator outcomes (last 7 days', text)
         self.assertNotIn('item.md', text)
 
+    def test_outcomes_skip_missing_files_null_and_string_attachments_and_refused_comments(self):
+        missing = self.message()
+        del missing['file']
+        self.write('messages.jsonl', [missing, self.message(attachments=None),
+                                    self.message(file='other.md', attachments=['bad']),
+                                    self.message(file='third.md', attachments='bad')])
+        with mock.patch.object(doc_comments, 'threads', side_effect=doc_comments.Refused('bad store')):
+            self.assertEqual([(r['file'], r['outcome']) for r in outcomes.records('m', NOW + timedelta(hours=48))],
+                             [('item.md', 'no_link'), ('other.md', 'no_link'), ('third.md', 'no_link')])
+
+    def test_push_stats_survive_outcomes_read_failure(self):
+        with mock.patch.object(outcomes, 'lines', side_effect=OSError('bad store')):
+            text = '\n'.join(pushes.lines('m', [], NOW))
+        self.assertIn('Outcomes could not be read: OSError: bad store', text)
+        self.assertIn('pushes to the operator today: 0', text)
+
+    def test_short_quote_never_links_and_old_duplicate_does_not_hide_recent_match(self):
+        reply = self.message('operator', 'm', file='reply.md', text='> Done', ts=(NOW + timedelta(hours=1)).isoformat())
+        self.assertEqual(self.outcome([reply], text='Done')['outcome'], 'no_link')
+        reply['text'] = '> Should I rewrite the parser?'
+        self.write('messages.jsonl', [self.message(file='old.md', ts=(NOW - timedelta(days=30)).isoformat()),
+                                    self.message(), reply])
+        self.assertEqual([(r['file'], r['outcome']) for r in outcomes.records('m', NOW + timedelta(hours=48))],
+                         [('old.md', 'no_link'), ('item.md', 'followed_up')])
+        reply['in_reply_to'] = 'old.md'
+        self.write('messages.jsonl', [self.message(file='old.md', ts=(NOW - timedelta(days=30)).isoformat()),
+                                    self.message(), reply])
+        self.assertEqual([r['outcome'] for r in outcomes.records('m', NOW + timedelta(hours=48))], ['no_link', 'no_link'])
+
+    def test_doc_comment_credits_only_latest_delivery_before_comment(self):
+        self.write('messages.jsonl', [self.message(text='notes/docs/report.md', ts=(NOW - timedelta(hours=1)).isoformat()),
+                                    self.message(file='new.md', attachments=[{'path': 'notes/docs/report.md'}]),
+                                    self.message(file='future.md', text='notes/docs/report.md', ts=(NOW + timedelta(hours=2)).isoformat())])
+        comments = [{'id': 'c', 'doc': 'report.md', 'posts': [
+            {'pid': 'p', 'by': 'operator', 'ts': (NOW + timedelta(hours=1)).isoformat()}]}]
+        with mock.patch.object(doc_comments, 'threads', return_value=comments):
+            self.assertEqual([(r['file'], r['outcome']) for r in outcomes.records('m', NOW + timedelta(hours=50))],
+                             [('item.md', 'no_link'), ('new.md', 'edited'), ('future.md', 'no_link')])
+
+    def test_outcomes_since_skips_old_bodies_and_weekly_lines_bound_scan(self):
+        self.write('messages.jsonl', [self.message(file='old.md', text=None, ts=(NOW - timedelta(days=30)).isoformat()),
+                                    self.message()])
+        self.assertEqual([r['file'] for r in outcomes.records('m', NOW, since=NOW - timedelta(days=9))], ['item.md'])
+        self.assertIn('open 1', '\n'.join(outcomes.lines('m', NOW)))
+
 
 class JudgingTest(Fixture):
     def setUp(self):
@@ -128,10 +175,10 @@ class JudgingTest(Fixture):
         self.ask = self.enterContext(mock.patch.object(judge, 'ask', side_effect=lambda *a, **k: dict(VERDICT, should_have_waited='yes', delivery_supported='yes')))
         self.enterContext(mock.patch.object(judge, 'JUDGE_EVERY', 1))
 
-    def test_m7b_requested_reply_forces_na_after_judge_says_wait(self):
+    def test_m7b_operator_reply_fact_does_not_overwrite_unrelated_push_verdict(self):
         self.ep['inbox'] = ['20261106-110000-000001-from-operator.md']
         self.assertEqual(metrics.judge_pending('m'), 1)
-        self.assertEqual(metrics.judgments('m')[0]['should_have_waited'], 'na')
+        self.assertEqual(metrics.judgments('m')[0]['should_have_waited'], 'yes')
         self.assertIn('answers_operator: true', self.ask.call_args.args[1])
 
     def test_m7b_deferred_operator_message_does_not_exempt_push(self):
@@ -139,7 +186,7 @@ class JudgingTest(Fixture):
         self.ep['inbox_deferred'] = list(self.ep['inbox'])
         metrics.judge_pending('m')
         self.assertEqual(metrics.judgments('m')[0]['should_have_waited'], 'yes')
-        self.assertTrue(metrics.answers_operator({'kind': 'talk', 'role': 'assistant'}))
+        self.assertTrue(metrics.answers_operator({'intent': {'origin': 'operator'}}))
         self.assertFalse(metrics.answers_operator({'kind': 'talk', 'role': 'assistant', 'speaker': 'other'}))
 
     def test_m7c_unsampled_cited_judged_once_and_excluded_from_sampled_mean(self):
@@ -232,6 +279,58 @@ class JudgingTest(Fixture):
                 mock.patch('supervisor.tom.score'), mock.patch.object(metrics, 'write_stats'), mock.patch.object(metrics, 'check_probation'):
             metrics.after_cycle('m')
         run.assert_called_once_with('m')
+
+    def test_unreadable_commitment_ledger_does_not_stop_judging(self):
+        self.ledger.side_effect = IsADirectoryError('ledger is a directory')
+        self.assertEqual(metrics.judge_pending('m'), 1)
+        self.assertEqual(metrics.judgments('m')[0]['should_have_waited'], 'yes')
+        self.assertEqual(metrics.log.call_count, 1)
+        self.assertIn('commitment citations could not be read', metrics.log.call_args.args[0])
+
+    def test_cited_only_episode_does_not_spend_second_judge(self):
+        self.write('judgments/m-unsampled.jsonl', [{'episode_ts': self.ep['ts']}])
+        self.ledger.return_value = {'c': {'status': 'kept', 'evidence': self.ep['ts']}}
+        with mock.patch.object(metrics, 'second_sampled', side_effect=AssertionError('paid sampling')):
+            self.assertEqual(metrics.judge_pending('m'), 1)
+        self.assertEqual(metrics.judgments('m')[0]['cited'], True)
+
+    def test_operator_origin_without_inbox_adds_fact_but_keeps_judge_verdict(self):
+        self.ep['intent']['origin'] = 'operator'
+        self.assertEqual(metrics.judge_pending('m'), 1)
+        self.assertIn('answers_operator: true', self.ask.call_args.args[1])
+        self.assertEqual(metrics.judgments('m')[0]['should_have_waited'], 'yes')
+
+    def test_stats_inspection_never_runs_paid_probe(self):
+        from supervisor import __main__ as cli
+        with mock.patch.object(cli, 'instance_root'), mock.patch.object(metrics, 'judge_pending', return_value=0), \
+                mock.patch.object(metrics, 'stats_text', return_value='stats'), \
+                mock.patch.object(judge_probe, 'run', side_effect=AssertionError('paid probe')), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+            self.assertEqual(cli.main(['stats', 'm']), 0)
+        self.assertEqual(output.getvalue(), 'stats\n')
+
+    def test_probe_skips_torn_json_nonobjects_and_invalid_dates(self):
+        path = judge_probe._path('m')
+        path.parent.mkdir()
+        path.write_text('torn\nnull\n{}\n{"at": "invalid"}\n{"at": 123}\n'
+                        '{"at": "2026-11-06T12:00:00garbage"}\n' + json.dumps(
+            {'at': NOW.isoformat(), 'episode_ts': 'old', 'caught': True}) + '\n')
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate: 1/1 over 30 days')
+        self.write('judgments/m.jsonl', [{'episode_ts': self.ep['ts'], 'delivery_supported': 'yes', 'confidence_of': None}])
+        self.assertEqual(judge_probe.run('m'), 1)
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate: 1/2 over 30 days')
+
+    def test_failed_probe_attempts_count_toward_cap_but_not_catch_rate(self):
+        episodes = [dict(self.ep, ts=(NOW - timedelta(hours=i)).isoformat()) for i in range(5)]
+        metrics.live_episodes.return_value = episodes
+        self.write('judgments/m.jsonl', [{'episode_ts': ep['ts'], 'delivery_supported': 'yes', 'confidence_of': None} for ep in episodes])
+        self.ask.side_effect = judge.JudgeError('paid failure')
+        self.assertEqual([judge_probe.run('m') for _ in range(5)], [0, 0, 0, 0, 0])
+        rows = judge_probe.records('m')
+        self.assertEqual([r['error'] for r in rows], ['paid failure'] * 3)
+        self.assertEqual(self.ask.call_count, 3)
+        self.assertTrue(all('caught' not in r for r in rows))
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate: unmeasured')
 
 
 class PlanTest(Fixture):

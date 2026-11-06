@@ -126,7 +126,7 @@ class FactsTest(unittest.TestCase):
         file.write_text("refresh ready")
         rows = [{"ts": NOW.isoformat(), "plugin": plugin, **out} for plugin, out in
                 (("grading_packet_refresh", {"delivered": True}), ("briefing", {"published": ["notes/b.md"]}),
-                 ("removed", {"delivered": True}))]
+                 ("briefing", {"delivered": True}))]
         own = [{"plugin": p, "can_wake": False} for p in ("grading_packet_refresh", "briefing")]
         with mock.patch.object(jobs, "declared", return_value=(own, [])), \
                 mock.patch.object(jobs, "_rows", return_value=rows):
@@ -140,7 +140,7 @@ class FactsTest(unittest.TestCase):
     def test_job_mail_filter_keeps_waking_jobs_other_senders_and_read_failures(self):
         own = [{"plugin": "wake_job", "can_wake": True}, {"plugin": "quiet-job", "can_wake": False}]
         with mock.patch.object(jobs, "declared", return_value=(own, [])):
-            for sender, expected in (("job wake_job", True), ("job quiet-job", False), ("job removed", False),
+            for sender, expected in (("job wake_job", True), ("job quiet-job", False), ("job removed", True),
                                      ("operator", True), ("wren", True), ("watch", True)):
                 file = f"{jobs._stem(NOW, sender)}.md"
                 self.assertEqual(jobs.inbox_can_wake(self.name, file), expected, sender)

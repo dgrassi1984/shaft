@@ -349,14 +349,15 @@ def wake_facts(name: str, since: datetime | None, until: datetime) -> WakeFacts:
     from . import commitments, jobs
     try:
         now = datetime.now()
-        unread = sum(n.endswith(".md") and jobs.inbox_can_wake(name, n)
+        quiet = jobs.quiet_jobs(name)
+        unread = sum(n.endswith(".md") and jobs.inbox_can_wake(name, n, quiet)
                      for n in list_beneath(INSTANCES / name, "inbox"))
         due = commitments.coming_due(name, since, until)
         reminders = commitments.overdue_reminders(name, since, now)
         overdue = sum(i["status"] in ("open", "overdue") and (at := commitments._at(i["due"])) is not None
                       and at < now and since is not None and at <= commitments._local(since)
                       for i in commitments.ledger(name, now).values())
-        results = jobs.results_since(name, since) if since else 0
+        results = jobs.results_since(name, since, quiet) if since else 0
     except (Exception, SystemExit) as e:
         return WakeFacts(error=f"{type(e).__name__}: {e}")
     reason = f"{due[0]['id']} due {due[0]['due_at']:%H:%M}" if due else \
@@ -875,7 +876,8 @@ class WarmState:
     unreadable: bool = False
     timed_out: bool = False
     ended: float = float("-inf")
-    regated: float = float("-inf")
+    regated_pass: str | None = None
+    regated_at: float = float("-inf")
 
 
 def gate_warm(children: dict, st: WarmState, start, now: float | None = None) -> None:
@@ -898,8 +900,8 @@ def gate_warm(children: dict, st: WarmState, start, now: float | None = None) ->
         wait = now - st.ended < WARM_RETRY_S if st.timed_out else now - st.started < WARM_CHECK_S
         if pair in st.failed or (pair == st.pair and wait):
             return
-        st.pair, st.started, st.timed_out = pair, now, False
         children["gate warm"] = (start(["gate", "warm"]), time.monotonic())
+        st.pair, st.started, st.timed_out = pair, now, False
     except Exception as e:                    # never the scheduler's loop: wakes, sleeps and jobs go on (Codex, M2)
         try:
             log(f"scheduler: the gate's warm-up could not start: {type(e).__name__}: {e}")
@@ -942,10 +944,11 @@ def regate_recorded(children: dict, st: WarmState, start) -> None:
         env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}
         rec = gate.recorded_pass(tree, gate.shared_key(tree, env))
         # Hourly too: a re-gate that found the instance busy has nothing newer to wait for.
-        if rec and (datetime.fromisoformat(rec["passed_at"]).timestamp() > st.regated
-                    or time.time() - st.regated >= WARM_RETRY_S):
-            st.regated = time.time()
+        if rec and (rec["passed_at"] != st.regated_pass
+                    or time.monotonic() - st.regated_at >= WARM_RETRY_S):
             regate_after_warm(children, start)
+            if "gate regate" in children:
+                st.regated_pass, st.regated_at = rec["passed_at"], time.monotonic()
     except Exception as e:
         with contextlib.suppress(Exception):
             log(f"scheduler: the gate's recorded pass could not be read: {type(e).__name__}: {e}")

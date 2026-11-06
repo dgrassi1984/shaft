@@ -1473,7 +1473,7 @@ class Broker:
         """The judge's should_have_waited=yes share of this instance's push cycles, last 7 days (review G3)."""
         from . import metrics, pushes
         try:
-            js = metrics.judgments(self.name, self.project / ".supervisor")
+            js = [j for j in metrics.judgments(self.name, self.project / ".supervisor") if not j.get("cited")]
         except (OSError, ValueError):   # measurement must not turn a delivered message into a failed tool call
             return None
         return pushes.waited_share(pushes.recent_judgments(js, as_of))

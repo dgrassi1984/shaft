@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 
 from . import core, doc_comments, feedback, pushes
@@ -34,45 +35,68 @@ def _ratings(name: str) -> list[dict]:
     return rows
 
 
-def records(name: str, now: datetime | None = None) -> list[dict]:
+def records(name: str, now: datetime | None = None, since: datetime | None = None) -> list[dict]:
     now = now or datetime.now()
-    rows = pushes.records(core.SUP_DIR)
-    delivered = [r for r in rows if r.get("from") == name and r.get("to") == "operator" and pushes._time(r["ts"]) <= now]
+    window = timedelta(hours=OUTCOME_WINDOW_H)
+    rows = [r for r in pushes.records(core.SUP_DIR) if isinstance(r.get("file"), str) and r["file"]
+            and (at := pushes._time(r.get("ts"))) and (since is None or at >= since) and at <= now]
+    times = {r["file"]: pushes._time(r["ts"]) for r in rows}
+    delivered = sorted((r for r in rows if r.get("from") == name and r.get("to") == "operator"),
+                       key=lambda r: times[r["file"]])
     if not delivered:
         return []
+    stamps = [times[r["file"]] for r in delivered]
+    bodies = {r["file"]: " ".join(r.get("text", "").split()) for r in delivered}
+    by_file = {r["file"]: r for r in delivered}
     replies = {}
     for reply in rows:
         if reply.get("from") != "operator" or reply.get("to") != name:
             continue
-        quoted = [" ".join(line[1:].strip() for line in b.splitlines())
+        at = times[reply["file"]]
+        quoted = [" ".join(" ".join(line[1:].strip() for line in b.splitlines()).split())
                   for b in re.findall(r"(?m)(?:^>[^\n]*\n?)+", reply.get("text", ""))]
-        matched = {item["file"] for item in delivered if pushes._time(item["ts"]) <= pushes._time(reply["ts"])
-                   for body in [" ".join(item.get("text", "").split())]
-                   if any(q and q in body and len(q) >= min(len(body), 20) for q in quoted)}
+        quoted = [q for q in quoted if len(q) >= 20]
+        eligible = delivered[bisect_left(stamps, at - window):bisect_right(stamps, at)]
+        matched = {item["file"] for item in eligible if any(q in bodies[item["file"]] for q in quoted)}
         target = reply.get("in_reply_to") or (next(iter(matched)) if len(matched) == 1 else None)
-        if target:
+        if target in by_file and at - window <= times[target] <= at:
             replies.setdefault(target, []).append((reply["ts"], "followed_up", f"message:{reply['file']}"))
-    ratings = _ratings(name)
-    comments = doc_comments.threads(name)
+    ratings = {}
+    for rating in _ratings(name):
+        if rating["target"].get("kind") == "message":
+            ratings.setdefault(rating["target"].get("file"), []).append(
+                (rating["ts"], "followed_up", f"feedback:{rating['id']}"))
+    try:
+        comments = doc_comments.threads(name)
+    except doc_comments.Refused:
+        comments = []
+    docs = {}
+    for row in delivered:
+        attached = row.get("attachments") or []
+        paths = {att["path"] for att in attached if isinstance(att, dict) and isinstance(att.get("path"), str)} \
+            if isinstance(attached, list) else set()
+        named = set(re.findall(r"(?<![\w/])notes/docs/[\w ./-]+?\.md(?![\w./-])", row.get("text", "")))
+        for path in paths:
+            marker = "notes/docs/"
+            named.add(path[path.index(marker):] if marker in path else path)
+        for doc in named:
+            docs.setdefault(doc, []).append(row)
+    for thread in comments:
+        candidates = docs.get("notes/docs/" + thread["doc"], [])
+        dates = [times[r["file"]] for r in candidates]
+        for post in thread["posts"]:
+            at = pushes._time(post.get("ts"))
+            if post["by"] != "operator" or at is None or at > now:
+                continue
+            index = bisect_right(dates, at) - 1
+            if index >= 0 and at - dates[index] <= window:
+                target = candidates[index]["file"]
+                replies.setdefault(target, []).append((post["ts"], "edited", f"comment:{thread['id']}:{post['pid']}"))
     out = []
     for row in delivered:
-        sent = pushes._time(row["ts"])
-        end = sent + timedelta(hours=OUTCOME_WINDOW_H)
-        links = list(replies.get(row["file"], []))
-        for rating in ratings:
-            if rating["target"].get("kind") == "message" and rating["target"].get("file") == row["file"]:
-                links.append((rating["ts"], "followed_up", f"feedback:{rating['id']}"))
-        docs = set()
-        for att in row.get("attachments", []):
-            path = att.get("path", "")
-            marker = "notes/docs/"
-            docs.add(path[path.index(marker):] if marker in path else path)
-        for thread in comments:
-            doc = "notes/docs/" + thread["doc"]
-            if doc in docs or re.search(r"(?<![\w/])" + re.escape(doc) + r"(?![\w./-])", row.get("text", "")):
-                for post in thread["posts"]:
-                    if post["by"] == "operator":
-                        links.append((post["ts"], "edited", f"comment:{thread['id']}:{post['pid']}"))
+        sent = times[row["file"]]
+        end = sent + window
+        links = replies.get(row["file"], []) + ratings.get(row["file"], [])
         links = sorted((at, kind, evidence) for ts, kind, evidence in links
                        if (at := pushes._time(ts)) and sent <= at <= end and at <= now)
         if links:
@@ -87,7 +111,8 @@ def records(name: str, now: datetime | None = None) -> list[dict]:
 
 def lines(name: str, now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
-    rows = [r for r in records(name, now) if now - timedelta(days=7) <= pushes._time(r["ts"]) <= now]
+    since = now - timedelta(days=7, hours=OUTCOME_WINDOW_H)
+    rows = [r for r in records(name, now, since=since) if now - timedelta(days=7) <= pushes._time(r["ts"]) <= now]
     if not rows:
         return []
     return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window; a floor, chat answers name no "

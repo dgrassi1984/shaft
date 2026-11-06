@@ -122,6 +122,7 @@ records, verdicts, claims or checking tools. criterion_met keeps its meaning, in
 
 Push timing, separately: should_have_waited is na when this cycle sent no push to the operator \
 (a successful send_message to=operator alerts them), or na when the push answers a message the operator sent. \
+answers_operator: true means this cycle worked on something the operator asked for. A push that delivers it is na. An unrelated push in the same cycle is judged as usual.
 Otherwise judge the tool log and the push's \
 content and timing: yes if any push could have waited for a morning digest; no if all were time-critical, \
 such as a calendar clash within hours, a cancellation, or a deadline today. Never judge this from \
@@ -785,12 +786,16 @@ def judge_pending(name: str) -> int:
     js = judgments(name)
     episodes = live_episodes(name)
     cited = set()
-    for item in commitments.ledger(name).values():
-        if item.get("status") == "kept" and isinstance(item.get("evidence"), str):
-            citation = commitments._citation(item["evidence"])
-            matches = [ep["ts"] for ep in episodes if citation and commitments._matches(ep.get("ts"), citation[0])]
-            if len(matches) == 1:
-                cited.add(matches[0])
+    try:
+        for item in commitments.ledger(name).values():
+            if item.get("status") == "kept" and isinstance(item.get("evidence"), str):
+                citation = commitments._citation(item["evidence"])
+                matches = [ep["ts"] for ep in episodes if citation and commitments._matches(ep.get("ts"), citation[0])]
+                if len(matches) == 1:
+                    cited.add(matches[0])
+    except Exception as e:
+        cited.clear()
+        log(f"{name}: commitment citations could not be read: {type(e).__name__}: {e}")
     left = unsampled(name)
     done = {j["episode_ts"] for j in js} | (left - cited)
     new = 0
@@ -812,7 +817,7 @@ def judge_pending(name: str) -> int:
             try:
                 case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
                              followed=_followed_surprise(name, ep))
-                second = second_sampled(name, ep["ts"])
+                second = selected and second_sampled(name, ep["ts"])
                 by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
                 verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
@@ -829,8 +834,6 @@ def judge_pending(name: str) -> int:
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
-        if answers_operator(ep):
-            verdict["should_have_waited"] = "na"
         if not selected:
             verdict["cited"] = True
         intent = ep.get("intent") or {}
@@ -1403,10 +1406,10 @@ def _followed_surprise(name: str, ep: dict) -> str:
 
 
 def answers_operator(ep: dict) -> bool:
-    """Only messages actually read (not deferred), or an operator conversation reply."""
+    """An operator message actually read, or a goal declared as the operator's request."""
     read = set(ep.get("inbox") or []) - set(ep.get("inbox_deferred") or [])
     return any(re.fullmatch(r"\d{8}-\d{6}-\d{6}-from-operator\.md", f) for f in read) or (
-        ep.get("kind") == "talk" and ep.get("role") == "assistant" and not ep.get("speaker"))
+        (ep.get("intent") or {}).get("origin") == "operator")
 
 
 def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "", *, followed: str = "") -> str:
