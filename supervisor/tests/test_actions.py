@@ -19,8 +19,8 @@ class ClassificationTest(unittest.TestCase):
     """#142: each existing operator tool has an explicit classification, including reads."""
 
     def test_table(self):
-        self.assertEqual(set(actions.OPERATOR_TOOLS), set(broker.MAIL_TOOLS + broker.CALENDAR_TOOLS))
-        for tool in broker.MAIL_TOOLS + ('calendar_events', 'calendar_event'):
+        self.assertEqual(set(actions.OPERATOR_TOOLS), set(broker.MAIL_TOOLS + broker.CALENDAR_TOOLS + broker.DRIVE_TOOLS))
+        for tool in broker.MAIL_TOOLS + broker.DRIVE_TOOLS + ('calendar_events', 'calendar_event'):
             self.assertIsNone(actions.classify(tool, {}))
         self.assertIsNone(actions.classify('send_message', {'to': 'operator'}))
         self.assertIsNone(actions.classify('send_message', {'to': 'shaft'}))

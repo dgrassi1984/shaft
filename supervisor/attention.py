@@ -31,6 +31,7 @@ MEMORY_TOOLS = ("search_memory", "remember", "rewrite_facts", "write_digest", "u
 # its own name.
 TOOL_SOURCES = {
     "web_search": ("web",), "fetch_page": ("web",), "http_request": ("web",), "browse": ("web",),
+    "drive_search": ("drive",), "drive_read": ("drive",), "drive_download": ("drive",),
     "web_research": ("web",), "mail_search": ("mail",), "mail_read": ("mail",), "mail_attachment": ("mail",),
     "calendar_events": ("calendar",), "calendar_event": ("calendar",), "calendar_create": ("calendar",),
     "calendar_move": ("calendar",), "calendar_respond": ("calendar",), "record": ("record",), "history": ("record",),

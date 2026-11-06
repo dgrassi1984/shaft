@@ -378,7 +378,7 @@ def _run(name: str, root: Path, job: dict) -> int:
     if long:
         env.update(SHAFT_JOB_CHECKPOINT=f".jobs/{plugin}/{CHECKPOINT}", SHAFT_JOB_RESUME="1" if resumed else "0")
     for key, value in (("SHAFT_SHARED", str(broker.shared) if broker.shared else ""),
-                       ("SHAFT_MAIL", broker.mail_env()), ("SHAFT_CALENDAR", broker.calendar_env())):
+                       ("SHAFT_GDRIVE", broker.gdrive_env()), ("SHAFT_MAIL", broker.mail_env()), ("SHAFT_CALENDAR", broker.calendar_env())):
         if value:
             env[key] = value
 

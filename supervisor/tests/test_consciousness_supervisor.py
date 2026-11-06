@@ -152,6 +152,11 @@ class AttentionMissedTouchesTest(unittest.TestCase):
                                                 call("kiln-watch", {})])
         self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
 
+    def test_drive_broker_tools_touch_drive(self):
+        for tool in ('drive_search', 'drive_read', 'drive_download'):
+            s = self.cycle(["drive"], [call(tool, {"id": "work/file00000000"})])
+            self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+
     def test_dot_folders_and_save_paths(self):
         s = self.cycle([".tmp/kiln-dump.txt", ".tmp/"], [call("read_file", {"path": ".tmp/kiln-dump.txt"}),
                                                          call("mail_dump", {"id": "t1", "save_to": ".tmp/m.txt"})])

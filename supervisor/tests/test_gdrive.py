@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from supervisor import google
+from supervisor.tests.test_mail import MailCase
 
 READONLY = 'https://www.googleapis.com/auth/drive.readonly'
 API = 'https://www.googleapis.com/drive/v3'
@@ -690,3 +691,266 @@ with open(sys.argv[1], 'a') as stream:
             self.assertEqual(self.cli_module.main(['google', 'login', 'work', 'operator@work.example']), 0)
         self.assertIn('shaft gdrive <instance> grant work', out.getvalue())
         self.assertIn('drive.readonly', out.getvalue())
+
+
+class BrokerTest(MailCase):
+    def fake_gmail(self):
+        self.fake = FakeDrive()
+        return self.fake
+
+    def setUp(self):
+        super().setUp()
+        from supervisor import core
+        self.core = core
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}])
+        google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
+        with (self.root / '.gitignore').open('a') as out:
+            out.write('\ngdrive/\n')
+        for p in (mock.patch.object(core, 'INSTANCES', self.root.parent),
+                  mock.patch.object(google.Account, 'token', return_value='token'),
+                  mock.patch.object(google.Account, 'download', return_value=b'hello')):
+            p.start()
+            self.addCleanup(p.stop)
+        self.handle = 'work/' + OWN
+
+    def replay(self, cache=None, lock=None):
+        import tempfile
+        import threading
+        from pathlib import Path
+        from supervisor import broker
+        return broker.ReplayBroker('wren', self.project, self.secrets, self.sup / 'b.log',
+            state_root=Path(tempfile.mkdtemp(dir=self.project)), start_commit='0', as_of=CUT,
+            cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wren@trial:t',
+            tools_log=self.sup / 't.log', max_calls=200)
+
+    def test_tools_offered_only_when_granted(self):
+        from supervisor import broker
+        b = self.broker()
+        names = lambda: {s['function']['name'] for s in b.tool_specs()}
+        self.assertTrue(set(broker.DRIVE_TOOLS) <= names())
+        self.assertEqual(b.gdrive_env(), 'work (own)')
+        for s in b.tool_specs():
+            if s['function']['name'] in broker.DRIVE_TOOLS:
+                self.assertIn("operator's Drive", s['function']['description'])
+                self.assertIn('authors', s['function']['description'])
+                self.assertIn('own Drive', s['function']['description'])
+        self.core.set_gdrive_grants('wren', [])
+        self.assertFalse(set(broker.DRIVE_TOOLS) & names())
+
+    def test_revoke_holds_from_the_next_call(self):
+        b = self.broker()
+        self.ok(b, 'drive_read', {'id': self.handle})
+        self.core.set_gdrive_grants('wren', [])
+        for tool in ('drive_search', 'drive_read', 'drive_download'):
+            self.assertIn('no Drive granted', self.refused(b, tool, {} if tool == 'drive_search' else {'id': self.handle}))
+
+    def test_ungranted_account_refused(self):
+        google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
+        for tool in ('drive_read', 'drive_download', 'drive_search'):
+            args = {'account': 'home'} if tool == 'drive_search' else {'id': 'home/' + OWN}
+            err = self.refused(self.broker(), tool, args)
+            self.assertIn("'home' is not granted", err)
+            self.assertIn('work (own)', err)
+
+    def test_calls_capped_pages_not(self):
+        b = self.broker(max_calls=200)
+        self.ok(b, 'drive_read', {'id': self.handle})
+        for _ in range(29):
+            self.ok(b, 'drive_search', {})
+        for _ in range(32):
+            self.ok(b, 'drive_read', {'id': self.handle, 'offset': 1})
+        self.assertIn('30 Drive calls', self.refused(b, 'drive_read', {'id': self.handle}))
+
+    def test_offset_on_unopened_file_is_counted(self):
+        b = self.broker(max_calls=200)
+        for i in range(31):
+            fid = 'file%010d' % i
+            self.fake.files[fid] = file(fid, ownedByMe=True)
+            result = b.call('drive_read', {'id': 'work/' + fid, 'offset': 1})
+            self.assertEqual(result['ok'], i < 30, result)
+        self.assertIn('30 Drive calls', result['error'])
+        failed = self.broker()
+        self.refused(failed, 'drive_read', {'id': 'work/' + EXTERNAL})
+        self.assertNotIn('work/' + EXTERNAL, failed.drive_opened)
+
+    def test_download_refused_while_gdrive_not_ignored(self):
+        (self.root / '.gitignore').write_text('logs/\n')
+        self.assertIn('shaft update wren', self.refused(self.broker(), 'drive_download', {'id': self.handle}))
+        self.assertFalse((self.root / 'gdrive').exists())
+
+    def test_run_bytes_capped(self):
+        from supervisor import broker
+        b = self.broker()
+        with mock.patch.object(broker, 'DRIVE_RUN_BYTES', 7):
+            self.ok(b, 'drive_download', {'id': self.handle})
+            self.assertIn('per run', self.refused(b, 'drive_download', {'id': self.handle}))
+        self.assertEqual(b.drive_bytes, 5)
+
+    def test_revoke_during_fetch_leaves_no_copy(self):
+        import threading
+        from supervisor import gdrive
+        started, resume = threading.Event(), threading.Event()
+        results = []
+        previous = self.root / 'gdrive' / 'work'
+        previous.mkdir(parents=True)
+        (previous / 'old.txt').write_text('old copy')
+        def fetch(*args):
+            started.set()
+            if not resume.wait(5):
+                raise AssertionError('fetch was not released')
+            return 'copy.txt', 'text/plain', b'hello'
+        with mock.patch.object(gdrive, 'fetch', side_effect=fetch):
+            thread = threading.Thread(target=lambda: results.append(self.broker().call('drive_download', {'id': self.handle})))
+            thread.start()
+            try:
+                self.assertTrue(started.wait(5), 'fetch never started')
+                with self.core.gdrive_lock('wren'):
+                    self.core.set_gdrive_grants('wren', [])
+                    self.core.remove_gdrive_copies('wren')
+                self.assertFalse((self.root / 'gdrive').exists())
+            finally:
+                resume.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(results[0]['ok'], results)
+        self.assertIn('not granted', results[0]['error'])
+        self.assertFalse((self.root / 'gdrive').exists())
+
+    def test_replay_read_shared_and_keyed_on_grant(self):
+        from supervisor import gdrive
+        cache = {}
+        first, second = self.replay(cache), self.replay(cache)
+        with mock.patch.object(gdrive, 'text_of', return_value='first body') as read:
+            a = self.ok(first, 'drive_read', {'id': self.handle})
+            self.assertEqual(a, self.ok(second, 'drive_read', {'id': self.handle}))
+            self.assertEqual(read.call_count, 1)
+            self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+            self.ok(second, 'drive_read', {'id': self.handle})
+            self.assertEqual(read.call_count, 2)
+        self.assertTrue(all('2026-11-06' in k for k in cache))
+
+    def test_replay_cached_answer_rechecks_file(self):
+        for hidden in ({'trashed': True}, {'ownedByMe': False}):
+            for tool in ('drive_search', 'drive_read', 'drive_download'):
+                with self.subTest(hidden=hidden, tool=tool):
+                    self.fake.files[OWN] = file(OWN, ownedByMe=True)
+                    cache = {}
+                    first, second = self.replay(cache), self.replay(cache)
+                    args = {} if tool == 'drive_search' else {'id': self.handle}
+                    self.ok(first, tool, args)
+                    self.fake.files[OWN].update(hidden)
+                    if tool == 'drive_search':
+                        self.assertNotIn(self.handle, self.ok(second, tool, args))
+                    else:
+                        self.refused(second, tool, args)
+                    self.assertFalse((second.root / 'gdrive').exists())
+
+    def test_replay_download_lands_in_the_copy(self):
+        cache = {}
+        for b in (self.replay(cache), self.replay(cache)):
+            out = self.ok(b, 'drive_download', {'id': self.handle})
+            rel = 'gdrive/work/' + OWN + '-' + OWN
+            self.assertIn(rel, out)
+            self.assertEqual((b.root / rel).read_bytes(), b'hello')
+        self.assertFalse((self.root / 'gdrive').exists())
+
+    def test_battery_never_gets_drive_tools(self):
+        from supervisor import broker, battery
+        b = self.broker(root=self.root)
+        self.assertEqual(b.gdrive_grants(), [])
+        self.assertTrue(set(broker.DRIVE_TOOLS) <= battery.EXAM_OFF)
+        self.assertFalse(set(broker.DRIVE_TOOLS) & {s['function']['name'] for s in b.tool_specs()})
+        for tool in broker.DRIVE_TOOLS:
+            self.refused(b, tool, {} if tool == 'drive_search' else {'id': self.handle})
+
+    def test_every_read_is_logged_with_handle_and_name(self):
+        self.fake.files[OWN]['name'] = 'Budget.txt'
+        cache = {}
+        for b in (self.broker(), self.replay(cache), self.replay(cache)):
+            for tool in ('drive_read', 'drive_download'):
+                before = b.log_path.read_text() if b.log_path.exists() else ''
+                self.ok(b, tool, {'id': self.handle})
+                added = b.log_path.read_text()[len(before):]
+                self.assertIn(f'{tool} {self.handle} Budget.txt', added)
+        from supervisor import gdrive
+        for tool, method in (('drive_read', 'text_of'), ('drive_download', 'fetch')):
+            b = self.broker()
+            before = b.log_path.read_text()
+            with mock.patch.object(gdrive, method, side_effect=gdrive.Refused('refused')):
+                self.refused(b, tool, {'id': self.handle})
+            self.assertIn(f'{tool} {self.handle} Budget.txt', b.log_path.read_text()[len(before):])
+
+    def test_gdrive_excluded_everywhere(self):
+        from supervisor import trial, battery, web
+        for exclusions in (trial.NOT_STATE, battery.EXAM_SKIP, web.FILE_EXCLUSIONS):
+            self.assertIn('gdrive', exclusions)
+        self.ok(self.broker(), 'drive_download', {'id': self.handle})
+        self.assertFalse(any(p.startswith('gdrive/') for p in trial._files_now(self.root)))
+        with mock.patch.object(battery, 'SUP_DIR', self.sup):
+            copy = battery.make_exam_copy('wren', self.root)
+        self.assertFalse((copy / 'gdrive').exists())
+        with mock.patch.object(self.core, 'instance_root', return_value=self.root):
+            for path in ('gdrive/work/' + OWN, 'GDRIVE/work/' + OWN):
+                self.assertEqual(web._instance_files('wren', 'file', {'path': path}, ['wren'], '').status, 403)
+
+    def test_search_reports_empty_failed_and_incomplete(self):
+        self.fake.incomplete = True
+        b = self.broker()
+        out = self.ok(b, 'drive_search', {})
+        self.assertIn('searched work', out)
+        self.assertIn('incomplete', out)
+        self.assertNotIn(EXTERNAL, out)
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'missing', 'reach': 'own'}])
+        self.assertIn('not searched: missing:', self.ok(b, 'drive_search', {}))
+        self.fake.files.clear()
+        self.assertIn('no files', self.ok(b, 'drive_search', {}))
+
+    def test_cursor_bound_to_arguments_and_accounts(self):
+        b = self.broker()
+        out = self.ok(b, 'drive_search', {'max': 1})
+        import re
+        page = json.loads(re.search(r'page=(".*")\)', out).group(1))
+        for args in ({'text': 'new'}, {'folder': self.handle}, {'modified_after': '2026-01-01'},
+                     {'account': 'work'}, {'max': 2}):
+            self.assertIn('page', self.refused(b, 'drive_search', {'max': 1, 'page': page, **args}))
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+        self.assertIn('page', self.refused(b, 'drive_search', {'max': 1, 'page': page}))
+
+    def test_folder_handle_picks_account(self):
+        b = self.broker()
+        self.ok(b, 'drive_search', {'folder': self.handle})
+        self.assertIn("'%s' in parents" % OWN, next(p['q'] for path, p in self.fake.requests if path == 'files'))
+        self.assertIn('account', self.refused(b, 'drive_search', {'folder': self.handle, 'account': 'home'}))
+
+    def test_tool_errors_are_ordinary_results(self):
+        from supervisor import gdrive
+        for error in (gdrive.NotVisible('hidden'), gdrive.Refused('unsupported'),
+                      google.AccountError('login required'), google.ApiError(403, 'denied')):
+            with self.subTest(error=error), mock.patch.object(gdrive, 'get_file', side_effect=error):
+                for tool in ('drive_read', 'drive_download'):
+                    self.assertIn(str(error), self.refused(self.broker(), tool, {'id': self.handle}))
+
+    def test_member_drives_cached_per_account_per_run(self):
+        from supervisor import gdrive
+        b = self.broker()
+        with mock.patch.object(gdrive, 'member_drives', wraps=gdrive.member_drives) as members:
+            self.ok(b, 'drive_search', {})
+            self.ok(b, 'drive_read', {'id': self.handle})
+            self.ok(b, 'drive_download', {'id': self.handle})
+            self.assertEqual(members.call_count, 1)
+
+    def test_search_merges_accounts_without_losing_rows(self):
+        import re
+        google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
+        b = self.broker()
+        page, handles = '', []
+        for _ in range(10):
+            out = self.ok(b, 'drive_search', {'max': 1, 'page': page})
+            handles.extend(re.findall(r'^(?:home|work)/[^ ·]+', out, re.M))
+            match = re.search(r'page=(".*")\)', out)
+            if not match:
+                break
+            page = json.loads(match.group(1))
+        self.assertEqual(set(handles), {a + '/' + fid for a in ('home', 'work') for fid in (OWN, SHARED, DOMAIN)})
+        self.assertEqual(len(handles), 6)
