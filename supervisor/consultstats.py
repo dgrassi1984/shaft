@@ -174,7 +174,7 @@ def section(name: str, cap=None) -> list[str]:
     window_eps = [ep for ep in eps if (t := _ts(ep.get("ts"))) is not None and since <= t <= now]
     consulted = [ep for ep in window_eps if ep["ts"] in consulted_ts]
     not_consulted = [ep for ep in window_eps if ep["ts"] not in consulted_ts]
-    js_by_ts = {j["episode_ts"]: j for j in metrics.judgments(name)}
+    js_by_ts = {j["episode_ts"]: j for j in metrics.judgments_for_stats(name)}
     lines.append(f"- Live cycles in the last 7 days: {len(consulted)} consulted, {len(not_consulted)} did not.")
     lines.append(f"- Consulted: success {_success_text({ep['ts'] for ep in consulted}, js_by_ts)}, "
                  f"mean value {_value_text({ep['ts'] for ep in consulted}, js_by_ts)}; "

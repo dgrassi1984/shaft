@@ -324,7 +324,7 @@ def cmd_status(names: list[str]) -> int:
                 calls, errors = calls + 1, errors + bool(rec.get("error"))
                 tokens += rec.get("completion_tokens") or 0
         entries = journal_entries(root)
-        js = metrics.judgments(name)
+        js = metrics.judgments_for_stats(name)
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
         rated = [v for v in map(metrics.cycle_value, js) if v is not None]
         worth = metrics.mean_value(metrics.valued(js)[-20:])
@@ -1274,9 +1274,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p = sub.add_parser("judge", help="judging: 'backfill' asks cycles judged before for the ratings and value they lack; "
-                                     "'second' runs the second judge; 'value-regrade' re-asks only value (paid); "
+                                     "'catch' reports planted delivery failures; 'second' runs the second judge; 'value-regrade' re-asks only value (paid); "
                                      "'pushback-outcome' previews later outcomes, --write pays and stores apart")
-    p.add_argument("action", choices=["backfill", "second", "value-regrade", "pushback-outcome"])
+    p.add_argument("action", choices=["backfill", "second", "value-regrade", "pushback-outcome", "catch"])
     p.add_argument("names", nargs="*")
     p.add_argument("--days", type=int, default=3, help="pushback-outcome: minimum cycle age in days")
     p.add_argument("--write", action="store_true", help="pushback-outcome: pay for judgments and store apart")
@@ -1727,6 +1727,8 @@ def main(argv: list[str]) -> int:
     if args.cmd == "stats":
         instance_root(args.name)
         metrics.judge_pending(args.name)
+        from . import judge_probe
+        judge_probe.run(args.name)
         print(metrics.stats_text(args.name))
         return 0
     if args.cmd == "review":                 # read-only: judges nothing, so it costs nothing and waits for no run
@@ -1745,6 +1747,12 @@ def main(argv: list[str]) -> int:
         except (ValueError, metrics.judge.JudgeError) as e:
             print(str(e), file=sys.stderr)
             return 2
+        return 0
+    if args.cmd == "judge" and args.action == "catch":
+        from . import judge_probe
+        for name in args.names or instance_names():
+            instance_root(name)
+            print(f"{name}: {judge_probe.line(name)}")
         return 0
     if args.cmd == "judge" and args.action == "second":
         print(f"second judge: {metrics.second_pending(args.names or None)} cycle(s) graded")

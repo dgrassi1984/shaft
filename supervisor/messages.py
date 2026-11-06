@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, list_beneath, log, safe_write, safe_write_bytes
+from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, list_beneath, log, safe_read, safe_write, safe_write_bytes
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
 LOG_NAME = "messages.jsonl"
@@ -33,6 +33,10 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
     document comments it carries."""
     row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
            "file": path.name, "text": text.strip()}
+    if sender == "operator" and kind == "reply":
+        head = safe_read(path.parent, path.name, "").split("\n\n", 1)[0]
+        if ref := re.search(r"(?m)^In-Reply-To: (.+)$", head):
+            row["in_reply_to"] = ref[1]
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
     if alert:

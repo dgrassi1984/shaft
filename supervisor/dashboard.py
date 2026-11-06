@@ -88,7 +88,7 @@ def _judgments(name: str) -> list[dict] | None:
     they cannot be read."""
     from . import metrics
     try:
-        return metrics.judgments(name)
+        return metrics.judgments_for_stats(name)
     except Exception:
         return None
 
