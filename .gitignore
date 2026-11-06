@@ -15,6 +15,7 @@ __pycache__/
 secrets/
 # attachments downloaded from the operator's mail (mail_attachment): copies of his mail, never committed
 mail/
+gdrive/
 # my scheduled jobs' own state (.jobs/<plugin>/): a cache the job keeps between runs, never committed
 .jobs/
 
