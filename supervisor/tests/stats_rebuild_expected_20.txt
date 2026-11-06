@@ -21,6 +21,9 @@ Open projects: 1
 - Self-audit share: 0/0 (unknown) among the last 20 judged cycles (20 unknown); since field existed 0/0 (20 older/unknown)
 - Non-yes verdicts with deliverable met (self-imposed clauses only): 0
 
+## What my cycles were worth (what would be lost if each had not run)
+- No cycle has a value grade yet.
+
 ## What I achieved (success × how hard the goal was)
 - Achieved difficulty per cycle (0–5): **1.0** over my last 20 rated cycles on an unrecorded model
 - Difficulty of my goals (1–5, judged from the work): mean 2.0; success at 1–2: 50% of 20
@@ -36,9 +39,6 @@ Open projects: 1
 - My surprises: open 0 · resolved 0 · closed 0 · expired 0
 - Kinds of failed result that came back in a later cycle: 0 of 0
 - None of my last 10 live cycles stated a prediction
-
-## What my cycles were worth (what would be lost if each had not run)
-- No cycle has a value grade yet.
 
 ## Success against my own criteria (raw)
 - Last 5 cycles: yes, no, yes, no, yes

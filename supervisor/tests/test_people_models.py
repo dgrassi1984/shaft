@@ -102,7 +102,8 @@ class PredictionsTest(unittest.TestCase):
         title = "## What I expected others to answer"
         at = text.index(title)
         self.assertLess(text.index("## My expectations vs what happened"), at)
-        self.assertLess(at, text.index("## What my cycles were worth"))
+        self.assertLess(text.index("## What my cycles were worth"), at)
+        self.assertLess(at, text.index("## Success against my own criteria (raw)"))
         self.assertIn("Per peer: operator:", text[:5500])
         self.assertEqual(text.count(title), 1)
         self.assertEqual(len(tom.section("wren")), 5)

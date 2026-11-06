@@ -476,6 +476,26 @@ class CommitmentsTest(unittest.TestCase):
         self.write_episodes([])
         self.assertEqual(supervisor.verify("x", item), "no such episode")
 
+    def test_stats_head_cut_prioritizes_commitments_value_and_failure_modes(self):
+        from supervisor.tests.test_measurement import judgment
+
+        self.write_rows([MADE])
+        self.judgments.return_value = [
+            {**judgment("2026-10-26T15:00:00", "no", 3), "failure_mode": "Report was not sent"}]
+        # Render the real commitment section; isolate unrelated sections from runtime data.
+        sections = metrics._sections
+        with mock.patch.object(metrics, "_sections", side_effect=lambda name, which:
+                               sections(name, tuple(m for m in which if m == "commitments"))), \
+             mock.patch.object(metrics, "SUP_DIR", self.sup):
+            text = metrics.stats_text("x")
+        titles = ("## Promises I made and kept", "## What my cycles were worth",
+                  "## Recent failure modes", "## What I achieved", "## Success against my own criteria (raw)")
+        for title in titles:
+            self.assertEqual(text.count(title), 1)
+        for before, after in zip(titles, titles[1:]):
+            self.assertLess(text.index(before), text.index(after))
+        self.assertIn("Report was not sent", text)
+
     def test_supervisor_safe_reads_and_reports(self):
         self.assertEqual(supervisor.section("x"), [])
         self.assertEqual(supervisor.report(["x"]), "x: commitments\n  (none)")

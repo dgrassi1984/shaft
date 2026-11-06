@@ -191,7 +191,9 @@ before and after a self-change. Cycles judged before the ratings existed are rat
 `shaft judge backfill` (verdicts unchanged). Judged success and unsupported claims count only judges in today's
 rotation, and are given **per judge**: each judge's 7 days to the latest verdict against its 7 before, "too few" under
 10 verdicts. Judges differ several-fold on claims, so no figure pools two of them (docs/plans/PLAN-judge-mix.md).
-The success line sits under achieved difficulty, inside the first 5500 characters the LIVE prompt shows.
+Stats section order is priority order: commitments, value and recent failure modes precede achieved difficulty,
+where the per-judge success line sits. The LIVE prompt keeps only the head of stats.md; its SECTIONS budget is
+5500 characters, but CONTEXT_CHARS can shrink it further.
 
 Stats rebuilds share parsed episode files, invalidated by file name, inode, nanosecond mtime and size;
 reads still refuse links. Provenance indexes citation times and URLs once per rebuild and shingles each

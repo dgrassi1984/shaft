@@ -255,7 +255,7 @@ class ValueTest(unittest.TestCase):
         js.sort(key=lambda j: j["episode_ts"])
         with mock.patch.object(metrics, "judgments", return_value=js):
             text = metrics.stats_text("m")
-        self.assertLess(text.index("What I achieved"), text.index("What my cycles were worth"))
+        self.assertLess(text.index("What my cycles were worth"), text.index("What I achieved"))
         self.assertIn("**2.0** over my last 20 cycles on mimo, vs 1.0 over the 20 before", text)
         self.assertIn("On other models: haiku 4.0 (1 cycles)", text)
         self.assertIn("1: 10 · 3: 10", text)
@@ -427,13 +427,11 @@ class JudgeMixWithinRotationTest(unittest.TestCase):
         self.assertIn("Judges, today's too, differ", text)
         self.assertIn("each read against that judge's own earlier figure", text)
 
-    def test_the_success_line_stays_in_the_part_the_prompt_shows(self):
-        # The LIVE prompt shows stats.md's first 5500 characters (template shaft/prompts.py _head). Where the pooled
-        # line stood, the longer per-judge line started at character 4972 of wren's real stats.md and was cut off.
+    def test_the_success_line_stays_in_the_achieved_section(self):
         text = self.text(self.week(0, self.LENIENT, 20, 1) + self.week(0, self.STRICT, 20, 5))
         at = text.index("- Judged success rate per judge")
         self.assertLess(text.index("## What I achieved"), at)
-        self.assertLess(at, text.index("## What my cycles were worth"))
+        self.assertLess(at, text.index("## Success against my own criteria (raw)"))
 
 
 class ModelTest(InstanceDirCase):

@@ -1768,17 +1768,22 @@ def _stats_text(name: str) -> str:
     lines += push_lines + project_lines
     lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
 
+    # Order is priority: the prompt keeps only the head, below SECTIONS' 5500 when CONTEXT_CHARS shrinks it.
+    commitments = _sections(name, ("commitments",))
+    lines += commitments + ([""] if commitments else []) + _value_section(all_js)
+    fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
+    if fails:
+        lines += ["## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails] + [""]
+
     def success(w: list[dict], latest: bool) -> str:
         rate = f"{sum(SCORE[j['criterion_met']] for j in w) / len(w):.0%}"
         return f"{'**' + rate + '**' if latest else rate} of {len(w)}"
-    # In the achieved section, not under "raw": the LIVE prompt shows stats.md's first 5500 characters, and a
-    # per-judge line where the pooled one stood fell past them on wren (2026-10-29).
     achieved = _achieved_section(js)
     if js:
         achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
                            f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
     achieved[-1:-1] = ran_out_by_model(name, all_js)
-    lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _value_section(all_js) + _battery_section(name)
+    lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -1822,12 +1827,9 @@ def _stats_text(name: str) -> str:
                      f"{by_judge_trend(js, unsupported)}")
     vague = sum(1 for j in js if j.get("criterion_quality") != "checkable")
     lines.append(f"- Criteria the judge found vague or unverifiable: {vague}/{len(js)}")
-    lines += _sections(name, ("metacog",))   # right under calibration: inside the part my prompt shows
-    fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
-    if fails:
-        lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
+    lines += _sections(name, ("metacog",))
     lines += _second_section(js)
-    lines += _sections(name, ("attention", "commitments", "provenance", "consultstats"))
+    lines += _sections(name, ("attention", "provenance", "consultstats"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
