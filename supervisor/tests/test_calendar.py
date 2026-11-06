@@ -448,6 +448,17 @@ class OfferedTest(CalendarCase):
         self.assertNotIn("SHAFT_CALENDAR", env)
 
 
+class DeletedEventTest(CalendarCase):
+    def test_deleted_event_is_refused_like_one_that_never_existed(self):
+        """The bug: Google answers a GET of a deleted event with the event, status cancelled, so calendar_event gave an
+        instance holding its id the title, description and attendees of an event the operator had deleted."""
+        self.assertEqual(self.refused(self.broker(), "calendar_event", {"id": self.handle(PRIMARY, "cancel1")}), HIDDEN)
+
+    def test_only_cancelled_is_refused(self):
+        self.cal.events[PRIMARY]["own1"]["status"] = "tentative"
+        self.assertIn("Status: tentative", self.ok(self.broker(), "calendar_event", {"id": self.handle(PRIMARY, "own1")}))
+
+
 class ReplayTest(CalendarCase):
     def replay(self, cache, lock, as_of):
         state = Path(tempfile.mkdtemp(dir=self.project, prefix="copy-"))

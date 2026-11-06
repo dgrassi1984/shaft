@@ -271,7 +271,8 @@ call per granted calendar per pass (the first one pages through the whole calend
 nothing). Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
 watch)`: each event's handle, time and title, never its description, location or attendees. `wake` uses the same
 wake path (`watch-calendar`) and the same per-instance limit; an expired token (410) starts from now. The instance's
-own `calendar_create` and `calendar_move` changes are reported too.
+own `calendar_create` and `calendar_move` changes are reported too. `calendar_event` refuses a deleted event like one
+that never existed.
 
 Source: [calendar tools](../supervisor/calendar.py).
 

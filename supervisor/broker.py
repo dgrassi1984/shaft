@@ -2412,7 +2412,8 @@ class Broker:
                                  gcal.series(acct, grant["calendar"], ev), self._operator(), acct.address)
 
     def _calendar_lookup(self, id: str) -> tuple[str, dict, str, object, dict]:   # noqa: A002
-        """(alias, grant, event id, account, event) of an event on a granted calendar now — or NotVisible."""
+        """(alias, grant, event id, account, event) of an event on a granted calendar now — or NotVisible. Google answers
+        a GET of a deleted event with the event, details and all, status cancelled: refused like one that never existed."""
         from . import calendar as gcal, google
         alias, h, eid = (str(id).strip().split("/", 2) + ["", ""])[:3]
         grant = next((g for g in self.calendar_grants()
@@ -2420,7 +2421,10 @@ class Broker:
         if grant is None:   # an alias or calendar not granted, or a forged handle: nothing is asked of Google
             raise gcal.NotVisible(gcal.HIDDEN)
         acct = self._google_account(alias, google.CALENDAR)
-        return alias, grant, eid, acct, gcal.event(acct, grant["calendar"], eid, self.as_of)
+        ev = gcal.event(acct, grant["calendar"], eid, self.as_of)
+        if ev.get("status") == "cancelled":
+            raise gcal.NotVisible(gcal.HIDDEN)
+        return alias, grant, eid, acct, ev
 
     def _calendar_create(self, calendar: str, title: str, start: str, end: str, timezone: str = "",
                          location: str | None = None, description: str | None = None, attendees=None) -> str:
@@ -2805,7 +2809,7 @@ class ReplayBroker(Broker):
         rows = []
         for r in found["rows"]:
             try:
-                self._calendar_there(r[0])
+                self._calendar_lookup(r[0])
             except (gcal.NotVisible, google.AccountError, google.ApiError):
                 continue
             rows.append(r)
@@ -2814,16 +2818,9 @@ class ReplayBroker(Broker):
                       "failed the check, dropped")
         return {**found, "rows": rows}
 
-    def _calendar_there(self, id: str) -> None:   # noqa: A002
-        """NotVisible unless the event is on a granted calendar now. Google answers a GET of a deleted event with the
-        event, details and all, status cancelled."""
-        from . import calendar as gcal
-        if self._calendar_lookup(id)[-1].get("status") == "cancelled":
-            raise gcal.NotVisible(gcal.HIDDEN)
-
     def _calendar_event(self, id: str) -> str:   # noqa: A002
         def still(answer: str) -> str:
-            self._calendar_there(id)
+            self._calendar_lookup(id)
             return answer
         return self._shared(["calendar_event", self.calendar_grants(), id, self.as_of],
                             lambda: Broker._calendar_event(self, id), still)
