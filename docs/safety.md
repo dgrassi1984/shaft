@@ -72,6 +72,15 @@ The broker call log includes the class, action id and disposition for classified
   **Your mail, one label at a time** (`shaft mail <name> grant <alias> <label>`; [PLAN-mail.md](plans/PLAN-mail.md)):
   `mail_search`, `mail_read`, `mail_attachment`, offered only when granted. The credential and the grant stay with
   the supervisor, which enforces the label on every call (see [integrations](integrations.md)).
+  **Your Drive, one account per grant** (`shaft gdrive <name> grant <alias> [--all]`;
+  [PLAN-operator-drive.md](plans/PLAN-operator-drive.md)): `drive_search`, `drive_read`, and `drive_download`,
+  offered only when granted. The supervisor holds the whole-Drive read credential and checks the grant and reach
+  on each file. `own` includes owned files, member Shared Drives, and same-domain files only when
+  Drive's `about` reports `canCreateDrives=true` for the account. A Workspace that blocks Shared Drive creation
+  shows no same-domain files under `own` unless they qualify as owned files or files in a member Shared Drive;
+  `--all` includes external shares. Both exclude trash. Revoke deletes the account's downloaded copies under
+  `gdrive/` and reports any deletion failure. Memories remain. See [integrations](integrations.md),
+  `supervisor/broker.py:1400`, `supervisor/broker.py:2400`, `supervisor/gdrive.py:46`, and `supervisor/__main__.py:749`.
   **Your calendars, one per grant** (`shaft calendar <name> grant <alias> <calendar>`;
   [PLAN-calendar.md](plans/PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
   names a granted calendar; the credential and the grant stay with the supervisor.

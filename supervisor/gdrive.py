@@ -233,10 +233,3 @@ def render(handle: str, f: dict, text: str, operator: str, offset: int) -> str:
         raise ValueError('file headers and paging footer exceed the Drive page budget')
     pos = min(offset + room, len(text))
     return head + text[offset:pos] + (footer(pos) if pos < len(text) else end)
-
-
-def read_page(acct: google.Account, reach: str, drives: set[str], file_id: str, operator: str,
-              offset: int = 0, before: datetime | None = None) -> str:
-    """Recheck visibility and fetch text for every page, including continuations."""
-    f = get_file(acct, reach, workspace_domain(acct), drives, file_id, before)
-    return render(f"{acct.alias}/{file_id}", f, text_of(acct, f), operator, offset)

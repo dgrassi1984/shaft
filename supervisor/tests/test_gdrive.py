@@ -376,8 +376,9 @@ class DriveReadTest(unittest.TestCase):
     def native(self, kind):
         self.f['mimeType'] = 'application/vnd.google-apps.' + kind
 
-    def read(self, **kw):
-        return self.drive.read_page(self.acct, 'own', self.drives, OWN, 'Daniele', **kw)
+    def read(self, offset=0):
+        f = self.drive.get_file(self.acct, 'own', self.domain, self.drives, OWN)
+        return self.drive.render('work/' + OWN, f, self.drive.text_of(self.acct, f), 'Daniele', offset)
 
     def test_doc_read_pages_with_marking_on_every_page(self):
         import re
@@ -460,17 +461,6 @@ class DriveReadTest(unittest.TestCase):
         self.blob = b''
         self.assertIn('(this file has no text)', self.read())
         self.assertIn('[End of file]', self.read())
-
-    def test_read_rechecks_visibility_on_each_page(self):
-        self.blob = b'x' * 10000
-        self.read()
-        for change in ({'trashed': True}, {'trashed': False, 'ownedByMe': False},
-                       {'ownedByMe': True, 'createdTime': '2026-11-07T00:00:00Z'}):
-            self.f.update(change)
-            self.download.reset_mock()
-            with self.assertRaises(self.drive.NotVisible):
-                self.read(offset=5000, before=CUT)
-            self.download.assert_not_called()
 
     def test_exports_and_extensions(self):
         types = [('document', 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
@@ -869,6 +859,22 @@ class BrokerTest(MailCase):
         self.core.set_gdrive_grants('wren', [])
         for tool in ('drive_search', 'drive_read', 'drive_download'):
             self.assertIn('no Drive granted', self.refused(b, tool, {} if tool == 'drive_search' else {'id': self.handle}))
+
+    def test_read_rechecks_visibility_on_each_page(self):
+        for change in ({'trashed': True}, {'ownedByMe': False},
+                       {'createdTime': '2026-11-07T00:00:00Z'}):
+            with self.subTest(change=change):
+                self.fake.files[OWN] = file(OWN, ownedByMe=True)
+                b = self.broker()
+                b.as_of = CUT
+                with mock.patch.object(google.Account, 'download', return_value=b'x' * 10000) as download:
+                    first = self.ok(b, 'drive_read', {'id': self.handle})
+                    offset = int(re.search(r'offset=(\d+)', first)[1])
+                    self.fake.files[OWN].update(change)
+                    download.reset_mock()
+                    self.assertIn('file is not visible to you',
+                                  self.refused(b, 'drive_read', {'id': self.handle, 'offset': offset}))
+                    download.assert_not_called()
 
     def test_ungranted_account_refused(self):
         google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})

@@ -107,13 +107,17 @@ shaft channel <name> [auto|web|telegram]   # where its messages to you notify yo
 shaft orders <name> [list|add TEXT|drop ID]   # standing orders (decisions that stay decided): shown to it verbatim
                                      # every run and conversation; its messages to you are checked against them
                                      # (architecture.md); it can record one it heard from you, only you drop one
-shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail read + Calendar read/write
+shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail read + Calendar read/write + Drive read
 shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
 shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar <name> grant-write|revoke-write <alias> <calendar> # write implies read; revoke-write keeps read
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
+shaft gdrive <name> grant <alias> [--all] # own reach by default; --all includes external shares
+shaft gdrive <name> revoke <alias>   # revoke this account and delete its gdrive/<alias>/ copies
+shaft gdrive <name> off              # revoke all Drive grants and delete gdrive/ copies
+shaft gdrive [name]                  # show Drive grants (and accounts when no name is given)
 shaft actions <name>                 # class states, action ids, full history and proposals (#142)
 shaft actions <name> restore reversible|staged|irreversible   # restore that class's initial rule
 shaft actions <name> overreach <action-id>   # mark a recorded action out of bounds; demote its class once
@@ -158,6 +162,9 @@ shaft trial models <name> --arm M[@EFFORT] …  # model bake-off: replay past cy
                                            #   [--judged-by M] judge it with Claude Code subagents instead of the API.
                                            #   Ledger and reuse rules: docs/bakeoffs/README.md
 ```
+
+Drive grants and login scopes: `supervisor/__main__.py:710`, `supervisor/google.py:46`.
+See [operator Drive access](integrations.md#the-operators-drive-shaft-gdrive) for reach, limits, and deletion failures.
 
 `--cycles N` replays N consecutive live cycles per arm from one reconstructed past state, default 1.
 `--sleep` runs consolidation between every pair of live cycles, never after the last. Each operation uses the
