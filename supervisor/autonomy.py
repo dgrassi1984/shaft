@@ -7,7 +7,7 @@ A timed wake also needs something to do (wake_gate, review C15/G1/G4): an unread
 before the next check, a job result since its last cycle, or no cycle for SHAFT_IDLE_WAKE_MINUTES; with none it is
 skipped, the reason kept in schedule.json and shown. What used to wait for that interval wakes the instance at once
 instead (event wakes, through the jobs' wake path): a message from the operator or another instance, and a commitment
-falling due.
+falling due or reaching a daily overdue reminder.
 
 It used to be two timed launchd jobs. On 2026-10-13 macOS put the login session's launchd domain in
 "on-demand-only mode" while the Mac stayed awake: timed jobs stopped starting ("pending spawn"), and the
@@ -181,8 +181,9 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
     interval = wake_interval(name, config)
     wakes = (f"looks every {_every(interval)} whether to wake you for an autonomous cycle (WAKE_INTERVAL_MINUTES in "
              f"your config.env — change it with set_config — at least {wake_floor(name)}): it wakes you when your "
-             f"inbox has an unread message, a commitment of yours comes due before it looks again, or a job of yours "
-             f"delivered or published something since your last cycle, and otherwise once you have had no cycle for "
+             f"inbox has an unread message, a commitment of yours comes due before it looks again, or a job of yours allowed "
+             f"to wake you delivered or published something since your last cycle, and otherwise once you have had no "
+             f"cycle for "
              f"{IDLE_WAKE_MIN} minutes; a wake that comes while you are already awake — a cycle, a conversation, your "
              f"sleep — is skipped. A message from the operator, a message from another instance (at most once per "
              f"{wake_floor(name)} minutes) and a commitment falling due wake you as soon as you are idle") if interval \
@@ -286,9 +287,10 @@ def replay_next_wake(name: str, now: datetime) -> str:
 class WakeFacts:
     """What a timed wake would find for the instance (wake_facts), for wake_gate."""
     unread: int = 0         # messages in its inbox/
-    due: str = ""           # 'c1103-0001-1 due 14:30': its first open commitment coming due before the next check
-    results: int = 0        # job runs that delivered or published something since its last cycle
+    due: str = ""           # first newly due commitment or overdue reminder
+    results: int = 0        # can_wake job runs that delivered or published since its last cycle
     error: str = ""         # what could not be read: the wake goes ahead, saying so
+    overdue: int = 0        # unsettled promises already due when the last cycle began
 
 
 def wake_gate(now: datetime, since: datetime | None, until: datetime, idle_after: timedelta, facts) -> tuple[bool, str]:
@@ -308,7 +310,8 @@ def wake_gate(now: datetime, since: datetime | None, until: datetime, idle_after
         return True, f"commitment {f.due}"
     if f.results:
         return True, f"{f.results} job result(s) since its last cycle"
-    return False, (f"{NOTHING_TO_DO}: inbox empty, no commitment due before {until:%H:%M}, no job result since its "
+    due_text = f"none newly due; {f.overdue} overdue" if f.overdue else f"no commitment due before {until:%H:%M}"
+    return False, (f"{NOTHING_TO_DO}: inbox empty, {due_text}, no job result since its "
                    f"last cycle at {since:%H:%M}; it wakes anyway after {int(idle_after.total_seconds() // 60)} min "
                    f"without a cycle")
 
@@ -345,12 +348,20 @@ def wake_facts(name: str, since: datetime | None, until: datetime) -> WakeFacts:
     watch result (watch.py) is an inbox message. Never raises: what fails is the facts' `error`."""
     from . import commitments, jobs
     try:
-        unread = sum(n.endswith(".md") for n in list_beneath(INSTANCES / name, "inbox"))
+        now = datetime.now()
+        unread = sum(n.endswith(".md") and jobs.inbox_can_wake(name, n)
+                     for n in list_beneath(INSTANCES / name, "inbox"))
         due = commitments.coming_due(name, since, until)
+        reminders = commitments.overdue_reminders(name, since, now)
+        overdue = sum(i["status"] in ("open", "overdue") and (at := commitments._at(i["due"])) is not None
+                      and at < now and since is not None and at <= commitments._local(since)
+                      for i in commitments.ledger(name, now).values())
         results = jobs.results_since(name, since) if since else 0
     except (Exception, SystemExit) as e:
         return WakeFacts(error=f"{type(e).__name__}: {e}")
-    return WakeFacts(unread=unread, results=results, due=f"{due[0]['id']} due {due[0]['due_at']:%H:%M}" if due else "")
+    reason = f"{due[0]['id']} due {due[0]['due_at']:%H:%M}" if due else \
+        f"{reminders[0]['id']} overdue" if reminders else ""
+    return WakeFacts(unread=unread, results=results, due=reason, overdue=overdue)
 
 
 def event_wake(name: str, why: str, from_instance: bool = False) -> None:
@@ -387,14 +398,17 @@ def commitment_wakes(now: datetime, st: dict, names: list[str], children: dict, 
     """Event wakes for commitments: one that came due since the instance's last cycle (any open one due by now, for an
     instance with no cycle on record yet) asks for a wake (event_wake). The cycle it starts begins after the due time,
     so each asks once; while one is pending, event_wake does not ask again. One whose wake is starting waits for the
-    next tick. `errors`: the last read error per instance, logged once."""
+    next tick. Unsettled promises also ask once per daily anniversary after their due time.
+    `errors`: the last read error per instance, logged once."""
     from . import commitments
     for name in names:
         cycle = (st.get("cycles") or {}).get(name)
         if f"wake {name}" in children:
             continue
         try:
-            due = commitments.coming_due(name, datetime.fromisoformat(cycle) if cycle else None, now)
+            since = datetime.fromisoformat(cycle) if cycle else None
+            due = commitments.coming_due(name, since, now)
+            reminders = commitments.overdue_reminders(name, since, now)
         except (Exception, SystemExit) as e:
             if errors.get(name) != (err := f"{type(e).__name__}: {e}"):
                 errors[name] = err
@@ -403,6 +417,8 @@ def commitment_wakes(now: datetime, st: dict, names: list[str], children: dict, 
         errors.pop(name, None)
         for item in due:
             event_wake(name, f"commitment {item['id']} due")
+        for item in reminders:
+            event_wake(name, f"commitment {item['id']} overdue")
 
 
 def update_jobs(children: dict, names: list[str], awake_of) -> list[str]:
@@ -458,10 +474,6 @@ def serve(poll_s: int = 30) -> int:
             if proc.poll() is not None and job == "gate warm":      # it says how it ended itself (warm_ended)
                 warm_ended(warm, proc.returncode, time.monotonic() - started)
                 del children[job]
-                # The baseline is green: held changes go again — not while draining (Codex on the drain: it started
-                # new work); the next scheduler's own first warm-up re-gates them (gate_held keeps them waiting).
-                if proc.returncode == 0 and not (drain or ((r := restart_request()) and r["pid"] == os.getpid())):
-                    regate_after_warm(children, _start)
             elif proc.poll() is not None:
                 err = stderr_tail(proc)
                 log(f"scheduler: {job} ended exit={proc.returncode} after {time.monotonic() - started:.0f}s"
@@ -517,6 +529,7 @@ def serve(poll_s: int = 30) -> int:
                 watch.tick(children, now, names)
             except Exception as e:
                 log(f"scheduler: the mail and calendar watch did not start — {type(e).__name__}: {e}")
+            regate_recorded(children, warm, _start)
             gate_warm(children, warm, _start)   # the shared supervisor tests of a new commit, before a gate needs them
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
@@ -849,23 +862,27 @@ def _batteries(children: dict, now: datetime, sleeping_due: bool) -> None:
                                        time.monotonic())
 
 
+WARM_RETRY_S = 3600   # a timeout is retried one hour after it ended, until it passes or the commits move
 WARM_CHECK_S = 3600   # the same commit is looked at again hourly: the child exits at once while its record is fresh
 
 
 @dataclass
 class WarmState:
-    """The scheduler's memory for gate_warm: the commits it last started a warm-up for, when, and those that failed."""
+    """Warm-up attempts, test failures, timeout retry clock, and the last held-work re-gate attempt."""
     pair: str | None = None
     started: float = float("-inf")
     failed: set[str] = field(default_factory=set)
     unreadable: bool = False
+    timed_out: bool = False
+    ended: float = float("-inf")
+    regated: float = float("-inf")
 
 
 def gate_warm(children: dict, st: WarmState, start, now: float | None = None) -> None:
     """Start `shaft gate warm` (gate.warm, docs/plans/PLAN-gate-cache.md) when main has moved to commits with no warm-up
     yet, and hourly for the same ones, so the first gate after a merge reads the shared supervisor tests' pass instead
-    of running them while holding its instance. A commit whose warm-up failed is not tried again: its failure is an
-    alert, and every gate on it runs the shared part anyway."""
+    of running them while holding its instance. A test failure is not tried again on its commits; a timeout is
+    retried hourly after it ends. Every gate on unrecorded commits runs the shared part anyway."""
     if "gate warm" in children:
         return
     now = time.monotonic() if now is None else now
@@ -878,9 +895,10 @@ def gate_warm(children: dict, st: WarmState, start, now: float | None = None) ->
                 log(f"scheduler: the gate's warm-up cannot read the project's commits: {type(e).__name__}: {e}")
             return
         st.unreadable = False
-        if pair in st.failed or (pair == st.pair and now - st.started < WARM_CHECK_S):
+        wait = now - st.ended < WARM_RETRY_S if st.timed_out else now - st.started < WARM_CHECK_S
+        if pair in st.failed or (pair == st.pair and wait):
             return
-        st.pair, st.started = pair, now
+        st.pair, st.started, st.timed_out = pair, now, False
         children["gate warm"] = (start(["gate", "warm"]), time.monotonic())
     except Exception as e:                    # never the scheduler's loop: wakes, sleeps and jobs go on (Codex, M2)
         try:
@@ -891,18 +909,46 @@ def gate_warm(children: dict, st: WarmState, start, now: float | None = None) ->
 
 def warm_ended(st: WarmState, returncode: int, seconds: float = 0.0) -> None:
     """A warm-up child ended. A failure marks its commits as tried. warm() logs its own alert for a failure it knew
-    (gate.WARM_FAILED), so that one is said here without the words the panel alerts on; any other failure exit — a
+    (gate.WARM_FAILED or WARM_TIMED_OUT), so those are said without the words the panel alerts on; another exit — a
     crash before warm() could say anything — is the alert."""
-    if returncode != 0 and st.pair:
+    st.timed_out = returncode == gate.WARM_TIMED_OUT
+    st.ended = st.started + seconds
+    if returncode not in (0, gate.WARM_TIMED_OUT) and st.pair:
         st.failed.add(st.pair)
     if returncode == 0:
         log(f"scheduler: gate warm ended after {seconds:.0f}s: the shared supervisor tests' pass is recorded")
+    elif returncode == gate.WARM_TIMED_OUT:
+        log(f"scheduler: gate warm ended after {seconds:.0f}s without a pass (timed out, said above); "
+            f"tries again in {WARM_RETRY_S // 60} min on {st.pair}")
     elif returncode == gate.WARM_FAILED:
         log(f"scheduler: gate warm ended after {seconds:.0f}s without a pass (said above); not tried again on "
             f"{st.pair}")
     else:
         log(f"scheduler: gate warm ended exit={returncode} after {seconds:.0f}s, before it could say why; not tried "
             f"again on {st.pair}")
+
+
+def regate_recorded(children: dict, st: WarmState, start) -> None:
+    """A gate's shared pass also releases held work, once per pass newer than the last re-gate attempt."""
+    if "gate regate" in children:
+        return
+    try:
+        if (req := restart_request()) and req["pid"] == os.getpid():
+            return
+        from . import gate_held
+        if not gate_held.waiting():
+            return
+        tree = PROJECT / gate.TREES / gate.commits_id() / PROJECT.name
+        env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}
+        rec = gate.recorded_pass(tree, gate.shared_key(tree, env))
+        # Hourly too: a re-gate that found the instance busy has nothing newer to wait for.
+        if rec and (datetime.fromisoformat(rec["passed_at"]).timestamp() > st.regated
+                    or time.time() - st.regated >= WARM_RETRY_S):
+            st.regated = time.time()
+            regate_after_warm(children, start)
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            log(f"scheduler: the gate's recorded pass could not be read: {type(e).__name__}: {e}")
 
 
 def regate_after_warm(children: dict, start) -> None:
