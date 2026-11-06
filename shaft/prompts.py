@@ -297,17 +297,18 @@ LOOK_AHEAD = (" Also ask: what will {operator} need within 7 days that they have
 
 def live_instructions(cfg) -> str:
     text = LIVE
-    if cfg.CONFIDENCE_MODE != "confirm":
+    if getattr(cfg, "CONFIDENCE_MODE", "confirm") in ("clauses", "noconfirm"):
         text = text.replace(CONFIRM_INSTRUCTION, "")
-    if cfg.LOOK_AHEAD == "on":
+    if getattr(cfg, "LOOK_AHEAD", "off") == "on":
         text = text.replace("\n2. ", LOOK_AHEAD + "\n2. ", 1)
     return text
 
 
-def conversation_orders(tools: str) -> str:
+def conversation_orders(tools: set[str]) -> str:
     if "commit_to" in tools:
         record = ("record it with commit_to, with a due date and a criterion someone else can check; "
-                  "a note to yourself is not enough")
+                  "a note to yourself is not enough. If commit_to has closed because the reply budget ran out, "
+                  "use queue_for_next_cycle in its place")
     else:
         record = ("use queue_for_next_cycle to send yourself the order's exact words marked ORDER, "
                   "with a criterion someone else can check")
@@ -430,11 +431,13 @@ TALK_SUMMARY = """\
 The conversation is over. Write the journal entry your future self will read about it, \
 in first person: what was discussed, what you learned about {operator} or about \
 yourself, and anything you committed to or want to follow up on. Only what actually \
-happened in the conversation above. List any order made in this conversation that has no recorded \
-commitment and no result; preserve its exact words marked ORDER and a checkable criterion. \
-Use the conversation order records as evidence: only commit_to, settle_commitment and queue_for_next_cycle \
-results are shown, each cut to 300 characters. No entry for a turn means no commitment was recorded in that turn. \
-Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
+happened in the conversation above. Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
+
+TALK_ORDERS = (
+    "\n\nList any order the operator made that has no record and no result. A commit_to or queue_for_next_cycle "
+    "line without ERROR counts as recorded; one with ERROR does not. Other actions are not listed here, so check "
+    "the conversation's text for a result before listing an order. Preserve its exact words marked ORDER, "
+    "with a checkable criterion.")
 
 
 # Every section of my context has a budget in characters, and CONTEXT_CHARS caps them together (review E2/C6): the

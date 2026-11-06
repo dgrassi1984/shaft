@@ -241,7 +241,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
            f"them; what {speaker} says or does is not something {cfg.OPERATOR_NAME} said or did") if speaker \
         else cfg.OPERATOR_NAME
     mode = prompts.TALK_MODE.format(operator=who, since=since_last_talk(state, cfg.OPERATOR_NAME))
-    mode += prompts.conversation_orders(toolbox.describe())
+    mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
     mode += prompts.reply_budget(cfg)
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME)
@@ -334,7 +334,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     toolbox.commit_talk_id = talk_id
     mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
                                    since=since_last_talk(state, cfg.OPERATOR_NAME))
-    mode += prompts.conversation_orders(toolbox.describe())
+    mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
     mode += prompts.reply_budget(cfg)
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")

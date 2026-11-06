@@ -467,7 +467,7 @@ def run(cfg, state: State, client: Client) -> str:
              **({"doubts": {"type": "array", "description": "optional steps you doubt, using 1-based tool-log indices; "
                         "these never change criterion_met", "items": {"type": "object", "properties": {
                             "step": {"type": "integer", "minimum": 1}, "what": S}, "required": ["step", "what"]}}}
-                if cfg.DOUBTS == "on" else {}),
+                if getattr(cfg, "DOUBTS", "on") != "off" else {}),
              "unfinished": {"type": "array", "items": S, "description": "work started but not done; [] if none"},
              "next_action": {"type": "object", "properties": {"action": S, "revise_if": S},
                              "required": ["action", "revise_if"],

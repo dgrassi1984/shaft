@@ -131,9 +131,11 @@ def run(cfg, state: State, client: Client) -> int:
             label = f"[{t['ts']}] {who if t['role'] == 'user' else 'me'}: "
             room = MAX_TRANSCRIPT_CHARS - len(label) - 2
             content = t["content"]
-            order_records = [f"{e['tool']}: {e.get('result', '')}; args: {e.get('args', '')}"[:300]
-                             for e in t.get("tools") or []
-                             if e["tool"] in {"commit_to", "settle_commitment", "queue_for_next_cycle"}]
+            tools = t.get("tools")
+            order_records = [f"{e.get('tool')}: {e.get('result', '')}; args: {e.get('args', '')}"[:300]
+                             for e in tools if isinstance(e, dict) and isinstance(e.get("tool"), str)
+                             and e.get("tool") in {"commit_to", "settle_commitment", "queue_for_next_cycle"}] \
+                if isinstance(tools, list) else []
             if order_records:
                 content += "\nConversation order records:\n" + "\n".join(order_records)
             for offset in range(0, len(content), room):
@@ -159,6 +161,7 @@ def run(cfg, state: State, client: Client) -> int:
                        "about your behaviour in this transcript page. Use its timestamp and words. For a correction "
                        "already recorded within 7 days, pass its id in reopens. Do not accept it as a fact about "
                        "yourself without checking the record.") if not speaker else ""
+        page_prompt = prompts.TALK_SUMMARY.format(operator=who) + (prompts.TALK_ORDERS if not speaker else "")
         summaries = []
         calls: list[dict] = []
         when = started[:16].replace("T", " ")
@@ -179,7 +182,7 @@ def run(cfg, state: State, client: Client) -> int:
                 messages = [{"role": "system", "content": system},
                             {"role": "user", "content": "Transcript page:\n" + page + "\n\n" + instruction
                              + "\nRecent corrections, including closed ones:\n" + json.dumps(recent, ensure_ascii=False)
-                             + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]
+                             + "\n\n" + page_prompt}]
                 box = Toolbox(state.root)
                 try:
                     outcome = agent.run(client, messages, box, max_tokens=cfg.MAX_TOKENS_REFLECT,
@@ -196,7 +199,7 @@ def run(cfg, state: State, client: Client) -> int:
                     entry = _entry(call([{"role": "system", "content": text_only},
                                          {"role": "user", "content": "Transcript page:\n" + page + "\n\n"
                                           + (corrections_line(page_calls) + "\n\n" if page_calls else "")
-                                          + prompts.TALK_SUMMARY.format(operator=who)}]))
+                                          + page_prompt}]))
                 if not entry:
                     raise LLMError(f"conversation writeup wrote no entry (ended by {outcome.ended_by})")
                 summaries.append(entry)
@@ -204,7 +207,9 @@ def run(cfg, state: State, client: Client) -> int:
             if len(summaries) > 1:
                 content = _entry(call([{"role": "system", "content": text_only},
                                        {"role": "user", "content": "Summaries of all transcript pages:\n\n"
-                                        + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]))
+                                        + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)
+                                        + ("\n\nKeep each ORDER line from the page summaries unless a later page "
+                                           "shows it recorded." if not speaker else "")}]))
                 if not content:
                     raise LLMError("conversation writeup wrote no summary of its pages")
             if calls:
