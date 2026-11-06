@@ -223,7 +223,7 @@ class InstanceToolsTest(unittest.TestCase):
     def test_the_prompt_mentions_it_only_when_granted(self):
         code = ("from shaft import prompts, config; from shaft.state import State; from pathlib import Path; import os\n"
                 "root = Path(os.environ['SHAFT_ROOT']); cfg = config.load(root, environ={}); s = State(root)\n"
-                "print('SHARED' if 'shared/ is a folder' in prompts.system_prompt(s, cfg, 'm', 'built-in: read_file') "
+                "print('SHARED' if 'shared/ is a folder' in prompts.system_prompt(s, cfg, 'm', 'built-in: read_file, run') "
                 "else 'NONE')")
         (self.root / "config.env").write_text('LLM_BASE_URL="http://127.0.0.1:1/v1"\nLLM_MODEL="m"\n')
         env = {"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(self.root)}

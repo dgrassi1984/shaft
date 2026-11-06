@@ -814,7 +814,7 @@ with open(sys.argv[1], 'a') as stream:
 
 
 class TemplatePromptTest(unittest.TestCase):
-    def prompt(self, grants=None, tools='built-in: read_file'):
+    def prompt(self, grants=None, tools='built-in: read_file; supervisor: drive_search, drive_read'):
         import subprocess
         import sys
         import tempfile
@@ -838,7 +838,8 @@ class TemplatePromptTest(unittest.TestCase):
         out = self.prompt('home (own),work (all)')
         self.assertIn("You can read the operator's Google Drive (home (own), work (all): account and reach)", out)
         self.assertIn('with drive_search, drive_read and drive_download — read-only.', out)
-        for grants, tools in ((None, 'built-in: read_file'), ('', 'built-in: read_file'), ('home (own)', None)):
+        for grants, tools in ((None, 'built-in: read_file'), ('', 'built-in: read_file'), ('home (own)', None),
+                              ('home (own)', 'built-in: read_file')):   # a sleep: granted, but the tool is not offered
             with self.subTest(grants=grants, tools=tools):
                 self.assertNotIn('drive_search', self.prompt(grants, tools))
 

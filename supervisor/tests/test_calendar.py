@@ -645,7 +645,7 @@ class TemplatePromptTest(unittest.TestCase):
         (root / "config.env").write_text('LLM_BASE_URL="http://127.0.0.1:1/v1"\nLLM_MODEL="m"\n')
         code = ("from shaft import prompts, config; from shaft.state import State; from pathlib import Path; import os\n"
                 "root = Path(os.environ['SHAFT_ROOT']); cfg = config.load(root, environ={}); s = State(root)\n"
-                "print(prompts.system_prompt(s, cfg, 'm', 'built-in: read_file'))")
+                "print(prompts.system_prompt(s, cfg, 'm', 'built-in: read_file; supervisor: calendar_events'))")
         env = {"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}
         run = lambda e: subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=TEMPLATE, capture_output=True,  # noqa: E731
                                        text=True, env=e)
@@ -653,7 +653,7 @@ class TemplatePromptTest(unittest.TestCase):
         self.assertIn("You can read the operator's calendar(s) work/Operator; work/Team, shared (account/name)",
                       with_it.stdout, with_it.stderr)
         self.assertIn("theirs, not the operator's", with_it.stdout)
-        self.assertNotIn("calendar_events", run(env).stdout)
+        self.assertNotIn("You can read the operator's calendar", run(env).stdout)
 
 
 if __name__ == "__main__":
