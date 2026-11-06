@@ -322,7 +322,7 @@ class DriveReadTest(unittest.TestCase):
 
     def test_sheet_read_says_first_tab_only(self):
         self.native('spreadsheet')
-        self.assertIn('first tab only', self.read())
+        self.assertIn('(first tab only; drive_download gives the whole workbook)', self.read())
         self.assertEqual(self.download.call_args.kwargs, {'mimeType': 'text/csv'})
 
     def test_pdf_read_points_to_download(self):
@@ -452,3 +452,241 @@ class DriveReadTest(unittest.TestCase):
         self.f['size'] = '50000000'
         self.assertEqual(self.drive.text_of(self.acct, self.f), 'hello')
         self.download.assert_called_with(API + '/files/' + OWN, 50_000_000, alt='media', supportsAllDrives='true')
+
+
+class GrantsTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from supervisor import core, __main__ as cli
+        from supervisor.tests.test_mail import git
+        self.core, self.cli_module = core, cli
+        tmp = tempfile.TemporaryDirectory(prefix='shaft-gdrive-')
+        self.addCleanup(tmp.cleanup)
+        self.project = Path(tmp.name).resolve()
+        git(self.project, 'init', '-q')
+        git(self.project, 'commit', '-q', '--allow-empty', '-m', 'main')
+        self.root = self.project / 'instances' / 'wren'
+        git(self.project, 'worktree', 'add', '-q', '--orphan', '-b', 'instance/wren', str(self.root))
+        (self.root / 'shaft').mkdir()
+        self.requests = []
+        for patch in (mock.patch.object(core, 'SUP_DIR', self.project / '.supervisor'),
+                      mock.patch.object(core, 'INSTANCES', self.root.parent),
+                      mock.patch.object(core, 'secrets_env', return_value={}),
+                      mock.patch.object(cli, 'log'),
+                      mock.patch.object(google, 'urlopen', side_effect=self.about),
+                      mock.patch.object(google.Account, 'token', return_value='token')):
+            patch.start()
+            self.addCleanup(patch.stop)
+        google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
+
+    def about(self, req, timeout=30):
+        self.requests.append(req.full_url)
+        self.assertEqual(req.full_url, google.DRIVE_ABOUT)
+        self.assertEqual(req.get_method(), 'GET')
+        return answer({'user': {'emailAddress': 'operator@work.example'}})
+
+    def cli(self, *args):
+        from contextlib import redirect_stdout, redirect_stderr
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            try:
+                code = self.cli_module.main(['gdrive', *args])
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue()
+
+    def grant(self, *args):
+        code, out = self.cli('wren', 'grant', 'work', *args)
+        self.assertEqual(code, 0, out)
+        return out
+
+    def copies(self, alias):
+        path = self.root / 'gdrive' / alias
+        path.mkdir(parents=True)
+        (path / 'copy.txt').write_text('copy')
+        return path
+
+    def test_grant_roundtrip_and_other_keys_kept(self):
+        before = {'off': ['web'], 'shared': '/tmp/shared', 'mail': [{'account': 'work', 'label': 'Access'}],
+                  'calendar': [{'account': 'work', 'calendar': 'primary', 'name': 'Work', 'write': True}],
+                  'wake_floor': 30, 'cloud_cap': 2}
+        self.core._update_tool_settings('wren', **before)
+        own = [{'account': 'work', 'reach': 'own'}]
+        self.assertEqual(self.core.set_gdrive_grants('wren', own), own)
+        self.assertEqual(self.core.gdrive_grants('wren'), own)
+        self.assertEqual(self.core.set_gdrive_grants('wren', own + [{'account': 'work', 'reach': 'all'}]),
+                         [{'account': 'work', 'reach': 'all'}])
+        self.core.set_gdrive_grants('wren', [])
+        self.assertEqual(self.core._tool_settings('wren'), before)
+
+    def test_malformed_grants_dropped(self):
+        self.core._update_tool_settings('wren', gdrive=[None, {}, {'account': 1, 'reach': 'own'},
+            {'account': 'work', 'reach': 'other'}, {'account': '../escape', 'reach': 'all'},
+            {'account': 'work', 'reach': 'own', 'extra': True}])
+        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+
+    def test_grant_refuses_unknown_alias(self):
+        code, out = self.cli('wren', 'grant', 'missing')
+        self.assertEqual(code, 2)
+        self.assertIn('shaft google login missing', out)
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_grant_refuses_login_without_scope(self):
+        google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': google.GMAIL})
+        code, out = self.cli('wren', 'grant', 'work')
+        self.assertEqual(code, 2)
+        self.assertIn('shaft google login work', out)
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_grant_checks_about_before_saving(self):
+        with mock.patch.object(google, 'urlopen', side_effect=error(403, 'access denied')):
+            code, out = self.cli('wren', 'grant', 'work')
+        self.assertEqual(code, 2)
+        self.assertIn('shaft google login work', out)
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_grant_defaults_to_reach_own(self):
+        self.grant('--all')
+        self.grant()
+        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+        self.assertEqual(self.requests, [google.DRIVE_ABOUT, google.DRIVE_ABOUT])
+        self.assertIn('work (own)', self.cli()[1])
+
+    def test_all_prints_the_risk_line(self):
+        out = self.grant('--all')
+        self.assertIn('everything the account can reach, including files strangers share with it, reaches the instance', out)
+        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'all'}])
+        self.assertIn('work (all)', out)
+        self.assertNotIn('strangers', self.grant())
+
+    def test_off_removes_copies(self):
+        self.grant()
+        self.copies('work')
+        self.copies('home')
+        self.assertEqual(self.cli('wren', 'off')[0], 0)
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertFalse((self.root / 'gdrive').exists())
+        self.assertEqual(self.cli('wren', 'off')[0], 0)
+
+    def test_revoke_removes_only_that_alias(self):
+        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'all'}])
+        work, home = self.copies('work'), self.copies('home')
+        self.assertEqual(self.cli('wren', 'revoke', 'work')[0], 0)
+        self.assertFalse(work.exists())
+        self.assertEqual((home / 'copy.txt').read_text(), 'copy')
+        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'home', 'reach': 'all'}])
+
+    def test_symlinked_gdrive_refused_target_untouched(self):
+        target = self.project / 'target'
+        target.mkdir()
+        (target / 'keep').write_text('safe')
+        (self.root / 'gdrive').symlink_to(target, target_is_directory=True)
+        self.grant()
+        code, out = self.cli('wren', 'off')
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(self.root / 'gdrive'), out)
+        self.assertEqual((target / 'keep').read_text(), 'safe')
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_removal_failure_keeps_revoke_saved(self):
+        self.grant()
+        path = self.copies('work')
+        with mock.patch('supervisor.core.shutil.rmtree', side_effect=PermissionError('denied')):
+            code, out = self.cli('wren', 'revoke', 'work')
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(path), out)
+        self.assertTrue(path.exists())
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_remove_rejects_path_alias(self):
+        with self.assertRaises(ValueError):
+            self.core.remove_gdrive_copies('wren', '../escape')
+
+    def test_web_passes_all_only_when_ticked(self):
+        from supervisor import web_config, web_actions
+        self.assertIn('gdrive', web_config.VERBS)
+        self.assertEqual(web_actions.CHECK['gdrive'], 'Access')
+        with mock.patch.object(web_config, '_ran', return_value=(200, 'ok')) as ran:
+            for field, expected in (({}, []), ({'all': '1'}, ['--all']), ({'all': '0'}, [])):
+                web_config.run('gdrive', 'wren', {'op': 'grant', 'alias': 'work', **field})
+                ran.assert_called_with(['gdrive', 'wren', 'grant', 'work', *expected])
+            web_config.run('gdrive', 'wren', {'op': 'revoke', 'alias': 'work'})
+            ran.assert_called_with(['gdrive', 'wren', 'revoke', 'work'])
+            web_config.run('gdrive', 'wren', {'op': 'off'})
+            ran.assert_called_with(['gdrive', 'wren', 'off'])
+
+    def test_web_form_defaults_to_own_and_shows_reach(self):
+        from html.parser import HTMLParser
+        from supervisor import web_config
+        from supervisor.tests.test_web_config import ACCESS
+
+        class Inputs(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.inputs = []
+            def handle_starttag(self, tag, attrs):
+                if tag == 'input':
+                    self.inputs.append(dict(attrs))
+
+        page = str(web_config.access_page('wren', dict(ACCESS, gdrive=[{'account': 'work', 'reach': 'all'}]), 'gdrive'))
+        inputs = Inputs()
+        inputs.feed(page)
+        checkbox = [a for a in inputs.inputs if a.get('name') == 'all']
+        self.assertEqual(checkbox, [{'type': 'checkbox', 'name': 'all', 'value': '1'}])
+        self.assertIn('work (all)', page)
+        self.assertIn('everything, including files shared from outside', page)
+        self.assertIn('data-post="/action/gdrive" data-confirm=', page)
+        self.assertIn('data-check="Access"', page)
+        self.assertIn('name="op" value="revoke"', page)
+        self.assertIn('name="op" value="off"', page)
+        self.assertNotIn('Your calendars', page)
+
+    def test_symlinked_alias_refused_target_untouched(self):
+        target = self.project / 'target'
+        target.mkdir()
+        (target / 'keep').write_text('safe')
+        (self.root / 'gdrive').mkdir()
+        (self.root / 'gdrive' / 'work').symlink_to(target, target_is_directory=True)
+        self.grant()
+        code, out = self.cli('wren', 'revoke', 'work')
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(self.root / 'gdrive' / 'work'), out)
+        self.assertEqual((target / 'keep').read_text(), 'safe')
+        self.assertEqual(self.core.gdrive_grants('wren'), [])
+
+    def test_gdrive_lock_excludes_other_processes_and_releases(self):
+        import subprocess
+        import sys
+        path = self.core.SUP_DIR / 'locks' / 'gdrive-wren.lock'
+        probe = '''import fcntl, sys
+with open(sys.argv[1], 'a') as stream:
+    try:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(3)
+'''
+        with self.core.gdrive_lock('wren'):
+            self.assertEqual(subprocess.run([sys.executable, '-c', probe, str(path)], check=False).returncode, 3)
+        self.assertEqual(subprocess.run([sys.executable, '-c', probe, str(path)], check=False).returncode, 0)
+
+    def test_other_settings_keep_gdrive(self):
+        shared = self.project / 'shared'
+        shared.mkdir()
+        kept = [{'account': 'work', 'reach': 'all'}]
+        self.core.set_gdrive_grants('wren', kept)
+        for change in (lambda: self.core.set_mail_grants('wren', [{'account': 'work', 'label': 'L'}]),
+                       lambda: self.core.set_calendar_grants('wren', [{'account': 'work', 'calendar': 'primary'}]),
+                       lambda: self.core.set_tool('wren', 'decide', False),
+                       lambda: self.core.set_shared_folder('wren', shared)):
+            change()
+            self.assertEqual(self.core.gdrive_grants('wren'), kept)
+
+    def test_google_login_success_names_drive_grant(self):
+        from contextlib import redirect_stdout, redirect_stderr
+        saved = {'address': 'operator@work.example', 'client': 'work', 'scope': ' '.join(google.SCOPES)}
+        out = io.StringIO()
+        with mock.patch.object(google, 'login', return_value=saved), redirect_stdout(out), redirect_stderr(out):
+            self.assertEqual(self.cli_module.main(['google', 'login', 'work', 'operator@work.example']), 0)
+        self.assertIn('shaft gdrive <instance> grant work', out.getvalue())
+        self.assertIn('drive.readonly', out.getvalue())

@@ -338,7 +338,7 @@ def instance_summary(name: str, d: dict, live: dict, names: list[str], csrf: str
     cfg = rows([("model", f"{d['model']} via {d['via']} · effort {d['effort']}"),
                 ("tools off", ", ".join(d["tools_off"]) or "none"),
                 ("shared folder", d["shared"] or "none"), ("mail", d["mail"] or "none"),
-                ("calendar", d["calendar"] or "none"), ("jobs", d.get("jobs") or "none"),
+                ("calendar", d["calendar"] or "none"), ("gdrive", d.get("gdrive") or "none"), ("jobs", d.get("jobs") or "none"),
                 ("python", (d.get("python", ""), "warn" if "BROKEN" in d.get("python", "") else "")),
                 ("browser", (d.get("browser", ""), "warn" if "not installed" in d.get("browser", "") else "")),
                 ("internet", d.get("internet", ""))])

@@ -622,7 +622,9 @@ class CliTest(CalendarCase):
         kept = core.calendar_grants("wren")
         shared = Path(tempfile.mkdtemp(prefix="shaft-share-")).resolve()
         self.addCleanup(shutil.rmtree, shared, True)
-        for change in (lambda: core.set_mail_grants("wren", [{"account": "work", "label": "L"}]),
+        for change in (lambda: core.set_gdrive_grants("wren", [{"account": "work", "reach": "all"}]),
+                       lambda: core.set_gdrive_grants("wren", []),
+                       lambda: core.set_mail_grants("wren", [{"account": "work", "label": "L"}]),
                        lambda: core.set_mail_grants("wren", []), lambda: core.set_shared_folder("wren", shared),
                        lambda: core.set_shared_folder("wren", None), lambda: core.set_tool("wren", "decide", False),
                        lambda: core.set_tool("wren", "decide", True)):

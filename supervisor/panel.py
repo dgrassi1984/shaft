@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import browser, core, corrections, egress, planchannel, pyenv
-from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
+from .core import (SUP_DIR, calendar_grants, gdrive_grants, disabled_tools, dollars, git, instance_config, instance_names,
                    instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
 
@@ -235,6 +235,7 @@ def instance_detail(name: str) -> dict:
             "tools_off": sorted(disabled_tools(name)),
             "shared": str(shared_folder(name) or ""),
             "mail": ", ".join(f"{g['account']}/{g['label']}" for g in mail_grants(name)),
+            "gdrive": ", ".join(f"{g['account']} ({g['reach']})" for g in gdrive_grants(name)),
             "calendar": "; ".join(f"{g['account']}/{g['name']}" for g in calendar_grants(name)),
             "jobs": _jobs_summary(name),
             "python": pyenv.describe(root),
