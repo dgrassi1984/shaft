@@ -1410,11 +1410,12 @@ def answers_operator(ep: dict) -> bool:
 
 
 def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "", *, followed: str = "") -> str:
+    # Only when true: every other case stays byte-identical to what the earlier verdicts were judged on.
+    fact = "## Supervisor fact\nanswers_operator: true\n\n" if answers_operator(ep) else ""
     ep = _blind(ep)
     tools = "\n\n".join(f"### {t.get('_log_step', i)}. {t['tool']}({_logged(t.get('args', ''))})\n→ {_logged(t.get('result', ''))}"
                         for i, t in enumerate(ep.get("tools", []), 1))
-    return (f"## Supervisor fact\nanswers_operator: {str(answers_operator(ep)).lower()}\n\n"
-            f"## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
+    return (f"{fact}## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
             f"## Claimed afterwards\n{json.dumps(ep.get('finish'), indent=1, ensure_ascii=False)}\n\n"
             f"## Ended by\n{ep.get('ended_by')} after {ep.get('steps')} turns\n\n## Tool log\n{tools or '(no tool calls)'}"
             + (f"\n\n## Files written in this cycle, as they are now (later cycles may have changed them)\n{files}"
