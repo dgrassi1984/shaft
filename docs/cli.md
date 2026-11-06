@@ -123,6 +123,13 @@ shaft pause [name] · shaft resume [name] · shaft check [name] · shaft list
 shaft setup                          # recreate missing template/instance worktrees from local or origin branches,
                                      # then install the pre-push guard (as shaft mind guard); exit 1 if another
                                      # tool's pre-push hook is in the way (docs/migration.md)
+shaft migrate source --to HOST [--check]   # move SHAFT to a new Mac (docs/migration.md): stop the old Mac, push the
+                                     #   copy over SSH (Remote Login on the new Mac); walks the operator one step at
+                                     #   a time, Enter runs and q stops, finished steps resume; no --yes
+shaft migrate target [--check]       # on the new Mac, from the copied folder: repair paths, rebuild environments,
+                                     #   start the services, talk and check each instance; refuses without the
+                                     #   manifest left by `migrate source`. --check runs only the read-only checks
+
 shaft gate warm                      # run the gate's shared supervisor tests on the current commit unless their
                                      # pass is recorded (fresh: under 12 h); the scheduler runs it after each merge
 shaft gate regate                    # gate again each code change held while the gate's baseline was red; the

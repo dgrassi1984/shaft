@@ -1163,6 +1163,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
     p.add_argument("action", choices=["login", "status"])
+    p = sub.add_parser("migrate", help="move a SHAFT setup to a new Mac (docs/migration.md): source --to HOST [--check], "
+                                       "or target [--check]")
+    p.add_argument("role", choices=["source", "target"])
+    p.add_argument("--to", help="source: the new Mac (its .local or tailnet name)")
+    p.add_argument("--check", action="store_true", help="run only the read-only checks; write nothing")
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
@@ -1474,6 +1479,9 @@ def main(argv: list[str]) -> int:
         return cmd_grok(args.action)
     if args.cmd == "codex":
         return cmd_codex(args.action)
+    if args.cmd == "migrate":
+        from . import migrate
+        return migrate.command(args.role, args.to, args.check)
 
     if args.cmd == "talk":
         extra = (["--show-thinking"] if args.show_thinking else []) + (["--as", args.speaker] if args.speaker else [])
