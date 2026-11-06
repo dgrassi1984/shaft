@@ -191,7 +191,7 @@ def reliance(name: str, suspect: set[str] | None = None) -> dict:
         suspect = {row["text"] for row, status in checked(name) if status == "self-generated"}
     episodes = {ep.get("ts"): ep for ep in metrics.live_episodes(name)}
     groups = {key: {"n": 0, "unsupported": 0, "share": None} for key in ("exposed", "other")}
-    for judgment in metrics.judgments(name):
+    for judgment in metrics.judgments_for_stats(name):
         if not metrics.by_current_judge(judgment) or not isinstance(judgment.get("claim_supported"), bool):
             continue
         ep = episodes.get(judgment.get("episode_ts"))

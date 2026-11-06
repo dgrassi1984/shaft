@@ -230,7 +230,8 @@ def lines(name: str, judgments: list[dict], now: datetime | None = None) -> list
     for row in reactions(name, rows, core.SUP_DIR, now):
         if _time(row["ts"]).date() in daily:
             counts[row["outcome"]] += 1
-    return [f"pushes to the operator today: {daily[now.date()]}{budget}",
+    from . import outcomes
+    return outcomes.lines(name, now) + [f"pushes to the operator today: {daily[now.date()]}{budget}",
             "pushes per day (last 7 days" + (f", budget {PUSH_BUDGET}/day" if PUSH_BUDGET else "") + "): "
             + ", ".join(f"{day:%m-%d}: {daily[day]}" for day in days),
             f"should_have_waited=yes (last 7 days, judged push cycles): {share}; "

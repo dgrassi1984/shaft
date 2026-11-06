@@ -196,6 +196,7 @@ shaft secret <name> set <key> --hosts <host> [--header H] [--scheme S]  # prompt
                                     #   (default: Authorization: Bearer <value>; --scheme '' sends it raw)
 shaft secret <name> list|delete [<key>]  # its keys, described without values · remove one
 shaft secret <name> google <key> <address> --client <client> [--scope gmail.modify|drive]
+shaft judge catch [names]         # report blind planted-delivery catch rate (30 days)
 shaft judge second [names]        # process sampled second opinions
 shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
