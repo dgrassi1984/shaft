@@ -34,6 +34,7 @@ class Outcome:
 
 
 REPEAT_LIMIT = 2   # identical calls in a row that are refused before the reply is ended
+SAME_TURN_LIMIT = 10   # measured ~4.5 calls per model turn; bound a channel that never reports a turn's end
 REPEATED = ("(not run again) You just called {name} with exactly these arguments, and its result is the one above "
             "— running it again cannot change it. Use that result, or do something different.")
 REPEATED_STOP = "(stopped) The same call a third time in a row: this reply is ended so the loop does not go on."
@@ -257,6 +258,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     toolbox.loop_guard = guard
     reply = None
     step = 0
+    uncounted = 0
     wrapped_up = ""
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     summary: list[tuple[int, str]] = []   # where the ledger and focus line stand now, and that result without them
@@ -286,7 +288,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             if last and wrap_up:
                 why = ("one turn: the operator needs the model for a conversation" if yielding else
                        f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
-                messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
+                if not wrapped_up:
+                    messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
                 reply = call(messages, final_tools)
                 wrapped_up = ("yield" if yielding else "deadline"
                               if left is not None and left < WRAP_UP_RESERVE_S else "steps")
@@ -316,6 +319,13 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
             continue
+        turn_step = step
+        same_turn = reply.same_turn and bool(reply.tool_calls) and uncounted < SAME_TURN_LIMIT
+        if same_turn:
+            step -= 1
+            uncounted += 1
+        else:
+            uncounted = 0
         turn = {"role": "assistant", "content": reply.content or ""}
         if reply.reasoning:
             # Bonsai's template shows each earlier step's thinking within the reply (until the next user
@@ -369,7 +379,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                     last_call = None   # held, not run: calling it again must run it, not be refused as a repeat
                 hit = _tag(toolbox.log[-1])
                 if not result.startswith(cards.HELD):
-                    result += guard.observe(c["name"], c["arguments"], result, step, toolbox.log[-1])
+                    result += guard.observe(c["name"], c["arguments"], result, turn_step, toolbox.log[-1])
                 predictions = expected() if expected and hit else None
                 if predictions is not None:
                     result += surprises.note(hit, predictions)
@@ -381,7 +391,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         _unsummarise(messages, summary)
         before = messages[-1]["content"]
         if ledger:
-            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, limit, purpose,
+            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], turn_step, limit, purpose,
                                                          envelope=broker.envelope(), left_s=time_left())
         if focus and (now_in_focus := focus()):
             messages[-1]["content"] += "\n" + now_in_focus
@@ -390,6 +400,6 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
             toolbox.shown = []
-        if last and wrap_up:
+        if last and wrap_up and (not same_turn or yielding or (left is not None and left < WRAP_UP_RESERVE_S)):
             break
     return ended("steps")

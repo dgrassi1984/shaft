@@ -135,8 +135,11 @@ def run(cfg, state: State, client: Client) -> int:
                 if len(pages[-1]) + len(fragment) > MAX_TRANSCRIPT_CHARS:
                     pages.append("")
                 pages[-1] += fragment
-        system = prompts.system_prompt(state, cfg, prompts.RECOVERY_MODE.format(
+        text_only = prompts.system_prompt(state, cfg, prompts.RECOVERY_MODE.format(
             operator=about, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
+        system = text_only.replace(prompts.ABILITIES_NONE,
+                                   "In this mode your only tool is record_correction: record an operator correction, "
+                                   "then write your journal entry.", 1) if not speaker else text_only
         def record(args: dict) -> str:
             if speaker:
                 return "ERROR: this speaker is not the operator"
@@ -184,7 +187,7 @@ def run(cfg, state: State, client: Client) -> int:
                 # entry: asked once more, without tools, with what the tool log says this page recorded.
                 entry = _entry(outcome.reply) if outcome.ended_by == "answer" else ""
                 if not entry:
-                    entry = _entry(call([{"role": "system", "content": system},
+                    entry = _entry(call([{"role": "system", "content": text_only},
                                          {"role": "user", "content": "Transcript page:\n" + page + "\n\n"
                                           + (corrections_line(page_calls) + "\n\n" if page_calls else "")
                                           + prompts.TALK_SUMMARY.format(operator=who)}]))

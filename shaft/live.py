@@ -221,6 +221,9 @@ def cycle_toolbox(cfg, state: State) -> Toolbox:
 def opening(cfg, state: State, toolbox: Toolbox) -> str:
     """My live cycle's system prompt: my context, and the transcripts of conversations not written up yet."""
     system = prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())
+    if cfg.COMMITMENTS == "on":
+        system += ("\n\nsettle_commitment is available: settle overdue commitments now. Kept needs an episode "
+                   "ts, optionally #step, as evidence; otherwise say why broken, superseded or void.")
     unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
     if unwritten:
         system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
@@ -362,6 +365,12 @@ def run(cfg, state: State, client: Client) -> str:
         except OSError as e:   # a ledger I cannot write must not cost me the finish
             return f"ERROR: commitment not recorded: {type(e).__name__}: {e}"
 
+    def settle(args: dict) -> str:
+        try:
+            return commitments.settle(state.root, args, clock.now())
+        except OSError as e:   # a ledger I cannot read or write must not stop my cycle
+            return f"ERROR: commitment not settled: {type(e).__name__}: {e}"
+
     def costs(goal: str, origin: str) -> str:
         """What goals like this one have cost me, against what this cycle has left (FORECAST); '' when off."""
         env, left_s = broker.envelope(), agent.time_left()
@@ -470,6 +479,8 @@ def run(cfg, state: State, client: Client) -> str:
             ["what_happened", "criterion_met", "learned", "delivered_via"]), finish, stops=True),
     }
     controls.update(projects.controls(state.root, clock.now))
+    if cfg.COMMITMENTS == "on":
+        controls["settle_commitment"] = Control(commitments.SETTLE, settle)
     if mode == "clauses":
         schema = controls["declare_intent"].spec["function"]["parameters"]
         del schema["properties"]["confidence"]

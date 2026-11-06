@@ -51,6 +51,7 @@ class Reply:
     usage: dict = field(default_factory=dict)
     attempts: int = 1
     max_tokens: int = 0
+    same_turn: bool = False       # the plan channel has not finished this model turn
 
 
 class Client:
@@ -200,6 +201,7 @@ class Client:
                     _move_leaked_thinking(reply)
                     reply.finish_reason = _finish_reason(choice, data)
                     reply.usage = data.get("usage") or {}
+                    reply.same_turn = data.get("shaft_same_turn") is True
                     # A cut-off call is kept, read leniently, only as the sign that the answer had begun (as the
                     # stream keeps it): _answer never returns a cut reply, so it is never run.
                     cut = reply.finish_reason == "length"
@@ -250,6 +252,8 @@ class Client:
             if payload == "[DONE]":
                 break
             chunk = json.loads(payload)
+            if "shaft_same_turn" in chunk:
+                reply.same_turn = chunk["shaft_same_turn"] is True
             if chunk.get("error") and not chunk.get("choices"):   # an error sent mid-stream (OpenRouter does)
                 err = chunk["error"]
                 raise LLMError(f"stream error: {err.get('message', err) if isinstance(err, dict) else err}")

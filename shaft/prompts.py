@@ -677,7 +677,7 @@ def _promises(root: Path, cfg, cap: int | None = None) -> str:
         _, keep, where = SECTIONS["promises"]
         open_ = cut(open_, cap, where, keep)
     return ("\n## My open commitments (commit_to for the operator or other agents; "
-            f"my sleep settles the overdue ones)\n\n{open_}\n")
+            f"live cycles and sleep settle the overdue ones)\n\n{open_}\n")
 
 
 SETTLE = ("\n8. Settle every overdue commitment (listed below) with settle_commitment: kept only with the episode that "
