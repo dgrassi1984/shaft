@@ -168,7 +168,8 @@ class WithdrawTest(HeldCase):
     def hold_one(self) -> dict:
         path = "plugins/text_stats/main.py"
         with self.patched():
-            gate_held.save("kant", "base", {path: trx.COMMITTED.encode()}, {path: NEW.encode()}, [path], "red", [])
+            hid = gate_held.save("kant", "base", {path: trx.COMMITTED.encode()}, {path: NEW.encode()}, [path], "red", [])
+            gate_held.log_run("kant", "held", [path], "red", held=hid)
         held, = self.held()
         return held
 

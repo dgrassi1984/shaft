@@ -3199,8 +3199,19 @@ class ReplayBroker(Broker):
 
     def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
         from . import gate_held
-        held = [m for m in gate_held.pending(self.name) if m["id"] not in self.sim_withdrawn
-                and m.get("held_at", "") <= self.as_of.isoformat(timespec="seconds")]
+        held = {}
+        for row in gate_held.rows(self.name, self.as_of):
+            hid = row.get("held")
+            if row.get("outcome") == "held" and hid:
+                # The gate row includes reverted config too; only code files were held.
+                held[hid] = {"id": hid, "files": [p for p in row.get("files", []) if p != "config.env"]}
+            elif row.get("outcome") == "re-gated" and row.get("result") != "held":
+                # Some re-gates recorded only files: pending changes are tried oldest first.
+                if not hid:
+                    hid = next((key for key, meta in held.items()
+                                if set(meta["files"]) == set(row.get("files", []))), None)
+                held.pop(hid, None)
+        held = [meta for hid, meta in held.items() if hid not in self.sim_withdrawn]
         _, answer = gate_held.withdrawal(self.name, id, reason, held)
         self.sim_withdrawn.add(id)
         self._tag("simulated: not withdrawn")

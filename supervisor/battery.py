@@ -71,6 +71,7 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # Keyed by the instance's name, not its folder, so it acts on the live instance whatever copy the exam runs
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
+            "withdraw_held", "record_order",   # keyed by the live instance's name: held changes and standing orders
             *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS}   # the operator's mail, calendars and Drive never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
