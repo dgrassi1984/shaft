@@ -44,6 +44,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "STALE_GOAL_HOURS": (int, 48),
     "CRITERION_CHARS": (int, 600),
     "CONFIDENCE_MODE": (str, "confirm"),   # confirm after the base rate, per-clause, or without confirmation
+    "DOUBTS": (str, "on"),            # finish_cycle may list steps I doubt
+    "LOOK_AHEAD": (str, "off"),       # live step 1 asks what the operator will need within 7 days
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
     "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
     "BRIEFING_CHARS": (int, 6000),     # how much of it every live cycle carries: whole sections, Corrections first
@@ -116,6 +118,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 # accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
 CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
+           "DOUBTS": ("on", "off"), "LOOK_AHEAD": ("on", "off"),
            "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
            "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off"),

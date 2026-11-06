@@ -454,7 +454,9 @@ def run(cfg, state: State, client: Client) -> str:
              "predictions": {"type": "array", "items": S, "description": "1-3 short, specific things you expect "
                              "your work to find that could turn out wrong (e.g. 'the watch finds no new primary "
                              "source since 11:57'); optional"},
-             **({"attention": ATTENTION} if attention_on else {})},
+             **({"attention": ATTENTION if cfg.WORKSPACE != "off" else {
+                 **ATTENTION, "description": ATTENTION["description"].replace(
+                     "; it focuses your workspace, and", ";")}} if attention_on else {})},
             ["goal", "success_criterion", "confidence", "origin"]),
             declare),
         "finish_cycle": Control(_spec(
@@ -462,9 +464,10 @@ def run(cfg, state: State, client: Client) -> str:
             {"what_happened": S, "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
              "delivered_via": {"type": "string", "enum": list(DELIVERY_CHANNELS)},
              "learned": S,
-             "doubts": {"type": "array", "description": "optional steps you doubt, using 1-based tool-log indices; "
+             **({"doubts": {"type": "array", "description": "optional steps you doubt, using 1-based tool-log indices; "
                         "these never change criterion_met", "items": {"type": "object", "properties": {
-                            "step": {"type": "integer", "minimum": 1}, "what": S}, "required": ["step", "what"]}},
+                            "step": {"type": "integer", "minimum": 1}, "what": S}, "required": ["step", "what"]}}}
+                if cfg.DOUBTS == "on" else {}),
              "unfinished": {"type": "array", "items": S, "description": "work started but not done; [] if none"},
              "next_action": {"type": "object", "properties": {"action": S, "revise_if": S},
                              "required": ["action", "revise_if"],
@@ -543,7 +546,7 @@ def run(cfg, state: State, client: Client) -> str:
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
-            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_shown,
+            prompts.live_instructions(cfg).format(operator=cfg.OPERATOR_NAME, steps=cfg.MAX_STEPS_LIVE, inbox=inbox_shown,
                                 briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg),
                                 slate=goal_slate(cfg, state, seen))
             + f"\n\nConfidence mode: {mode}. " + {

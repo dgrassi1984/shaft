@@ -130,8 +130,14 @@ def run(cfg, state: State, client: Client) -> int:
         for t in turns:
             label = f"[{t['ts']}] {who if t['role'] == 'user' else 'me'}: "
             room = MAX_TRANSCRIPT_CHARS - len(label) - 2
-            for offset in range(0, len(t["content"]), room):
-                fragment = label + t["content"][offset:offset + room] + "\n\n"
+            content = t["content"]
+            order_records = [f"{e['tool']}: {e.get('result', '')}; args: {e.get('args', '')}"[:300]
+                             for e in t.get("tools") or []
+                             if e["tool"] in {"commit_to", "settle_commitment", "queue_for_next_cycle"}]
+            if order_records:
+                content += "\nConversation order records:\n" + "\n".join(order_records)
+            for offset in range(0, len(content), room):
+                fragment = label + content[offset:offset + room] + "\n\n"
                 if len(pages[-1]) + len(fragment) > MAX_TRANSCRIPT_CHARS:
                     pages.append("")
                 pages[-1] += fragment

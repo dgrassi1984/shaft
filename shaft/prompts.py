@@ -286,6 +286,35 @@ give one action and revise_if, the condition for changing it. Judge yourself by 
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
 tell which, so report this one as if it is checked.""" + PUSHBACK
 
+# This sentence is removed outside confirm mode; LIVE itself keeps its default bytes.
+CONFIRM_INSTRUCTION = (
+    " In confirm mode, if your record has judged cycles in the band of your "
+    "confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call "
+    "confirm_confidence to keep your number or change it, before the other tools open.")
+LOOK_AHEAD = (" Also ask: what will {operator} need within 7 days that they have not asked for? "
+              "Prepare it, then offer it in one line.")
+
+
+def live_instructions(cfg) -> str:
+    text = LIVE
+    if cfg.CONFIDENCE_MODE != "confirm":
+        text = text.replace(CONFIRM_INSTRUCTION, "")
+    if cfg.LOOK_AHEAD == "on":
+        text = text.replace("\n2. ", LOOK_AHEAD + "\n2. ", 1)
+    return text
+
+
+def conversation_orders(tools: str) -> str:
+    if "commit_to" in tools:
+        record = ("record it with commit_to, with a due date and a criterion someone else can check; "
+                  "a note to yourself is not enough")
+    else:
+        record = ("use queue_for_next_cycle to send yourself the order's exact words marked ORDER, "
+                  "with a criterion someone else can check")
+    return ("\n\nWhen the operator orders something to be done later, " + record
+            + ". If blocked, tell the operator in one line.")
+
+
 # #139: shared across conversation, writeup and consolidation so an unchecked claim stays attributed.
 SELF_CLAIMS = (
     " When the operator states a fact about your own behaviour or history, check record/history or its episodes "
@@ -401,7 +430,11 @@ TALK_SUMMARY = """\
 The conversation is over. Write the journal entry your future self will read about it, \
 in first person: what was discussed, what you learned about {operator} or about \
 yourself, and anything you committed to or want to follow up on. Only what actually \
-happened in the conversation above. Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
+happened in the conversation above. List any order made in this conversation that has no recorded \
+commitment and no result; preserve its exact words marked ORDER and a checkable criterion. \
+Use the conversation order records as evidence: only commit_to, settle_commitment and queue_for_next_cycle \
+results are shown, each cut to 300 characters. No entry for a turn means no commitment was recorded in that turn. \
+Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
 
 
 # Every section of my context has a budget in characters, and CONTEXT_CHARS caps them together (review E2/C6): the
