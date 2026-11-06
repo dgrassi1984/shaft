@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, battery, commitments, delete, jobs, messages, runner
+from supervisor import autonomy, battery, broker, commitments, core, delete, jobs, messages, runner
 from supervisor.autonomy import WakeFacts, decide_wakes, wake_gate
 
 D = datetime.fromisoformat
@@ -402,12 +402,17 @@ class CycleClockTest(StateCase):
 class ServeTest(StateCase):
     """The gate and the event wakes are wired into the scheduler's loop."""
 
-    def tick(self, facts: WakeFacts) -> tuple[list, list[str]]:
+    def tick(self, facts: WakeFacts, polls: int = 1) -> tuple[list, list[str]]:
         class Stop(Exception):
             pass
         started, logged = [], []
+        def log(message):
+            logged.append(message)
+            core.log(message)
+
         patches = [mock.patch.object(autonomy, "SUP_DIR", self.sup),
-                   mock.patch.object(autonomy, "log", lambda m: logged.append(m)),
+                   mock.patch.object(core, "SUP_DIR", self.sup),
+                   mock.patch.object(autonomy, "log", log),
                    mock.patch.object(autonomy, "stop_children_on_signal"),
                    mock.patch("supervisor.version.record_service"),
                    mock.patch("supervisor.browser.startup_note", return_value=""),
@@ -424,22 +429,41 @@ class ServeTest(StateCase):
                    mock.patch("supervisor.jobs.tick"), mock.patch("supervisor.watch.tick"),
                    mock.patch("supervisor.trial.has_work", return_value=False),
                    mock.patch.object(autonomy, "_start", lambda a: started.append(a) or object()),
-                   mock.patch.object(autonomy.time, "sleep", side_effect=Stop)]
+                   mock.patch.object(autonomy.time, "sleep", side_effect=[None] * (polls - 1) + [Stop])]
         with ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
             cw = stack.enter_context(mock.patch.object(autonomy, "commitment_wakes"))
             with self.assertRaises(Stop):
                 autonomy.serve(poll_s=0)
-        cw.assert_called_once()
+        self.assertEqual(cw.call_count, polls)
         return started, logged
+
+    def test_m3_skips_are_visible_only_in_own_record_and_throttled(self):
+        times = [NOW, NOW + timedelta(minutes=5), NOW + timedelta(hours=1), NOW + timedelta(hours=1, minutes=5)]
+        reasons = [f"nothing to do: no commitment due before {at + TEN:%H:%M}" for at in times[:3]]
+        reasons.append("already busy")
+        with mock.patch.object(autonomy, "datetime", wraps=datetime) as clock, \
+                mock.patch.object(autonomy, "decide_wakes", side_effect=[({}, {"wren": r}) for r in reasons]):
+            clock.now.side_effect = [at for at in times for _ in range(2)]   # scheduler and record("skip")
+            _, logged = self.tick(WakeFacts(), polls=4)
+        skips = [line for line in logged if "wake skipped" in line]
+        self.assertEqual(len(skips), 3, skips)
+        with mock.patch.object(core, "SUP_DIR", self.sup):
+            b = broker.Broker("wren", self.sup, {}, self.sup / "broker.log", root=self.sup, share=False)
+            answer = b.call("record", {"kind": "runs"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn("wren: wake skipped — nothing to do", answer["result"])
+            self.assertIn("wren: wake skipped — already awake (already busy)", answer["result"])
+            b.name = "kant"
+            self.assertNotIn("wake skipped", b.call("record", {"kind": "runs"})["result"])
 
     def test_nothing_to_do_skips_then_a_message_wakes(self):
         recent = (datetime.now() - timedelta(minutes=12)).isoformat(timespec="seconds")
         (self.sup / "schedule.json").write_text(json.dumps({"wakes": {"wren": recent}, "cycles": {"wren": recent}}))
         started, logged = self.tick(WakeFacts())
         self.assertEqual(started, [])                                      # the old loop started ["wake", "wren"]
-        self.assertTrue(any("wren's wake skipped — nothing to do" in l for l in logged), logged)
+        self.assertTrue(any("wren: wake skipped — nothing to do" in l for l in logged), logged)
         self.assertTrue(autonomy.last_skip("wren").startswith(autonomy.NOTHING_TO_DO))
         st = self.st()
         st["wakes"]["wren"] = recent                                       # its interval passed again

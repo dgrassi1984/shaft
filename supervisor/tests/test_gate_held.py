@@ -7,14 +7,17 @@ lost the change; nothing told it when the gate was green again (~14 h once), and
 """
 from __future__ import annotations
 
+import fcntl
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, broker, core, gate, gate_held, runner
+from supervisor import autonomy, broker, core, gate, gate_held, jobs, runner
 from supervisor.tests import test_gate as tg
 from supervisor.tests import test_run_transaction as trx
 
@@ -159,6 +162,85 @@ class HeldCase(trx.RunTransactionCase):
         self.assertEqual(self.cycle(EDITS), 0)
         held, = self.held()
         return held
+
+
+class WithdrawTest(HeldCase):
+    def hold_one(self) -> dict:
+        path = "plugins/text_stats/main.py"
+        with self.patched():
+            gate_held.save("kant", "base", {path: trx.COMMITTED.encode()}, {path: NEW.encode()}, [path], "red", [])
+        held, = self.held()
+        return held
+
+    def test_m4_withdraw_then_regate_never_restores_the_change(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        with self.patched(), runner.run_lock("kant", wait=False, kind="live"):
+            answer = b.call("withdraw_held", {"id": held["id"], "reason": "the operator said no"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn(held["id"], answer["result"])
+            self.assertEqual(gate_held.waiting(), [])
+        self.verdict = "pass"
+        self.gated.clear()
+        self.regate()
+        self.assertEqual(self.gated, [])
+        self.assertEqual(self.plugin(), trx.COMMITTED)
+        self.assertEqual((self.rows()[-1]["result"], self.rows()[-1]["why"]),
+                         ("withdrawn", "the operator said no"))
+        self.assertIn("withdrawn", self.record())
+
+    def test_m4_withdraw_refuses_another_instances_id_and_missing_reason(self):
+        held = self.hold_one()
+        with self.patched():
+            own = gate_held.save("wren", "base", {}, {"shaft/x.py": b"x"}, ["shaft/x.py"], "red", [])
+            b = broker.Broker("wren", self.project, {}, self.sup / "broker.log")
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn(own, refused["error"])
+            refused = b.call("withdraw_held", {"id": own, "reason": " "})
+            self.assertFalse(refused["ok"])
+            self.assertIn("reason is required", refused["error"])
+            b.unavailable = jobs.OFF_IN_JOBS
+            refused = b.call("withdraw_held", {"id": own, "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("decided by the cycle", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_withdraw_refuses_an_active_regate_with_retry(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        with self.patched(), runner.run_lock("kant", wait=False, kind="re-gate"):
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("retry withdraw_held", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_withdraw_refuses_a_regate_lock_held_outside_this_process_registry(self):
+        held = self.hold_one()
+        b = broker.Broker("kant", self.project, {}, self.sup / "broker.log")
+        locks = self.sup / "locks"
+        locks.mkdir(exist_ok=True)
+        with self.patched(), (locks / "kant.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            refused = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertFalse(refused["ok"])
+            self.assertIn("retry withdraw_held", refused["error"])
+        self.assertEqual(len(self.held()), 1)
+
+    def test_m4_replay_withdraw_answers_and_records_without_changing_held_state(self):
+        held = self.hold_one()
+        with self.patched():
+            b = broker.ReplayBroker("kant", self.project, {}, self.sup / "replay.log", state_root=self.root,
+                                    start_commit="base", as_of=datetime.now() + timedelta(seconds=1), cache={},
+                                    cache_lock=threading.Lock(), billed="trial", tools_log=self.sup / "broker.log")
+            before = gate_held.rows("kant")
+            answer = b.call("withdraw_held", {"id": held["id"], "reason": "no"})
+            self.assertTrue(answer["ok"], answer)
+            self.assertIn("withdrawn held change", answer["result"])
+            self.assertEqual(b.trace[-1]["tool"], "withdraw_held")
+            self.assertFalse(b.call("withdraw_held", {"id": held["id"], "reason": "no"})["ok"])
+            self.assertEqual(gate_held.rows("kant"), before)
+        self.assertEqual(len(self.held()), 1)
 
 
 class HoldTest(HeldCase):

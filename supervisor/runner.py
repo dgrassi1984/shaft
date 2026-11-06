@@ -41,6 +41,10 @@ class Busy(Exception):
     pass
 
 
+_run_lock_guard = threading.RLock()
+_run_locks: dict[str, str] = {}   # locks held by this process, including its broker threads
+
+
 @contextmanager
 def run_lock(name: str, wait: bool, kind: str = ""):
     """One run per instance at a time (a conversation and an autonomous cycle never overlap)."""
@@ -57,13 +61,17 @@ def run_lock(name: str, wait: bool, kind: str = ""):
         f.truncate()
         f.write(f"{os.getpid()} {kind} {datetime.now():%H:%M}\n")
         f.flush()
+        with _run_lock_guard:
+            _run_locks[name] = kind
         yield
     finally:
-        f.seek(0)
-        f.truncate()   # no holder: the trial worker reads this line instead of trying the lock (trial.py)
-        f.flush()
-        fcntl.flock(f, fcntl.LOCK_UN)
-        f.close()
+        with _run_lock_guard:
+            _run_locks.pop(name, None)
+            f.seek(0)
+            f.truncate()   # no holder: the trial worker reads this line instead of trying the lock (trial.py)
+            f.flush()
+            fcntl.flock(f, fcntl.LOCK_UN)
+            f.close()
 
 
 def busy_with(name: str) -> str | None:

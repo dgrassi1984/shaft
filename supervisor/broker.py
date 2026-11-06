@@ -304,8 +304,12 @@ SPECS = {
                           {"text": {"type": "string", "description": "the order in his own words, verbatim"},
                            "source": {"type": "string", "description": "the file of his message it came in (e.g. "
                                       "inbox/20261101-091500-123456-from-operator.md); leave it empty in a "
-                                      "conversation with him"}},
+                                      "conversation with him. On refusal, the answer lists recent message files; "
+                                      "record(kind='runs') shows conversation ids in start talk/api lines"}},
                           ["text"]),
+    "withdraw_held": _spec("withdraw_held", "Withdraw one of your own held code changes so it is never re-gated. "
+                           "record(kind='gate') lists your held ids. Give the reason you no longer want it.",
+                           {"id": S, "reason": S}, ["id", "reason"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
     "run": _spec(
         "run",
@@ -349,7 +353,7 @@ SPECS = {
         "record",
         "The supervisor's own record about you — what it saw you do, not what you remember. kind: "
         "'judgments' (the judge's verdict on each autonomous cycle, with its full reasoning), 'runs' (your runs: "
-        "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
+        "start, end, exit code, reverted or kept code changes, wake skips, notes), 'tools' (every supervisor tool you "
         "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
         "sandbox made to the internet through the proxy, or why it was refused), 'jobs' (your scheduled plugins: "
@@ -1525,6 +1529,10 @@ class Broker:
             ": you are shown it in every run and conversation, your messages to the operator are checked against "
             "it, and only he can drop it")
 
+    def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
+        from . import gate_held
+        return gate_held.withdraw(self.name, id, reason)
+
     def _order_source(self, source) -> str:
         """Where the operator gave the order: this conversation (its id), an earlier one (its id, from the supervisor's
         log), or a message he sent this instance (its file). Anything else is refused."""
@@ -1535,9 +1543,10 @@ class Broker:
             return talk
         cut = self.as_of
         file = Path(source).name
-        if file and any(r.get("from") == "operator" and r.get("to") == self.name and r.get("file") == file
-                        and (cut is None or pushes._time(r["ts"]) <= cut)
-                        for r in pushes.records(self.project / ".supervisor")):
+        messages = [r for r in pushes.records(self.project / ".supervisor")
+                    if r.get("from") == "operator" and r.get("to") == self.name and r.get("file")
+                    and (cut is None or pushes._time(r["ts"]) <= cut)]
+        if file and any(r["file"] == file for r in messages):
             return file
         if source and re.fullmatch(r"[A-Za-z0-9_.-]+", source):
             started = re.compile(r"^\[([^]]+)\] " + re.escape(self.name) + r": start (?:talk|api) "
@@ -1549,9 +1558,12 @@ class Broker:
             if any((m := started.match(line)) and (cut is None or (pushes._time(m[1]) or cut) <= cut)
                    for line in lines):
                 return source
+        recent = sorted(messages, key=lambda r: pushes._time(r["ts"]), reverse=True)[:3]
         raise ValueError(f"source {source!r}: name the file of the operator's message it came in "
-                         "(inbox/…-from-operator.md) or the id of the conversation"
-                         + (" — or leave it empty, in this conversation" if talk else ""))
+                         "as source (inbox/…-from-operator.md). Recent operator messages to you: "
+                         + (", ".join(r["file"] for r in recent) or "none recorded")
+                         + ". For a conversation id, call record(kind='runs') and use the id after start talk/api"
+                         + ("; or leave source empty in this conversation" if talk else ""))
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
@@ -2881,6 +2893,7 @@ class ReplayBroker(Broker):
         self._started = datetime.now()
         self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
+        self.sim_withdrawn: set[str] = set()
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -3183,6 +3196,15 @@ class ReplayBroker(Broker):
 
     def _log_check(self, row: dict) -> None:
         self.sim_checks.append({**row, "ts": self.as_of.isoformat(timespec="seconds")})   # counted as of the replay
+
+    def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
+        from . import gate_held
+        held = [m for m in gate_held.pending(self.name) if m["id"] not in self.sim_withdrawn
+                and m.get("held_at", "") <= self.as_of.isoformat(timespec="seconds")]
+        _, answer = gate_held.withdrawal(self.name, id, reason, held)
+        self.sim_withdrawn.add(id)
+        self._tag("simulated: not withdrawn")
+        return answer
 
     def _record_order(self, text: str, source: str = "") -> str:
         from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written
