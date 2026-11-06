@@ -327,7 +327,7 @@ INWARD = re.compile(
     r"|\b(?:read_file|write_file|append_file|list_files|search_memory|rewrite_facts|write_digest|retire_fact"
     r"|update_self_model|update_personality|view_image|commit_to|settle_commitment|declare_intent|confirm_confidence"
     r"|finish_cycle|close_surprise|open_project|close_project|list_instances|delegate_coding|set_config"
-    r"|secret_set|secret_list|secret_delete)\b"
+    r"|secret_set|secret_list|secret_delete|withdraw_held)\b"
     r"|`(?:run|remember|record|history|decide|trial)`|\b(?:run|remember|record|history|decide|trial)\(|"
     r"\bthe (?:run|remember|record|history|decide|trial) tool\b"
     r"|\b(?:my|our|own|the instance'?s)\s+(?:[\w-]+\s+){0,2}"

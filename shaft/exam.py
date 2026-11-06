@@ -39,6 +39,8 @@ class ExamToolbox(Toolbox):
     def describe(self) -> str:
         groups = [("built-in", [t["function"]["name"] for t in EXAM_BUILTINS]),
                   ("my plugins", list(self.plugins)), ("supervisor", list(self.remote))]
+        if self.extra:
+            groups.append(("extra", [t["function"]["name"] for t in self.extra]))
         return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups) + self.not_loaded()
 
     def _dispatch(self, name: str, args: dict) -> str:

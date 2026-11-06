@@ -536,13 +536,13 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
         abilities += DELEGATION
-    if tools and os.environ.get("SHAFT_SHARED"):   # granted by the operator (shaft share <name> <folder>)
+    if tools and "run" in tools and os.environ.get("SHAFT_SHARED"):   # granted by the operator (shaft share <name> <folder>)
         abilities += SHARED.format(operator=cfg.OPERATOR_NAME, path=os.environ["SHAFT_SHARED"])
-    if tools and os.environ.get("SHAFT_MAIL"):   # granted by the operator (shaft mail <name> grant <alias> <label>)
+    if tools and "mail_search" in tools and os.environ.get("SHAFT_MAIL"):   # granted by the operator (shaft mail <name> grant <alias> <label>)
         abilities += MAIL.format(operator=cfg.OPERATOR_NAME, grants=", ".join(os.environ["SHAFT_MAIL"].split(",")))
-    if tools and os.environ.get("SHAFT_GDRIVE"):
+    if tools and "drive_search" in tools and os.environ.get("SHAFT_GDRIVE"):
         abilities += GDRIVE.format(operator=cfg.OPERATOR_NAME, grants=", ".join(os.environ["SHAFT_GDRIVE"].split(",")))
-    if tools and os.environ.get("SHAFT_CALENDAR"):   # granted by the operator (shaft calendar <name> grant ...)
+    if tools and "calendar_events" in tools and os.environ.get("SHAFT_CALENDAR"):   # granted by the operator (shaft calendar <name> grant ...)
         abilities += CALENDAR.format(operator=cfg.OPERATOR_NAME, grants=os.environ["SHAFT_CALENDAR"])
     if tools and "view_image" in tools:          # offered only when SHAFT_VISION says my model sees images
         abilities += VISION.format(operator=cfg.OPERATOR_NAME)

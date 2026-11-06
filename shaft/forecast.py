@@ -17,7 +17,7 @@ RESERVE = "Keep at least 2 turns and 15 minutes for checking your work and calli
 COMPARABLE = 10
 MIN_COMPARABLE = 3
 RAN_OUT_SHARE = 0.3
-CONTROLS = ("declare_intent", "confirm_confidence", "finish_cycle")
+CONTROLS = ("declare_intent", "confirm_confidence", "settle_commitment", "finish_cycle")
 
 
 def _at(value) -> datetime | None:

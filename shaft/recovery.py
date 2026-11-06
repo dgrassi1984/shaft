@@ -196,7 +196,7 @@ def run(cfg, state: State, client: Client) -> int:
                 summaries.append(entry)
             content = summaries[0]
             if len(summaries) > 1:
-                content = _entry(call([{"role": "system", "content": system},
+                content = _entry(call([{"role": "system", "content": text_only},
                                        {"role": "user", "content": "Summaries of all transcript pages:\n\n"
                                         + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]))
                 if not content:

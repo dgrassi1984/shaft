@@ -258,6 +258,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     toolbox.loop_guard = guard
     reply = None
     step = 0
+    turn_step = 0
     uncounted = 0
     wrapped_up = ""
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
@@ -265,7 +266,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
 
     def ended(how: str) -> Outcome:   # the last summary leaves too: a conversation keeps these messages
         _unsummarise(messages, summary)
-        return Outcome(reply, how, step, toolbox.log, wrapped_up)
+        return Outcome(reply, how, turn_step, toolbox.log, wrapped_up)
 
     while True:
         limit = max_steps() if callable(max_steps) else max_steps
@@ -279,7 +280,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         shrink(messages, keep_turns, toolbox.root)
         step += 1
         left = time_left()
-        yielding = step > 1 and yield_requested()
+        yielding = (step > 1 or uncounted > 0) and yield_requested()
         last = step == limit or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
         mark = len(messages)
         images.keep_newest(messages)   # only the newest images are resent (PLAN-vision.md)
@@ -294,6 +295,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 wrapped_up = ("yield" if yielding else "deadline"
                               if left is not None and left < WRAP_UP_RESERVE_S else "steps")
             else:
+                wrapped_up = ""
                 model_messages = messages
                 remaining = limit - step + 1
                 # 2026-10-27: cycles reached the final turn with closures still unrun. Warn for at most
@@ -400,6 +402,6 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
             toolbox.shown = []
-        if last and wrap_up and (not same_turn or yielding or (left is not None and left < WRAP_UP_RESERVE_S)):
+        if last and wrap_up and not same_turn:
             break
     return ended("steps")

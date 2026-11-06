@@ -155,7 +155,7 @@ STATE_CHANGING = frozenset({
     "write_file", "append_file", "rewrite_facts", "write_digest", "remember", "update_self_model",
     "update_personality", "commit_to", "settle_commitment", "close_surprise", "send_message", "run",
     "secret_set", "secret_delete", "delegate_coding", "set_config", "trial", "mail_attachment", "drive_download",
-    "calendar_create", "calendar_move", "calendar_respond",
+    "calendar_create", "calendar_move", "calendar_respond", "withdraw_held",
 })
 
 
@@ -253,6 +253,8 @@ class Toolbox:
     def describe(self) -> str:
         groups = [("built-in", [t["function"]["name"] for t in self._builtins()]),
                   ("my plugins", list(self.plugins)), ("supervisor", list(self.remote))]
+        if self.extra:
+            groups.append(("extra", [t["function"]["name"] for t in self.extra]))
         return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups) + self.not_loaded()
 
     def not_loaded(self) -> str:
