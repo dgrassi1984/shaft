@@ -128,7 +128,8 @@ class ProjectsTest(InstanceFixture, unittest.TestCase):
 
     def test_sleep_controls_prompt_and_new_judgment_page(self):
         """#105 #106: sleep offers proposals and project controls, and sees just-fetched external verdicts."""
-        pid = self.open()
+        # Sleep reads the real clock: a fixed deadline turned this into "deadline, repeated failure" the day it passed.
+        pid = self.open(deadline=(datetime.now() + timedelta(days=30)).isoformat(timespec="seconds"))
         for i in range(3):
             self.state.append_episode({"ts": f"2026-10-28T15:0{i}:00", "kind": "live", "intent": {"project": pid},
                                        "project_usage": {"calls": 1, "usd": 0}})
