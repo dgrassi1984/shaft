@@ -447,7 +447,7 @@ TALK_ORDERS = (
 # last — and where the whole is. The open surprises are not here: surprises.block keeps them to QUEUE_CHARS, and
 # x_probes finds that block verbatim.
 SECTIONS = {
-    "self_model": (8000, "head", "read_file self/self.md"),
+    "self_model": (10000, "head", "read_file self/self.md"),
     "personality": (4000, "head", "read_file self/personality.md"),
     "skills": (3000, "head", "list_files skills"),
     "facts": (6000, "tail", "read_file memory/facts.md"),
