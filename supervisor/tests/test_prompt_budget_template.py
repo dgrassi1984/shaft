@@ -215,6 +215,16 @@ class SectionBudgetTest(Fixture, unittest.TestCase):
         self.assertIn("## My self-model (self/self.md)\n\n# Self-Model\nsmall and whole\n\n## My personality", shown)
         self.assertNotIn("left out at this section's budget", shown)
 
+    def test_self_model_of_9000_chars_keeps_its_last_section_regression(self):
+        marker = "SELF_MODEL_BOUNDARY: I must not decide the operator's priorities."
+        self.state.self_md.write_text("# Self-Model\n" + "I check my work against the record.\n" * 255
+                                      + "\n## What I must not decide\n" + marker + "\n")
+        self.cfg.values["CONTEXT_CHARS"] = 100000
+        shown = self.context()
+        self.assertIn(marker, shown)
+        self_model = shown.split("\n## My personality", 1)[0]
+        self.assertNotIn("left out at this section's budget", self_model)
+
     def test_the_total_shares_room_by_budget_and_zero_switches_it_off(self):
         self.grow()
         self.cfg.values["CONTEXT_CHARS"] = 0

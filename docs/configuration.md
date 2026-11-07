@@ -331,7 +331,7 @@ whose heading names corrections first, then the rest in file order, and one line
 `read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
 
-Every section of the standing context (the system prompt of every run) has a budget: the self-model 8,000
+Every section of the standing context (the system prompt of every run) has a budget: the self-model 10,000
 characters, personality 4,000, the skill list 3,000, facts 6,000, digests 3,500, goals `GOALS_CHARS`, journal
 `CONTEXT_JOURNAL_CHARS`, the last sleep 3,000, the improvement plan 2,500, open commitments, projects and corrections
 3,000 each, stats 5,500 (template `shaft/prompts.py` `SECTIONS`). `CONTEXT_CHARS` (default 48,000, about what the
