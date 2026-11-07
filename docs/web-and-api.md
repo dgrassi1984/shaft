@@ -237,11 +237,11 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
   not included.
   Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,
   the editor keeps the newer text, based on the revision just saved.
-  A text file an instance sends you (`send_message` with an attachment: `.md`, `.txt`, `.csv`, `.json` and the other
-  types Files opens as text) opens read-only in the same panel when you click it in the chat, Markdown rendered
+  A text file an instance sends you (`send_message` with an attachment: `.md`, `.markdown`, `.txt`, `.csv`, `.json` and
+  the other types Files opens as text) opens read-only in the same panel when you click it in the chat, Markdown rendered
   (`?att=<message file>/<index>`): **Download** saves it, **← Documents** returns to the list, ⌘/Ctrl-click downloads
   straight away. Only that instance's own messages preview there, up to 200 KB of UTF-8; anything else says why
-  and offers the download. Images keep their thumbnails, and the message page renders a `.md` attachment too.
+  and offers the download. Images keep their thumbnails, and the message page renders a Markdown attachment too.
   Unsaved document drafts stay in this browser per instance and document across reloads, chat navigation,
   and closing the panel. Reopening restores the editor and marks the draft. An older draft says
   "Unsaved draft restored — started from an older version"; Save still checks its original revision and

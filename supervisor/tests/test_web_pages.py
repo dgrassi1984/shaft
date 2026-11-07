@@ -318,6 +318,12 @@ class TranscriptsTest(PagesTest):
         self.has("/i/shaft/transcripts", "Next check", "Said it would do next", "tidy notes", "claimed yes",
                  "notes change", "1 cycle · 1 yes · 0 partial · 0 no (claimed) · 0 judged · 0 for you")
 
+    def test_a_markdown_attachment_renders_under_either_extension(self):
+        for name in ("report.md", "REPORT.MD", "report.markdown"):
+            self.assertIn("<h2>", str(web_views.text_view(name, "# Report")), name)
+            self.assertTrue(name.lower().endswith(web_views.TEXT_TYPES), name)
+        self.assertNotIn("<h2>", str(web_views.text_view("report.txt", "# Report")))
+
     def test_cycles_lists_wrap_and_times_are_formatted(self):
         self.record["finish"]["unfinished"] = ["finish the remaining work in full"]
         self.seed()

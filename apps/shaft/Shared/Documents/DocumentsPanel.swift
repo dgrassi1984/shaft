@@ -39,7 +39,7 @@ struct DocumentsPanel: View {
         }
         .environment(docs)
         .environment(preview)
-        .filePreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
+        .filePreview(preview)
         .task {
             await docs.refresh()
             // Live while it shows: a document the instance writes, a comment it answers.

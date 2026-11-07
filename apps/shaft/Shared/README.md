@@ -15,7 +15,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Documents/` | the panel (folders, sort, new document), a document (rendered, threads, overwritten lines, Select text with Reply and Comment, Download, Delete), the editor with the stale-save choice, comments, `CommentHighlight.swift` and `DocumentMarkdown.swift` |
 | `Cycles/` | `SidePanel` selects Documents or Cycles with a system segmented picker; `CyclesPanel` shows Next, filtered server days and earlier pages; `CycleDetailView` separates plans, actions, claims, judge verdicts and what remains |
 | `Markdown/` | MarkdownUI with SHAFT's theme (tables that scroll, task lists, code with language, Copy and syntax colours), the operator's own text, Markdown as rendered text |
-| `Attachments/` | thumbnails and file chips (`FileViews.swift`); `FilePreviewView.swift` presents a sheet with `QLPreviewView` on macOS and Quick Look on iOS; files coming in from Photos, a paste or a drop |
+| `Attachments/` | thumbnails and file chips (`FileViews.swift`); `FilePreviewView.swift` presents a Markdown file as a read-only page drawn as a document is, any other in a sheet with `QLPreviewView` on macOS and Quick Look on iOS; files coming in from Photos, a paste or a drop |
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
 

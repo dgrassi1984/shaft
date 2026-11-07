@@ -220,7 +220,7 @@ enum MacDevDriver {
             // A file opened as a file chip opens it: the file preview sheet over the window.
             state.screen?.preview.open(local: URL(fileURLWithPath: rest))
             try? await Task.sleep(for: .seconds(2))
-            log("file preview sheet requested: \(state.screen?.preview.url != nil)")
+            log("file preview sheet requested: \(state.screen?.preview.showing == true), markdown page: \(state.screen?.preview.page != nil)")
         case "rows":
             // The chat list as drawn: name, unread, replying.
             log("rows: " + (state.store?.instances.map { "\($0.name)\($0.unread ? " (unread)" : "")\($0.replying ? " (replying)" : "")" } ?? []).joined(separator: ", ") + " badge \(state.store?.badge ?? -1)")

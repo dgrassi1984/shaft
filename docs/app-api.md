@@ -383,7 +383,7 @@ requested. Your next message starts a new conversation."; an archived one "This 
 | `name` | str | its file name |
 | `bytes` | int | its size |
 | `image` | bool | `.jpg .jpeg .png .gif .webp`: shown as a picture |
-| `text` | bool | `.md .txt .csv .json .log .py .yaml .yml .toml .html .xml`: the app can preview it as text (the web previews up to 200 KB) |
+| `text` | bool | `.md .markdown .txt .csv .json .log .py .yaml .yml .toml .html .xml`: the app can preview it as text (the web previews up to 200 KB; the native apps draw `.md` and `.markdown` up to 256 KB of UTF-8 as a document, any other file in the system's preview) |
 | `url` | str | `/app/v1/file/chat/<cid>/<k>/<j>` or `/app/v1/file/message/<file>/<j>` (§8), relative to the base URL |
 
 ### 4.5 Ratings

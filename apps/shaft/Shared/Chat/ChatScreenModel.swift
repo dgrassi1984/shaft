@@ -86,7 +86,7 @@ final class ChatScreenModel {
         confirmRetry = nil
         confirmingNewChat = false
         confirmingEnd = false
-        preview.url = nil
+        preview.close()
         preview.error = nil
         dismissRequest += 1
     }

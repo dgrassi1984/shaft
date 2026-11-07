@@ -15,31 +15,26 @@ is behind the code, regenerate it.**
 
 |  |  |
 |---|---|
-| Tracked files | 560 |
-| Languages | 305 Python, 101 Swift, 80 Markdown, 44 JSON, 2 YAML, 2 JavaScript, 1 CSS |
-| Tests | 227 |
-| Python files | 305 |
-| Python modules with public symbols | 300 |
+| Tracked files | 570 |
+| Languages | 315 Python, 101 Swift, 80 Markdown, 44 JSON, 2 YAML, 2 JavaScript, 1 CSS |
+| Tests | 234 |
+| Python files | 315 |
+| Python modules with public symbols | 310 |
 
 ## Layout
 
 | Path | Files |
 |---|---|
-| `supervisor/` | 337 |
+| `supervisor/` | 347 |
 | `apps/` | 138 |
 | `docs/` | 75 |
 | `(root)` | 8 |
 | `.claude/` | 1 |
 | `bin/` | 1 |
 
-## Outcome and judge checks
-
-- `supervisor/outcomes.py`: identity-linked 48-hour operator outcomes; weekly statistics only.
-- `supervisor/judge_probe.py`: blind delivery-refusal probes, capped at three per instance per seven days; `shaft judge catch`.
-
 ## Python
 
-300 modules expose a public class or function. Full list:
+310 modules expose a public class or function. Full list:
 [codemap/python.md](codemap/python.md).
 
 ## Tests
@@ -47,4 +42,4 @@ is behind the code, regenerate it.**
 | Path | Files |
 |---|---|
 | `apps/` | 1 |
-| `supervisor/` | 226 |
+| `supervisor/` | 233 |

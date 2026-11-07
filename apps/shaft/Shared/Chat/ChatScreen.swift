@@ -43,7 +43,7 @@ struct ChatScreen: View {
     }
     private var covered: Bool {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
-            || screen.showEarlierChats || screen.showInstanceSettings || preview.url != nil || preview.error != nil
+            || screen.showEarlierChats || screen.showInstanceSettings || preview.showing || preview.error != nil
             || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
     }
     private var covers: Bool { shell?.documentsCover ?? true }
@@ -112,7 +112,7 @@ struct ChatScreen: View {
         .sheet(isPresented: $screen.showEarlierChats) {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
-        .filePreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
+        .filePreview(preview)
         .alert(screen.confirmRetry?.confirm ?? "", isPresented: Binding(
             get: { screen.confirmRetry != nil }, set: { if !$0 { screen.confirmRetry = nil } })) {
             Button("Send it again") {

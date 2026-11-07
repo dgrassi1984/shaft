@@ -513,6 +513,9 @@ def seed(base: Path, web, web_chat, messages) -> None:
 
     size = _png(inst / "thelos" / "attachments" / "ci-run.png")
     (inst / "thelos" / "attachments" / "totals.csv").write_text("account,total\noperating,12401.19\nreserve,3050.00\n")
+    report = "# October report\n\n**Net** totals, rounded *once*.\n\n- [x] operating\n- [ ] reserve\n\n| account | total |\n" \
+             "| --- | ---: |\n| operating | 12401.19 |\n\n```python\nprint(sum(totals))\n```\n"
+    (inst / "thelos" / "attachments" / "report.md").write_text(report)
     docs_dir = inst / "thelos" / "notes" / "docs"
     (docs_dir / "ledger.md").write_text(
         "# Ledger\n\nNet daily totals are rounded once, at the end.\n\n## October\n\n| Account | Total |\n|---|---:|\n"
@@ -561,7 +564,8 @@ def seed(base: Path, web, web_chat, messages) -> None:
         "operator", False, kind="question")
     # Spaces distinguish the raw sent.file identity from the URL-encoded feed key.
     msg(ts(14), "seed from thelos m.md", "The totals, as a file:", "thelos", "operator", True,
-        attachments=[{"name": "totals.csv", "path": "instances/thelos/attachments/totals.csv", "bytes": 51}])
+        attachments=[{"name": "totals.csv", "path": "instances/thelos/attachments/totals.csv", "bytes": 51},
+                     {"name": "report.md", "path": "instances/thelos/attachments/report.md", "bytes": len(report)}])
     msg(ts(12), "seed-from-operator-b.md", "Look at the March reconciliation when you have time.", "operator",
         "thelos", False, via=messages.BACKGROUND, mid="seed-b")
     with feedback.FILE.open("a") as f:

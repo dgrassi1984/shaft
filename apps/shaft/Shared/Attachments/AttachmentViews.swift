@@ -3,7 +3,7 @@ import SHAFTKit
 import SwiftUI
 
 /// Files the chat shows (§4.4 attachments, §8): fetched once with the bearer, kept for the session, pictures downsized
-/// here (the server sends no thumbnails), and opened in the file preview sheet on macOS or Quick Look on iOS.
+/// here (the server sends no thumbnails), and opened as a page if Markdown, else in the file preview sheet on macOS or Quick Look on iOS.
 @MainActor
 final class AttachmentLoader {
     static let shared = AttachmentLoader()
@@ -101,19 +101,23 @@ final class AttachmentLoader {
     }
 }
 
-/// Where the feed's file taps go: the file preview of the chat screen.
+/// Where the feed's file taps go: the file preview of the chat screen. A Markdown file opens as a page of its own
+/// (`page`), any other in the system's preview (`url`): the choice is made here, since iOS presents the two differently.
 @MainActor
 @Observable
 final class FilePreview {
     var url: URL?
+    var page: MarkdownPage?
     var loading: String?
     var error: String?
+
+    var showing: Bool { url != nil || page != nil }
 
     func open(_ attachment: Attachment, client: APIClient) {
         loading = attachment.name
         Task {
             do {
-                url = try await AttachmentLoader.shared.file(attachment.url, name: attachment.name, client: client)
+                show(try await AttachmentLoader.shared.file(attachment.url, name: attachment.name, client: client))
                 error = nil
             } catch {
                 self.error = "Could not open \(attachment.name): \(APIError.from(error).message)"
@@ -123,6 +127,26 @@ final class FilePreview {
     }
 
     func open(local: URL) {
-        url = local
+        show(local)
     }
+
+    func close() {
+        url = nil
+        page = nil
+    }
+
+    private func show(_ file: URL) {
+        if let text = MarkdownFile.text(at: file) {
+            page = MarkdownPage(file: file, text: text)
+        } else {
+            url = file
+        }
+    }
+}
+
+/// A Markdown file, read, to show.
+struct MarkdownPage: Identifiable, Equatable {
+    let file: URL
+    let text: String
+    var id: URL { file }
 }

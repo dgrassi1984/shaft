@@ -845,12 +845,13 @@ def messages_page(ms: list[dict], who: str, people: list[str], names: list[str],
 
 
 IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".gif", ".webp")
-TEXT_TYPES = (".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
+MARKDOWN_TYPES = (".md", ".markdown")               # also SHAFTKit's MarkdownFile
+TEXT_TYPES = (*MARKDOWN_TYPES, ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
 
 
 def text_view(file_name: str, text: str) -> Html:
     """An attachment's text as it reads: Markdown rendered, any other text type as written."""
-    return markdown(text) if file_name.lower().endswith(".md") else pre(text, "wrap")
+    return markdown(text) if file_name.lower().endswith(MARKDOWN_TYPES) else pre(text, "wrap")
 
 
 def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:

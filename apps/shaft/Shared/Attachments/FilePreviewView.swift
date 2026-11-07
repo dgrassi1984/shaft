@@ -6,17 +6,78 @@ import QuickLook
 #endif
 
 extension View {
-    func filePreview(_ url: Binding<URL?>) -> some View {
+    /// The file `preview` holds: a Markdown page, or the system's preview.
+    func filePreview(_ preview: FilePreview) -> some View {
+        systemPreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
+            .sheet(item: Binding(get: { preview.page }, set: { preview.page = $0 })) { page in
+                MarkdownFileSheet(page: page)
+            }
+    }
+
+    private func systemPreview(_ url: Binding<URL?>) -> some View {
         #if os(macOS)
         sheet(item: Binding(
             get: { url.wrappedValue.map { PreviewFile(url: $0) } },
             set: { url.wrappedValue = $0?.url }
         )) { file in
-            MacFilePreview(url: file.url)
+            MacFileSheet(url: file.url) { MacPreviewContent(url: file.url) }
         }
         #else
-        self.quickLookPreview(url)
+        quickLookPreview(url)
         #endif
+    }
+}
+
+/// A Markdown file as a document reads, read-only: it is the message's, so nothing here edits or comments on it. Share
+/// keeps the way out that Quick Look gave, which is what Download on a document leads to.
+private struct MarkdownFileSheet: View {
+    let page: MarkdownPage
+    #if os(iOS)
+    @Environment(\.dismiss) private var dismiss
+    #endif
+
+    var body: some View {
+        #if os(macOS)
+        MacFileSheet(url: page.file) { content }
+        #else
+        NavigationStack {
+            content
+                .navigationTitle(page.file.lastPathComponent)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) { ShareFile(url: page.file) }
+                }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if page.text.allSatisfy(\.isWhitespace) {
+            ContentUnavailableView("Empty file", systemImage: "doc")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.canvas)
+        } else {
+            ScrollView {
+                MarkdownText(source: page.text)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .readingColumn()
+                    .padding(.vertical, Design.Space.s16)
+            }
+            .readingTextSize()
+            .background(Color.canvas)
+        }
+    }
+}
+
+private struct ShareFile: View {
+    let url: URL
+
+    var body: some View {
+        ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+            .accessibilityLabel("Share \(url.lastPathComponent)")
     }
 }
 
@@ -26,8 +87,9 @@ private struct PreviewFile: Identifiable {
     var id: URL { url }
 }
 
-private struct MacFilePreview: View {
+private struct MacFileSheet<Content: View>: View {
     let url: URL
+    @ViewBuilder var content: () -> Content
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -38,11 +100,12 @@ private struct MacFilePreview: View {
                     .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
                 Spacer()
+                ShareFile(url: url)
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(Design.Space.s16)
-            MacPreviewContent(url: url)
+            content()
         }
         .frame(minWidth: 640, idealWidth: 760, minHeight: 480, idealHeight: 620)
         .background(Color.canvas)
