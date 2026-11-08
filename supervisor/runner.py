@@ -9,8 +9,9 @@ failure), commit the instance's state to its branch.
 A terminal conversation is different: its process stays up while it waits for the operator,
 so it holds the lock (and is checked and committed) one reply at a time — an open but quiet
 `shaft talk` never blocks the API or a write-up. Open conversations register themselves
-(open_conversations): autonomous cycles wait while one is open, and no journal write-up
-closes a conversation that is still going on.
+(open_conversations): autonomous cycles run while a conversation waits for the operator,
+pause only while a reply is being written and resume after, and every run sees the open
+conversations so no journal write-up closes one still going on.
 """
 from __future__ import annotations
 
