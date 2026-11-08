@@ -204,7 +204,7 @@ struct EarlierChatsSheet: View {
                 do {
                     chats = try await store.client.chats(instance).chats
                 } catch {
-                    self.error = APIError.from(error).message
+                    if let error = APIError.from(error) { self.error = error.message }
                 }
             }
         }

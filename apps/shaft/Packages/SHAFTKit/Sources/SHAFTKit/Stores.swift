@@ -55,10 +55,9 @@ public final class InstancesStore {
             }
             loaded = true
             error = nil
-        } catch is CancellationError {
-            return
         } catch {
-            report(APIError.from(error))
+            guard let error = APIError.from(error) else { return }
+            report(error)
         }
     }
 
@@ -118,7 +117,7 @@ public final class InstancesStore {
             }
             return true
         } catch {
-            let apiError = APIError.from(error)
+            guard let apiError = APIError.from(error) else { return false }
             if apiError.code != "stale_version" { report(apiError) }
             return false
         }
@@ -236,7 +235,8 @@ public final class ChatStore {
                     self.apply(event)
                 }
             } catch {
-                self?.halt(APIError.from(error))
+                guard let error = APIError.from(error) else { return }
+                self?.halt(error)
             }
         }
     }
@@ -429,8 +429,9 @@ public final class ChatStore {
             actionError = nil
             return answer.id
         } catch {
-            actionError = APIError.from(error)
-            owner?.report(APIError.from(error))
+            guard let error = APIError.from(error) else { return nil }
+            actionError = error
+            owner?.report(error)
             return nil
         }
     }
@@ -500,8 +501,9 @@ public final class ChatStore {
             actionError = nil
             reconnectIfWaiting()
         } catch {
-            actionError = APIError.from(error)
-            owner?.report(APIError.from(error))
+            guard let error = APIError.from(error) else { return }
+            actionError = error
+            owner?.report(error)
         }
     }
 

@@ -70,13 +70,21 @@ public enum APIError: Error, Sendable, Equatable, LocalizedError {
         return rest.last?.isPunctuation == true ? String(rest) : rest + "."
     }
 
-    /// Any error as an `APIError` (a cancelled or foreign one as `.transport`).
-    public static func from(_ error: any Error) -> APIError {
+    /// Any error as an `APIError` (a foreign one as `.transport`), or nil for a cancellation: work given up on purpose
+    /// (the chat left the screen, a newer load replaced it) is never a failure to show, and the optional makes every
+    /// caller decide so ("Swift.CancellationError error 1." once reached the instances list this way).
+    public static func from(_ error: any Error) -> APIError? {
+        if isCancellation(error) { return nil }
         if let error = error as? APIError { return error }
         if let error = error as? URLError {
             return .transport(code: error.errorCode, message: error.localizedDescription)
         }
         let error = error as NSError
         return .transport(code: error.code, message: error.localizedDescription)
+    }
+
+    /// A `CancellationError`, or a URL load cancelled under it (`URLError.cancelled`).
+    public static func isCancellation(_ error: any Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 }

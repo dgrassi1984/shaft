@@ -64,9 +64,8 @@ struct Thumbnail: View {
             do {
                 image = try await AttachmentLoader.shared.thumbnail(attachment.url, client: store.client, side: side,
                                                                     scale: scale)
-            } catch is CancellationError {
             } catch {
-                failed = APIError.from(error).message
+                if let error = APIError.from(error) { failed = error.message }
             }
         }
     }

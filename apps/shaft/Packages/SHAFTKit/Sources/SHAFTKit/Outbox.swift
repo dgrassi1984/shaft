@@ -81,7 +81,7 @@ public final class Outbox {
         do {
             try enqueue(message, to: instance)
         } catch {
-            return .failure(APIError.from(error))
+            return .failure(Self.failure(error))
         }
         return await attempt(message.mid)
     }
@@ -203,12 +203,15 @@ public final class Outbox {
             savePersisting()
             return .success(answer)
         } catch {
-            let apiError = error is CancellationError
-                ? APIError.transport(code: NSURLErrorCancelled, message: "The send was cancelled.")
-                : APIError.from(error)
+            let apiError = Self.failure(error)
             markNotSent(mid, reason: apiError.message)
             return .failure(apiError)
         }
+    }
+
+    /// Why a message stayed unsent: a cancelled send is one too, so the message keeps a row that says so.
+    private static func failure(_ error: any Error) -> APIError {
+        APIError.from(error) ?? .transport(code: NSURLErrorCancelled, message: "The send was cancelled.")
     }
 
     private func markNotSent(_ mid: String, reason: String) {

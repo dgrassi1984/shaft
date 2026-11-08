@@ -164,6 +164,33 @@ struct StoresTests {
         #expect(server.requests.first?.path == "/app/v1/chat/wren/seen")
     }
 
+    /// Bug: leaving a chat, or the Mac window losing focus, cancelled a seen request in flight, and the list showed
+    /// "The operation couldn't be completed. (Swift.CancellationError error 1.)" above the instances.
+    @Test func aSeenCancelledInFlightIsNotAnErrorOnTheList() async throws {
+        let folder = try temporaryFolder("seen-cancel-in-flight")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var held = StubServer.Response.json(200, #"{"unread": false, "badge": 0}"#)
+        held.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let reply = held
+        let server = StubServer { _ in reply }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("wren")
+        chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
+        let task = Task { await chat.markSeenUntilDone() }
+        for await _ in began.stream { break }
+        task.cancel()
+
+        #expect(await task.value == false)
+        #expect(store.error == nil, "a cancellation reached the list as \(String(describing: store.error?.message))")
+        #expect(server.requests.count == 1)
+    }
+
     @Test func aSendClearsTheDraftAndAFailureStaysInTheChatAsNotSent() async throws {
         let folder = try temporaryFolder("stores")
         defer { try? FileManager.default.removeItem(at: folder) }

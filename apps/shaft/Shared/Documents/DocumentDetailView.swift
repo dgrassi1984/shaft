@@ -335,6 +335,8 @@ struct DocumentEditor: View {
                 conflict = stale
             case .refused(let error):
                 problem = error.message
+            case .cancelled:
+                break
             }
             saving = false
         }

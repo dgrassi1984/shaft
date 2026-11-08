@@ -88,11 +88,9 @@ public final class CyclesStore {
             guard detailGeneration == requestedGeneration else { return }
             open = detail
             detailError = nil
-        } catch is CancellationError {
-            // Cancellation is not a failure to show on screen.
         } catch {
-            guard detailGeneration == requestedGeneration else { return }
-            detailError = APIError.from(error)
+            guard detailGeneration == requestedGeneration, let apiError = APIError.from(error) else { return }
+            detailError = apiError
         }
     }
 
@@ -103,11 +101,9 @@ public final class CyclesStore {
             try await action()
             guard generation == requestedGeneration else { return }
             error = nil
-        } catch is CancellationError {
-            // Cancellation is not a failure to show on screen.
         } catch {
-            guard generation == requestedGeneration else { return }
-            self.error = APIError.from(error)
+            guard generation == requestedGeneration, let apiError = APIError.from(error) else { return }
+            self.error = apiError
         }
     }
 }

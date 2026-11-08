@@ -87,7 +87,7 @@ public struct FeedPoll: AsyncSequence, Sendable {
                 } catch is CancellationError {
                     return nil
                 } catch {
-                    let apiError = APIError.from(error)
+                    guard let apiError = APIError.from(error) else { return nil }
                     guard apiError.isRetryable else { throw apiError }
                     failures += 1
                     let delay = poll.backoff.delay(failures: failures, unit: poll.random())

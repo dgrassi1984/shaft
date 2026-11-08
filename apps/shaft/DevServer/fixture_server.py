@@ -16,7 +16,7 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 - services: fake records start with this process's live pid; restarts change only those records. No CLI or launchd
   is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub.
 
-    python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>]
+    python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
     python3 apps/shaft/DevServer/fixture_server.py act   --dir /tmp/shaft-fixture --port 8899 <what> [text]
 
@@ -25,6 +25,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
 `services drain-end` finishes a pending scheduler drain and changes its fake pid.
+
+`--slow-seen SECONDS` holds every "mark seen" answer that long, so leaving a chat at once cancels the request in flight.
 
 Run it from the repository root with the python the supervisor uses (3.12). Never point --dir at the real data.
 """
@@ -656,6 +658,7 @@ def main() -> int:
     p.add_argument("--port", required=True, type=int)
     p.add_argument("--name", default="iphone-app")
     p.add_argument("--simctl", action="append", default=[], help="a simulator UDID to hand each push to")
+    p.add_argument("--slow-seen", type=float, default=0, help="seconds to hold each mark-seen answer")
     a = p.parse_args()
     if a.port in (8444, 8785, 8781):
         raise SystemExit(f"port {a.port} belongs to a running SHAFT service: choose another")
@@ -668,6 +671,14 @@ def main() -> int:
         act(a.dir.resolve(), web, web_chat, messages, webpush, a.rest[0], a.rest[1:])
         return 0
     seed(a.dir.resolve(), web, web_chat, messages)
+    if a.slow_seen > 0:
+        from supervisor import web_seen
+        real_seen = web_seen.seen
+
+        def slow_seen(*args, **kwargs):
+            time.sleep(a.slow_seen)
+            return real_seen(*args, **kwargs)
+        web_seen.seen = slow_seen
     server = ThreadingHTTPServer(("127.0.0.1", a.port), web.Handler)
     server.daemon_threads = True
     print(f"SHAFT fixture server on http://127.0.0.1:{a.port} over {a.dir.resolve()}", flush=True)

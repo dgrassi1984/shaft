@@ -50,7 +50,8 @@ public final class SHAFTSession {
             if let deviceToken { await registerPush(token: deviceToken) }
             return true
         } catch {
-            problem = (error as? APIError)?.message ?? error.localizedDescription
+            guard let error = APIError.from(error) else { return false }
+            problem = error.message
             return false
         }
     }
@@ -61,7 +62,8 @@ public final class SHAFTSession {
             try await pairing.unpair()
             close()
         } catch {
-            problem = (error as? APIError)?.message ?? error.localizedDescription
+            guard let error = APIError.from(error) else { return }
+            problem = error.message
         }
     }
 
@@ -80,7 +82,8 @@ public final class SHAFTSession {
             let answer = try await PushRegistrar(client: store.client).register(token: token)
             pushStatus = answer.push.on ? "Notifications on (\(answer.push.env ?? "?"))" : answer.push.reason
         } catch {
-            pushStatus = (error as? APIError)?.message ?? error.localizedDescription
+            guard let error = APIError.from(error) else { return }
+            pushStatus = error.message
         }
     }
 

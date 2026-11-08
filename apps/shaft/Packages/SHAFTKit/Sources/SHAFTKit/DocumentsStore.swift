@@ -20,6 +20,8 @@ public final class DocumentsStore {
         case saved(DocSaveResponse)
         case stale(Conflict)
         case refused(APIError)
+        /// The save was given up (the sheet closed): nothing to say.
+        case cancelled
     }
 
     public let instance: String
@@ -63,7 +65,7 @@ public final class DocumentsStore {
             error = nil
             return try await client.rawDoc(instance, path: path)
         } catch {
-            self.error = APIError.from(error)
+            if let apiError = APIError.from(error) { self.error = apiError }
             return nil
         }
     }
@@ -81,7 +83,7 @@ public final class DocumentsStore {
             await refreshQuietly()
             return .saved(answer)
         } catch {
-            let apiError = APIError.from(error)
+            guard let apiError = APIError.from(error) else { return .cancelled }
             if case .server(_, let body) = apiError, body.code == "stale" {
                 return .stale(Conflict(path: path, text: text, sha: body.sha, diff: body.diff, message: apiError.message))
             }
@@ -183,10 +185,8 @@ public final class DocumentsStore {
             try await body()
             error = nil
             return true
-        } catch is CancellationError {
-            return false
         } catch {
-            self.error = APIError.from(error)
+            if let apiError = APIError.from(error) { self.error = apiError }
             return false
         }
     }

@@ -27,10 +27,8 @@ public final class InstanceSettingsStore {
             settings = try await client.settings(instance)
             loadError = nil
             unsupported = false
-        } catch is CancellationError {
-            return
         } catch {
-            let error = APIError.from(error)
+            guard let error = APIError.from(error) else { return }
             loadError = error
             unsupported = error.status == 404
             if error.isUnpaired { owner?.report(error) }
@@ -52,10 +50,8 @@ public final class InstanceSettingsStore {
             loadError = nil
             notice = answer.applies == "next run" ? "Applies from the next run" : "Applies now"
             return true
-        } catch is CancellationError {
-            return false
         } catch {
-            let error = APIError.from(error)
+            guard let error = APIError.from(error) else { return false }
             if case .server(_, let body) = error, body.code == "stale" {
                 if let fresh = body.settings { self.settings = fresh }
                 saveError = "This setting changed elsewhere. Review the current value before saving again."
@@ -79,10 +75,8 @@ public final class InstanceSettingsStore {
             unsupported = false
             loadError = nil
             notice = "Applies now"
-        } catch is CancellationError {
-            return
         } catch {
-            let error = APIError.from(error)
+            guard let error = APIError.from(error) else { return }
             saveError = error.message
             unsupported = error.status == 404
             if error.isUnpaired { owner?.report(error) }
@@ -137,11 +131,9 @@ public final class ServicesStore {
                     startWatcher("scheduler", oldPID: schedulerPID)
                 }
             }
-        } catch is CancellationError {
-            return
         } catch {
-            guard generation == self.generation else { return }
-            report(APIError.from(error))
+            guard generation == self.generation, let error = APIError.from(error) else { return }
+            report(error)
         }
     }
 
@@ -175,11 +167,12 @@ public final class ServicesStore {
             }
             let task = startWatcher(name, oldPID: oldPID)
             await task.value
-        } catch is CancellationError {
-            if generation == self.generation { restarting.remove(name) }
         } catch {
             guard generation == self.generation else { return }
-            let error = APIError.from(error)
+            guard let error = APIError.from(error) else {
+                restarting.remove(name)
+                return
+            }
             outcome[name] = .failed(error.message)
             restarting.remove(name)
             if error.status == 404 { unsupported = true }
@@ -197,10 +190,8 @@ public final class ServicesStore {
             if let status = service("scheduler") {
                 _ = finished(status, oldPID: oldPID)
             }
-        } catch is CancellationError {
-            return
         } catch {
-            let error = APIError.from(error)
+            guard let error = APIError.from(error) else { return }
             outcome["scheduler"] = .failed(error.message)
             if error.status == 404 { unsupported = true }
             if error.isUnpaired { owner?.report(error) }
@@ -279,11 +270,9 @@ public final class ServicesStore {
                     }
                     self.apply(answer)
                     if let status = self.service(name), self.finished(status, oldPID: oldPID) { break }
-                } catch is CancellationError {
-                    break
                 } catch {
                     // A temporarily unreachable service does not disprove a restart.
-                    let error = APIError.from(error)
+                    guard let error = APIError.from(error) else { break }
                     if error.isUnpaired { self.report(error); break }
                 }
                 if name == "scheduler", let drainedAt = self.schedulerDrainedAt,

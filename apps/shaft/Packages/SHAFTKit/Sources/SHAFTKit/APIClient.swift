@@ -461,10 +461,8 @@ public final class APIClient: Sendable {
                 (data, response) = try await session.data(for: request, delegate: delegate)
             }
         } catch {
-            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
-                throw CancellationError()
-            }
-            throw APIError.from(error)
+            guard let apiError = APIError.from(error), !Task.isCancelled else { throw CancellationError() }
+            throw apiError
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.decoding(path: path, message: "not an HTTP response")

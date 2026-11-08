@@ -349,6 +349,8 @@ struct NewDocumentSheet: View {
                 problem = conflict.message
             case .refused(let error):
                 problem = error.message
+            case .cancelled:
+                break
             }
             busy = false
         }

@@ -120,7 +120,8 @@ final class FilePreview {
                 show(try await AttachmentLoader.shared.file(attachment.url, name: attachment.name, client: client))
                 error = nil
             } catch {
-                self.error = "Could not open \(attachment.name): \(APIError.from(error).message)"
+                // The pairing changed and the loader dropped its files (it throws a cancellation): nothing failed.
+                if let failure = APIError.from(error) { self.error = "Could not open \(attachment.name): \(failure.message)" }
             }
             loading = nil
         }

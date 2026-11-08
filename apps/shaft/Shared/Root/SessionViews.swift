@@ -214,7 +214,7 @@ struct SettingsView: View {
                 do {
                     push = try await session.store?.client.pushStatus()
                 } catch {
-                    pushProblem = APIError.from(error).message
+                    if let error = APIError.from(error) { pushProblem = error.message }
                 }
             }
             .onDisappear {
