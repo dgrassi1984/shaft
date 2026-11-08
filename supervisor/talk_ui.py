@@ -227,6 +227,8 @@ class Client:
                     t = ev["type"]
                     if t == "status":
                         phase, detail = ev["phase"], ev.get("detail", "")
+                        if phase == "planned":
+                            live.console.print(Text(f"  planned · {detail}", style="dim"))
                     elif t == "reasoning":
                         reasoning += ev["text"]
                         if phase != "thinking" or not self.show_thinking:

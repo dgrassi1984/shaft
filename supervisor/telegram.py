@@ -623,6 +623,16 @@ def _api(route: str, name: str, messages: list[dict], timeout: float, request_id
         raise TelegramError(f"the API is not reachable ({e}); is it on? shaft api status") from None
 
 
+def _planned(name: str, detail: str) -> None:
+    """Announce a reply plan while the non-streaming Telegram request is still waiting."""
+    owner, token = paired_id(), tokens().get(name)
+    if owner is not None and token:
+        try:
+            send(token, owner, f"planned · {detail}")
+        except TelegramError as e:
+            log(f"telegram: could not announce {name}'s reply plan: {e}")
+
+
 def ask_api(name: str, history: list[dict], request_id: str = "") -> tuple[str, int, bool]:
     """One reply through SHAFT's own API: a sandboxed run, pausing a running cycle only while it replies.
     Returns the reply, how many messages sent to it meanwhile (interject_api) it heard, oldest first, and whether it

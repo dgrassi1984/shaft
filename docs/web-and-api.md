@@ -16,8 +16,12 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
   runs older code than is checked out (`shaft model on` restarts it). `shaft status` shows the same.
 - The instance is held only while it replies: an open chat waiting for you does not block the API or a
   journal write-up. A chat left with nothing typed for `SHAFT_IDLE_MINUTES` (30) closes itself.
-- Terminal and API replies get about `TALK_REPLY_CALLS` (3) tool calls or `TALK_REPLY_S` (45) seconds
+- Terminal and API replies get about `TALK_REPLY_CALLS` (6) tool calls or `TALK_REPLY_S` (90) seconds
   before the next model call must answer, offered only `queue_for_next_cycle`. Each knob accepts 0 to disable its budget.
+  `plan_reply(calls, seconds, why)` changes this reply's budget from its start and announces the plan.
+  Plans above `TALK_REPLY_MAX_CALLS` (20) or `TALK_REPLY_MAX_S` (300) are refused; 0 disables a ceiling.
+  Both conversation controls are excluded from the calls count. Work expected to exceed a ceiling is queued up front.
+  Requests to take your time mean a brief reply and the full task queued for the next cycle.
   Running calls finish normally. `queue_for_next_cycle(task, why)` writes unfinished work to the
   instance's own inbox, marked `queued from conversation` with the conversation date. The next live
   cycle sees it and is asked to report back. Queuing itself sends nothing to the operator.

@@ -604,6 +604,9 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 idle = 0
                 t = ev["type"]
+                if t == "status" and ev.get("phase") == "planned" and channel == "telegram":
+                    from . import telegram
+                    telegram._planned(model, ev.get("detail", ""))
                 if t == "done":
                     break
                 if t == "content":

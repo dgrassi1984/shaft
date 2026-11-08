@@ -215,8 +215,10 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_LIVE` | `12` | `12` |
 | `MAX_STEPS_SLEEP` | `30` | `30` |
 | `SLEEP_VERDICT_CHARS` | `120000` | `120000` |
-| `TALK_REPLY_CALLS` | `3` | uses built-in default |
-| `TALK_REPLY_S` | `45` | uses built-in default |
+| `TALK_REPLY_CALLS` | `6` | uses built-in default |
+| `TALK_REPLY_S` | `90` | uses built-in default |
+| `TALK_REPLY_MAX_CALLS` | `20` | uses built-in default |
+| `TALK_REPLY_MAX_S` | `300` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `LOOP_GUARD` | `'on'` | `on` |
 | `LOOP_EFFECT_ROUNDS` | `3` | `3` |
@@ -250,7 +252,12 @@ at sleep. `STALE_GOAL_HOURS` flags Active goal bullets with no live touch in tha
 only if the operator sent a conversation turn during it. Set either to 0 to disable that check.
 Sleep asks for a fix, retirement or reason to keep each item, recorded in its journal.
 
-`TALK_REPLY_CALLS` and `TALK_REPLY_S` bound work before a conversation reply. When either budget
+`TALK_REPLY_CALLS` (6) and `TALK_REPLY_S` (90) set the default conversation reply budget.
+`plan_reply(calls, seconds, why)` changes it for that reply, counting from the reply's start.
+Plans above `TALK_REPLY_MAX_CALLS` (20) or `TALK_REPLY_MAX_S` (300) are refused; the previous budget stays.
+Set a ceiling to 0 to disable it. The plan is shown to the operator and recorded in the talk episode.
+The two conversation controls do not spend the calls budget. Work expected to exceed a ceiling is queued up front.
+An operator request to take your time means queue the full task for the next cycle and reply briefly. When either budget
 is used, the next model call is offered only `queue_for_next_cycle` and must answer with its next steps. A running
 call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.

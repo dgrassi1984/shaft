@@ -86,6 +86,25 @@ def _msg(user, text, mid=1, chat_type="private", reply_to=None):
     return {"update_id": mid, "message": m}
 
 
+class PlannedStatusTest(unittest.TestCase):
+    def test_plan_is_sent_from_the_instances_bot(self):
+        """Guard Telegram hiding the reply plan while its non-streaming API request waits."""
+        with mock.patch.object(telegram, "paired_id", return_value=42), \
+                mock.patch.object(telegram, "tokens", return_value=TOK), \
+                mock.patch.object(telegram, "send") as send:
+            telegram._planned("wren", "up to 8 calls / 200 s: Read sources")
+            send.assert_called_once_with(TOK["wren"], 42, "planned · up to 8 calls / 200 s: Read sources")
+
+    def test_failed_plan_notice_does_not_discard_the_reply(self):
+        """Guard a failed Telegram plan notice aborting an otherwise successful conversation reply."""
+        with mock.patch.object(telegram, "paired_id", return_value=42), \
+                mock.patch.object(telegram, "tokens", return_value=TOK), \
+                mock.patch.object(telegram, "send", side_effect=telegram.TelegramError("offline")), \
+                mock.patch.object(telegram, "log") as log:
+            telegram._planned("wren", "up to 8 calls / 200 s: Read sources")
+            log.assert_called_once()
+
+
 class TelegramTest(unittest.TestCase):
     def setUp(self):
         self.enterContext(mock.patch.object(pushes, "QUIET_HOURS", None))

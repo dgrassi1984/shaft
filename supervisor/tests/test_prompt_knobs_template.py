@@ -41,6 +41,18 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
                     "Send the report tomorrow.", "/exit"]), talk_id="orders-terminal")
         return seen[0]
 
+    def test_conversation_prompt_queues_take_your_time_requests(self):
+        """Guard the 2026-11-08 bug where take-your-time requests consumed a live reply instead of a cycle."""
+        sentence = ("When the operator says to take your time, or anything that means the same, do it in your "
+                    "next cycle: reply briefly with what you will do and call queue_for_next_cycle with the full task.")
+        for api in (False, True):
+            messages, tools = self.capture_conversation(api)
+            self.assertIn(sentence, messages[0]["content"])
+            self.assertIn("6 tool calls or 90 seconds", messages[0]["content"])
+            self.assertIn("Plans above 20 calls or 300 seconds are refused", messages[0]["content"])
+            self.assertNotIn("TALK_REPLY_MAX", messages[0]["content"])   # plain words, not knob names
+            self.assertIn("plan_reply", [t["function"]["name"] for t in tools])
+
     def test_new_knobs_default_and_validate_both_states(self):
         self.assertEqual(self.cfg.DOUBTS, "on")
         self.assertEqual(self.cfg.LOOK_AHEAD, "off")

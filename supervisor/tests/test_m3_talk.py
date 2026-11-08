@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import os
 import unittest
@@ -37,16 +38,18 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
             return reply
 
         client.stream.side_effect = stream
+        self.box, self.view = Toolbox(self.root), mock.Mock()
         with mock.patch.object(talk.time, "monotonic", side_effect=lambda: ticks[0]), \
                 mock.patch.object(clock, "now", return_value=NOW):
-            result = talk._respond(client, self.cfg, Toolbox(self.root),
-                                   [{"role": "user", "content": "Investigate."}], mock.Mock())
+            result = talk._respond(client, self.cfg, self.box,
+                                   [{"role": "user", "content": "Investigate."}], self.view)
         self.assertIs(result, replies[-1])
         return seen
 
-    def test_three_tool_calls_in_one_round_force_the_next_call_to_answer(self):
-        seen = self.respond([Reply("", tool_calls=[tool("read_file", {"path": path}, str(i))
-                            for i, path in enumerate(("self/goals.md", "self/self.md", "memory/facts.md"))]),
+    def test_six_tool_calls_in_one_round_force_the_next_call_to_answer(self):
+        """Guard the 2026-11-08 fixed 3-call budget bug and enforce the default 6-call limit."""
+        seen = self.respond([Reply("", tool_calls=[tool("read_file", {"path": f"missing-{i}"}, str(i))
+                            for i in range(6)]),
                              Reply("I will finish next cycle.")])
         self.assertTrue(seen[0][1])
         # only the queue is left: reverting to no tools at all makes queueing the rest impossible (#133)
@@ -54,11 +57,18 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
         self.assertIn("Reply now", seen[1][0][-1]["content"])
         self.assertIn("what you will do next", seen[1][0][-1]["content"])
 
-    def test_forty_five_seconds_force_the_next_call_with_a_fake_clock(self):
+    def test_ninety_seconds_force_the_next_call_with_a_fake_clock(self):
+        """Guard the 2026-11-08 bug where a 46-second browse could never fit in 45 seconds."""
         seen = self.respond([Reply("", tool_calls=[tool("read_file", {"path": "self/goals.md"})]),
-                             Reply("Later.")], advance=[45, 0])
+                             Reply("Later.")], advance=[90, 0])
         self.assertEqual([t["function"]["name"] for t in seen[-1][1]], ["queue_for_next_cycle"])
         self.assertIn("Reply now", seen[-1][0][-1]["content"])
+
+    def test_default_budget_allows_a_forty_six_second_page(self):
+        """Guard the 2026-11-08 bug where one 46-second browse exhausted the default 45-second budget."""
+        seen = self.respond([Reply("", tool_calls=[tool("read_file", {"path": "missing"})]),
+                             Reply("Done.")], advance=[46, 0])
+        self.assertIn("read_file", [t["function"]["name"] for t in seen[-1][1]])
 
     def test_zero_disables_each_budget_independently(self):
         for calls, seconds, elapsed, rounds in ((0, 45, 0, 4), (3, 0, 100, 1), (0, 0, 100, 4)):
@@ -95,15 +105,17 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
                      "Finish the orchard survey", "Why: Reply first"):
             self.assertIn(text, shown.split("\n\n## ", 1)[0])
 
-    def test_talk_and_api_prompts_show_budgets_and_zero_omits_them(self):
-        self.assertEqual(config.FIELDS["TALK_REPLY_CALLS"], (int, 3))
-        self.assertEqual(config.FIELDS["TALK_REPLY_S"], (int, 45))
+    def test_talk_and_api_prompts_show_defaults_and_disabled_budgets(self):
+        self.assertEqual(config.FIELDS["TALK_REPLY_CALLS"], (int, 6))
+        self.assertEqual(config.FIELDS["TALK_REPLY_S"], (int, 90))
+        self.assertEqual(config.FIELDS["TALK_REPLY_MAX_CALLS"], (int, 20))
+        self.assertEqual(config.FIELDS["TALK_REPLY_MAX_S"], (int, 300))
         for mode in (prompts.TALK_MODE, prompts.API_MODE):
             text = mode.format(operator="operator", app="app", since="") + prompts.reply_budget(self.cfg)
-            self.assertIn("3 tool calls or 45 seconds", text)
+            self.assertIn("6 tool calls or 90 seconds", text)
             self.assertIn("queue_for_next_cycle", text)
         self.cfg.values.update(TALK_REPLY_CALLS=0, TALK_REPLY_S=0)
-        self.assertEqual(prompts.reply_budget(self.cfg), "")
+        self.assertIn("no calls or time limit", prompts.reply_budget(self.cfg))
 
 
     def test_terminal_and_api_entry_points_offer_queue_and_show_the_budget(self):
@@ -120,8 +132,120 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
                         view.return_value.next_message.side_effect = ["Hello", None]
                         talk.run(self.cfg, self.state, client, talk_id="terminal")
                 call = client.stream.call_args
-                self.assertIn("3 tool calls or 45 seconds", call.args[0][0]["content"])
+                self.assertIn("6 tool calls or 90 seconds", call.args[0][0]["content"])
                 self.assertIn("queue_for_next_cycle", [t["function"]["name"] for t in call.kwargs["tools"]])
+
+    def test_planned_status_is_visible_in_plain_and_json_views(self):
+        """Guard a reply plan disappearing when tool_end immediately replaces its transient status."""
+        detail = "up to 8 calls / 200 s: Read sources"
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            view = talk.TerminalView(self.cfg, False)
+            view.status("planned", detail)
+            view.status("waiting for the model")
+            self.assertIn("planned · " + detail, out.getvalue())
+        out = io.StringIO()
+        talk.JsonView(out=out).status("planned", detail)
+        self.assertEqual(json.loads(out.getvalue()), dict(type="status", phase="planned", detail=detail))
+
+    def test_plan_keeps_fourth_fifth_and_sixth_calls_available(self):
+        """Guard the 2026-11-08 fixed 3-call budget that queued 37% of replies despite a feasible plan."""
+        seen = self.respond([Reply("", tool_calls=[tool("plan_reply", {
+            "calls": 8, "seconds": 200, "why": "Read six sources"})])] + [
+            Reply("", tool_calls=[tool("read_file", {"path": f"missing-{i}"}, str(i))])
+            for i in range(6)] + [Reply("Done.")], advance=[0, 46, 0, 0, 0, 0, 0, 0])
+        for index in (4, 5, 6, 7):
+            self.assertIn("read_file", [t["function"]["name"] for t in seen[index][1]])
+        self.view.status.assert_any_call("planned", "up to 8 calls / 200 s: Read six sources")
+        self.assertEqual(self.box.reply_plan, dict(calls=8, seconds=200, why="Read six sources",
+                         planned=True, refused=0, used_calls=6, used_s=46, queued=False))
+
+    def test_refused_ceiling_preserves_previous_budget(self):
+        """Guard plans bypassing the ceiling or replacing the previous budget after refusal."""
+        for calls, seconds, ceiling in ((21, 100, "TALK_REPLY_MAX_CALLS"), (8, 301, "TALK_REPLY_MAX_S")):
+            with self.subTest(ceiling=ceiling):
+                self.cfg.values["TALK_REPLY_CALLS"] = 1
+                seen = self.respond([Reply("", tool_calls=[tool("plan_reply", {
+                    "calls": calls, "seconds": seconds, "why": "Too much"})]),
+                    Reply("", tool_calls=[tool("read_file", {"path": "missing"})]), Reply("Later.")])
+                result = seen[1][0][-1]["content"]
+                self.assertTrue(result.startswith("ERROR:"))
+                self.assertIn(ceiling, result)
+                self.assertIn("answer now with what you can, and queue_for_next_cycle the rest", result)
+                self.assertEqual([t["function"]["name"] for t in seen[2][1]], ["queue_for_next_cycle"])
+                self.assertEqual(self.box.reply_plan["calls"], 1)
+                self.assertEqual(self.box.reply_plan["refused"], 1)
+                self.assertFalse(self.box.reply_plan["planned"])
+
+    def test_controls_do_not_spend_calls_and_replanning_does_not_reset_usage(self):
+        """Guard logged controls consuming the calls budget or a revised plan resetting the reply's start."""
+        self.cfg.values["TALK_REPLY_CALLS"] = 1
+        seen = self.respond([Reply("", tool_calls=[tool("plan_reply", {
+            "calls": 2, "seconds": 100, "why": "Two reads"})]),
+            Reply("", tool_calls=[tool("queue_for_next_cycle", {"task": "Other work", "why": "Later"})]),
+            Reply("", tool_calls=[tool("read_file", {"path": "one"})]),
+            Reply("", tool_calls=[tool("plan_reply", {"calls": 1, "seconds": 90, "why": "Enough"})]),
+            Reply("Done.")])
+        for index in (1, 2, 3):
+            self.assertIn("read_file", [t["function"]["name"] for t in seen[index][1]])
+        self.assertEqual([t["function"]["name"] for t in seen[-1][1]], ["queue_for_next_cycle"])
+        self.assertEqual(self.box.reply_plan["used_calls"], 1)
+        self.assertTrue(self.box.reply_plan["queued"])
+
+    def test_plan_time_counts_from_reply_start(self):
+        """Guard plan_reply restarting the clock and extending the operator's wait beyond its plan."""
+        seen = self.respond([Reply("", tool_calls=[tool("plan_reply", {
+            "calls": 8, "seconds": 50, "why": "One browse"})]), Reply("Done.")], advance=[50, 0])
+        self.assertEqual([t["function"]["name"] for t in seen[-1][1]], ["queue_for_next_cycle"])
+
+    def test_plan_validates_positive_integers_and_reason(self):
+        """Guard malformed plans silently disabling the budget or omitting the operator's explanation."""
+        for args in ({"calls": True, "seconds": 20, "why": "x"},
+                     {"calls": 1.5, "seconds": 20, "why": "x"},
+                     {"calls": 0, "seconds": 20, "why": "x"},
+                     {"calls": 1, "seconds": -1, "why": "x"},
+                     {"calls": 1, "seconds": 20, "why": " "}):
+            with self.subTest(args=args):
+                seen = self.respond([Reply("", tool_calls=[tool("plan_reply", args)]), Reply("Done.")])
+                self.assertTrue(seen[-1][0][-1]["content"].startswith("ERROR:"))
+                self.assertEqual(self.box.reply_plan["refused"], 1)
+                self.assertEqual(self.box.reply_plan["calls"], 6)
+
+    def test_zero_disables_plan_ceilings(self):
+        """Guard zero-valued ceilings refusing plans instead of disabling their own limit."""
+        self.cfg.values.update(TALK_REPLY_MAX_CALLS=0, TALK_REPLY_MAX_S=0)
+        self.respond([Reply("", tool_calls=[tool("plan_reply", {
+            "calls": 21, "seconds": 301, "why": "Ceilings disabled"})]), Reply("Done.")])
+        self.assertTrue(self.box.reply_plan["planned"])
+        self.assertEqual(self.box.reply_plan["refused"], 0)
+
+    def test_episode_records_reply_plan_in_terminal_and_api(self):
+        """Guard losing reply-plan accounting between _respond and either conversation episode writer."""
+        for api in (False, True):
+            for planned in (False, True):
+                with self.subTest(api=api, planned=planned):
+                    replies = ([Reply("", tool_calls=[tool("plan_reply", {
+                        "calls": 8, "seconds": 200, "why": "Read sources"})]),
+                        Reply("", tool_calls=[tool("plan_reply", {
+                            "calls": 21, "seconds": 200, "why": "Refuse"})]),
+                        Reply("", tool_calls=[tool("read_file", {"path": "missing"}),
+                            tool("queue_for_next_cycle", {"task": "Follow up", "why": "Later"})])]
+                        if planned else []) + [Reply("Done.")]
+                    client = mock.Mock()
+                    client.stream.side_effect = replies
+                    with mock.patch.object(talk.time, "monotonic", return_value=10):
+                        if api:
+                            with mock.patch.object(talk, "JsonView"):
+                                talk.answer(self.cfg, self.state, client, {"messages": [
+                                    {"role": "user", "content": "Hello"}]})
+                        else:
+                            with mock.patch.object(talk, "TerminalView") as view:
+                                view.return_value.next_message.side_effect = ["Hello", None]
+                                talk.run(self.cfg, self.state, client)
+                    episode = [e for e in self.episodes() if e.get("role") == "assistant"][-1]
+                    self.assertEqual(episode["reply_plan"], dict(calls=8 if planned else 6,
+                        seconds=200 if planned else 90, why="Read sources" if planned else "",
+                        planned=planned, refused=int(planned), used_calls=int(planned), used_s=0,
+                        queued=planned))
 
 
 class CorrectionsTest(InstanceFixture, unittest.TestCase):

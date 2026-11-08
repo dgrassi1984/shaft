@@ -82,6 +82,28 @@ class ApiTest(unittest.TestCase):
         r = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body else None, headers=headers)
         return urllib.request.urlopen(r, timeout=10)
 
+    def test_planned_status_reaches_stream_activity_and_telegram(self):
+        """Guard planned status being lost by the API stream or Telegram's non-streaming reply path."""
+        from supervisor import telegram
+        detail = "up to 8 calls / 200 s: Read sources"
+        events = [*EVENTS[:1], dict(type="status", phase="planned", detail=detail), *EVENTS[1:]]
+        with mock.patch(__name__ + ".EVENTS", events), mock.patch.object(telegram, "_planned") as planned:
+            with self.req("/chat/completions", {"model": "shaft", "stream": True,
+                          "messages": [{"role": "user", "content": "Read sources"}]}) as response:
+                chunks = [json.loads(line[6:]) for line in response.read().decode().splitlines()
+                          if line.startswith("data: {")]
+                notes = "".join(c["choices"][0]["delta"].get("reasoning_content", "") for c in chunks)
+                self.assertIn("planned · " + detail, notes)
+            planned.assert_not_called()
+            req = urllib.request.Request(self.base + "/chat/completions",
+                data=json.dumps({"model": "wren", "messages": [
+                    {"role": "user", "content": "Read sources"}]}).encode(),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
+                         "Tailscale-User-Login": ME, "X-Shaft-Channel": "telegram"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                self.assertIn("planned · " + detail, json.loads(response.read())["choices"][0]["message"]["reasoning_content"])
+            planned.assert_called_once_with("wren", detail)
+
     def test_chat_and_interject_record_operator_text_and_channel(self):
         for channel in ("web", "telegram", "api"):
             with self.subTest(channel=channel):
