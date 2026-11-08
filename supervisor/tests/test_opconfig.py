@@ -142,9 +142,9 @@ class SetTest(OpConfigTest):
         self.assertEqual(self.committed, [])
 
     def test_a_wake_below_the_floor_says_what_will_happen(self):
-        with mock.patch("supervisor.autonomy.wake_floor", return_value=10):
-            r = opconfig.set_values("wren", {"WAKE_INTERVAL_MINUTES": "3"})
-        self.assertIn("wake floor is 10 min (shaft limits): it wakes every 10 min, not 3", r["notes"][0])
+        # setUp supplies the operator's 5-minute floor.
+        r = opconfig.set_values("wren", {"WAKE_INTERVAL_MINUTES": "3"})
+        self.assertIn("wake floor is 5 min (shaft limits): it wakes every 5 min, not 3", r["notes"][0])
 
 
 class CommitFailsTest(OpConfigTest):

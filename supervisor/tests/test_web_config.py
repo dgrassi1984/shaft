@@ -18,7 +18,7 @@ FIELDS = [{"key": "LLM_MODEL", "set": True, "value": "openrouter/xiaomi/mimo-v2.
           {"key": "WAKE_INTERVAL_MINUTES", "set": False, "value": "", "default": "120", "help": "How often I wake.",
            "secret": False, "numeric": True, "choices": None}]
 ACCESS = {"channel": "web", "channel_now": "telegram", "channel_why": "the operator's conversation with wren there is open",
-          "tools_off": ["delegate_coding"], "wake_floor": 5, "wake_floor_default": 10, "wake_floor_own": True,
+          "tools_off": ["delegate_coding"], "wake_floor": 5, "wake_floor_default": 1, "wake_floor_own": True,
           "cloud_cap": 15.0, "cloud_cap_default": 8.0, "cloud_cap_own": True, "spent_today": 3.03, "jobs_off": False,
           "jobs_text": "wren: jobs on\n  watcher: every 15 min", "shared": "/Users/example/Shared",
           "mail": [{"account": "work", "label": "AssistantAccess"}],

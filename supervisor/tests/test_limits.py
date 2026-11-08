@@ -1,5 +1,5 @@
-"""The operator's own limits for an instance (`shaft limits`): a wake floor below the default and a daily cloud cap
-above it, kept in supervisor/tools/<name>.json — never in its config.env, which the instance can change itself."""
+"""The operator's own limits for an instance (`shaft limits`): an explicit wake floor and a daily cloud cap
+above the default, kept in supervisor/tools/<name>.json — never in its config.env, which the instance can change itself."""
 from __future__ import annotations
 
 import io
@@ -85,17 +85,25 @@ class LimitsTest(unittest.TestCase):
             self.assertEqual(str(raised.exception), message)
             self.assertEqual(self.cli("wren", limit, value), (2, message + "\n"))
 
-    def test_the_operator_s_floor_lets_wren_wake_every_5_minutes(self):
-        config = {"WAKE_INTERVAL_MINUTES": "5"}
-        self.assertEqual(autonomy.wake_interval("wren", config), timedelta(minutes=autonomy.WAKE_FLOOR_MIN))
+    def test_no_default_ten_minute_wake_floor(self):
+        self.assertNotEqual(autonomy.WAKE_FLOOR_MIN, 10)
+        for minutes in (3, 5):
+            with self.subTest(minutes=minutes):
+                self.assertEqual(autonomy.wake_interval("wren", {"WAKE_INTERVAL_MINUTES": str(minutes)}),
+                                 timedelta(minutes=minutes))
+
+    def test_the_operator_s_floor_clamps_only_its_instance(self):
+        config = {"WAKE_INTERVAL_MINUTES": "1"}
         core._update_tool_settings("wren", wake_floor_minutes=5)
         self.assertEqual(autonomy.wake_interval("wren", config), timedelta(minutes=5))
-        self.assertEqual(autonomy.wake_interval("kant", config), timedelta(minutes=autonomy.WAKE_FLOOR_MIN))
+        self.assertEqual(autonomy.wake_interval("kant", config), timedelta(minutes=1))
+        self.assertIsNone(autonomy.wake_interval("wren", {"WAKE_INTERVAL_MINUTES": "0"}))
 
     def test_the_instance_cannot_lower_its_own_floor(self):
         # The floor lives in the supervisor's folder; a key in config.env (the instance's own file) is ignored.
+        core._update_tool_settings("wren", wake_floor_minutes=5)
         config = {"WAKE_INTERVAL_MINUTES": "1", "WAKE_FLOOR_MINUTES": "1", "wake_floor_minutes": "1"}
-        self.assertEqual(autonomy.wake_interval("wren", config), timedelta(minutes=autonomy.WAKE_FLOOR_MIN))
+        self.assertEqual(autonomy.wake_interval("wren", config), timedelta(minutes=5))
 
     def test_the_operator_s_cap_is_the_one_enforced(self):
         body = {"model": "claude-haiku-5-5", "messages": [{"role": "user", "content": "hi"}]}
@@ -123,7 +131,8 @@ class LimitsTest(unittest.TestCase):
             self.assertEqual(self.cli("wren", *bad)[0], 2, bad)
         self.cli("wren", "wake-floor", "off")
         self.assertNotIn("wake_floor_minutes", json.loads((self.sup / "tools" / "wren.json").read_text()))
-        self.assertEqual(autonomy.wake_floor("wren"), autonomy.WAKE_FLOOR_MIN)
+        self.assertEqual(autonomy.wake_floor("wren"), 1)
+        self.assertEqual(autonomy.wake_interval("wren", {"WAKE_INTERVAL_MINUTES": "3"}), timedelta(minutes=3))
 
 
 if __name__ == "__main__":

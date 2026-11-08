@@ -68,10 +68,11 @@ class SettingsTest(AppTest):
                 {"model": "new-model", "label": "New model"},
                 {"model": "openrouter/xiaomi/mimo-v2.6-pro", "label": "openrouter/xiaomi/mimo-v2.6-pro"}]},
             "effort": {"value": "medium", "choices": ["medium", "xhigh", "low"]},
-            "wake_interval": {"value": 5, "floor": autonomy.WAKE_FLOOR_MIN, "effective": max(5, autonomy.WAKE_FLOOR_MIN)},
+            "wake_interval": {"value": 5, "floor": 1, "effective": 5},
             "cloud_cap": {"value": None, "spent_today": 0.25},
             "channel": {"value": "auto", "choices": ["auto", "web", "telegram"]},
             "operator_name": {"value": "the operator"}})
+        self.assertIs(type(got["wake_interval"]["floor"]), int)
         self.assertNotIn(self.fake.encode(), r.body)
         self.assertNotIn(b"base_url", r.body)
         self.assertNotIn(b"LLM_API_KEY", r.body)

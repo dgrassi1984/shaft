@@ -276,8 +276,8 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
         'name="limit" value="wake-floor"><input name="value" inputmode="numeric" pattern="[0-9]+" placeholder="minutes" '
         'aria-label="wake floor in minutes" required><button type="submit" class="small">Set wake floor</button></form>'
         '{wfoff}</div></div>', n=n, wf=a["wake_floor"], wfd="(yours)" if a["wake_floor_own"] else "(default)",
-        wfoff=button("limit", "Default floor", f"put {n}'s wake floor back to the default ({a['wake_floor_default']} min)?",
-                     {"name": n, "limit": "wake-floor", "value": "off"}, "" if a["wake_floor_own"] else "already the default",
+        wfoff=button("limit", "No floor", f"remove {n}'s wake floor (back to none)?",
+                     {"name": n, "limit": "wake-floor", "value": "off"}, "" if a["wake_floor_own"] else "already no floor",
                      cls="small"),
         a=post_attrs("Access", actions.RUN_NOW_S))
     cap = h('<div data-row><div class="kv">'

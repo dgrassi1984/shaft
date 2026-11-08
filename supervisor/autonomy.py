@@ -39,7 +39,7 @@ from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
 WAKE_DEFAULT_MIN = 120                  # minutes between wakes when config.env does not say
-WAKE_FLOOR_MIN = 10                     # config.env is the instance's own file: no faster than this
+WAKE_FLOOR_MIN = 1                      # no default floor: the instance's own interval, unless the operator set one
 SLEEP_AT = (4, 0)                       # hour, minute — daily; caught up later that day if missed
 STATE = SUP_DIR / "schedule.json"       # last wake per instance / last nightly sleep, written by the runs
 LEGACY_JOBS = ("com.shaft.tick", "com.shaft.sleep")
@@ -123,7 +123,7 @@ def service(name: str, action: str) -> int:
 
 
 def wake_interval(name: str, config: dict[str, str] | None = None) -> timedelta | None:
-    """The instance's WAKE_INTERVAL_MINUTES (config.env), at least WAKE_FLOOR_MIN; 0 = no scheduled wakes."""
+    """The instance's WAKE_INTERVAL_MINUTES, bounded only by an operator floor; 0 = no scheduled wakes."""
     raw = (instance_config(name) if config is None else config).get("WAKE_INTERVAL_MINUTES", "")
     try:
         minutes = int(raw) if raw else WAKE_DEFAULT_MIN
@@ -134,8 +134,8 @@ def wake_interval(name: str, config: dict[str, str] | None = None) -> timedelta 
 
 
 def wake_floor(name: str) -> int:
-    """The shortest interval the instance may set itself: WAKE_FLOOR_MIN, or the operator's own floor for it
-    (`shaft limits <name> wake-floor <minutes>`, kept in the supervisor's folder — the instance cannot lower it)."""
+    """The shortest interval the instance may wake at: the operator's own floor for it (`shaft limits <name> wake-floor
+    <minutes>`, kept in the supervisor's folder — the instance cannot lower it), else WAKE_FLOOR_MIN (1: no floor)."""
     from .core import _tool_settings
     own = _tool_settings(name).get("wake_floor_minutes")
     return own if isinstance(own, int) and not isinstance(own, bool) and own >= 1 else WAKE_FLOOR_MIN

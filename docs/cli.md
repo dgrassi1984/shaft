@@ -96,7 +96,7 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
                                 #   finetune --iters N, --min-examples N (default 20)
 
 shaft limits [name] [wake-floor <min>|cloud-cap <usd>|consult-cap <usd>|off]
-                                     # wake floor (default 10 min), daily cloud cap ($8), daily consult cap ($3)
+                                     # wake floor (none by default), daily cloud cap ($8), daily consult cap ($3)
                                      # use off as the value to restore the selected limit's default
 shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
 shaft job run <name> <plugin>        # run one scheduled job now (the scheduler's own entry point)

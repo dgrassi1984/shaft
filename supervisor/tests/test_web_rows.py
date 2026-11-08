@@ -132,6 +132,20 @@ class SavedRowsTest(ActionsTest):
             self.assertIn(b'name="sha" value="empty-sha"', removed.body)
             self.assertNotIn(b"Remove drive.md", removed.body)
 
+    def test_removing_wake_floor_returns_no_floor_control(self):
+        with mock.patch.object(web_config, "access", return_value=ACCESS):
+            r = self.post_row("limit", name="wren", limit="wake-floor", value="5")
+        self.assertEqual(r.status, 200)
+        self.assertIn(b"back to none", r.body)
+        self.assertIn(b'name="value" value="off"', r.body)
+        access = dict(ACCESS, wake_floor=1, wake_floor_own=False)
+        with mock.patch.object(web_config, "access", return_value=access):
+            r = self.post_row("limit", name="wren", limit="wake-floor", value="off")
+        self.assertEqual(r.status, 200)
+        self.assertIn(b"No floor", r.body)
+        self.assertIn(b'already no floor', r.body)
+        self.assertNotIn(b"Default floor", r.body)
+
     def test_issue_17_access_returns_only_changed_control(self):
         """Reverting #17 leaves switches facing the old direction; a whole-page swap loses other edits."""
         with mock.patch.object(web_config, "access", return_value=ACCESS):

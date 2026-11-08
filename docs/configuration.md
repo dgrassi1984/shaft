@@ -293,7 +293,7 @@ selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid valu
 conversation step limit. `MAX_STEPS_*` count model turns. Plan-channel tool replies marked `shaft_same_turn`
 do not spend a turn; after 10 consecutive such replies, the next one spends a turn to bound missing end signals.
 Other replies count even without usage. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
-values are bounded by the operator's wake floor (default 10 minutes), and a wake at that interval runs only with
+values use the instance's own interval unless the operator sets a wake floor, and a wake at that interval runs only with
 something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wakes)). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).

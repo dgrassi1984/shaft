@@ -74,7 +74,7 @@ class WakeTest(unittest.TestCase):
                                 {"new": H2, "off": None}.get, lambda n: "")
         self.assertEqual(list(start), ["new"])
 
-    def test_interval_from_config_env_with_a_floor(self):
+    def test_interval_from_config_env_without_a_default_floor(self):
         def interval(value):
             root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
             (root / "config.env").write_text(f"WAKE_INTERVAL_MINUTES={value}\n" if value is not None else "")
@@ -82,7 +82,7 @@ class WakeTest(unittest.TestCase):
                 return autonomy.wake_interval("x")
         self.assertEqual(interval(None), timedelta(minutes=120))      # not set: the old two hours
         self.assertEqual(interval(45), timedelta(minutes=45))
-        self.assertEqual(interval(1), timedelta(minutes=10))          # its own file: no faster than the floor
+        self.assertEqual(interval(1), timedelta(minutes=1))           # no operator floor: its own interval
         self.assertIsNone(interval(0))
         self.assertEqual(interval("soon"), timedelta(minutes=120))    # not a number: the default, logged
 
