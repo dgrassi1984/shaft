@@ -388,14 +388,26 @@ self-imposed clauses (deliverable_met yes) is not a reason to add a new rung to 
 
 
 def reply_budget(cfg) -> str:
-    limits = []
-    calls, seconds = getattr(cfg, "TALK_REPLY_CALLS", 3), getattr(cfg, "TALK_REPLY_S", 45)
+    limits, ceilings = [], []
+    calls, seconds = getattr(cfg, "TALK_REPLY_CALLS", 6), getattr(cfg, "TALK_REPLY_S", 90)
     if calls > 0:
         limits.append(f"{calls} tool calls")
     if seconds > 0:
         limits.append(f"{seconds} seconds")
-    return (" Answer within about " + " or ".join(limits) + "; queue the rest for your next cycle "
-            "with queue_for_next_cycle(task, why), then say what you will do next.") if limits else ""
+    for knob, unit, default in (("TALK_REPLY_MAX_CALLS", "calls", 20), ("TALK_REPLY_MAX_S", "seconds", 300)):
+        if (value := getattr(cfg, knob, default)) > 0:
+            ceilings.append(f"{value} {unit}")
+    return (" Default reply budget: " + (" or ".join(limits) if limits else "no calls or time limit") +
+            ", counted from the start of the reply. If this question needs a different budget, call "
+            "plan_reply(calls, seconds, why) first; you can change the plan later, and the operator sees it. "
+            + ("Plans above " + " or ".join(ceilings) + " are refused: work that big belongs to your next cycle, "
+               "so queue it up front and do not start it. " if ceilings else "") +
+            "plan_reply and queue_for_next_cycle do not count as calls. Once the budget is used, only "
+            "queue_for_next_cycle(task, why) is offered: it puts the unfinished work in your inbox for your next "
+            "live cycle; then reply with what you did and what you will do next. A call already running finishes. "
+            "Reading one page with a headless browser through run takes about 45 seconds. "
+            "When the operator says to take your time, or anything that means the same, do it in your next cycle: "
+            "reply briefly with what you will do and call queue_for_next_cycle with the full task.")
 
 
 TALK_MODE = (

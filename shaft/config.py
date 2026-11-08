@@ -31,8 +31,10 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 30),
     "SLEEP_VERDICT_CHARS": (int, 120000),   # judges' verdicts one sleep reads (~30k tokens); says when cut short
-    "TALK_REPLY_CALLS": (int, 3),       # reply first, queue the rest; 0 disables each budget
-    "TALK_REPLY_S": (int, 45),
+    "TALK_REPLY_CALLS": (int, 6),       # reply first, queue the rest; 0 disables each budget
+    "TALK_REPLY_S": (int, 90),
+    "TALK_REPLY_MAX_CALLS": (int, 20),  # refuse plans above these ceilings; 0 disables each ceiling
+    "TALK_REPLY_MAX_S": (int, 300),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "LOOP_GUARD": (str, "on"),         # #103: repeated effects show a note
     "LOOP_EFFECT_ROUNDS": (int, 3),

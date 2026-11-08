@@ -93,6 +93,9 @@ class TerminalView:
             return None
 
     def status(self, phase: str, detail: str = "") -> None:
+        if phase == "planned":
+            self.ui.clear()
+            self.ui.write(f"{DIM}planned · {detail}{RESET}\n")
         self.ui.show(phase, detail)
 
     def reasoning_chunk(self, chunk: str) -> None:
@@ -273,7 +276,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         history = turn[1:]  # keep tool calls and results in the conversation
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant",
                               "content": reply.content, "reasoning": reply.reasoning,
-                              "tools": toolbox.log[log_start:], "usage": reply.usage,
+                              "tools": toolbox.log[log_start:], "usage": reply.usage, "reply_plan": toolbox.reply_plan,
                               "attempts": reply.attempts, "turn_messages": len(turn) - start,
                               **toolbox.loop_guard.record()})
 
@@ -365,6 +368,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
         archive_read_inbox(state, toolbox.log[log_start:])
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
+                              "reply_plan": toolbox.reply_plan,
                               "via": app, **toolbox.loop_guard.record()})
 
 
@@ -374,6 +378,30 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
     began = getattr(toolbox, "reply_started", time.monotonic())
     first_logged = len(toolbox.log)
     when = getattr(toolbox, "conversation_when", clock.now())
+    plan = toolbox.reply_plan = {
+        "calls": getattr(cfg, "TALK_REPLY_CALLS", 6), "seconds": getattr(cfg, "TALK_REPLY_S", 90),
+        "why": "", "planned": False, "refused": 0, "used_calls": 0, "used_s": 0, "queued": False,
+    }
+
+    def plan_reply(args: dict) -> str:
+        calls, seconds, why = args.get("calls"), args.get("seconds"), args.get("why")
+        if (type(calls) is not int or calls <= 0 or type(seconds) is not int or seconds <= 0
+                or not isinstance(why, str) or not why.strip()):
+            plan["refused"] += 1
+            return "ERROR: calls and seconds must be positive integers and why must be non-empty text"
+        for knob, value, default in (("TALK_REPLY_MAX_CALLS", calls, 20), ("TALK_REPLY_MAX_S", seconds, 300)):
+            ceiling = getattr(cfg, knob, default)
+            if ceiling > 0 and value > ceiling:
+                plan["refused"] += 1
+                return (f"ERROR: {knob} ceiling is {ceiling}; answer now with what you can, "
+                        "and queue_for_next_cycle the rest.")
+        plan.update(calls=calls, seconds=seconds, why=why.strip(), planned=True)
+        view.status("planned", f"up to {calls} calls / {seconds} s: {why.strip()}")
+        return f"Reply budget set to {calls} calls / {seconds} s, counted from the start of this reply."
+
+    def used_calls() -> int:
+        # agent.run logs controls too; only toolbox calls spend the reply's calls budget.
+        return sum(e["tool"] not in controls for e in toolbox.log[first_logged:])
 
     def queue(args: dict) -> str:
         task, why = args.get("task"), args.get("why")
@@ -389,11 +417,16 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
                             "Handle this in your next live cycle and report back to the operator.\n")
         except OSError as e:
             return f"ERROR: could not queue task: {e}"
+        plan["queued"] = True
         return f"Queued in inbox/{path.name} for my next cycle."
 
     controls = {"queue_for_next_cycle": agent.Control(_spec(
         "queue_for_next_cycle", "Queue unfinished conversation work for my next live cycle; sends no reply.",
-        {"task": {"type": "string"}, "why": {"type": "string"}}), queue)}
+        {"task": {"type": "string"}, "why": {"type": "string"}}), queue),
+        "plan_reply": agent.Control(_spec(
+            "plan_reply", "Set this reply's budget, counted from its start, within the configured ceilings.",
+            {"calls": {"type": "integer", "minimum": 1}, "seconds": {"type": "integer", "minimum": 1},
+             "why": {"type": "string"}}), plan_reply, repeatable=True)}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
 
@@ -406,11 +439,10 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
                     f"{chars / 1000:.1f}k chars" if chars >= 1000 else f"{chars} chars")
 
     def call(msgs, t=tools):
-        calls = getattr(cfg, "TALK_REPLY_CALLS", 3)
-        seconds = getattr(cfg, "TALK_REPLY_S", 45)
-        if (calls > 0 and len(toolbox.log) - first_logged >= calls
+        calls, seconds = plan["calls"], plan["seconds"]
+        if (calls > 0 and used_calls() >= calls
                 or seconds > 0 and time.monotonic() - began >= seconds):
-            t = [c.spec for c in controls.values()]   # only the queue: the rest of the work waits for a cycle
+            t = [controls["queue_for_next_cycle"].spec]   # the rest waits for a cycle
             msgs = [*msgs, {"role": "user", "content": "[runtime] Reply now, saying what you will do next. "
                            "The reply-first budget is used: no more tools, except queue_for_next_cycle for "
                            "the work you have not done."}]
@@ -451,4 +483,6 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
         view.interrupted()
     except LLMError as e:
         view.error(str(e))
+    finally:
+        plan.update(used_calls=used_calls(), used_s=round(time.monotonic() - began, 2))
     return None
