@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 from . import google
@@ -97,6 +97,109 @@ def conversation_name(acct: google.Account, space: dict, cache: dict, me_id: str
                 cache[key] += f' +{len(names) - 4}'
         cache[key] = cache[key][:80]
     return cache[key]
+
+
+KINDS = {"dm": "DIRECT_MESSAGE", "group": "GROUP_CHAT", "space": "SPACE"}
+
+
+def _literal(value: str) -> str:
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def search(acct: google.Account, *, text: str = '', conversation: str = '', sender: str = '', kind: str = '',
+           after: str = '', before: str = '', as_of: datetime | None = None, limit: int = 20,
+           page: str = '', me_id: str = '') -> tuple[list[dict], str, str]:
+    """Search messages, or list conversations by activity when no filters are supplied.
+
+    Sender accepts users/<id> or an email as users/<email>; Google's email aliasing
+    is unverified. Display names cannot match Google's resource-name filter.
+    Conversation listings use an offset cursor over current activity, not a snapshot.
+    """
+    if kind and kind not in KINDS:
+        raise ValueError(f"unknown kind {kind!r}; allowed: {', '.join(KINDS)}")
+    if sender and not sender.startswith('users/'):
+        if not re.fullmatch(r'[^\s/@]+@[^\s/@]+', sender):
+            raise ValueError('sender must be users/<id> or an email address; Google matches resource names, not display names')
+        sender = 'users/' + sender
+    sid = ''
+    if conversation:
+        alias, sid, mid = parse_handle(conversation)
+        if alias != acct.alias or mid:
+            raise NotVisible('conversation is not visible to you')
+    filters = []
+    if text:
+        filters.append(_literal(text))
+    if sid:
+        filters.append(f'space.name = {_literal("spaces/" + sid)}')
+    if sender:
+        filters.append(f'sender.name = {_literal(sender)}')
+    if kind:
+        filters.append(f'space.space_type = {_literal(KINDS[kind])}')
+    dates = []
+    for value, op in ((after, '>='), (before, '<')):
+        if value:
+            bound = date.fromisoformat(value).isoformat() + 'T00:00:00Z'
+            dates.append(f'createTime {op} {_literal(bound)}')
+    as_of_time = ''
+    if as_of:
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        as_of_time = as_of.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        dates.append(f'createTime < {_literal(as_of_time)}')
+    limit = max(1, min(limit, 50))
+    cache, rows = {}, []
+    if not any((text, conversation, sender, kind, after, before)):
+        try:
+            offset = int(page) if page else 0
+            if offset < 0:
+                raise ValueError
+        except ValueError:
+            raise ValueError('invalid gchat_search cursor') from None
+        found = spaces(acct)
+        if as_of_time:
+            found = [s for s in found if s.get('lastActiveTime') and
+                     datetime.fromisoformat(s['lastActiveTime'].replace('Z', '+00:00')) < as_of]
+        found.sort(key=lambda s: datetime.fromisoformat(
+            s.get('lastActiveTime', '0001-01-01T00:00:00Z').replace('Z', '+00:00')), reverse=True)
+        for space in found[offset:offset + limit]:
+            rows.append({'handle': f'{acct.alias}/{_id(space["name"].removeprefix("spaces/"))}',
+                         'conversation': conversation_name(acct, space, cache, me_id),
+                         'time': space.get('lastActiveTime', '')})
+        token = str(offset + limit) if offset + limit < len(found) else ''
+        return rows, token, '' if rows else 'no messages'
+    note, token = '', page
+    if sid and not text:
+        space = _get(acct, f'{API}/spaces/{sid}')
+        if kind and space.get('spaceType') != KINDS[kind]:
+            return [], '', 'no messages'
+        messages = []
+        while True:
+            found = _get(acct, f'{API}/spaces/{sid}/messages', pageSize=limit - len(messages),
+                         pageToken=token, orderBy='createTime DESC', filter=' AND '.join(dates))
+            messages.extend(m for m in found.get('messages') or []
+                            if not sender or (m.get('sender') or {}).get('name') == sender)
+            token = found.get('nextPageToken') or ''
+            if len(messages) >= limit or not token:
+                break
+    else:
+        found = acct.post(f'{API}/spaces/-/messages:search',
+                          {'filter': ' AND '.join(filters + dates), 'pageSize': limit, 'pageToken': page})
+        messages = [r['message'] for r in found.get('results') or []]
+        token = found.get('nextPageToken') or ''
+        note = 'muted conversations not searched'
+    for msg in messages:
+        message_space = space if sid and not text else (
+            msg.get('space') or {'name': msg['name'].split('/messages/')[0]})
+        who = msg.get('sender') or {}
+        rows.append({'handle': f'{acct.alias}/{_id(msg["name"].split("/")[1])}/'
+                               f'{_id(msg["name"].rsplit("/", 1)[1], message=True)}',
+                     'conversation': conversation_name(acct, message_space, cache, me_id),
+                     'sender': 'you' if me_id and who.get('name') == me_id else (
+                         who.get('displayName') or who.get('name') or 'unknown sender'),
+                     'time': msg.get('createTime', ''), 'preview': (msg.get('text') or '')[:200]})
+    if not rows:
+        note = (note + '; ' if note else '') + 'no messages'
+    return rows, token, note
 
 
 def _lines(msgs: list[dict], me_id: str) -> str:

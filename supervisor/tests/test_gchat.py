@@ -347,3 +347,165 @@ class ChatTest(unittest.TestCase):
         self.assertEqual(self.chat.conversation_name(self.acct,
                          {'name': 'spaces/room', 'displayName': 'Example space'}, {}, 'users/me'), 'Example space')
         self.assertEqual(self.fake.requests, [])
+
+
+class SearchTest(unittest.TestCase):
+    def setUp(self):
+        from supervisor import gchat
+        self.chat = gchat
+        self.acct = mock.Mock(alias='work')
+        self.acct.get.return_value = {}
+        self.acct.post.return_value = {}
+        patch = mock.patch.object(google, 'account', return_value={})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_search_args_cannot_inject_filter(self):
+        self.chat.search(self.acct, text='hi\\" OR sender.name = "users/evil',
+                         sender='users/a"\\b', kind='dm', after='2026-11-01', before='2026-11-03')
+        self.acct.post.assert_called_once_with(
+            'https://chat.googleapis.com/v1/spaces/-/messages:search',
+            {'filter': '\"hi\\\\\\" OR sender.name = \\"users/evil\" AND sender.name = '
+                       '\"users/a\\\"\\\\b\" AND space.space_type = \"DIRECT_MESSAGE\" AND '
+                       'createTime >= \"2026-11-01T00:00:00Z\" AND createTime < \"2026-11-03T00:00:00Z\"',
+             'pageSize': 20, 'pageToken': ''})
+        for kw in ({'kind': 'dm" OR x'}, {'after': '2026-11-01" OR x'},
+                   {'before': '2026-02-30'}, {'sender': 'Some Person'}):
+            with self.subTest(kw=kw), self.assertRaises(ValueError):
+                self.chat.search(self.acct, **kw)
+
+    def test_search_says_muted_not_searched(self):
+        for kw in ({'text': 'example'}, {'sender': 'users/123'}, {'kind': 'group'},
+                   {'sender': 'example@work.example'}):
+            with self.subTest(kw=kw):
+                rows, token, note = self.chat.search(self.acct, **kw)
+                self.assertIn('muted conversations not searched', note)
+        self.assertIn('sender.name = "users/example@work.example"',
+                      self.acct.post.call_args.args[1]['filter'])
+
+    def test_search_in_one_conversation_uses_list(self):
+        own = dict(message('own', 2), sender={'name': 'users/me'})
+        self.acct.get.side_effect = [
+            {'name': 'spaces/room', 'displayName': 'Example', 'spaceType': 'SPACE'},
+            {'messages': [message('other', 3)], 'nextPageToken': 'more'},
+            {'messages': [own]}]
+        rows, token, note = self.chat.search(self.acct, conversation='work/room', sender='users/me',
+                                            me_id='users/me', limit=1)
+        self.assertEqual(rows, [{'handle': 'work/room/own', 'conversation': 'Example', 'sender': 'you',
+                                 'time': '2026-11-01T00:02:00Z', 'preview': 'own'}])
+        self.assertEqual((token, note), ('', ''))
+        self.acct.post.assert_not_called()
+        self.assertEqual(self.acct.get.call_args.kwargs['pageToken'], 'more')
+        for handle in ('other/room', 'work/room/message', 'work/../room'):
+            with self.subTest(handle=handle), self.assertRaises(self.chat.NotVisible):
+                self.chat.search(self.acct, conversation=handle)
+
+    def test_no_args_lists_conversations_by_activity(self):
+        self.acct.get.side_effect = [
+            {'spaces': [{'name': 'spaces/old', 'displayName': 'Old', 'lastActiveTime': '2026-11-01T00:00:00Z'}],
+             'nextPageToken': 'more'},
+            {'spaces': [{'name': 'spaces/new', 'displayName': 'New', 'lastActiveTime': '2026-11-02T00:00:00Z'}]}]
+        rows, token, note = self.chat.search(self.acct, limit=1)
+        self.assertEqual(rows, [{'handle': 'work/new', 'conversation': 'New', 'time': '2026-11-02T00:00:00Z'}])
+        self.assertTrue(token)
+        self.assertEqual(note, '')
+        self.acct.post.assert_not_called()
+        self.acct.get.side_effect = None
+        self.acct.get.return_value = {'spaces': [
+            {'name': 'spaces/old', 'displayName': 'Old', 'lastActiveTime': '2026-11-01T00:00:00Z'},
+            {'name': 'spaces/new', 'displayName': 'New', 'lastActiveTime': '2026-11-02T00:00:00Z'}]}
+        rows, token, _ = self.chat.search(self.acct, limit=1, page=token)
+        self.assertEqual([row['handle'] for row in rows], ['work/old'])
+        self.assertEqual(token, '')
+
+    def test_search_bounded_by_as_of(self):
+        for cut in (datetime(2026, 11, 1, 0, 2),
+                    datetime(2026, 11, 1, 1, 2, tzinfo=timezone(timedelta(hours=1)))):
+            for kw in ({'text': 'example'}, {'conversation': 'work/room'}):
+                self.acct.get.return_value = {'name': 'spaces/room', 'displayName': 'Example'}
+                self.chat.search(self.acct, as_of=cut, **kw)
+                params = (self.acct.post.call_args.args[1] if 'text' in kw
+                          else self.acct.get.call_args.kwargs)
+                self.assertIn('createTime < "2026-11-01T00:02:00.000000Z"', params['filter'])
+
+    def test_no_messages_said_explicitly(self):
+        for kw in ({}, {'text': 'example'}, {'conversation': 'work/room'}):
+            self.acct.get.return_value = {'name': 'spaces/room', 'displayName': 'Example'}
+            rows, token, note = self.chat.search(self.acct, **kw)
+            self.assertEqual((rows, token), ([], ''))
+            self.assertIn('no messages', note)
+
+    def test_search_result_names_preview_and_cursor(self):
+        self.acct.post.return_value = {'results': [
+            {'message': dict(message('one', 2), space={'name': 'spaces/room', 'spaceType': 'DIRECT_MESSAGE'},
+                             sender={'name': 'users/me'}, text='x' * 201)},
+            {'message': message('two', 1)}], 'nextPageToken': 'next'}
+        self.acct.get.return_value = {'memberships': [
+            {'member': {'name': 'users/me', 'displayName': 'Operator'}},
+            {'member': {'name': 'users/other', 'displayName': 'Other Person'}}]}
+        rows, token, note = self.chat.search(self.acct, text='example', me_id='users/me', page='previous', limit=50)
+        self.assertEqual(rows, [
+            {'handle': 'work/room/one', 'conversation': 'DM with Other Person', 'sender': 'you',
+             'time': '2026-11-01T00:02:00Z', 'preview': 'x' * 200},
+            {'handle': 'work/room/two', 'conversation': 'DM with Other Person', 'sender': 'Other Person',
+             'time': '2026-11-01T00:01:00Z', 'preview': 'two'}])
+        self.assertEqual(token, 'next')
+        self.assertEqual(self.acct.get.call_count, 1)
+        self.assertEqual(self.acct.post.call_args.args[1]['pageToken'], 'previous')
+        self.assertEqual(self.acct.post.call_args.args[1]['pageSize'], 50)
+
+    def test_conversation_with_text_uses_search_and_quotes_space(self):
+        self.chat.search(self.acct, conversation='work/room', text='example', limit=200)
+        self.assertEqual(self.acct.post.call_args.args[1], {
+            'filter': '"example" AND space.name = "spaces/room"', 'pageSize': 50, 'pageToken': ''})
+
+
+    def test_search_posts_json_through_account(self):
+        acct = google.Account('work', {})
+        def respond(req, timeout=30):
+            self.assertEqual(req.get_method(), 'POST')
+            self.assertEqual(req.full_url, 'https://chat.googleapis.com/v1/spaces/-/messages:search')
+            self.assertEqual(json.loads(req.data), {
+                'filter': 'sender.name = "users/123"', 'pageSize': 20, 'pageToken': ''})
+            return answer({'results': [{'message': dict(message('one'),
+                           space={'name': 'spaces/room', 'displayName': 'Example'})}]})
+        with mock.patch.object(google, 'urlopen', side_effect=respond), \
+                mock.patch.object(acct, 'token', return_value='fake'):
+            rows, token, note = self.chat.search(acct, sender='users/123')
+        self.assertEqual(rows, [{'handle': 'work/room/one', 'conversation': 'Example',
+                                 'sender': 'Other Person', 'time': '2026-11-01T00:00:00Z', 'preview': 'one'}])
+
+    def test_list_dates_kind_and_page_token(self):
+        self.acct.get.side_effect = [
+            {'name': 'spaces/room', 'displayName': 'Example', 'spaceType': 'SPACE'},
+            {'messages': [message('one')], 'nextPageToken': 'next'}]
+        rows, token, note = self.chat.search(self.acct, conversation='work/room', kind='space',
+                                            after='2026-11-01', before='2026-11-02', page='previous', limit=1)
+        self.assertEqual(self.acct.get.call_args.kwargs, {
+            'pageSize': 1, 'pageToken': 'previous', 'orderBy': 'createTime DESC',
+            'filter': 'createTime >= "2026-11-01T00:00:00Z" AND createTime < "2026-11-02T00:00:00Z"'})
+        self.assertEqual(token, 'next')
+        self.assertEqual(rows[0]['handle'], 'work/room/one')
+        self.assertEqual(note, '')
+        self.acct.get.side_effect = None
+        self.acct.get.return_value = {'name': 'spaces/room', 'spaceType': 'SPACE'}
+        self.assertEqual(self.chat.search(self.acct, conversation='work/room', kind='dm'),
+                         ([], '', 'no messages'))
+
+    def test_conversation_activity_does_not_expose_future_as_of(self):
+        self.acct.get.return_value = {'spaces': [
+            {'name': 'spaces/old', 'displayName': 'Old', 'lastActiveTime': '2026-11-01T00:00:00Z'},
+            {'name': 'spaces/new', 'displayName': 'New', 'lastActiveTime': '2026-11-02T00:00:00Z'}]}
+        rows, token, note = self.chat.search(self.acct, as_of=datetime(2026, 11, 2))
+        self.assertEqual(rows, [{'handle': 'work/old', 'conversation': 'Old', 'time': '2026-11-01T00:00:00Z'}])
+        self.assertEqual((token, note), ('', ''))
+        for cursor in ('-1', 'not-an-offset'):
+            with self.subTest(cursor=cursor), self.assertRaisesRegex(ValueError, 'invalid gchat_search cursor'):
+                self.chat.search(self.acct, page=cursor)
+
+    def test_conversation_activity_orders_fractional_seconds(self):
+        self.acct.get.return_value = {'spaces': [
+            {'name': 'spaces/old', 'displayName': 'Old', 'lastActiveTime': '2026-11-01T00:00:00Z'},
+            {'name': 'spaces/new', 'displayName': 'New', 'lastActiveTime': '2026-11-01T00:00:00.1Z'}]}
+        rows, _, _ = self.chat.search(self.acct)
+        self.assertEqual([r['handle'] for r in rows], ['work/new', 'work/old'])
