@@ -132,7 +132,7 @@ def _message(acct: google.Account, space: str, mid: str) -> dict:
 
 
 def page(acct: google.Account, space_id: str, *, upto_message: str = '', before: str = '',
-         as_of: datetime | None = None) -> tuple[list[dict], str]:
+         as_of: datetime | None = None, me_id: str = '') -> tuple[list[dict], str]:
     """Newest page, oldest first; keep equal-time groups whole for the exclusive cursor."""
     sid = _id(space_id)
     for mid in (upto_message, before):
@@ -167,7 +167,7 @@ def page(acct: google.Account, space_id: str, *, upto_message: str = '', before:
                     rows.append(msg)
                     continue
                 return list(reversed(rows)), _id(rows[-1]['name'].rsplit('/', 1)[1], message=True)
-            if rows and len(_lines(list(reversed(rows + [msg])), '')) > PAGE_CHARS - HEAD_MAX - FOOT_MAX:
+            if rows and len(_lines(list(reversed(rows + [msg])), me_id)) > PAGE_CHARS - HEAD_MAX - FOOT_MAX:
                 # An exclusive cursor must leave a timestamp group entirely on one page.
                 group_start = len(rows)
                 while group_start and rows[group_start - 1]['createTime'] == msg['createTime']:

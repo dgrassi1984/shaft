@@ -184,6 +184,25 @@ class ChatTest(unittest.TestCase):
             before = older
         self.assertEqual(seen, [m['name'] for m in self.fake.messages])
 
+    def test_page_budgets_operator_sender_label(self):
+        alias, sid = 'a' * 31, 's' * 100
+        handle = f'{alias}/{sid}'
+        self.fake.spaces = [{'name': f'spaces/{sid}'}]
+        self.fake.messages = [dict(message(str(i) * 100, i),
+                                   name=f'spaces/{sid}/messages/{str(i) * 100}',
+                                   sender={'name': f'users/{i}', 'displayName': 'A'},
+                                   text='x' * (2669 + i))
+                              for i in (1, 2)]
+        # An earlier message makes the first page use the maximum-length older footer.
+        self.fake.messages.insert(0, dict(message('0' * 100),
+                                         name=f'spaces/{sid}/messages/{"0" * 100}'))
+        for me_id in ('users/2', 'users/neither'):
+            with self.subTest(me_id=me_id):
+                msgs, older = self.chat.page(self.acct, sid, me_id=me_id)
+                rendered = self.chat.render(handle, 'C' * 80, msgs, me_id, 'O' * 40, older)
+                self.assertLessEqual(len(rendered), self.chat.PAGE_CHARS)
+                self.assertEqual(len(msgs), 1 if me_id == 'users/2' else 2)
+
     def test_render_bounds_marking_inputs(self):
         rendered = self.chat.render('work/room', 'C' * 81, [], '', 'O' * 41, '')
         self.assertTrue(rendered.startswith(
