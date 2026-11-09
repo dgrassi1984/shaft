@@ -30,11 +30,12 @@ instance when the window ends only if the instance has not read it by then.
 
 State, per instance and grant, in .supervisor/watch/<instance>/ (the cursor, the last error) — written atomically, and
 only after the message is in the inbox: a crash in between repeats a line, never loses one. Chat's cursor is a mark per
-conversation (the createTime of the last message reported, or the lastActiveTime seen), with the account's address and
-the operator's own Chat user. A new grant, a grant re-enabled after `off`, an expired cursor (Gmail 404, Calendar 410)
-and a Chat alias logged in as another address start from now, with one log line and no flood of old items; a Chat
-conversation first seen after that is new, and reported from its first message. An API error is logged once (again
-only when it changes), never stops the pass, and never stops another grant or instance.
+conversation (the createTime of the last message reported, or the lastActiveTime seen), with the account's address,
+the operator's own Chat user and when the pass began. A new grant, a grant re-enabled after `off`, an expired cursor
+(Gmail 404, Calendar 410) and a Chat alias logged in as another address start from now, with one log line and no flood
+of old items; a Chat conversation first seen after that (a new DM, a space joined) is read back only to when the
+previous pass began (ruling R17), never through its whole history. An API error is logged once (again only when it
+changes), never stops the pass, and never stops another grant or instance.
 """
 from __future__ import annotations
 
@@ -44,7 +45,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -165,7 +166,7 @@ def _account(alias: str, scopes: tuple[str, ...], secrets: dict):
 
 
 # -- one grant: its changes since the cursor, and the cursor after them ----------------------------------------------
-def _mail(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[dict], dict]:
+def _mail(name: str, g: dict, acct, st: dict, labels: dict, now: datetime) -> tuple[list[dict], dict]:
     from . import mail
     alias, where = g["account"], _where("mail", g)
     if alias not in labels:
@@ -197,7 +198,7 @@ def _mail(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[dict],
     return rows, {**base, "history_id": history_id}
 
 
-def _calendar(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[dict], dict]:
+def _calendar(name: str, g: dict, acct, st: dict, labels: dict, now: datetime) -> tuple[list[dict], dict]:
     from . import calendar as gcal
     alias, cal, where = g["account"], g["calendar"], _where("calendar", g)
     base = {"account": alias, "calendar": cal}
@@ -227,27 +228,35 @@ def _calendar(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[di
     return rows, {**base, "sync_token": token}
 
 
-def _gchat(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[dict], dict]:
+def _gchat(name: str, g: dict, acct, st: dict, labels: dict, now: datetime) -> tuple[list[dict], dict]:
     """New messages in every conversation of the granted account, oldest first. The state after them:
-    {account, address, me (the operator's own Chat user), marks: {spaceId: the last createTime reported, or the
-    lastActiveTime seen}}."""
+    {account, address, me (the operator's own Chat user), since (when this pass began, UTC), marks: {spaceId: the
+    last createTime reported, or the lastActiveTime seen}}. Times are compared with gchat.time_key, every fraction
+    digit kept."""
     from . import gchat
     alias, address = g["account"], acct.address
+    since = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")   # before spaces.list, so nothing falls between
     found = [(s["name"].removeprefix("spaces/"), s) for s in gchat.spaces(acct)
              if gchat.SPACE_RE.fullmatch(str(s.get("name") or "").removeprefix("spaces/"))]
-    base = {"account": alias, "address": address}
+    base = {"account": alias, "address": address, "since": since}
     marks = st.get("marks")
     if not isinstance(marks, dict) or st.get("address") != address:   # a new grant, or the alias on another account
         core.log(f"watch: {name} gchat {alias}: watching from now")
         # A conversation with no activity yet gets no mark: its first message, when it comes, is news.
         return [], {**base, "me": "", "marks": {sid: s["lastActiveTime"] for sid, s in found if s.get("lastActiveTime")}}
     me_id, marks, rows, names = str(st.get("me") or ""), dict(marks), [], {}
+    before = str(st.get("since") or "")  # when the previous successful pass began
     for sid, s in found:
         mark, last = marks.get(sid), s.get("lastActiveTime")
-        if mark and (not last or gchat.when(last) <= gchat.when(mark)):
+        # R17: a conversation first seen now (a new DM, or a space the operator joined with years of history) is read
+        # back only to the previous pass; a new DM's first message is after it, so it still shows.
+        floor = mark or before
+        if floor and (not last or gchat.time_key(last) <= gchat.time_key(floor)):
+            if last and not mark:
+                marks[sid] = last         # first seen, nothing since the previous pass: seen from now on
             continue                      # nothing since the mark: no messages.list
         try:
-            msgs = gchat.newer(acct, sid, mark or "")   # no mark: a conversation first seen now, from its first message
+            msgs = gchat.newer(acct, sid, floor)
         except gchat.NotVisible:          # left or deleted since spaces.list: the next pass no longer lists it
             continue
         if msgs:
@@ -263,18 +272,18 @@ def _gchat(name: str, g: dict, acct, st: dict, labels: dict) -> tuple[list[dict]
                 text = text[:CHAT_TEXT_CHARS - 1] + "…"
             rows.append({"handle": f"{alias}/{sid}/{mid}", "conversation": conversation, "own": own, "text": text,
                          "sender": "you" if own else who.get("displayName") or who.get("name") or "unknown sender",
-                         "at": gchat.when(m["createTime"]),
+                         "at": gchat.time_key(m["createTime"]),
                          "line": gchat._lines([{**m, "text": text}], me_id)})   # the line gchat_read shows for it
         # The newest of the mark, the activity seen and the last message: an edit moves lastActiveTime but not
         # createTime, and must not have the conversation listed again on every pass.
         seen = [t for t in (mark, last, msgs[-1]["createTime"] if msgs else "") if t]
         if seen:                          # an empty conversation with no activity keeps no mark: still new
-            marks[sid] = max(seen, key=gchat.when)
+            marks[sid] = max(seen, key=gchat.time_key)
     rows.sort(key=lambda r: r["at"])
     return rows, {**base, "me": me_id, "marks": marks}
 
 
-def _changes(name: str, kind: str, secrets: dict) -> tuple[list[dict], list]:
+def _changes(name: str, kind: str, secrets: dict, now: datetime) -> tuple[list[dict], list]:
     """(rows, the cursor saves to make once the rows are delivered) over every grant of `kind`. A grant whose call
     fails is logged when its error is new and skipped; the others go on."""
     from . import google
@@ -284,7 +293,7 @@ def _changes(name: str, kind: str, secrets: dict) -> tuple[list[dict], list]:
         path, where = _dir(name) / f"{_key(kind, g)}.json", _where(kind, g)
         st = _load(path)
         try:
-            got, new = _KIND[kind].read(name, g, _account(g["account"], scopes, secrets), st, labels)
+            got, new = _KIND[kind].read(name, g, _account(g["account"], scopes, secrets), st, labels, now)
         except Exception as e:   # Google, the network, a malformed answer: this grant, this pass
             err = f"{type(e).__name__}: {e}"[:500]
             if st.get("error") != err:
@@ -336,7 +345,7 @@ def _chat_body(name: str, rows: list[dict]) -> list[str]:
 
 class _Kind(NamedTuple):
     scopes: tuple[str, ...]           # the google.py scope constants the account's login must have granted
-    read: Callable                    # (name, grant, account, state, per-pass cache) -> (rows, state after them)
+    read: Callable                    # (name, grant, account, state, per-pass cache, pass time) -> (rows, state after)
     grants: Callable[[str], list]     # the instance's grants of this kind, read again every pass
     shown: Callable[[dict], str]      # the grant's part of its name in the operator's log, after the account
     what: Callable[[dict], str]       # the grant's part of its state file's key, after the account
@@ -409,7 +418,7 @@ def _one(name: str, modes: dict[str, str], now: datetime, secrets: dict) -> None
         for kind in KINDS:
             if modes[kind] == "off":
                 continue
-            rows, commits = _changes(name, kind, secrets)
+            rows, commits = _changes(name, kind, secrets, now)
             if rows:
                 file = _deliver(name, kind, rows, modes[kind], now)
                 # D9: the operator's own Chat messages are listed, never a reason to wake (nor kept for a later wake).

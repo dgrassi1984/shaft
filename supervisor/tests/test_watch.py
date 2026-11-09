@@ -775,7 +775,7 @@ class ChatWatchTest(WatchCase):
         self.run_pass(0)
         [state] = (self.sup / "watch" / "wren").glob("gchat-*.json")
         before = json.loads(state.read_text())
-        self.assertEqual(set(before), {"account", "address", "me", "marks"})
+        self.assertEqual(set(before), {"account", "address", "me", "since", "marks"})
         self.post("AAA", "must not be lost")
         with mock.patch.object(watch, "_deliver", side_effect=OSError("disk full")):
             self.run_pass(1)
@@ -858,6 +858,39 @@ class ChatWatchTest(WatchCase):
         self.config(WATCH_GCHAT="inbox")
         self.run_pass(2)
         self.assertEqual(self.inbox(), [])
+
+    def test_watch_unseen_space_read_back_only_to_the_previous_pass(self):
+        """Guards R17 (F2): a conversation first seen after the first pass is read back only to the previous pass —
+        joining a space with 300 old messages reports the 2 written since, from one page — and one with no activity
+        since then is not listed at all. A new DM's first message is after the previous pass, so it still shows."""
+        self.space("AAA", title="A")
+        self.config(WATCH_GCHAT="inbox")
+        self.run_pass(0)
+        self.space("OLD", title="Archive")
+        old = CHAT0 - timedelta(days=400)
+        self.chat.messages += [{"name": f"spaces/OLD/messages/o{i}", "createTime": (old + timedelta(seconds=i)).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"), "sender": {"name": "users/other"}, "text": f"old {i:03d}"} for i in range(300)]
+        self.post("OLD", "new one")
+        self.post("OLD", "new two")
+        quiet = self.space("QUIET", title="Quiet")
+        quiet["lastActiveTime"] = (old + timedelta(seconds=999)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self.chat.requests.clear()
+        self.run_pass(1)
+        [msg] = self.inbox()
+        self.assertIn("2 message(s) in 1 conversation(s).", msg)
+        self.assertIn("new one", msg)
+        self.assertIn("new two", msg)
+        self.assertNotIn("old ", msg)
+        self.assertEqual(self.listed(), ["spaces/OLD/messages"])       # one page, and nothing asked of QUIET
+        self.run_pass(2)                                               # both now have a mark: nothing again
+        self.assertEqual(len(self.inbox()), 1)
+
+    def test_set_config_names_watch_gchat(self):
+        """Guards F3: the instance learns WATCH_GCHAT where it learns WATCH_MAIL and WATCH_CALENDAR."""
+        from supervisor import broker
+        text = broker.SPECS["set_config"]["function"]["description"]
+        self.assertIn("WATCH_GCHAT", text)
+        self.assertIn("Google Chat", text)
 
     def test_mail_and_calendar_watch_unchanged(self):
         """Guards the per-kind table: the mail and calendar messages stay byte for byte what they were before Chat

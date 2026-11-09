@@ -257,6 +257,23 @@ class ChatTest(unittest.TestCase):
         self.fake.members.append({'member': {'name': 'users/third', 'displayName': 'Third Person'}})
         self.assertEqual(self.chat.conversation_name(self.acct, self.fake.spaces[0], {}, 'users/me'), 'Other, Third')
 
+    def test_newer_keeps_every_fraction_digit(self):
+        """Guards F1: datetime.fromisoformat keeps six fraction digits, so ...123456100Z and ...123456900Z read as one
+        time and the strictly newer message was taken for the mark itself and skipped."""
+        self.fake.page_size = 100
+        self.fake.messages = [dict(message('old'), createTime='2026-11-01T00:00:00.123456100Z'),
+                              dict(message('new'), createTime='2026-11-01T00:00:00.123456900Z')]
+        got = self.chat.newer(self.acct, 'room', '2026-11-01T00:00:00.123456100Z')
+        self.assertEqual([m['text'] for m in got], ['new'])
+        got = self.chat.newer(self.acct, 'room', '2026-11-01T00:00:00.123456Z')   # a 6-digit mark, 9-digit messages
+        self.assertEqual([m['text'] for m in got], ['old', 'new'])
+        key = self.chat.time_key
+        self.assertLess(key('2026-11-01T00:00:00Z'), key('2026-11-01T00:00:00.000000001Z'))
+        self.assertLess(key('2026-11-01T00:00:00.9Z'), key('2026-11-01T00:00:01Z'))   # as text, `.9Z` > `01Z` is wrong too
+        self.assertEqual(key('2026-11-01T01:00:00.5+01:00'), key('2026-11-01T00:00:00.500000000Z'))
+        with self.assertRaises(ValueError):
+            key('yesterday')
+
     def test_page_hides_after_as_of(self):
         self.fake.messages = [message('old', 1), message('at', 2), message('new', 3)]
         cut = datetime(2026, 11, 1, 0, 2, tzinfo=timezone.utc)
