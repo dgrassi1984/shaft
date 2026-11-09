@@ -117,14 +117,15 @@ preceding content delta contains `[error: …]`. The stream ends with
 `data: [DONE]`. After streaming starts, errors stay in the HTTP 200 stream.
 
 Only the reply's last step is its `content`: text written before a tool call is narration and arrives as
-`reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. A `voice`
+`reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. Text of a model
+call cut off at its token limit is dropped when the call is asked again (`retry`), as the instance drops it. A `voice`
 request's stream is the same stream with extra chunks in between: each has an empty delta and a top-level
 `shaft_event` (a typed request never gets one).
 
 | `shaft_event.type` | Fields | Sent |
 |---|---|---|
 | `draft` | `text` | each piece of text the model writes, as it arrives, before the step is known to be the answer |
-| `step_end` | `answer` (bool) | after a step's drafts: `true` when that text is the answer (its whole text then comes as `content`), `false` when the step went on to call a tool (narration) |
+| `step_end` | `answer` (bool) | after a step's drafts: `true` when that text is the answer (its whole text then comes as `content`), `false` when the step went on to call a tool (narration) or the model call was cut off at its token limit and asked again (that text is discarded) |
 | `status` | `phase`, `detail` | each status of the reply, the wait for a running cycle included |
 | `tool_start` | `name` | a tool call started |
 | `tool_end` | `name`, `ok` (bool) | it finished |

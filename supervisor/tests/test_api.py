@@ -237,6 +237,27 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(content, "(no answer: the reply stopped after 30 steps — steps)")
         self.assertNotIn("Let me check", content)                           # the narration is not passed off as one
 
+    CUT_THEN_ASKED_AGAIN = [{"type": "ready", "name": "wren"}, {"type": "content", "text": "Teal is a dark cy"},
+                            {"type": "retry", "old": 16384, "new": 32768},
+                            {"type": "content", "text": "Teal is "}, {"type": "content", "text": "blue-green."},
+                            {"type": "turn_end", "steps": 1, "ended_by": "answer"}]
+
+    def test_a_reply_cut_off_and_asked_again_answers_with_the_second_call_only(self):
+        """Bug guarded (found 2026-11-09 for PLAN-voice): llm._answer discards a call cut off at max_tokens and asks
+        again, and the agent records only the second call's text; the API kept the cut call's text in the step, so
+        the operator got "Teal is a dark cyTeal is blue-green." while the instance's record said "Teal is blue-green."."""
+        for stream in (False, True):
+            with self.subTest(stream=stream), mock.patch(f"{__name__}.EVENTS", self.CUT_THEN_ASKED_AGAIN):
+                with self.req("/chat/completions", {"model": "wren", "stream": stream,
+                                                     "messages": [{"role": "user", "content": "teal?"}]}) as r:
+                    raw = r.read().decode()
+                if stream:
+                    chunks = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
+                    text = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+                else:
+                    text = json.loads(raw)["choices"][0]["message"]["content"]
+                self.assertEqual(text, "Teal is blue-green.")
+
     def test_thelos_error_overwrite_2026_10_28(self):
         message = "talk: reply cut off at max_tokens=16384 twice (completion_tokens=16384); nothing saved"
 

@@ -111,6 +111,17 @@ class VoiceApiTest(unittest.TestCase):
         got = self.chat(cut, voice=True)
         self.assertEqual(got[-4:-2], [event(type="step_end", answer=True), [{"content": "It is sunny."}, None, {}]])
 
+    def test_drafts_of_a_call_cut_off_and_asked_again_are_closed_as_not_the_answer(self):
+        """Bug guarded: the drafts of a model call cut off at max_tokens (discarded by llm._answer) left open, so the
+        app took them for the start of the answer the second call then wrote again."""
+        got = self.chat(base.ApiTest.CUT_THEN_ASKED_AGAIN, voice=True)
+        self.assertEqual(got[1:7], [event(type="draft", text="Teal is a dark cy"), event(type="step_end", answer=False),
+                                    [{"reasoning_content": "reply cut off at 16384 tokens — asking again with 32768\n"},
+                                     None, {}],
+                                    event(type="draft", text="Teal is "), event(type="draft", text="blue-green."),
+                                    event(type="step_end", answer=True)])
+        self.assertEqual(got[7], [{"content": "Teal is blue-green."}, None, {}])
+
     def test_a_spoken_interjection_is_marked_for_the_agent_and_the_reply_scoring(self):
         """Bug guarded: a spoken interjection recorded as typed (C1.3), so its talk episode and the reply-prediction
         judge treated recognition errors as the operator's words."""

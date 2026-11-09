@@ -635,6 +635,9 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 if t in ("tool_start", "tool_end"):
                     tools_ran = True
+                if t == "retry" and step:       # a call cut off at max_tokens is discarded and asked again (llm._answer):
+                    event(type="step_end", answer=False)   # its text was never the answer, nor in the agent's record
+                    step = []
                 if t == "tool_start" and step:           # that step called tools: its text was narration
                     event(type="step_end", answer=False)
                     said = "".join(step).strip()
