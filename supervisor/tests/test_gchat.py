@@ -1271,9 +1271,9 @@ class ChatBrokerTest(MailCase):
         text = log.read_text()
         for leaked in ('IGNORE', 'SECRET-PHRASE', 'someone@work.example'):
             self.assertNotIn(leaked, text)
-        self.assertIn('gchat_download args=attachment,id id=work/room/m1 -> ERROR Refused', text)
+        self.assertIn('gchat_download args=attachment,id id_chars=12 -> ERROR Refused', text)
         self.assertIn('gchat_search args=from,text text_chars=13 -> ok', text)
-        self.assertIn('gchat_read args=id -> ERROR NotVisible', text)
+        self.assertIn('gchat_read args=id id_chars=24 -> ERROR NotVisible', text)
 
     def test_replay_search_recheck_outage_fails_not_empty(self):
         # F3: a cached search drops a row only when its conversation is not visible or not granted; an outage fails.
@@ -1296,3 +1296,38 @@ class ChatBrokerTest(MailCase):
         self.assertNotIn('work/side/s1', out)
         self.assertIn('work/room/m2', out)
         self.assertIn('work/room/m1', out)
+
+    # -- fix round 2 ---------------------------------------------------------------------------------------------
+    def test_write_failure_quotes_no_path_or_name(self):
+        # F1: the destination path holds the sender's file name; an OSError writing it names neither.
+        self.hostile()
+        path = str(self.root / 'gchat/work/room' / ('m1-' + self.HOSTILE))
+        with mock.patch.object(self.core, 'safe_write_bytes', side_effect=IsADirectoryError(21, 'Is a directory', path)):
+            err = self.refused(self.broker(), 'gchat_download', {'id': self.msg, 'attachment': '1'})
+        self.assertEqual(err, 'RuntimeError: could not write the download (IsADirectoryError)')
+        log = (self.sup / 'broker.log').read_text()
+        for leaked in ('IGNORE', 'gchat/work/room/m1-'):
+            self.assertNotIn(leaked, err)
+            self.assertNotIn(leaked, log)
+
+    def test_log_quotes_only_known_names_and_accepted_handles(self):
+        # F2 (ruling R15): unknown argument names are counted, not quoted; a handle is quoted only once the call
+        # succeeded (granted, and Google accepted it), else only its length.
+        log = self.sup / 'broker.log'
+        cache = {}
+        for b in (self.broker(), self.replay(cache), self.replay(cache)):
+            with self.subTest(broker=type(b).__name__):
+                before = log.read_text() if log.exists() else ''
+                self.assertIn('bad arguments', self.refused(b, 'gchat_search', {'SECRET-PHRASE': ''}))
+                self.refused(b, 'gchat_read', {'id': 'work/room/SECRET-PHRASE'})
+                self.refused(b, 'gchat_read', {'id': self.conv, 'before': 'work/room/SECRET-PHRASE'})
+                self.refused(b, 'gchat_download', {'id': 'work/room/SECRET-PHRASE', 'attachment': '1'})
+                self.refused(b, 'gchat_search', {'conversation': 'work/SECRET-PHRASE'})
+                self.ok(b, 'gchat_read', {'id': self.msg})
+                added = log.read_text()[len(before):]
+                self.assertNotIn('SECRET-PHRASE', added)
+                self.assertIn('gchat_search args= unknown_args=1 -> ERROR TypeError', added)
+                self.assertIn('gchat_read args=id id_chars=23 -> ERROR Gone', added)
+                self.assertIn('gchat_read args=before,id id_chars=9 before_chars=23 -> ERROR Gone', added)
+                self.assertIn(f'gchat_read args=id id={self.msg} -> ok', added)
+                self.assertIn(f'gchat_read {self.msg} Project room', added)

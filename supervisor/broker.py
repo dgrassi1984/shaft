@@ -532,14 +532,24 @@ class ChatMarked(Exception):
         self.kind = kind
 
 
-def _gchat_brief(args: dict) -> str:
-    """What broker.log keeps of a Chat call's arguments: their names, the handles, and a search text's length. Never a
-    value that could carry Chat's words (a copied message, a file name, a sender) or the instance's search for them."""
+_GCHAT_HANDLE_ARGS = {"gchat_search": ("conversation",), "gchat_read": ("id", "before"), "gchat_download": ("id",)}
+
+
+def _gchat_brief(tool: str, args: dict, ok: bool) -> str:
+    """What broker.log keeps of a Chat call's arguments (ruling R15): the names its spec defines (any other name is only
+    counted), a handle only once the call succeeded (granted, and Google accepted it; else only its length), and a
+    search text's length. Never a value that could carry Chat's words (a copied message, a file name, a sender) or the
+    instance's search for them."""
     from . import gchat
-    handles = [f"{k}={v.strip()}" for k in ("id", "before", "conversation")
-               if isinstance(v := args.get(k), str) and gchat.is_handle(v.strip())]
-    text = [f"text_chars={len(str(args['text']))}"] if "text" in args else []
-    return " ".join([f"args={','.join(sorted(map(str, args)))}", *handles, *text])
+    known = SPECS[tool]["function"]["parameters"]["properties"]
+    unknown = sum(k not in known for k in args)
+    parts = [f"args={','.join(sorted(k for k in args if k in known))}"] + ([f"unknown_args={unknown}"] if unknown else [])
+    for k in _GCHAT_HANDLE_ARGS[tool]:
+        if (value := str(args.get(k) or "").strip()):
+            parts.append(f"{k}={value}" if ok and gchat.is_handle(value) else f"{k}_chars={len(value)}")
+    if "text" in args:
+        parts.append(f"text_chars={len(str(args['text']))}")
+    return " ".join(parts)
 
 
 def _integer(value) -> int | None:
@@ -1281,7 +1291,7 @@ class Broker:
         brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
         if tool in GCHAT_TOOLS:   # its arguments and errors can quote Chat: names, handles and the error's class only
-            brief, status = _gchat_brief(args), "ok" if result["ok"] else f"ERROR {failure}"
+            brief, status = _gchat_brief(tool, args, result["ok"]), "ok" if result["ok"] else f"ERROR {failure}"
         action = self._current_action
         classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
         self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
@@ -2785,11 +2795,15 @@ class Broker:
         return gchat.marking(", ".join(found["searched"]), self._operator()) + "\n".join(out)
 
     def _gchat_read(self, id: str, before: str = "", offset: int = 0) -> str:   # noqa: A002
-        return self._gchat_reader(id, before, offset)[1]()
+        _, page, logged = self._gchat_reader(id, before, offset)
+        shown = page()
+        self._log(logged)
+        return shown
 
     def _gchat_reader(self, id, before, offset):   # noqa: A002
-        """(the read's key, how to make its page). The grant and the conversation are checked, and the read logged,
-        here: before any page is made, and before a trial's shared answer is given."""
+        """(the read's key, how to make its page, its log line). The grant and the conversation are checked here: before
+        any page is made, and before a trial's shared answer is given. The caller logs the line once the page was made:
+        a handle is logged only when Google accepted it (ruling R15)."""
         from . import gchat
         alias, sid, mid = self._gchat_handle(id)
         offset = _integer(offset)
@@ -2806,7 +2820,6 @@ class Broker:
                 raise ValueError(f"before must be a message handle in {alias}/{sid}")
         acct, me_id, conversation = self._gchat_conversation(alias, sid)
         handle = "/".join(p for p in (alias, sid, mid) if p)
-        self._log(f"{self.name} gchat_read {handle} {conversation}")
         operator = self._operator()
 
         def page() -> str:
@@ -2818,18 +2831,17 @@ class Broker:
                 return gchat.render(handle, conversation, target, me_id, operator,
                                     mid if len(msgs) > 1 or older else "", offset)
             return gchat.render(handle, conversation, msgs, me_id, operator, older)
-        return [handle, before_mid, offset], page
+        return [handle, before_mid, offset], page, f"{self.name} gchat_read {handle} {conversation}"
 
     def _gchat_fetcher(self, id, attachment):   # noqa: A002
         """(the download's key, how to fetch the file, (alias, space, message, conversation)). The grant, the
-        conversation and the message are checked, and the download logged, here: before any byte is fetched or shared."""
+        conversation and the message are checked here: before any byte is fetched or shared."""
         from . import gchat
         alias, sid, mid = self._gchat_handle(id)
         if not mid:
             raise ValueError("id must be a message handle (account/conversation/message)")
         acct, _, conversation = self._gchat_conversation(alias, sid)
         handle = f"{alias}/{sid}/{mid}"
-        self._log(f"{self.name} gchat_download {handle} {conversation}")
         msg = gchat.get_message(acct, sid, mid, self.as_of)
         which = str(attachment) if type(attachment) is int else attachment
 
@@ -2866,8 +2878,12 @@ class Broker:
                 raise ValueError(f"this file is {size_text(len(data))}; with the {size_text(self.gchat_bytes)} downloaded "
                                  f"this run that is more than {size_text(GCHAT_RUN_BYTES)} per run")
             self._gchat_granted(alias)
-            core.safe_write_bytes(self._root(), rel, data)
+            try:
+                core.safe_write_bytes(self._root(), rel, data)
+            except (OSError, core.UnsafePath) as e:   # its text would quote the path: the sender's file name
+                raise RuntimeError(f"could not write the download ({type(e).__name__})") from None
             self.gchat_bytes += len(data)
+        self._log(f"{self.name} gchat_download {alias}/{sid}/{mid} {conversation}")   # once saved (ruling R15)
         # The path holds the sender's file name: the result is marked like a page.
         return (gchat.marking(conversation, self._operator())
                 + f"saved {rel} ({size_text(len(data))}, {mime}): an attachment of {alias}/{sid}/{mid}. Read it with "
@@ -3407,8 +3423,10 @@ class ReplayBroker(Broker):
         return {**found, "searched": searched, "rows": rows}
 
     def _gchat_read(self, id: str, before: str = "", offset: int = 0) -> str:   # noqa: A002
-        key, page = self._gchat_reader(id, before, offset)   # even a cached page: granted and visible now
-        return self._shared(["gchat_read", self.gchat_grants(), *key, self.as_of], page)
+        key, page, logged = self._gchat_reader(id, before, offset)   # even a cached page: granted and visible now
+        shown = self._shared(["gchat_read", self.gchat_grants(), *key, self.as_of], page)
+        self._log(logged)
+        return shown
 
     def _gchat_fetch(self, id, attachment):   # noqa: A002 — a real read; written into the copy only
         key, fetch, where = self._gchat_fetcher(id, attachment)   # even a cached file: granted and visible now
