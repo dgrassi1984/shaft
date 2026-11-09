@@ -73,8 +73,9 @@ def _save(b: dict) -> None:
 
 
 def create(name: str, arms: list[str], episodes: list[str], judge: str = DEFAULT_JUDGE,
-           bid: str = "", project: Path = PROJECT) -> dict:
-    """A new bake-off, or the saved one with this id (to resume: its arms, states and judge are kept)."""
+           bid: str = "", project: Path = PROJECT, drawn: dict | None = None) -> dict:
+    """A new bake-off, or the saved one with this id (to resume: its arms, states and judge are kept). `drawn` is the
+    draw() the episodes came from: its window and the kinds' counts are kept for the report."""
     from .opconfig import effort_choices
     if bid and path(name, bid).exists():
         b = json.loads(path(name, bid).read_text())
@@ -102,12 +103,100 @@ def create(name: str, arms: list[str], episodes: list[str], judge: str = DEFAULT
         st = trial.state_of(project, name, eps[ts], starts)
         if not st:
             raise BakeoffError(f"cannot find when the cycle that ended {ts} started")
-        states.append({**st, "arms": {}, "outcomes": {}})
+        states.append({**st, "stratum": stratum(eps[ts]), "arms": {}, "outcomes": {}})
     code_rev = trial._git(project, "rev-parse", trial.branch(name)).stdout.strip()   # every arm, every resume
     b = {"id": bid, "name": name, "created": datetime.now().isoformat(timespec="seconds"), "judge": judge,
-         "code_rev": code_rev, "arms": parsed, "states": states}
+         "code_rev": code_rev, "arms": parsed, "states": states,
+         **({"drawn": {k: v for k, v in drawn.items() if k != "episodes"}} if drawn else {})}
     _save(b)
     return b
+
+
+# -- drawing a fresh set of cycles ---------------------------------------------------------------------------
+# Kinds of live cycle, so a set holds each kind the instance runs and its result can be read per kind. A cycle the
+# operator asked for; one that wrote or sent something; one that only looked (read, searched, checked). In the 10-28
+# sets 4% of cycles only looked; on 11-08, 74% did (review 2026-11-08). By the names of the tools a cycle called: a
+# heuristic, the same for every arm.
+STRATA = ("operator", "writes", "check")
+_WRITES = re.compile(r"write|append|send|deliver|record|remember|commit|settle|update|create|delete|edit|post|notify|"
+                     r"reply|task_queue")
+LOOP_PATHS = ("shaft", "config.env")   # the instance's loop and its configuration: not its plugins, which it grows
+MIN_PER_KIND = 4
+
+
+def stratum(ep: dict) -> str:
+    if (ep.get("intent") or {}).get("origin") == "operator":
+        return "operator"
+    return "writes" if any(_WRITES.search(str(t.get("tool") or "")) for t in ep.get("tools") or []) else "check"
+
+
+def last_loop_change(name: str, project: Path = PROJECT) -> str:
+    """When the instance's loop or configuration last changed on its branch (ISO time), or ''."""
+    return trial._git(project, "log", "-1", "--first-parent", "--format=%cI", trial.branch(name), "--",
+                      *LOOP_PATHS, check=False).stdout.strip()
+
+
+def _paused(name: str) -> list[datetime]:
+    """When a live cycle of `name` was paused for a conversation (supervisor.log): a replay cannot pause the same way."""
+    path, mark, out = SUP_DIR / "supervisor.log", f"] {name}: live paused", []
+    if path.exists():
+        with path.open(errors="replace") as f:
+            for line in f:
+                if mark in line and line.startswith("["):
+                    out.append(datetime.strptime(line[1:20], "%Y-%m-%d %H:%M:%S"))
+    return out
+
+
+def eligible(name: str, since: str, until: str = "", project: Path = PROJECT) -> list[dict]:
+    """The live cycles a replay can start from as they began, ended after `since` (and by `until`): a known start,
+    ended by the loop's own control, no pause for a conversation, every inbox message still in the mind store."""
+    from . import mind
+    starts, pauses = trial._starts(name), _paused(name)
+    lo, hi = datetime.fromisoformat(since).replace(tzinfo=None), datetime.fromisoformat(until).replace(tzinfo=None) \
+        if until else datetime.max
+    out = []
+    for ep in sorted(trial.live_episodes(INSTANCES / name), key=lambda e: e["ts"]):
+        end = datetime.fromisoformat(ep["ts"]).replace(tzinfo=None)
+        if not lo < end <= hi or ep.get("ended_by") != "control":
+            continue
+        t0 = trial.start_time(name, ep, starts)
+        if not t0 or any(t0 <= p <= end for p in pauses):
+            continue
+        if any("/" in m or m.startswith(".") or mind.show(name, "mind", f"memory/messages/{m}", project) is None
+               for m in ep.get("inbox") or []):
+            continue
+        out.append(ep)
+    return out
+
+
+def _spaced(items: list, k: int) -> list:
+    """`k` of `items`, evenly spaced, the first and last included."""
+    if k >= len(items):
+        return list(items)
+    if k == 1:
+        return [items[len(items) // 2]]
+    return [items[round(j * (len(items) - 1) / (k - 1))] for j in range(k)]
+
+
+def draw(name: str, n: int, since: str = "", until: str = "", project: Path = PROJECT) -> dict:
+    """A fresh set of `n` cycles from the eligible ones after `since` (default: the loop's last change): at least
+    MIN_PER_KIND of each kind there is, the rest by each kind's share, evenly spaced in time within a kind.
+    Returns {since, until, population: {kind: eligible count}, episodes: [ts]}."""
+    since = since or last_loop_change(name, project)
+    if not since:
+        raise BakeoffError(f"no change to {name}'s loop found: give --since")
+    pool = eligible(name, since, until, project)
+    by = {k: [e for e in pool if stratum(e) == k] for k in STRATA}
+    if len(pool) < n:
+        raise BakeoffError(f"{len(pool)} eligible live cycles of {name} after {since}, fewer than {n}: give an "
+                           f"earlier --since or a smaller --draw")
+    take = {k: min(len(v), MIN_PER_KIND, n // max(1, sum(bool(v) for v in by.values()))) for k, v in by.items()}
+    while sum(take.values()) < n:   # the rest by share: each seat to the kind furthest below its share
+        k = max((k for k in STRATA if take[k] < len(by[k])), key=lambda k: len(by[k]) / len(pool) * n - take[k])
+        take[k] += 1
+    chosen = sorted(e["ts"] for k in STRATA for e in _spaced(by[k], take[k]))
+    return {"since": since, "until": until or pool[-1]["ts"], "population": {k: len(v) for k, v in by.items()},
+            "episodes": chosen}
 
 
 def _arm_record(rec: dict) -> dict:
@@ -120,9 +209,12 @@ def _replay_state(project: Path, b: dict, i: int, lock: threading.Lock, arm_para
     """One state on every arm: the baseline first (its web answers fill the cache), then the candidates,
     `arm_parallel` at a time, reading the same cache."""
     st = b["states"][i]
-    if len(st["arms"]) == len(b["arms"]):
+    failed = [label for label, rec in st["arms"].items() if trial.infra_failure(rec)]
+    if len(st["arms"]) == len(b["arms"]) and not failed:
         return
-    if st["arms"]:   # cut off part-way: the arms done had web answers the rest could no longer share
+    if st["arms"]:   # cut off part-way, or an arm failed on its provider: the arms done had web answers the rest
+        if failed:   # could no longer share, so the state is replayed in full
+            log(f"bakeoff {b['id']} s{i}: replaying again, {', '.join(failed)} failed on the provider")
         with lock:
             st["arms"], st["outcomes"] = {}, {}
             _save(b)
@@ -168,8 +260,9 @@ def _judge_state(project: Path, b: dict, i: int, lock: threading.Lock) -> None:
             context = context or trial.state_context(project, b["name"], st)
             for order, (first, second) in (("AB", (A, B)), ("BA", (B, A))):
                 purpose = f"bakeoff {b['name']} {b['id']} s{i} {label} {order}"
-                try:
-                    judgments.append(trial.judge_pair(context, first, second, purpose, model=b["judge"]))
+                try:   # blinded as the subagents' cases are: the API judge saw model names until 2026-11-08
+                    judgments.append(trial.judge_pair(context, first, second, purpose, model=b["judge"],
+                                                      redact=_redactor(b)))
                 except Exception as e:   # judge.JudgeError or a network failure: the state is reported unjudged
                     log(f"bakeoff {b['id']} s{i} {label} {order}: judge failed: {e}")
                     judgments.append(None)
@@ -246,15 +339,40 @@ fence) to the output file named in your task:
 {case}"""
 
 
+def mapping_path(out: Path) -> Path:
+    """Where the key of the cases exported to `out` is kept: under the supervisor's folder, never beside the cases. In
+    `out` it told any judge that listed the folder which run was which (review 2026-11-08)."""
+    return DIR / "exports" / f"{hashlib.sha256(str(out.resolve()).encode()).hexdigest()[:16]}.json"
+
+
+def _mapping(out: Path) -> dict:
+    """The key of `out`'s cases; one written beside them by an older export moves to mapping_path(out)."""
+    key, legacy = mapping_path(out), out / "mapping.json"
+    mapping = json.loads(key.read_text()) if key.exists() else {}
+    if legacy.exists():
+        mapping = {**json.loads(legacy.read_text()), **mapping}
+        _write_mapping(out, mapping)
+        legacy.unlink()
+    return mapping
+
+
+def _write_mapping(out: Path, mapping: dict) -> None:
+    key = mapping_path(out)
+    key.parent.mkdir(parents=True, exist_ok=True)
+    tmp = key.with_suffix(".tmp")
+    tmp.write_text(json.dumps({**mapping}, indent=1))
+    tmp.replace(key)
+
+
 def export_cases(b: dict, out: Path, project: Path = PROJECT) -> list[str]:
     """Every judgeable pair of `b` in both orders as blind cases out/cases/<id>.md (random ids, model names redacted,
-    the order hidden), recorded in out/mapping.json (id -> instance, bake-off, state, arm, order, runs). Pairs already
+    the order hidden), recorded in mapping_path(out) (id -> instance, bake-off, state, arm, order, runs). Pairs already
     exported on the same runs are kept; several bake-offs can share `out`. Returns, shuffled (their order would tell
     AB from BA), the current cases still without a valid verdict in out/verdicts/."""
-    cases, verdicts, mapping_path = out / "cases", out / "verdicts", out / "mapping.json"
+    cases, verdicts = out / "cases", out / "verdicts"
     cases.mkdir(parents=True, exist_ok=True)
     verdicts.mkdir(exist_ok=True)
-    mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
+    mapping = _mapping(out)
     current = []
     redact, rng, base = _redactor(b), random.SystemRandom(), b["arms"][0]["label"]
     schema = json.dumps(trial.JUDGE_SCHEMA, indent=1)
@@ -281,7 +399,7 @@ def export_cases(b: dict, out: Path, project: Path = PROJECT) -> list[str]:
                 mapping[cid] = {"name": b["name"], "bid": b["id"], "state": i, "arm": label, "order": order,
                                 "runs": runs, "chars": len(text)}
                 current.append(cid)
-    mapping_path.write_text(json.dumps(mapping, indent=1))
+    _write_mapping(out, mapping)
     todo = [c for c in current if verdict(out, c) is None]
     rng.shuffle(todo)
     return todo
@@ -310,7 +428,7 @@ def import_verdicts(b: dict, out: Path, judge: str = "claude-opus-5-5") -> list[
     judged_by = judge + SUBAGENT
     if b["judge"] != judged_by and any(j for s in b["states"] for o in s["outcomes"].values() for j in o["judgments"]):
         raise BakeoffError(f"bake-off {b['id']} was judged by {b['judge']}: verdicts of {judged_by} would mix judges")
-    mapping = json.loads((out / "mapping.json").read_text())
+    mapping = _mapping(out)
     b["judge"] = judged_by
     base, bad = b["arms"][0]["label"], []
     for i, st in enumerate(b["states"]):
@@ -328,45 +446,102 @@ def import_verdicts(b: dict, out: Path, judge: str = "claude-opus-5-5") -> list[
     return bad
 
 
+def _outcome(b: dict, st: dict, label: str) -> str | None:
+    """The pair's outcome by today's rules (trial.decide on its stored judgments): a record saved before splits and
+    provider failures were told apart reads the same as a new one."""
+    base, o = b["arms"][0]["label"], st["outcomes"].get(label)
+    if not o:
+        return None
+    if base not in st["arms"] or label not in st["arms"]:
+        return o["outcome"]
+    return trial.decide({"A": st["arms"][base], "B": st["arms"][label]}, o["judgments"])[0]
+
+
+def _claims(b: dict, label: str) -> tuple[int, int, list[float]]:
+    """The judge's claim_supported calls on `label`'s runs: (supported, calls, each run's supported share). A baseline
+    run is judged once per candidate and order, so the pooled share weighs it many times; the per-run shares do not."""
+    base, supported, seen, per_run = b["arms"][0]["label"], 0, 0, []
+    for s in b["states"]:
+        calls = []
+        for cand, o in s["outcomes"].items():
+            if label not in (base, cand):
+                continue
+            for j, first in zip(o["judgments"], (base, cand)):
+                if j:
+                    calls.append(bool((j["first"] if first == label else j["second"]).get("claim_supported")))
+        supported, seen = supported + sum(calls), seen + len(calls)
+        if calls:
+            per_run.append(sum(calls) / len(calls))
+    return supported, seen, per_run
+
+
 def report(b: dict) -> str:
-    """Each arm's cost, completion and supported claims; each candidate's verdict against the baseline."""
+    """Each arm's cost, completion and supported claims; each candidate's verdict against the baseline, with ties
+    (both orders said so), splits (the orders disagreed) and the outcomes no judge decided shown apart; per stratum
+    when the cycles were drawn by kind."""
     base = b["arms"][0]["label"]
     lines = [f"bake-off {b['id']} on {b['name']}: {len(b['states'])} past cycles, judge {b['judge']}, "
-             f"baseline {base}", "",
-             "| arm | replayed | completed | $/cycle | tokens in/out per cycle | claim supported (judge) |",
-             "|---|---|---|---|---|---|"]
+             f"baseline {base}, instance code {b.get('code_rev', '')[:10]}", "",
+             "| arm | replayed | completed | failed on provider | $/cycle | s/cycle | tokens in/out per cycle "
+             "| claim supported (judge calls) | per run |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for arm in b["arms"]:
         label = arm["label"]
         recs = [s["arms"][label] for s in b["states"] if label in s["arms"]]
         done = [r for r in recs if r["completed"]]
-        supported, seen = 0, 0
-        for s in b["states"]:   # the judge grades both runs of each judged pair: count this arm's side
-            for cand, o in s["outcomes"].items():
-                if label not in (base, cand):
-                    continue
-                for j, first in zip(o["judgments"], (base, cand)):
-                    if j:
-                        side = j["first"] if first == label else j["second"]
-                        seen += 1
-                        supported += bool(side.get("claim_supported"))
+        supported, seen, per_run = _claims(b, label)
         n = len(recs) or 1
         tin = sum((r["usage"] or {}).get("prompt_tokens", 0) for r in recs) / n
         tout = sum((r["usage"] or {}).get("completion_tokens", 0) for r in recs) / n
-        lines.append(f"| {label} | {len(recs)} | {len(done)} | {sum(r['usd'] for r in recs) / n:.4f} | "
-                     f"{tin:,.0f} / {tout:,.0f} | {f'{supported}/{seen}' if seen else '—'} |")
-    lines += ["", "| candidate vs baseline | wins | losses | ties | unjudged | verdict | p |", "|---|---|---|---|---|---|---|"]
+        lines.append(f"| {label} | {len(recs)} | {len(done)} | {sum(bool(trial.infra_failure(r)) for r in recs)} | "
+                     f"{sum(r['usd'] for r in recs) / n:.4f} | {sum(r['seconds'] or 0 for r in recs) / n:.0f} | "
+                     f"{tin:,.0f} / {tout:,.0f} | {f'{supported}/{seen}' if seen else '—'} | "
+                     f"{f'{sum(per_run) / len(per_run):.0%} of {len(per_run)}' if per_run else '—'} |")
+    lines += ["", "T: both orders found the runs equal. S: the two orders disagreed. Neither counts in the sign test. "
+              "No judge: wins and losses settled because one run did not complete.", "",
+              "| candidate vs baseline | wins | losses | ties | splits | unjudged | no judge | verdict | p |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for arm in b["arms"][1:]:
-        outcomes = [s["outcomes"][arm["label"]]["outcome"] for s in b["states"] if arm["label"] in s["outcomes"]]
-        v = trial.verdict(outcomes)
-        lines.append(f"| {arm['label']} | {v['W']} | {v['L']} | {v['T']} | {v['unjudged']} | {v['label']} | {v['p']} |")
+        label = arm["label"]
+        states = [s for s in b["states"] if label in s["outcomes"]]
+        v = trial.verdict([_outcome(b, s, label) for s in states])
+        auto = sum(_outcome(b, s, label) in ("win", "loss") and not any(s["outcomes"][label]["judgments"])
+                   for s in states)
+        lines.append(f"| {label} | {v['W']} | {v['L']} | {v['T']} | {v['S']} | {v['unjudged']} | {auto} | "
+                     f"{v['label']} | {v['p']} |")
+    lines += _strata_lines(b)
     judge_usd = sum(o["judge_usd"] for s in b["states"] for o in s["outcomes"].values())
     replay_usd = sum(r["usd"] for s in b["states"] for r in s["arms"].values())
     lines += ["", f"spent: replays ${replay_usd:.2f}, judging ${judge_usd:.2f}", "",
-              "Per cycle, each candidate against the baseline (W win · L loss · T tie · ? unjudged · – not replayed):", "",
+              "Per cycle, each candidate against the baseline (W win · L loss · T tie · S split · ? unjudged · "
+              "– not replayed):", "",
               "| cycle (episode ts) | " + " | ".join(a["label"] for a in b["arms"][1:]) + " |",
               "|---|" + "---|" * (len(b["arms"]) - 1)]
-    mark = {"win": "W", "loss": "L", "tie": "T", "unjudged": "?"}
+    mark = {"win": "W", "loss": "L", "tie": "T", "split": "S", "unjudged": "?", None: "–"}
     for s in b["states"]:
-        lines.append(f"| {s['ts']} | " + " | ".join(mark[s["outcomes"][a["label"]]["outcome"]]
-                                                   if a["label"] in s["outcomes"] else "–" for a in b["arms"][1:]) + " |")
+        kind = f" ({s['stratum']})" if b.get("drawn") and s.get("stratum") else ""
+        lines.append(f"| {s['ts']}{kind} | " + " | ".join(mark[_outcome(b, s, a["label"])] for a in b["arms"][1:]) + " |")
     return "\n".join(lines)
+
+
+def _strata_lines(b: dict) -> list[str]:
+    """W–L–T–S per kind of cycle, and the net wins per cycle reweighted to the kinds' share of the instance's cycles
+    when they were drawn: a set that over-samples a rare kind would otherwise speak for it."""
+    if not b.get("drawn"):   # a set chosen by hand: its kinds were not balanced, so no table
+        return []
+    kinds = [k for k in STRATA if any(s.get("stratum") == k for s in b["states"])]
+    population = b["drawn"].get("population") or {}
+    total = sum(population.get(k, 0) for k in kinds)
+    head = " | ".join(f"{k} ({population.get(k, 0)} of {total})" if total else k for k in kinds)
+    lines = ["", "Per kind of cycle (W–L–T–S; in brackets the kind's count among the cycles the set was drawn from):",
+             "", f"| candidate | {head} | net per cycle, reweighted |", "|---|" + "---|" * (len(kinds) + 1)]
+    for arm in b["arms"][1:]:
+        label, cells, net = arm["label"], [], 0.0
+        for k in kinds:
+            o = [_outcome(b, s, label) for s in b["states"] if s.get("stratum") == k and label in s["outcomes"]]
+            cells.append(f"{o.count('win')}–{o.count('loss')}–{o.count('tie')}–{o.count('split')}")
+            judged = [x for x in o if x != "unjudged"]
+            if judged and total:
+                net += population.get(k, 0) / total * (judged.count("win") - judged.count("loss")) / len(judged)
+        lines.append(f"| {label} | " + " | ".join(cells) + f" | {f'{net:+.2f}' if total else '—'} |")
+    return lines

@@ -436,7 +436,16 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
         parts.append("".join(difflib.unified_diff(old, new, f"a/{rel}" if a is not None else "/dev/null",
                                                   f"b/{rel}" if b is not None else "/dev/null", n=1)))
     text = "".join(parts)
-    return text if len(text) <= limit else text[:limit] + f"\n[... diff cut here: {len(text)} chars in all]"
+    if len(text) <= limit:
+        return text
+    # Over the limit, every changed file keeps a fair share instead of the first files in path order taking it all:
+    # a run that wrote much to memory/ hid its later self/ and shaft/ edits from the judge (review 2026-11-08).
+    share, kept, left = {}, 0, len(parts)
+    for i in sorted(range(len(parts)), key=lambda i: len(parts[i])):
+        share[i] = min(len(parts[i]), (limit - kept) // left)
+        kept, left = kept + share[i], left - 1
+    return "".join(p if share[i] >= len(p) else p[:share[i]] + f"\n[... this file's diff cut here: {len(p)} chars in all]\n"
+                   for i, p in enumerate(parts))
 
 
 # -- one run of one past cycle -----------------------------------------------------------------------------
@@ -675,10 +684,21 @@ def _cap(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + f" [... {len(text) - n} more chars]"
 
 
+# Tags the broker puts on a read the other run had already made: shown to a judge they told which run met the world
+# first, which in a bake-off is always the baseline (390 such tags on candidate runs against 25 on baselines in three
+# bake-offs, review 2026-11-08). The record keeps them; the judge does not see them.
+_CACHE_TAGS = ("same answer as the other run", "the other run's answer, less what is no longer visible")
+
+
+def _shown_tags(call: dict) -> list[str]:
+    return [t for t in call.get("tags") or [] if t not in _CACHE_TAGS]
+
+
 def _run_text(arm: dict) -> str:
     """One run as the judge sees it: the supervisor's own record of its supervisor-tool calls (results as the run
     saw them, up to 6,000 chars with the cut marked), its own log of the other tools (files, memory, plugins), and
-    the file changes the supervisor computed."""
+    the file changes the supervisor computed. Nothing in it says which run met the world first or how long it took
+    (wall-clock seconds told models apart: 34 s to 794 s a cycle)."""
     from .metrics import blind_holds
     if "cycles" in arm:
         parts = []
@@ -690,14 +710,14 @@ def _run_text(arm: dict) -> str:
     ep = arm.get("episode") or {}
     ep = {**ep, "tools": blind_holds(ep.get("tools", []))}   # outcome cards carry earlier verdicts: never to a judge
     seen = {c["tool"] for c in arm.get("trace", [])}
-    trace = "\n\n".join(f"### {i}. {c['tool']}({_cap(c['args'], 2000)})" + (f"  [{'; '.join(c['tags'])}]" if c.get("tags") else "")
+    trace = "\n\n".join(f"### {i}. {c['tool']}({_cap(c['args'], 2000)})"
+                         + (f"  [{'; '.join(tags)}]" if (tags := _shown_tags(c)) else "")
                          + f"\n→ {'' if c['ok'] else 'ERROR '}{c['result']}"
                          for i, c in enumerate(arm.get("trace", []), 1))
     own = "\n\n".join(f"### {i}. {t.get('tool')}({_cap(t.get('args', ''), 2000)})\n→ {_cap(t.get('result', ''), 6000)}"
                        for i, t in enumerate(ep.get("tools", []), 1) if t.get("tool") not in seen)
     how = (f"exit {arm.get('exit')}, {arm.get('ended')}"
-           + (f", ended by {ep.get('ended_by')} after {ep.get('steps')} turns" if ep else ", wrote no cycle record")
-           + f", {arm.get('seconds')} s")
+           + (f", ended by {ep.get('ended_by')} after {ep.get('steps')} turns" if ep else ", wrote no cycle record"))
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), ensure_ascii=False)}\n\n"
             f"## Claimed afterwards\n{json.dumps(ep.get('finish', ep.get('content')), ensure_ascii=False)}\n\n"
             f"## How it ended\n{how}\n\n"
@@ -723,10 +743,14 @@ def state_context(project: Path, name: str, state: dict) -> str:
             f"{_cap(goals, 4000)}\n\n## Its inbox at that moment\n" + ("\n\n".join(inbox) or "(empty)"))
 
 
-def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str | None = None) -> dict:
-    """One judgment of a pair in one order; the judge owns retries."""
+def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str | None = None,
+               redact=None) -> dict:
+    """One judgment of a pair in one order; the judge owns retries. `redact` (text -> text) blinds the case first:
+    a bake-off's model names."""
     from . import judge
     case = judge_case(context, first, second)
+    if redact:
+        case = redact(case)
     out = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, model=model)
     for arm in ("first", "second"):
         judge.normalize_anticipated(out.get(arm))
@@ -748,10 +772,29 @@ def _judge_usd(purpose: str) -> float:
     return usd
 
 
+def infra_failure(rec: dict) -> str:
+    """Why a run failed on its provider rather than on its own work, or ''. Such a run says nothing about the model
+    or the code: a Mercury 3 run cut by HTTP 429 after three retries was scored a loss twice (review 2026-11-08). Only
+    errors the model client logged count, on a run that then died; a refusal the provider returned as an answer is
+    the path's own behaviour and stays a failure of the run (it recurs on the same cycle)."""
+    if str(rec.get("ended") or "").startswith("not replayed"):
+        return str(rec["ended"])
+    for r in [*(rec.get("cycles") or []), *(rec.get("sleeps") or [])] or [rec]:
+        usage = r.get("usage") or {}
+        if not r.get("completed") and r.get("exit") not in (0, None) and (usage.get("errors") or 0) > 0:
+            return f"its model calls failed on the provider ({usage['errors']} of {usage.get('calls')} calls)"
+    return ""
+
+
 def decide(arms: dict, judgments: list[dict | None]) -> tuple[str, str]:
-    """A state's outcome for the proposed change B against A: (win | loss | tie | unjudged, why).
-    judgments[0] has A first, judgments[1] has B first. A run that did not complete its cycle loses to one
-    that did, whatever a judge would say; a state counts only when both orders agree."""
+    """A state's outcome for the proposed change B against A: (win | loss | tie | split | unjudged, why).
+    judgments[0] has A first, judgments[1] has B first. A run that failed on its provider leaves the state unjudged;
+    a run that did not complete its cycle otherwise loses to one that did, whatever a judge would say; a state counts
+    only when both orders agree. Orders that disagree are a split, not a tie: 54 of 63 bake-off "ties" were the judge
+    contradicting itself, mostly by preferring whichever run it read first (review 2026-11-08)."""
+    for side in ("A", "B"):
+        if why := infra_failure(arms[side]):
+            return "unjudged", f"the {'current' if side == 'A' else 'proposed'} version's run {why}"
     a_ok, b_ok = arms["A"]["completed"], arms["B"]["completed"]
     if a_ok and not b_ok:
         return "loss", "the proposed version did not complete its cycle; the current one did"
@@ -767,7 +810,7 @@ def decide(arms: dict, judgments: list[dict | None]) -> tuple[str, str]:
         return "loss", "both orders preferred the current version"
     if picks[0] == picks[1] == "tie":
         return "tie", "both orders found them equally effective"
-    return "tie", "the two orders disagreed"
+    return "split", "the two orders disagreed"
 
 
 def sign_p(k: int, n: int) -> float:
@@ -777,14 +820,15 @@ def sign_p(k: int, n: int) -> float:
 
 def verdict(outcomes: list[str]) -> dict:
     w, l, t = outcomes.count("win"), outcomes.count("loss"), outcomes.count("tie")
-    n = w + l
+    n = w + l   # ties and splits say nothing about direction: the sign test leaves both out
     if w > l and sign_p(w, n) <= ALPHA:
         label, p = "better", sign_p(w, n)
     elif l > w and sign_p(l, n) <= ALPHA:
         label, p = "worse", sign_p(l, n)
     else:
         label, p = "no clear difference", sign_p(max(w, l), n)
-    return {"label": label, "W": w, "L": l, "T": t, "unjudged": outcomes.count("unjudged"), "p": round(p, 4)}
+    return {"label": label, "W": w, "L": l, "T": t, "S": outcomes.count("split"), "unjudged": outcomes.count("unjudged"),
+            "p": round(p, 4)}
 
 
 # -- asking for a trial ---------------------------------------------------------------------------------------
@@ -1272,7 +1316,7 @@ def conclude(project: Path, t: dict) -> None:
     v["models"] = sorted({s["model"] for s in t["states"] if s.get("model")})
     t.update(status="done", verdict=v, finished=datetime.now().isoformat(timespec="seconds"))
     save(t)
-    log(f"{t['instance']}: trial {t['id']} done — {v['label']} (W{v['W']} L{v['L']} T{v['T']}, p={v['p']}, "
+    log(f"{t['instance']}: trial {t['id']} done — {v['label']} (W{v['W']} L{v['L']} T{v['T']} S{v['S']}, p={v['p']}, "
         f"${v['usd']:.2f})")
     deliver(project, t)
 
@@ -1284,9 +1328,10 @@ def report(t: dict) -> str:
         lines += ["Verdict: **not run** — the proposed code failed the test gate, so no cycle was replayed.", "",
                   "```", (t.get("gate") or {}).get("output", "")[-2500:], "```"]
         return "\n".join(lines)
-    n_judged = v.get("W", 0) + v.get("L", 0) + v.get("T", 0)
+    n_judged = v.get("W", 0) + v.get("L", 0) + v.get("T", 0) + v.get("S", 0)
+    split = f", and the judge's two readings disagreed on {v['S']}" if v.get("S") else ""
     lines.append(f"Verdict: **{v.get('label')}** — over {n_judged} replayed cycles the proposed change won "
-                 f"{v.get('W')}, lost {v.get('L')}, tied {v.get('T')} (sign test p = {v.get('p')}; 'better' or "
+                 f"{v.get('W')}, lost {v.get('L')}, tied {v.get('T')}{split} (sign test p = {v.get('p')}; 'better' or "
                  f"'worse' needs p ≤ {ALPHA}).")
     if v.get("unjudged"):
         lines.append(f"{v['unjudged']} cycle(s) could not be judged and do not count.")
@@ -1295,7 +1340,8 @@ def report(t: dict) -> str:
         if part:
             o = [s["outcome"] for s in part]
             lines.append(f"- cycles {'you chose' if who == 'you' else 'drawn at random'}: won {o.count('win')}, "
-                         f"lost {o.count('loss')}, tied {o.count('tie')}")
+                         f"lost {o.count('loss')}, tied {o.count('tie')}"
+                         + (f", split {o.count('split')}" if "split" in o else ""))
     models = v.get("models") or []
     own = t["llm"].get("model")
     if any(m != own and m != "local" for m in models) and t["llm"]["local"]:
@@ -1306,7 +1352,7 @@ def report(t: dict) -> str:
     lines += ["", "Per cycle (\"current\" = your code now, \"proposed\" = with the change):"]
     for j, s in enumerate(t["states"], 1):
         res = {"win": "proposed better", "loss": "current better", "tie": "no difference",
-               "unjudged": "not judged"}.get(s.get("outcome"), s["status"])
+               "split": "the judge's two readings disagreed", "unjudged": "not judged"}.get(s.get("outcome"), s["status"])
         reason = _unblind(s.get("judgments") or [])
         lines.append(f"{j}. {s['ts'][:16]} ({'you chose it' if s.get('chosen_by') == 'you' else 'random'}; "
                      f"originally: {s.get('original_goal', '')[:100]}) — **{res}** ({s.get('why', '')}). {_cap(reason, 600)}")

@@ -417,12 +417,74 @@ class VerdictTest(unittest.TestCase):
         j = lambda w: {"winner": w}   # noqa: E731
         self.assertEqual(trial.decide(ok, [j("second"), j("first")])[0], "win")    # B both times
         self.assertEqual(trial.decide(ok, [j("first"), j("second")])[0], "loss")   # A both times
-        self.assertEqual(trial.decide(ok, [j("first"), j("first")])[0], "tie")     # position bias
+        self.assertEqual(trial.decide(ok, [j("first"), j("first")])[0], "split")   # position bias: not a tie
         self.assertEqual(trial.decide(ok, [j("second"), None])[0], "unjudged")
 
     def test_a_run_that_did_not_complete_loses_whatever_the_judge_says(self):
         self.assertEqual(trial.decide({"A": {"completed": True}, "B": {"completed": False}}, [None, None])[0], "loss")
         self.assertEqual(trial.decide({"A": {"completed": False}, "B": {"completed": True}}, [None, None])[0], "win")
+
+
+class BakeoffReviewFixesTest(unittest.TestCase):
+    """Defects the 2026-11-08 review of the bake-offs found in what a judge is shown and how a pair is decided
+    (PLAN-bakeoff-refresh-2026-11-08.md)."""
+    OK = {"completed": True}
+
+    def test_disagreeing_orders_are_a_split_not_a_tie(self):
+        j = lambda w: {"winner": w}   # noqa: E731
+        self.assertEqual(trial.decide({"A": self.OK, "B": self.OK}, [j("tie"), j("tie")])[0], "tie")
+        self.assertEqual(trial.decide({"A": self.OK, "B": self.OK}, [j("second"), j("tie")])[0], "split")
+        v = trial.verdict(["win"] * 4 + ["split"] * 3 + ["tie"])
+        self.assertEqual((v["W"], v["T"], v["S"], v["label"]), (4, 1, 3, "better"))   # splits stay out of the test
+
+    def test_a_run_cut_by_the_provider_leaves_the_pair_unjudged(self):
+        # Mercury 3, 11-05: HTTP 429 after three retries, exit 1, scored a loss twice
+        cut = {"completed": False, "exit": 1, "ended": "ok", "usage": {"calls": 17, "errors": 3}}
+        outcome, why = trial.decide({"A": self.OK, "B": cut}, [None, None])
+        self.assertEqual(outcome, "unjudged")
+        self.assertIn("3 of 17 calls", why)
+        self.assertEqual(trial.decide({"A": cut, "B": self.OK}, [None, None])[0], "unjudged")
+        self.assertEqual(trial.decide({"A": self.OK, "B": {"completed": False, "ended": "not replayed: x"}},
+                                      [None, None])[0], "unjudged")
+        # MiMo, 10-30: the provider's refusal came back as an answer (exit 0, no error): the path's own behaviour
+        refused = {"completed": False, "exit": 0, "ended": "ok", "usage": {"calls": 1, "errors": 0}}
+        self.assertEqual(trial.decide({"A": refused, "B": self.OK}, [None, None])[0], "win")
+        timeout = {"completed": False, "exit": None, "ended": "timeout", "usage": {"calls": 9, "errors": 0}}
+        self.assertEqual(trial.decide({"A": self.OK, "B": timeout}, [None, None])[0], "loss")
+        multi = {"completed": False, "exit": 1, "cycles": [{"completed": True, "exit": 0}, cut], "sleeps": []}
+        self.assertTrue(trial.infra_failure(multi))
+
+    def test_the_judge_is_not_told_which_run_met_the_world_first_nor_how_long_it_took(self):
+        arm = {"exit": 0, "ended": "ok", "seconds": 794.2, "episode": {"intent": {"goal": "g"}, "steps": 3},
+               "trace": [{"tool": "web_search", "args": "q", "ok": True, "result": "r",
+                          "tags": ["same answer as the other run"]},
+                         {"tool": "fetch_page", "args": "u", "ok": True, "result": "r",
+                          "tags": ["the other run's answer, less what is no longer visible"]},
+                         {"tool": "send_message", "args": "m", "ok": True, "result": "r",
+                          "tags": ["simulated: not sent"]}], "diff": ""}
+        text = trial._run_text(arm)
+        self.assertNotIn("other run", text)   # 390 such tags on candidates against 25 on baselines (11-08)
+        self.assertNotIn("794", text)
+        self.assertIn("[simulated: not sent]", text)
+
+    def test_a_long_diff_keeps_every_file_in_view(self):
+        before = {"memory/a.md": b"", "self/goals.md": b"old\n"}
+        after = {"memory/a.md": "x\n".encode() * 20000, "self/goals.md": b"new goal\n"}
+        text = trial.file_diff(before, after, limit=2000)
+        self.assertIn("+new goal", text)   # cut in path order, memory/ took it all and self/ vanished
+        self.assertIn("this file's diff cut here", text)
+        self.assertLess(len(text), 2200)
+        small = trial.file_diff({"a": b"1\n"}, {"a": b"2\n"})
+        self.assertNotIn("cut here", small)
+
+    def test_judge_pair_blinds_the_case_it_sends(self):
+        sent = {}
+        def ask(system, case, schema, **kw):
+            sent["case"] = case
+            return {"winner": "tie", "first": {}, "second": {}}
+        with mock.patch("supervisor.judge.ask", side_effect=ask):
+            trial.judge_pair("ran deepseek", {"diff": ""}, {"diff": ""}, "p", redact=lambda t: t.replace("deepseek", "[model]"))
+        self.assertIn("ran [model]", sent["case"])
 
 
 class RequestTest(Fixture):

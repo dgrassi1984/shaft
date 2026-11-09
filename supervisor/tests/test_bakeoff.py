@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -67,7 +68,7 @@ class BakeoffTest(unittest.TestCase):
 
     def test_candidates_are_judged_in_both_orders_against_the_baseline(self):
         seen = []
-        def judge(context, first, second, purpose, model=None):
+        def judge(context, first, second, purpose, model=None, redact=None):
             seen.append((first["model"], second["model"], purpose.split()[-1], model))
             winner = "second" if first["model"].startswith("openrouter/xiaomi") else "first"   # haiku always wins
             if "deepseek" in first["model"] + second["model"]:
@@ -88,8 +89,8 @@ class BakeoffTest(unittest.TestCase):
         text = bakeoff.report(b)
         self.assertIn("| claude-haiku-5-5@xhigh | 2 | 0 | 0 | 0 |", text)
         # the judge marks the first run's claim supported and the second's not: each arm is counted on its own side
-        self.assertIn("| openrouter/xiaomi/mimo-v2.6-pro | 2 | 2 | 0.0500 | 700,000 / 20,000 | 4/8 |", text)
-        self.assertIn("| claude-haiku-5-5@xhigh | 2 | 2 | 0.0500 | 700,000 / 20,000 | 2/4 |", text)
+        self.assertIn("| openrouter/xiaomi/mimo-v2.6-pro | 2 | 2 | 0 | 0.0500 | 60 | 700,000 / 20,000 | 4/8 | 50% of 2 |", text)
+        self.assertIn("| claude-haiku-5-5@xhigh | 2 | 2 | 0 | 0.0500 | 60 | 700,000 / 20,000 | 2/4 | 50% of 2 |", text)
         self.assertIn("judging $0.80", text)                  # 8 judgments at the mocked $0.10
 
     def test_a_run_that_did_not_complete_loses_without_a_judge_and_resume_skips_done_work(self):
@@ -260,7 +261,7 @@ class SubagentJudgeTest(BakeoffTest):
     def test_export_then_import_decides_each_pair_from_both_orders(self):
         b, out = self.replayed(), self.tmp / "judging"
         todo = bakeoff.export_cases(b, out)
-        mapping = json.loads((out / "mapping.json").read_text())
+        mapping = json.loads(bakeoff.mapping_path(out).read_text())
         self.assertEqual(len(todo), 4)   # 2 cycles × 1 candidate × 2 orders
         self.assertEqual(sorted(m["order"] for m in mapping.values()), ["AB", "AB", "BA", "BA"])
         for cid in todo:
@@ -286,7 +287,7 @@ class SubagentJudgeTest(BakeoffTest):
         self.assertEqual(saved["states"][0]["outcomes"], b["states"][0]["outcomes"])
         self.assertEqual(bakeoff.export_cases(b, out), [])
         rep = bakeoff.report(b)
-        self.assertIn("| openrouter/deepseek/deepseek-v4.1-flash | 2 | 0 | 0 | 0 | ", rep)
+        self.assertIn("| openrouter/deepseek/deepseek-v4.1-flash | 2 | 0 | 0 | 0 | 0 | 0 | ", rep)
         self.assertIn(f"| {EPS[0]['ts']} | W |", rep)
 
     def test_grok_xai_muse_names_do_not_leak_when_arm_is_another_model(self):
@@ -304,7 +305,7 @@ class SubagentJudgeTest(BakeoffTest):
     def test_an_invalid_verdict_leaves_the_pair_unjudged_and_is_named(self):
         b, out = self.replayed(), self.tmp / "judging"
         bakeoff.export_cases(b, out)
-        mapping = json.loads((out / "mapping.json").read_text())
+        mapping = json.loads(bakeoff.mapping_path(out).read_text())
         self.write(out, mapping)
         bad = next(c for c, m in mapping.items() if m["state"] == 0)
         p = out / "verdicts" / f"{bad}.json"
@@ -320,20 +321,20 @@ class SubagentJudgeTest(BakeoffTest):
     def test_a_verdict_on_runs_replayed_since_is_stale_and_the_pair_is_exported_again(self):
         b, out = self.replayed(), self.tmp / "judging"
         bakeoff.export_cases(b, out)
-        self.write(out, json.loads((out / "mapping.json").read_text()))
+        self.write(out, json.loads(bakeoff.mapping_path(out).read_text()))
         st = b["states"][0]   # replayed again after export (a resume replays a state cut off part-way in full)
         st["arms"]["openrouter/deepseek/deepseek-v4.1-flash"] = {**_rec("x"), "usd": 0.07}
         self.assertEqual(bakeoff.import_verdicts(b, out), [])
         self.assertEqual(st["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "unjudged")
         self.assertEqual(b["states"][1]["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "win")
         todo = bakeoff.export_cases(b, out)
-        mapping = json.loads((out / "mapping.json").read_text())
+        mapping = json.loads(bakeoff.mapping_path(out).read_text())
         self.assertEqual(sorted((mapping[c]["state"], mapping[c]["order"]) for c in todo), [(0, "AB"), (0, "BA")])
 
     def test_another_instance_s_bake_off_with_the_same_id_never_shares_cases(self):
         b, out = self.replayed(bid="same"), self.tmp / "judging"
         bakeoff.export_cases(b, out)
-        self.write(out, json.loads((out / "mapping.json").read_text()))
+        self.write(out, json.loads(bakeoff.mapping_path(out).read_text()))
         other = {**json.loads(json.dumps(b)), "name": "wren"}
         self.assertEqual(len(bakeoff.export_cases(other, out)), 4)
         for st in other["states"]:
@@ -364,3 +365,114 @@ class SubagentJudgeTest(BakeoffTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFixesTest(unittest.TestCase):
+    """Defects the 2026-11-08 review found in bake-offs (PLAN-bakeoff-refresh-2026-11-08.md)."""
+    setUp, create = BakeoffTest.setUp, BakeoffTest.create
+    replayed, write = SubagentJudgeTest.replayed, SubagentJudgeTest.write
+
+    def test_the_key_to_the_cases_is_never_beside_them(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        bakeoff.export_cases(b, out)
+        self.assertFalse((out / "mapping.json").exists())   # a judge listing the folder read which run was which
+        self.assertTrue(bakeoff.mapping_path(out).exists())
+        self.assertFalse(str(bakeoff.mapping_path(out)).startswith(str(out)))
+        legacy = json.loads(bakeoff.mapping_path(out).read_text())
+        bakeoff.mapping_path(out).unlink()
+        (out / "mapping.json").write_text(json.dumps(legacy))   # an export from before the fix moves out on use
+        self.write(out, bakeoff._mapping(out))
+        self.assertFalse((out / "mapping.json").exists())
+        self.assertEqual(bakeoff.import_verdicts(b, out), [])
+        self.assertEqual({s["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"] for s in b["states"]},
+                         {"win"})
+
+    def test_a_provider_failure_is_unjudged_and_replayed_again_on_resume(self):
+        calls = []
+        def replay(project, name, st, code, *, model, cache, cache_lock, billed, env):
+            calls.append((st["ts"], model))
+            rec = _rec(model)
+            if model == "openrouter/deepseek/deepseek-v4.1-flash" and len(calls) <= 4:
+                rec.update(completed=False, exit=1, usage={"calls": 17, "errors": 3})   # HTTP 429 (Mercury, 11-05)
+            return rec
+        b = self.create(arms=("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/deepseek/deepseek-v4.1-flash"))
+        with mock.patch.object(trial, "replay_arm", side_effect=replay):
+            bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)
+            self.assertEqual({bakeoff._outcome(b, s, "openrouter/deepseek/deepseek-v4.1-flash") for s in b["states"]
+                              if s["outcomes"]} | {"unjudged"}, {"unjudged"})
+            bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)   # the resume replays both states in full
+        self.assertEqual(len(calls), 8)
+        self.assertTrue(all(r["completed"] for s in b["states"] for r in s["arms"].values()))
+
+    def test_the_api_judge_sees_no_model_name(self):
+        b = self.replayed()
+        seen = []
+        def judge(context, first, second, purpose, model=None, redact=None):
+            seen.append(redact(trial.judge_case(context, first, second)))
+            return VERDICT
+        with mock.patch.object(trial, "judge_pair", side_effect=judge):
+            bakeoff.run(b, parallel=1, project=self.tmp)
+        self.assertEqual(len(seen), 4)
+        for text in seen:   # the run printed its config: LLM_MODEL=<model>
+            self.assertNotIn("deepseek", text.lower())
+            self.assertNotIn("mimo", text.lower())
+
+    def test_report_shows_splits_and_automatic_outcomes_apart_and_reads_old_records_by_todays_rules(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        label = "openrouter/deepseek/deepseek-v4.1-flash"
+        b["states"][0]["outcomes"][label] = {"outcome": "tie", "why": "the two orders disagreed",   # saved before 11-08
+                                             "judgments": [{**VERDICT, "winner": "first"}, {**VERDICT, "winner": "first"}],
+                                             "judge_usd": 0.0}
+        b["states"][1]["arms"][label] = {**_rec(label), "completed": False, "exit": 0}   # did not complete, no error
+        b["states"][1]["outcomes"][label] = {"outcome": "loss", "why": "", "judgments": [None, None], "judge_usd": 0.0}
+        rep = bakeoff.report(b)
+        self.assertIn(f"| {label} | 0 | 1 | 0 | 1 | 0 | 1 | ", rep)   # W L T S unjudged no-judge
+        self.assertIn(f"| {EPS[0]['ts']} | S |", rep)
+        self.assertNotIn("Per kind of cycle", rep)   # a set chosen by hand
+        b["drawn"] = {"since": "x", "until": "y", "population": {"operator": 1, "writes": 1, "check": 8}}
+        rep = bakeoff.report(b)
+        self.assertIn(f"| {EPS[0]['ts']} (check) | S |", rep)
+        self.assertIn(f"| {label} | 0–1–0–1 | -0.50 |", rep)   # a split and a loss: −1 over 2 cycles
+
+
+class DrawTest(unittest.TestCase):
+    """A fresh set of cycles drawn by kind (review 2026-11-08: the 10-28 sets held 4% check-only cycles, 11-08 74%)."""
+
+    def eps(self):
+        out = []
+        for i in range(30):   # 18 check-only, 8 writing, 4 the operator asked for
+            tools = [{"tool": "read_file"}] if i < 18 else [{"tool": "write_file"}]
+            origin = "operator" if i >= 26 else "self"
+            out.append({"kind": "live", "ts": f"2026-11-08T{i // 2:02d}:{(i % 2) * 30:02d}:00", "ended_by": "control",
+                        "intent": {"goal": "g", "origin": origin}, "tools": tools, "inbox": []})
+        out[3]["ended_by"] = "budget"
+        out[5]["inbox"] = ["gone.md"]
+        return out
+
+    def test_draw_holds_every_kind_and_skips_what_cannot_be_replayed_as_it_ran(self):
+        eps = self.eps()
+        with mock.patch.object(trial, "live_episodes", return_value=eps), \
+                mock.patch.object(trial, "_starts", return_value=[]), \
+                mock.patch.object(trial, "start_time", side_effect=lambda n, ep, s: datetime.fromisoformat(ep["ts"])), \
+                mock.patch.object(bakeoff, "_paused", return_value=[datetime(2026, 11, 8, 2, 0)]), \
+                mock.patch("supervisor.mind.show", side_effect=lambda n, r, p, pr: None if p.endswith("gone.md") else "x"):
+            d = bakeoff.draw("thelos", 12, since="2026-11-07T00:00:00")
+            el = {e["ts"] for e in bakeoff.eligible("thelos", "2026-11-07T00:00:00")}
+        for skipped in (eps[3]["ts"], eps[5]["ts"], eps[4]["ts"]):   # budget end, inbox gone, paused at 02:00
+            self.assertNotIn(skipped, el)
+        self.assertEqual(d["population"], {"operator": 4, "writes": 8, "check": 15})
+        kinds = [bakeoff.stratum(next(e for e in eps if e["ts"] == ts)) for ts in d["episodes"]]
+        self.assertEqual(len(d["episodes"]), 12)
+        self.assertEqual({k: kinds.count(k) for k in bakeoff.STRATA}, {"operator": 4, "writes": 4, "check": 4})
+        self.assertEqual(d["episodes"], sorted(d["episodes"]))
+        with self.assertRaises(bakeoff.BakeoffError), \
+                mock.patch.object(bakeoff, "eligible", return_value=eps[:2]):
+            bakeoff.draw("thelos", 12, since="2026-11-07T00:00:00")
+
+    def test_draw_fills_past_the_minimum_by_each_kind_s_share(self):
+        pool = [{"ts": f"t{i:02d}", "intent": {}, "tools": [] if i < 70 else [{"tool": "send_message"}]}
+                for i in range(100)]
+        with mock.patch.object(bakeoff, "eligible", return_value=pool):
+            d = bakeoff.draw("thelos", 24, since="x")
+        kinds = [bakeoff.stratum(next(e for e in pool if e["ts"] == ts)) for ts in d["episodes"]]
+        self.assertEqual((kinds.count("check"), kinds.count("writes")), (17, 7))   # 70/30 of 24, at least 4 each

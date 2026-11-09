@@ -1012,7 +1012,15 @@ def cmd_trial(args) -> int:
         from . import bakeoff
         instance_root(args.name)
         try:
-            b = bakeoff.create(args.name, args.arm, args.episodes, judge=args.judge, bid=args.id)
+            drawn = bakeoff.draw(args.name, args.draw, args.since, args.until) if args.draw else None
+            if drawn and not args.arm:   # the set only: to look at before spending
+                print(f"{len(drawn['episodes'])} cycles of {args.name} ended after {drawn['since']} and by "
+                      f"{drawn['until']}; eligible by kind: "
+                      + ", ".join(f"{k} {c}" for k, c in drawn["population"].items()))
+                print(" ".join(drawn["episodes"]))
+                return 0
+            b = bakeoff.create(args.name, args.arm, drawn["episodes"] if drawn else args.episodes, judge=args.judge,
+                               bid=args.id, drawn=drawn)
         except bakeoff.BakeoffError as e:
             print(f"refused: {e}", file=sys.stderr)
             return 1
@@ -1545,6 +1553,12 @@ def main(argv: list[str]) -> int:
     q.add_argument("--arm", action="append", default=[], metavar="MODEL[@EFFORT]",
                    help="an instance model, optionally with LLM_REASONING_EFFORT; the first is the baseline")
     q.add_argument("--episodes", nargs="*", default=[], help="the past live cycles (episode ts)")
+    q.add_argument("--draw", type=int, default=0, metavar="N",
+                   help="instead of --episodes: N eligible live cycles drawn by kind (operator-asked, writing, "
+                        "checking only) after --since; without --arm it prints the set and runs nothing")
+    q.add_argument("--since", default="", help="with --draw: cycles that ended after this time (default: the "
+                                               "instance's loop or configuration last changed)")
+    q.add_argument("--until", default="", help="with --draw: cycles that ended by this time (default: now)")
     q.add_argument("--judge", default="claude-sonnet-5-5")
     q.add_argument("--id", default="", help="a bake-off's id: resume it (its arms and cycles are kept)")
     q.add_argument("--parallel", type=int, default=3, help="past cycles replayed at once")
