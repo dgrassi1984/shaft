@@ -533,6 +533,24 @@ class ChatMarked(Exception):
         self.kind = kind
 
 
+# What the instance's tool runner puts before an error it is given (`ERROR: BrokerError: `), with room to spare.
+GCHAT_ERROR_ROOM = 100
+
+
+def _gchat_capped(result: dict) -> dict:
+    """Ruling R23, the one choke point for the Chat tools' output: a result is cut at gchat.PAGE_CHARS, an error at
+    PAGE_CHARS less GCHAT_ERROR_ROOM, at its end, ending `[cut at 6,000 characters]`. Past 6,000 characters the
+    instance's tool runner saves the rest to a file read back with read_file, without the sender marking; cut at the
+    end, a marking line stays first."""
+    from . import gchat
+    key = "result" if result["ok"] else "error"
+    text, limit = str(result[key]), gchat.PAGE_CHARS - (0 if result["ok"] else GCHAT_ERROR_ROOM)
+    if len(text) <= limit:
+        return result
+    cut = f"\n[cut at {gchat.PAGE_CHARS:,} characters]"
+    return {**result, key: text[:limit - len(cut)] + cut}
+
+
 _GCHAT_HANDLE_ARGS = {"gchat_search": ("conversation",), "gchat_read": ("id", "before"), "gchat_download": ("id",)}
 
 
@@ -1290,6 +1308,8 @@ class Broker:
             self.drive_opened.add(thread)
         if tool == "gchat_read" and result["ok"]:
             self.gchat_opened.add(conversation)
+        if tool in GCHAT_TOOLS:
+            result = _gchat_capped(result)
         shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
         brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"

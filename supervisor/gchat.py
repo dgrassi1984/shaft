@@ -55,10 +55,9 @@ def attachment(acct: google.Account, message: dict, which: str) -> tuple[str, st
     if selected is None:
         available = ', '.join(f'{i}: {item.get("contentName") or "unnamed"}'
                               for i, item in enumerate(attachments, 1)) or 'none'
-        # The argument is quoted cut short: a long one would push the sender's file names past the marked first part
-        # of the refusal (ruling R19).
-        asked = which[:80] + '…' if isinstance(which, str) and len(which) > 80 else which
-        raise Refused(f'unknown attachment {asked!r}; available attachments: {available}')
+        # The argument, of any type, is quoted cut short: a long one would push the sender's file names past the
+        # marked first part of the refusal (rulings R19, R23).
+        raise Refused(f'unknown attachment {repr(which)[:80]}; available attachments: {available}')
     if selected.get('driveDataRef'):
         raise Refused('this is a Drive file; use drive_read / drive_download with a Drive grant')
     resource = (selected.get('attachmentDataRef') or {}).get('resourceName')
@@ -175,7 +174,7 @@ def search(acct: google.Account, *, text: str = '', conversation: str = '', send
     Conversation listings use an offset cursor over current activity, not a snapshot.
     """
     if kind and kind not in KINDS:
-        raise ValueError(f"unknown kind {kind!r}; allowed: {', '.join(KINDS)}")
+        raise ValueError(f"unknown kind {repr(kind)[:80]}; allowed: {', '.join(KINDS)}")
     if sender and not sender.startswith('users/'):
         if not re.fullmatch(r'[^\s/@]+@[^\s/@]+', sender):
             raise ValueError('sender must be users/<id> or an email address; Google matches resource names, not display names')
