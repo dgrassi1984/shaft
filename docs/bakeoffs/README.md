@@ -51,6 +51,18 @@ The cycle sets come from the private instance after its goals-cap change. Privat
 - **R12**: 12 of R40, evenly spaced. For screening: a filter, not a verdict.
 - **F**: 12 failure-heavy cycles (8 the judge marked partial, 4 rated value 4). Leans to cycles that went wrong, by
   design.
+- **N24** (2026-11-09): 24 cycles drawn by kind with `--draw 24 --since 2026-11-07T09:46:56 --until 2026-11-09T09:00:17`
+  from the 102 eligible after the last change to the instance's live loop: 4 operator-asked, 5 writing, 15 check-only
+  (of 16, 22 and 64 eligible). The sets above come from 10-28 to 10-30 and hold 4% check-only cycles, against 74% of
+  the instance's cycles on 11-08: use N24, or a newer draw, to ask about the instance as it is.
+
+### Set N24: results held back
+
+Its replays (one per arm per cycle, every arm on the same code) are kept. Its verdicts are not published: two defects
+in the instrument were found after judging. The replay's system clock and web time services show the replay's time,
+not the cycle's, so a run that checks the date is misled (the agent's own clock is the cycle's). And the judge prompt
+rewards work beyond the cycle's own goal, so a cycle that correctly does little loses to a busy one. Re-judge after
+both are settled; the replays need not be run again except where the clock decided a run.
 
 ### What the models did (thelos's loop, its prompts as of 2026-10-30; the GPT-6.1 rows as of 2026-11-04, the 11-05 models as of 2026-11-05)
 
@@ -86,8 +98,8 @@ source), which favours models that take more steps.
 2. **Baseline:** use the instance's current model unless the operator names another.
 
 3. **Cycle sets.** To compare with the rows above, use R12 (screen) and R40 (confirm): the timestamps are in the
-   reports and `--episodes` takes them. To ask about the instance as it is now, draw a fresh set by the same rule
-   from cycles after the last change to its loop, and name it here.
+   reports and `--episodes` takes them. To ask about the instance as it is now, draw a fresh set with `--draw N`
+   (below) from cycles after the last change to its loop, and name it here.
 4. **Judging path:** blind Opus subagents export and import verdicts through the workflow below.
    Keep judges independent of the candidate family when testing GPT arms.
 
@@ -103,8 +115,9 @@ source), which favours models that take more steps.
 ## Running one
 
 ```bash
-bin/shaft trial models thelos --arm openrouter/deepseek/deepseek-v4.1-flash --arm <candidate>[@effort] \
-  --episodes <ts> … --arm-parallel 3 --replay-only
+bin/shaft trial models thelos --draw 24 [--since <iso>]           # look at a fresh set first: prints it, runs nothing
+bin/shaft trial models thelos --arm codex/gpt-6.1-sol --arm <candidate>[@effort] \
+  --draw 24 --since <iso> --until <last ts printed> --arm-parallel 3 --replay-only   # or --episodes <ts> …
 bin/shaft trial models thelos --id <id> --export-cases <dir>      # blind cases + the list still unjudged
 # one Opus subagent per case: read <dir>/cases/<case>.md, write only the JSON verdict to <dir>/verdicts/<case>.json
 bin/shaft trial models thelos --id <id> --import-verdicts <dir>   # decides each pair, saves, prints the report
@@ -113,7 +126,27 @@ bin/shaft trial models thelos --id <id> --import-verdicts <dir>   # decides each
 - Export redacts every arm's model id, also spelled out ("Claude Haiku 5.5"), and the known model families (one
   DeepSeek run printed its own config). Each order is its own case with a random id, listed shuffled, so neither the
   file nor the list tells which run is the baseline. A pair replayed again since its export is exported again and
-  its old verdicts are ignored; the mapping records the instance, so one directory can serve several.
+  its old verdicts are ignored; the mapping records the instance, so one directory can serve several. The mapping
+  is kept in `.supervisor/bakeoffs/exports/`, never in `<dir>`: beside the cases it told a judge which run was which.
+  An older `<dir>/mapping.json` moves there on the next export or import.
+- What a judge reads (trial._run_text) carries no wall-clock time and no "same answer as the other run" tags: the
+  baseline replays first, so those tags marked every candidate run. The API judge gets the same redaction as the
+  exported cases. Cases exported before this change are stale (`CASE_VERSION`) and are exported again.
+- **Draw** (`--draw N`): live cycles that ended after `--since` (default: the last change to the instance's `shaft/`
+  or `config.env`), ended by the loop's own control, with a known start, no pause for a conversation and every inbox
+  message still in the mind store. Three kinds: the operator asked for it, it wrote or sent something, it only
+  looked (by tool names, a heuristic). Of each kind 4, or all it has (fewer each when the set is too small for every
+  kind to have 4), the rest by each kind's share, evenly spaced in time within a kind. Offsets in `--since`/`--until`
+  are converted to local time, the time episodes carry. The report then adds W–L–T–S per kind and the net reweighted
+  to the kinds' shares.
+- **Outcomes.** W and L need both orders to agree; T is both orders saying tie; S (split) is the orders
+  disagreeing, which until 2026-11-08 was reported as T (54 of 63 old ties). Neither counts in the sign test. A run
+  that died on its provider (its last model call failed, or its output ends on the client's HTTP, connection or
+  stream error, other than a request the provider rejects as invalid — 400, 413, 422 — which it would reject in
+  production too; or it was not replayed) leaves the pair unjudged, and a resume replays that state again in full; a
+  run that otherwise did not complete still loses without a judge, and the report counts those apart ("no judge"). A
+  refusal the provider returns as an answer is the path's own behaviour: it counts. Reports printed again from old
+  records read by these rules.
 - Import refuses a bake-off another judge already judged (one bake-off, one judge). A verdict file that is not
   exactly the schema (one judge wrote text after its JSON) is named for re-judging and the pair stays unjudged: judge
   it again from scratch, never repair it. Re-run export to list what is still missing.
@@ -122,7 +155,9 @@ bin/shaft trial models thelos --id <id> --import-verdicts <dir>   # decides each
 - Use a scratch directory outside the repo for `<dir>`: cases quote the private record.
 - While the delegation guard reroutes general-purpose subagents at a require rule, spawn judges as `Explore` with model `opus`.
   They are read-only and some refuse to write a file: have each return `case <id>` and the JSON as its final reply, then save
-  the replies to `verdicts/` with a script.
+  the replies to `verdicts/` with a script. For hundreds of cases, run them as a Workflow (one judge per case, a schema
+  with the verdict plus `case`, `read_whole` and `chars_read`) and write the verdicts from the run's `journal.jsonl`,
+  dropping any read under 95% of the case: 280 cases took about 35M tokens of the Claude plan.
 - Routing and allowed models can be set for one run in the environment (`SHAFT_OPENROUTER_PROVIDER`, `SHAFT_CLOUD_MODELS`,
   `SHAFT_CODEX_MODELS`): the live settings stay as they are.
 - A dense case can overflow a judge's context, and a judge can skim without saying so. Have each judge report a partial

@@ -23,8 +23,8 @@ scored higher on fewer cycles and are not confirmed. Weighing cost, time and hon
 | 11 | GPT-6.1 Terra (medium, OpenRouter) | equal to DeepSeek | 15–18–6, 1 unjudged, on R40 vs DeepSeek | 78/79 | 40 | 3.19 | 287 | 0.486 |
 | 12 | Haiku 5.5 (xhigh, Anthropic API) | no clear difference | 15–20–5 on R40 vs DeepSeek; 8–4–0 on R12, 3–7–2 on F, vs MiMo | 116/126 | 64 | 2.70 | 150–154 | 0.049–0.053 |
 | 13 | Hunyuan HY3 | equal to MiMo | 4–5–3 on R12 vs MiMo | 22/24 | 12 | 1.06 | 318 | 0.034 |
-| 14 | MiniMax M3.1 Flash | no clear difference | 4–6–2 on R12 vs MiMo | 18/24 | 12 | 0.70 | 211 | 0.039 |
-| 15 | Mercury 3 | no clear difference, p = 0.38 | 4–6–2 on R12 vs DeepSeek | 32/44 | 12 | 0.82 | 247 | 0.022 |
+| 14= | MiniMax M3.1 Flash | no clear difference | 4–6–2 on R12 vs MiMo | 18/24 | 12 | 0.70 | 211 | 0.039 |
+| 14= | Mercury 3 | no clear difference, p = 0.38 | 4–6–2 on R12 vs DeepSeek | 32/44 | 12 | 0.82 | 247 | 0.022 |
 | 16 | Grok 4.7 | no clear difference, p = 0.11 | 3–8–1 on R12 vs DeepSeek | 32/48 | 12 | 1.33 | 400 | 0.575 |
 | 17 | GLM 5.3 | worse, p = 0.05 | 2–8–2 on R12 vs DeepSeek | 28/48 | 12 | 1.05 | 315 | 0.120 |
 | 18 | Step 3.7 Flash | worse | 2–9–1 on R12 vs MiMo | 20/24 | 12 | 0.72 | 217 | 0.048 |

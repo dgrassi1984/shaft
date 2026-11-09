@@ -427,7 +427,7 @@ class VerdictTest(unittest.TestCase):
 
 class BakeoffReviewFixesTest(unittest.TestCase):
     """Defects the 2026-11-08 review of the bake-offs found in what a judge is shown and how a pair is decided
-    (PLAN-bakeoff-refresh-2026-11-08.md)."""
+    (a private review record)."""
     OK = {"completed": True}
 
     def test_disagreeing_orders_are_a_split_not_a_tie(self):

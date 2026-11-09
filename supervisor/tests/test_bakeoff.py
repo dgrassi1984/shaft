@@ -368,7 +368,7 @@ if __name__ == "__main__":
 
 
 class ReviewFixesTest(unittest.TestCase):
-    """Defects the 2026-11-08 review found in bake-offs (PLAN-bakeoff-refresh-2026-11-08.md)."""
+    """Defects the 2026-11-08 review found in bake-offs (a private review record)."""
     setUp, create = BakeoffTest.setUp, BakeoffTest.create
     replayed, write = SubagentJudgeTest.replayed, SubagentJudgeTest.write
 
