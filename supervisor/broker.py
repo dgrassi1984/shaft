@@ -992,6 +992,34 @@ class Broker:
                             with broker._channel_lock:
                                 if broker.channel is None:
                                     broker.channel = planchannel.channel_for(original, broker.name, broker.usage_name, broker._log)
+                            if body.get("stream"):
+                                def channel_lines():
+                                    sent = False
+                                    with contextlib.closing(broker.channel.stream(body)) as lines:
+                                        try:
+                                            for line in lines:
+                                                sent = True
+                                                yield line
+                                            broker._channel_report(model=original)
+                                        except planchannel.ChannelFailure as e:
+                                            if not sent:
+                                                raise
+                                            if not isinstance(e, planchannel.ChannelClosed):
+                                                broker._channel_report(e, original)
+                                            msg = {"error": {"message": e.reason}}
+                                            yield b"data: " + json.dumps(msg).encode() + b"\n"
+                                            yield b"\n"
+
+                                # Prime before HTTP headers so initial failures retain fallback/502 semantics.
+                                lines = channel_lines()
+                                first = next(lines)
+
+                                def primed_lines():
+                                    yield first
+                                    yield from lines
+
+                                with contextlib.closing(lines):
+                                    return self._llm_stream(primed_lines(), original)
                             reply = broker.channel.complete(body)
                             broker._channel_report(model=original)
                         except planchannel.ChannelClosed as e:
