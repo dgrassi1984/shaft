@@ -2,7 +2,7 @@
 
 Two rankings fused (reciprocal rank fusion): BM25 over words, and the meaning of each chunk as a vector from
 SHAFT's local embedding service (SHAFT_EMBED_URL), so a memory written in other words — or in the other
-language — is still found. Vectors are cached per chunk in .tmp/memory-index.json and computed only for new
+language — is still found. Vectors are cached per chunk in .tmp/memory-index.bin and computed only for new
 chunks. Without the service, search is BM25 only. Every search_memory result says which it was (mode). Each hit carries its source
 (journal entry heading, file, or conversation timestamp) so I can cite it.
 """
@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import heapq
+import fcntl
 import json
 import math
 import os
+import operator
 import re
 import sys
+import struct
+import tempfile
 import urllib.request
 from array import array
 from collections import Counter
@@ -32,6 +37,9 @@ STOP = set("the and for that this with you are was have not but from they his he
            "di che il la le lo gli una per con non sono del della".split())
 CHUNK = 900
 INDEX = Path(".tmp") / "memory-index.json"   # derived from my memory; rebuilt if missing
+BINARY_INDEX = INDEX.with_suffix(".bin")
+CORPUS_CACHE = Path(".tmp/memory-corpus")
+_VECTOR_RECORD = struct.Struct("<20sI")  # SHA1 bytes, number of native float32 values
 RRF_K = 60                                    # reciprocal rank fusion constant (the usual 60)
 semantic_error = ""                           # why the last search was words-only, if it was
 mode = ""                                     # how the last search ranked: "words + meaning", "words only: <why>"
@@ -79,7 +87,9 @@ def verdict_rows(root: Path) -> list[dict]:
 class _File:
     revision: tuple
     docs: list[tuple[str, str]]
-    rows: list[dict]
+    rows: list[dict] | None
+    words: tuple
+    fold_rows: list[dict]
 
 
 # One instance per process; changing roots drops the previous instance's derived state.
@@ -90,13 +100,49 @@ _surprise_docs: list[tuple[str, str]] = []
 _surprise_expiry: datetime | None = None
 _vector_root: Path | None = None
 _vector_revision: tuple | None = None
-_encoded: dict[str, str] = {}
+_snapshot: tuple = ()
+_snapshot_docs: list[tuple[str, str]] = []
+_snapshot_expiry: datetime | None = None
+_lexical_docs = None
+_lexical = None
 _decoded: dict[str, array] = {}
+_vector_end = 0
+_vector_records = 0
+_vector_version = 0
+_vector_texts: list[str] = []
+_vector_keys: list[str] = []
+_vector_live: set[str] = set()
+_vector_ordered: list[array] = []
 
 
 def _revision(path: Path) -> tuple:
     stat = path.stat()
-    return path, stat.st_mtime_ns, stat.st_size
+    return path, stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns, stat.st_ino
+
+
+def _atomic_write(path: Path, write) -> tuple:
+    """Readers see one complete generation, including with concurrent writers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + ".", delete=False) as f:
+        temporary = Path(f.name)
+        try:
+            write(f)
+            f.flush()
+            temporary.replace(path)
+            stat = os.fstat(f.fileno())
+            return path, stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns, stat.st_ino
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def _word_index(docs):
+    lengths, postings = [], {}
+    for i, (_, text) in enumerate(docs):
+        tokens = _tokens(text)
+        lengths.append(len(tokens))
+        for word, count in Counter(tokens).items():
+            postings.setdefault(word, []).append((i, count))
+    return lengths, postings
 
 
 def _file_docs(root: Path, path: Path, verdicts: dict, rows: list[dict]) -> list[tuple[str, str]]:
@@ -169,6 +215,7 @@ def _file_docs(root: Path, path: Path, verdicts: dict, rows: list[dict]) -> list
 
 def corpus(root: Path) -> list[tuple[str, str]]:
     global _corpus_root, _surprise_revision, _surprise_docs, _surprise_expiry
+    global _snapshot, _snapshot_docs, _snapshot_expiry, _lexical_docs, _lexical
     root = root.resolve()
     if root != _corpus_root:
         _files.clear()
@@ -180,11 +227,20 @@ def corpus(root: Path) -> list[tuple[str, str]]:
     episodes = sorted((root / "memory" / "episodes").glob("*.jsonl"))
     paths.extend(episodes)
     episode_paths = set(episodes)
-    revisions = {path: _revision(path) for path in paths if path.exists()}
+    revisions = {}
+    for path in paths:
+        try:
+            revisions[path] = _revision(path)
+        except FileNotFoundError:
+            pass
     verdict_path = root / VERDICTS
     verdict_revision = _revision(verdict_path) if verdict_path.exists() else None
     now = clock.now()
     day = now.date()
+    # Include all sources, their order, verdicts and the day. Expiry can happen within a day.
+    snapshot = (str(root), repr((revisions, verdict_revision, day)))
+    if snapshot == _snapshot and (_snapshot_expiry is None or now <= _snapshot_expiry):
+        return _snapshot_docs.copy()
     verdicts = None
     docs = []
     for path, revision in revisions.items():
@@ -193,10 +249,20 @@ def corpus(root: Path) -> list[tuple[str, str]]:
         key = (revision, verdict_revision if is_episode else None,
                day if path.name in ("facts.md", "facts-archive.md") else None)
         cached = _files.get(path)
+        shard = root / CORPUS_CACHE / (hashlib.sha1(str(path.relative_to(root)).encode()).hexdigest() + ".json")
+        if cached is None:
+            try:
+                saved = json.loads(shard.read_text())
+            except (OSError, ValueError):
+                saved = {}
+            if saved.get("revision") == repr(key):
+                cached = _File(key, [tuple(doc) for doc in saved["docs"]], None,
+                               saved["words"], saved["fold_rows"])
+                _files[path] = cached
         if cached is None or cached.revision != key:
             rows = []
             if is_episode:
-                if cached and cached.revision[0] == revision:
+                if cached and cached.rows is not None and cached.revision[0] == revision:
                     rows = cached.rows
                 else:
                     for line in path.read_text(errors="replace").splitlines():
@@ -208,20 +274,34 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                             rows.append(rec)
                 if verdicts is None:
                     verdicts = {row["episode_ts"]: row for row in verdict_rows(root)}
-            cached = _File(key, _file_docs(root, path, verdicts or {}, rows), rows)
+            file_docs = _file_docs(root, path, verdicts or {}, rows)
+            # The surprise fold ignores talk records and never reads tool payloads.
+            fold_rows = [{k: row[k] for k in ("kind", "ts", "intent", "finish", "closed") if k in row}
+                         for row in rows if row.get("kind") in ("live", "sleep")]
+            cached = _File(key, file_docs, rows, _word_index(file_docs), fold_rows)
             _files[path] = cached
+            saved = {"revision": repr(key), "docs": cached.docs,
+                     "words": cached.words, "fold_rows": cached.fold_rows}
+            try:
+                _atomic_write(shard, lambda f: f.write(json.dumps(saved).encode()))
+            except OSError:
+                pass  # A read-only .tmp must not prevent corpus reading.
         docs.extend(cached.docs)
     for path in _files.keys() - revisions.keys():
         del _files[path]
     surprise_revision = (tuple(revisions[p] for p in episodes), day)
     if (surprise_revision != _surprise_revision
             or _surprise_expiry is not None and now > _surprise_expiry):
-        items = surprises.fold([row for p in episodes for row in _files[p].rows], now)
+        items = surprises.fold([row for p in episodes for row in _files[p].fold_rows], now)
         _surprise_docs = [(f"surprise {it['id']} ({it['opened'][:16]})", surprises.text(it)) for it in items.values()]
         _surprise_revision = surprise_revision
         _surprise_expiry = min((it["opened_at"] + timedelta(days=surprises.EXPIRE_DAYS)
                                 for it in items.values() if it["status"] == "open"), default=None)
-    return docs + _surprise_docs
+    _snapshot_docs = docs + _surprise_docs
+    _snapshot, _snapshot_expiry = snapshot, _surprise_expiry
+    _lexical_docs = _snapshot_docs
+    _lexical = [*(_files[p].words for p in revisions), _word_index(_surprise_docs)]
+    return _snapshot_docs.copy()
 
 
 def _bm25(docs: list[tuple[str, str]], query: str) -> list[int]:
@@ -229,20 +309,23 @@ def _bm25(docs: list[tuple[str, str]], query: str) -> list[int]:
     q = _tokens(query)
     if not docs or not q:
         return []
-    toks = [_tokens(text) for _, text in docs]
-    n, avg = len(docs), sum(map(len, toks)) / len(docs) or 1
-    df = Counter(w for t in toks for w in set(t))
+    global _lexical_docs, _lexical
+    if docs is not _lexical_docs and docs != _lexical_docs:
+        _lexical_docs, _lexical = docs, [_word_index(docs)]
+    n, avg = len(docs), sum(sum(lengths) for lengths, _ in _lexical) / len(docs) or 1
     k1, b = 1.5, 0.75
-    scored = []
-    for i, t in enumerate(toks):
-        tf, score = Counter(t), 0.0
-        for w in q:
-            if tf[w]:
-                idf = math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5))
-                score += idf * tf[w] * (k1 + 1) / (tf[w] + k1 * (1 - b + b * len(t) / avg))
-        if score > 0:
-            scored.append((score, i))
-    return [i for _, i in sorted(scored, reverse=True)]
+    scored = {}
+    for w in q:
+        df = sum(len(postings.get(w, ())) for _, postings in _lexical)
+        idf = math.log(1 + (n - df + 0.5) / (df + 0.5))
+        offset = 0
+        for lengths, postings in _lexical:
+            for i, tf in postings.get(w, ()):
+                score = idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * lengths[i] / avg))
+                index = i + offset
+                scored[index] = scored.get(index, 0.0) + score
+            offset += len(lengths)
+    return [i for _, i in sorted(((score, i) for i, score in scored.items() if score > 0), reverse=True)]
 
 
 def _embed(texts: list[str], query: bool) -> list[list[float]]:
@@ -259,39 +342,162 @@ def _embed(texts: list[str], query: bool) -> list[list[float]]:
     return out
 
 
-def _vectors(root: Path, texts: list[str]) -> list[array]:
-    """One vector per text, from the cache or the embedding service (only new texts are sent)."""
-    global _vector_root, _vector_revision, _encoded
-    root = root.resolve()
-    path = root / INDEX
+def _read_vectors(path: Path) -> None:
+    """Read a generation or just its appended records; ignore an incomplete final record."""
+    global _vector_revision, _vector_end, _vector_records, _vector_version
     revision = _revision(path) if path.exists() else None
-    if root != _vector_root or revision != _vector_revision:
-        try:
-            _encoded = json.loads(path.read_text()) if revision else {}
-        except (OSError, ValueError):
-            _encoded = {}
+    if revision == _vector_revision:
+        return
+    incremental = (_vector_version == 2 and revision and _vector_revision
+                   and revision[4] == _vector_revision[4] and revision[2] > _vector_end)
+    if not incremental:
         _decoded.clear()
-        _vector_root, _vector_revision = root, revision
-    keys = [hashlib.sha1(t.encode()).hexdigest() for t in texts]
-    live = set(keys)
-    missing = sorted({k: t for k, t in zip(keys, texts) if k not in _encoded}.items())
-    if missing:
-        for (k, _), v in zip(missing, _embed([t for _, t in missing], query=False)):
-            vec = array("f", v)
-            _encoded[k] = base64.b64encode(vec.tobytes()).decode()
-            _decoded[k] = vec
-    if missing or _encoded.keys() - live:
-        _encoded = {k: v for k, v in _encoded.items() if k in live}
+        _vector_end = _vector_records = _vector_version = 0
+    if revision:
+        with path.open("rb") as f:
+            # Bind the revision to this descriptor, not a concurrently replaced pathname.
+            stat = os.fstat(f.fileno())
+            revision = (path, stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns, stat.st_ino)
+            if incremental and revision[4] != _vector_revision[4]:
+                _decoded.clear()
+                _vector_end = _vector_records = _vector_version = 0
+                incremental = False
+            if incremental:
+                f.seek(_vector_end)
+            else:
+                header = json.loads(f.readline())
+                if header["byteorder"] != sys.byteorder or header["version"] not in (1, 2):
+                    raise ValueError("unsupported memory index format")
+                _vector_version = header["version"]
+                if _vector_version == 1:
+                    for key, size in header["vectors"]:
+                        vec = array("f")
+                        vec.fromfile(f, size)
+                        _decoded[key] = vec
+                    _vector_records = len(_decoded)
+                    _vector_end = f.tell()
+                    _vector_revision = revision
+                    return
+                _vector_end = f.tell()
+            while _vector_end + _VECTOR_RECORD.size <= stat.st_size:
+                record = f.read(_VECTOR_RECORD.size)
+                if len(record) != _VECTOR_RECORD.size:
+                    break
+                raw_key, size = _VECTOR_RECORD.unpack(record)
+                end = _vector_end + _VECTOR_RECORD.size + size * 4
+                if end > stat.st_size:
+                    break
+                payload = f.read(size * 4)
+                if len(payload) != size * 4:
+                    break
+                vec = array("f")
+                vec.frombytes(payload)
+                _decoded[raw_key.hex()] = vec
+                _vector_end = end
+                _vector_records += 1
+    _vector_revision = revision
+
+
+def _load_vectors(path: Path) -> None:
+    global _vector_revision, _vector_end, _vector_records, _vector_version
+    try:
+        _read_vectors(path)
+    except (OSError, ValueError, EOFError, KeyError, TypeError):
+        _decoded.clear()
+        _vector_end = _vector_records = _vector_version = 0
+        _vector_revision = _revision(path) if path.exists() else None
+
+
+def _write_vector(f, key: str, vec: array) -> None:
+    f.write(_VECTOR_RECORD.pack(bytes.fromhex(key), len(vec)))
+    f.write(vec.tobytes())
+
+
+def _vectors(root: Path, texts: list[str]) -> list[array]:
+    """Reuse known vectors; serialize migration, append and compaction with one stable lockfile."""
+    global _vector_root, _vector_revision, _vector_end, _vector_records, _vector_version
+    global _vector_texts, _vector_keys, _vector_live, _vector_ordered
+    root = root.resolve()
+    path, legacy = root / BINARY_INDEX, root / INDEX
+    if root != _vector_root:
+        _decoded.clear()
+        _vector_root, _vector_revision = root, None
+        _vector_end = _vector_records = _vector_version = 0
+        _vector_texts, _vector_keys, _vector_live, _vector_ordered = [], [], set(), []
+    revision = _revision(path) if path.exists() else None
+    if (revision == _vector_revision and _vector_version == 2 and texts == _vector_texts
+            and len(_vector_ordered) == len(texts)):
+        return _vector_ordered.copy()
+    _vector_ordered = []
+    if texts != _vector_texts:
+        _vector_texts = texts.copy()
+        _vector_keys = [hashlib.sha1(t.encode()).hexdigest() for t in texts]
+        _vector_live = set(_vector_keys)
+    _load_vectors(path)
+    missing = _vector_live - _decoded.keys()
+    dead = _vector_records - len(_vector_live & _decoded.keys())
+    if missing or _vector_version != 2 or dead > _vector_records * 0.25 or legacy.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(_encoded))
-        _vector_revision = _revision(path)
-    for k in _decoded.keys() - live:
-        del _decoded[k]
-    for k in live - _decoded.keys():
-        vec = array("f")
-        vec.frombytes(base64.b64decode(_encoded[k]))
-        _decoded[k] = vec
-    return [_decoded[k] for k in keys]
+        # Lock a separate inode: compaction atomically replaces the data file.
+        try:
+            with path.with_suffix(".lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                _load_vectors(path)  # another writer may have supplied the missing keys
+                if _vector_version == 0:
+                    try:
+                        encoded = json.loads(legacy.read_text()) if legacy.exists() else {}
+                    except (OSError, ValueError):
+                        encoded = {}
+                    for key, value in encoded.items():
+                        if key not in _vector_live:
+                            continue
+                        vec = array("f")
+                        vec.frombytes(base64.b64decode(value))
+                        _decoded[key] = vec
+                missing = sorted({k: t for k, t in zip(_vector_keys, texts) if k not in _decoded}.items())
+                added = {k: array("f", v) for (k, _), v in
+                         zip(missing, _embed([t for _, t in missing], query=False))} if missing else {}
+                _decoded.update(added)
+                # A short embedding response must fail before replacing or deleting a cache.
+                _vector_ordered = [_decoded[k] for k in _vector_keys]
+                # Dead keys are retained between compactions, including temporarily removed chunks.
+                dead = _vector_records - len(_vector_live & (_decoded.keys() - added.keys()))
+                if _vector_version != 2 or dead > _vector_records * 0.25:
+                    kept = {k: v for k, v in _decoded.items() if k in _vector_live}
+                    def write(f):
+                        f.write(json.dumps({"version": 2, "byteorder": sys.byteorder}).encode() + b"\n")
+                        for key, vec in kept.items():
+                            _write_vector(f, key, vec)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    _vector_revision = _atomic_write(path, write)
+                    _decoded.clear()
+                    _decoded.update(kept)
+                    _vector_version, _vector_records = 2, len(kept)
+                    _vector_end = _vector_revision[2]
+                elif added or _vector_end != _vector_revision[2]:
+                    with path.open("r+b") as f:
+                        f.truncate(_vector_end)  # discard a crashed writer's incomplete final record
+                        f.seek(_vector_end)
+                        for key, vec in added.items():
+                            _write_vector(f, key, vec)
+                        f.flush()
+                        os.fsync(f.fileno())
+                        stat = os.fstat(f.fileno())
+                        _vector_revision = (path, stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns, stat.st_ino)
+                        _vector_end = stat.st_size
+                        _vector_records += len(added)
+                # Only a complete, flushed new generation permits removing the migration source.
+                legacy.unlink(missing_ok=True)
+        except Exception:
+            # Do not serve vectors from a failed append or replacement on a later retry.
+            _decoded.clear()
+            _vector_ordered = []
+            _vector_revision = None
+            _vector_end = _vector_records = _vector_version = 0
+            raise
+    _vector_ordered = [_decoded[k] for k in _vector_keys]
+    return _vector_ordered.copy()
 
 
 def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> list[int]:
@@ -305,7 +511,21 @@ def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> 
         print(f"memory search: words only — semantic search unavailable ({semantic_error})", file=sys.stderr)
         return []
     semantic_error = ""
-    sims = sorted(((sum(a * b for a, b in zip(qv, v)), i) for i, v in enumerate(vecs)), reverse=True)
+    sims = [(math.sumprod(qv, v) if len(qv) == len(v) else sum(map(operator.mul, qv, v)), i)
+            for i, v in enumerate(vecs)]
+    if 0 < top < len(sims):
+        cutoff = heapq.nlargest(top, sims)[-1][0]
+        sims = [(score, i) for score, i in sims if score >= cutoff - 1e-12]
+    sims.sort(reverse=True)
+    # sumprod keeps extended-precision products. Resolve rounding-level ties with the
+    # original float products so tie-breaking stays identical for unit vectors.
+    close = set()
+    for (left, i), (right, j) in zip(sims, sims[1:]):
+        if abs(left - right) <= 1e-12:
+            close.update((i, j))
+    if close:
+        sims = sorted(((sum(map(operator.mul, qv, vecs[i])) if i in close else score, i)
+                       for score, i in sims), reverse=True)
     return [i for _, i in sims[:top]]
 
 
