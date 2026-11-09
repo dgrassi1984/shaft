@@ -311,12 +311,14 @@ class Interjections:
         new = []
         for line in lines[self.taken:]:
             try:
-                text = str(json.loads(line).get("text") or "").strip()
+                sent = json.loads(line)
+                text = str(sent.get("text") or "").strip()
             except (ValueError, AttributeError):
                 break                                   # still being written: next step
             self.taken += 1
             self.state.append_episode({"kind": "talk", "talk_id": self.talk_id, "role": "user", "content": text,
-                                       "via": self.app, "interjected": True})
+                                       "via": self.app, "interjected": True,
+                                       **({"voice": True} if sent.get("voice") is True else {})})   # spoken
             self.view.heard(text)
             note = f"[{self.cfg.OPERATOR_NAME} sent this while you were still replying]\n\n"
             new.append({"role": "user", "content": images.with_attached(note + text, self.state.root,
@@ -326,8 +328,14 @@ class Interjections:
 
 def answer(cfg, state: State, client: Client, request: dict) -> None:
     """One reply for an OpenAI-compatible client (via the supervisor's API): the client sends the
-    whole conversation each time; I answer as myself and log the new turn."""
+    whole conversation each time; I answer as myself and log the new turn.
+
+    `request["voice"] is True`: the operator spoke the last message and hears the reply read aloud (PLAN-voice C1).
+    The mode gains prompts.VOICE_NOTE, this reply's model calls use VOICE_REASONING_EFFORT when it is set, and both
+    episodes of the turn say `voice`. Anything else is a typed turn, unchanged."""
     reply_started = time.monotonic()
+    voice = request.get("voice") is True
+    spoken = {"voice": True} if voice else {}
     view = JsonView()
     talk_id = str(request.get("talk_id") or uuid.uuid4().hex[:12])
     app = request.get("client") or "an app"
@@ -339,6 +347,8 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
                                    since=since_last_talk(state, cfg.OPERATOR_NAME))
     mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
     mode += prompts.reply_budget(cfg)
+    if voice:
+        mode += prompts.VOICE_NOTE
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
     if app_rules.strip():
@@ -356,25 +366,28 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
                 "tools": len(toolbox.specs())})
     toolbox.reply_started = reply_started
     state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
-                          "via": app})
+                          "via": app, **spoken})
     asked = dialogue[-1]["content"]
     dialogue[-1] = {**dialogue[-1], "content": images.with_attached(asked + memory.recall(
         state.root, asked, shown=system + "\n" + "\n".join(m["content"] for m in dialogue)), state.root,
         listed_in=asked)}   # recall: not this dialogue; images: only those this message lists
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
-    reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view))
+    reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view),
+                     effort=getattr(cfg, "VOICE_REASONING_EFFORT", "") if voice else "")
     if reply is not None:
         archive_read_inbox(state, toolbox.log[log_start:])
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "reply_plan": toolbox.reply_plan,
-                              "via": app, **toolbox.loop_guard.record()})
+                              "via": app, **spoken, **toolbox.loop_guard.record()})
 
 
-def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None):
+def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None, effort: str = ""):
     """Stream one reply, reporting each phase to the view:
-    waiting for the model → reading my memory (prompt %) → thinking → answer / tools."""
+    waiting for the model → reading my memory (prompt %) → thinking → answer / tools.
+    `effort`: this reply's reasoning effort for every model call, in place of the client's (a spoken reply's
+    VOICE_REASONING_EFFORT); "" keeps LLM_REASONING_EFFORT."""
     began = getattr(toolbox, "reply_started", time.monotonic())
     first_logged = len(toolbox.log)
     when = getattr(toolbox, "conversation_when", clock.now())
@@ -457,7 +470,8 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
 
         reply = client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
                               on_content=timed(view.content_chunk), on_reasoning=timed(view.reasoning_chunk),
-                              on_retry=view.retry, on_progress=on_progress, on_tool_text=timed(on_tool_text))
+                              on_retry=view.retry, on_progress=on_progress, on_tool_text=timed(on_tool_text),
+                              **({"reasoning_effort": effort} if effort else {}))
         ended, u = time.monotonic(), reply.usage or {}
         out = u.get("completion_tokens") or 0
         gen_s = ended - first[0] if first else 0.0

@@ -36,6 +36,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "TALK_REPLY_MAX_CALLS": (int, 20),  # refuse plans above these ceilings; 0 disables each ceiling
     "TALK_REPLY_MAX_S": (int, 300),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
+    "VOICE_MODE": (str, "off"),        # on: the app offers voice mode (Talk) for me (docs/plans/PLAN-voice.md)
+    "VOICE_REASONING_EFFORT": (str, ""),   # effort on spoken turns; "" = LLM_REASONING_EFFORT
     "LOOP_GUARD": (str, "on"),         # #103: repeated effects show a note
     "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
@@ -124,7 +126,10 @@ CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
            "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off"),
-           "GOAL_SLATE": ("on", "off"), "FIRST_ERROR": ("on", "off")}
+           "GOAL_SLATE": ("on", "off"), "FIRST_ERROR": ("on", "off"), "VOICE_MODE": ("on", "off")}
+# Spoken turns take the same efforts as any other (an empty value is never checked: it keeps the default, "", which
+# means LLM_REASONING_EFFORT). Not in the literal above: the supervisor reads that literal without importing this file.
+CHOICES["VOICE_REASONING_EFFORT"] = CHOICES["LLM_REASONING_EFFORT"]
 NON_NEGATIVE = ("CONTEXT_CHARS", "INBOX_CHARS", "RESULTS_KEEP_TURNS")   # 0 switches each off; below 0 means nothing
 
 

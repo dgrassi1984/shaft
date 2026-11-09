@@ -421,6 +421,12 @@ API_MODE = (
     "over his private network. Reply in your own voice; keep replies reasonably short unless asked for depth. "
     "Use tools when they help. After the conversation you will write a journal entry about it.{since}" + SELF_CLAIMS + PUSHBACK)
 
+# A spoken turn (PLAN-voice C1): the API marks the request "voice" and talk.answer adds this to the mode. Never a line
+# against tools, read-only work or documents: some models obey such lines literally (gpt-6.1-sol stopped writing).
+VOICE_NOTE = ("\n\nThe operator is talking to you by voice and hears your reply read aloud. Answer first, in short "
+              "spoken sentences, and ask at most one question at a time. Keep tables, code and long material for a "
+              "document, and say that you made it. Use your tools as you normally would.")
+
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 CURIOSITY = ("\n\nThis is a curiosity cycle: take your goal from the selected outward surprise below. "
