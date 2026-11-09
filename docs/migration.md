@@ -1,5 +1,8 @@
 # Moving SHAFT to a new Mac
 
+Paths under `~/Development/shaft` in this guide are examples; use your project path.
+
+
 You cannot recreate a SHAFT setup from GitHub. GitHub holds `main` and `template`.
 Everything that makes your instances what they are exists only in the project
 folder on this Mac, plus one folder in `~/Library`. To move a setup:
@@ -53,6 +56,7 @@ Assistant stay manual (below).
 | Tailnet exposure of the API and web UI | Tailscale's `serve` configuration on the old Mac | **reinstall** with `api on` and `web on` |
 | Terminal client, Bonsai, and fine-tuning environments | `.venv-ui`, `.venv-bonsai`, `.venv-ft` | **recreate** |
 | Local model packs | `.models/` | copy, or download again |
+| Grok CLI | `~/.grok/bin/grok` (`SHAFT_GROK_BIN`) | **install** the CLI if any instance uses a `grok/*` model; its login in `.supervisor/grok-home/` (`SHAFT_GROK_HOME`) is copied with the folder |
 | Codex CLI | `/Applications/ChatGPT.app` (`SHAFT_CODEX_BIN`) | **install** ChatGPT if any instance uses a `codex/*` model; its login in `.supervisor/codex-home/` is copied with the folder |
 | Shared Chromium | `.browsers/` | **reinstall** with `bin/shaft browser install` |
 | Folders shared with an instance | your own folders, referenced by absolute path | **copy separately**, to the same path |
@@ -91,11 +95,13 @@ so do that instead.
   put `tailscale` on the same launchd PATH above.
 - If any instance uses a `codex/*` model, install ChatGPT in `/Applications`.
   The Codex CLI lives inside it. `SHAFT_CODEX_BIN` overrides this location.
+- If any instance uses a `grok/*` model, install the Grok CLI. SHAFT expects
+  `~/.grok/bin/grok`; `SHAFT_GROK_BIN` overrides the executable path.
 - Local models need Apple Silicon (MLX). The model server's defaults assume
   a 64 GB Mac: `SHAFT_PROMPT_CACHE_GB=8` on top of about 8 GB of weights.
   On a Mac with less memory, lower it with
   `bin/shaft settings set SHAFT_PROMPT_CACHE_GB=<gb>`.
-  Instances that use cloud, Codex or self-hosted models need none of this.
+  Instances that use cloud, Codex, Grok or a remote self-hosted server need none of this.
 
 ### If the new Mac is a laptop
 
@@ -276,7 +282,7 @@ bin/shaft settings
 
 Look at `SHAFT_WEB_HOSTS`: if it is set, the web UI answers only those names,
 whatever `web on` records. Also look at `SHAFT_FT_PYTHON`, `SHAFT_BONSAI_PYTHON`,
-`SHAFT_CODEX_HOME`, `SHAFT_CODEX_BIN`, `SHAFT_FT_BASE_MODEL`, and any other
+`SHAFT_CODEX_HOME`, `SHAFT_CODEX_BIN`, `SHAFT_GROK_BIN`, `SHAFT_GROK_HOME`, `SHAFT_FT_BASE_MODEL`, and any other
 setting whose value is a path. Fix each one with
 `bin/shaft settings set KEY=VALUE`, or remove it with `bin/shaft settings unset KEY`.
 
@@ -322,6 +328,9 @@ If it shows you signed out, run `bin/shaft codex login`. We have not tested
 whether a copied Codex login keeps working on another machine. If Codex cannot
 start, a live run falls back to `SHAFT_CODEX_FALLBACK_MODEL` without stopping.
 That costs API dollars.
+
+For `grok/*` models, check `bin/shaft grok status` before starting the scheduler.
+If signed out or the copied login fails, run `bin/shaft grok login` again.
 
 Talk to every instance and see it answer before you start the scheduler.
 `talk` works while paused. For instances that use a self-hosted model

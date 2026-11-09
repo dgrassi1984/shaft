@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/dgrassi1984/shaft/security/advisories/new
+    about: Send security reports through a private advisory.

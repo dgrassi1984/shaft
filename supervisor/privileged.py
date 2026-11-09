@@ -174,7 +174,11 @@ def _exam(root, broker, state, model, prompt, stop):
     if model != "local":
         extra.update(LLM_BASE_URL="broker", LLM_MODEL=model)
     with tempfile.TemporaryDirectory(prefix="shaft-predict-profile-") as tmp:
-        cmd, env = runner.agent_command(root, broker, ["exam"], Path(tmp) / "exam.sb", ports, extra)
+        try:
+            cmd, env = runner.agent_command(root, broker, ["exam"], Path(tmp) / "exam.sb", ports, extra)
+        except runner.RunRefused as e:
+            runner._refused(broker.name, e)
+            return {"exit": runner.REFUSED, "error": str(e)}
         task = {"prompt": prompt, "max_steps": 1, "scratch": ".tmp/predict"}
         with tempfile.TemporaryFile() as out:
             proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE,

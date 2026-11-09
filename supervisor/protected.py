@@ -72,8 +72,8 @@ def make(code: dict[str, bytes], parent: Path, name: str, config: bytes | None =
 
 def _link_data(tree: Path, instance: Path) -> None:
     """Link every top-level entry of the instance's folder the copy lacks, except a code path, back to the instance.
-    Its code finds its data from its own file (wren: Path(__file__).parent.parent / "notes/ledger/…"); in a copy of
-    the code alone that found nothing, and on 2026-10-29 the gate reverted every change wren made. A code path the
+    Its code finds its data from its own file (Path(__file__).parent.parent / "notes/data/…"); in a copy of
+    the code alone that found nothing, and the gate reverted every change the instance made. A code path the
     snapshot lacks stays absent, never a link to the unprotected working code; what the links reach is the sandbox's
     to say, as it was before the copy (gate.run_tests `data_root`, the launch's own profile)."""
     from .gate import CODE_PATHS

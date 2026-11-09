@@ -242,8 +242,13 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
     if localmodel.is_service(config_values(safe_read(root, "config.env", "")).get("LLM_BASE_URL", "")):
         localmodel.ensure(f"{label}'s exam")   # it runs only while used (localmodel.py)
     prof = base() / f"{label}.sb"
-    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port, broker.egress.port],
-                                    env_root=broker.env_root))   # its own Python environment, read-only
+    from .runner import RunRefused, _refused
+    try:
+        prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port, broker.egress.port],
+                                        env_root=broker.env_root))   # its own Python environment, read-only
+    except RunRefused as e:
+        _refused(label, e)
+        return {"error": str(e), "refused": True}
     safe_mkdir(root, ".tmp")
     deadline = time.time() + ITEM_TIMEOUT_S
     if until:
@@ -685,6 +690,7 @@ def _clean_left(name: str, control_only: bool) -> None:
 
 def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
             interrupt, grader: str | None) -> dict:
+    from .runner import RunRefused, _refused
     if item["category"] == "perturbation":
         from . import perturbation
         row = {**_row(item, arm, e), "probe_protocol": "temperature-v1", "base_temperature": localmodel.TEMP}
@@ -713,7 +719,10 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
     res: dict = {}
     try:
         res = _exam(label, root, broker, task, until, interrupt, real=real if arm == "instance" else None)
-        tests = run_hidden_tests(item, root, scratch_rel) if item["category"] == "coding" else None
+        tests = run_hidden_tests(item, root, scratch_rel) if item["category"] == "coding" and not res.get("refused") else None
+    except RunRefused as e:   # hidden-test profile: no score or judgment
+        _refused(name, e)
+        res = {"error": str(e), "refused": True}
     except Interrupted as stop:
         row.update(status="interrupted", why=str(stop))
         _append(name, row)
@@ -724,7 +733,7 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
                submitted=res.get("submitted"), answer=(res.get("answer") or "")[:4000],
                broker_calls=broker.counts)
     if res.get("error"):
-        row.update(status="error", error=res["error"])
+        row.update(status="refused" if res.get("refused") else "error", error=res["error"])
         _append(name, row)
         log(f"{name}: battery item {item['id']} ({arm}) failed to run: {res['error'][:300]}")
         return row

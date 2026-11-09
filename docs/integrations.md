@@ -24,7 +24,7 @@ photos you send a bot are saved in that instance's `attachments/from-operator/�
 files an instance attaches to a message for you arrive after its text (pictures as photos). `/new`
 starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. A message an
 instance sends you (`send_message` to the operator) arrives from its bot when it is routed to Telegram (see
-[Where an instance reaches you](#where-an-instance-reaches-you-shaft-channel)). The service long-polls Telegram; no port,
+[Where an instance reaches you](#where-an-instance-reaches-you-shaft-channel-)). The service long-polls Telegram; no port,
 webhook or Funnel. A message it has taken is kept in `.supervisor/telegram.json` until its answer is delivered — one sent
 while a reply runs, until that reply has heard it or its own reply is sent — so one that arrives as the service stops is
 answered when it starts again; a message whose reply had already come back is answered from the API's record of
@@ -69,8 +69,7 @@ operator inbox and web UI. Only device notifications wait. Use `urgent=True` for
 Urgent messages and messages during an open conversation notify immediately. Other notifications wait during local
 quiet hours (`SHAFT_QUIET_HOURS`, default `22-07`, may wrap midnight; empty disables) — except replies within two hours
 of an operator message — and once the instance's notifications that went out today reach the daily budget
-(`SHAFT_PUSH_BUDGET`, default 6; 0 means unlimited and hides the count), replies included (review I14: thelos sent 21
-against a budget of 6). Held messages do not use the budget. `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
+(`SHAFT_PUSH_BUDGET`, default 6; 0 means unlimited and hides the count), replies included. Held messages do not use the budget. `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
 `send_message`'s result says when a notification is held, until when and why, and gives the instance its
 `should_have_waited=yes` share of judged push cycles over the last 7 days.
 
@@ -87,7 +86,7 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 
 ## Google accounts (`shaft google …`)
 
-Mail, Calendar, and Drive share your Google accounts ([PLAN-calendar.md](plans/PLAN-calendar.md)). An instance never holds a
+Mail, Calendar, and Drive share your Google accounts ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)). An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
 for `gmail.readonly`, `calendar.readonly`, `calendar.events`, and `drive.readonly` together and records the scopes Google actually granted
@@ -126,17 +125,17 @@ suffix to the web credential names, because a refresh token must use the client 
 The CLI re-login command still names the base desktop client and can replace a web login with a desktop login.
 
 Google's quotas are per user per minute, shared by every instance on the account. A call over
-quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (PLAN-mail) kept their files in
+quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (docs/plans/PLAN-mail) kept their files in
 `.supervisor/mail/`: `shaft google migrate` moves them (until then they are not read, and the error says so).
 
 Source: [Google account login](../supervisor/google.py).
 
 ## Mail (`shaft mail …`)
 
-These operator-mail tools remain read-only under the [action class model](safety.md#operator-action-classes-142).
+These operator-mail tools remain read-only under the [action class model](safety.md#operator-action-classes).
 They still check the granted label on each thread. There is no operator mail-send broker tool.
 
-An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](plans/PLAN-mail.md)), on an
+An instance you pick may read the Gmail threads that carry a label you pick ([docs/plans/PLAN-mail.md](../docs/plans/PLAN-mail.md)), on an
 account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,
 reads or downloads from is checked again before anything of it is shown. A thread is visible while any of its
 messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
@@ -165,12 +164,12 @@ Mail content reaches model providers (a cloud-brained instance, the judges). Sen
 mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
 git), and downloads stay in `mail/`, after a revoke.
 
-**Watch (new mail, without polling).** An instance may ask the supervisor to tell it when new mail arrives under its
+**Watch for new mail.** An instance may ask the supervisor to tell it when new mail arrives under its
 granted labels, instead of polling with a scheduled plugin: `WATCH_MAIL` in its own `config.env` — `off` (default),
 `inbox` or `wake` — which it can set with `set_config`. The scheduler's watch ([watch.py](../supervisor/watch.py))
 reads Gmail's history from a stored history ID, filtered by the granted label's ID, every `SHAFT_WATCH_EVERY_S`
-seconds (default 60): one labels call per account and one history call per granted label per pass
-(per instance). Every thread the
+seconds (default 60). The supervisor polls incrementally; a granted label may need several
+history pages per pass, plus label lookups and thread visibility checks. Every thread the
 history names is checked with the same label check `mail_search` makes; one that fails is never mentioned, and a
 draft, trashed or spam message is not news. What it finds goes into the instance's inbox as one message per pass,
 `From: supervisor (mail watch)`: each thread's handle, sender and subject (at most 20 lines, the rest counted), never
@@ -186,7 +185,7 @@ Source: [mail grants and reads](../supervisor/mail.py).
 ## An instance's own Gmail (`shaft secret <name> google …`)
 
 An instance may have a Google account of its own, such as `assistant@example.com`
-([PLAN-own-mail.md](plans/PLAN-own-mail.md)). It reads the whole mailbox and sends from it through its own plugin, calling the
+([docs/plans/PLAN-own-mail.md](../docs/plans/PLAN-own-mail.md)). It reads the whole mailbox and sends from it through its own plugin, calling the
 Gmail API with `http_request(auth=…)`. The supervisor holds the login as a **Google key** in the instance's key store
 (`secrets/`, never readable by the instance). Each run, the broker makes an access token from the key's refresh token,
 adds it like any key and only to the key's hosts, and masks it in answers. Sign it in once, in a browser signed in as
@@ -213,7 +212,7 @@ Sources: [scope and host bindings](../supervisor/google.py),
 
 ## An instance's own Drive, Sheets, Docs and Slides (`shaft secret <name> google … --scope drive`)
 
-The same account's files ([PLAN-own-drive.md](plans/PLAN-own-drive.md)): a second Google key on the instance's own account,
+The same account's files ([docs/plans/PLAN-own-drive.md](../docs/plans/PLAN-own-drive.md)): a second Google key on the instance's own account,
 used the same way (its own plugins, `http_request(auth="drive")`). Sign it in once, as that account:
 
     shaft secret example google drive assistant@example.com --client personal --scope drive
@@ -235,14 +234,14 @@ Source: [Drive scope bundle](../supervisor/google.py).
 
 ## Calendar (`shaft calendar …`)
 
-For instances in `SHAFT_ACTION_INSTANCES` (default `thelos`), the [action classes](safety.md#operator-action-classes-142)
+For instances in `SHAFT_ACTION_INSTANCES` (default `thelos`), the [action classes](safety.md#operator-action-classes)
 preserve the initial calendar behavior: changes that tell nobody run directly; supplied attendees, invitations,
 incomplete attendee lists and RSVPs require proposals. An over-reach can make direct changes require approval or
 make a staged class refused. `shaft actions <name>` shows class state, history and proposals; `restore <class>`
 restores the initial rule. All classes share the existing `/calendar/proposals` queue, expiry and approval checks.
 Other instances keep their current calendar behavior.
 
-An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](plans/PLAN-calendar.md)), with full
+An instance you pick may read the calendars you pick, one per grant ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)), with full
 event details: title, time and time zone, location, description, organiser, attendees and their responses, your
 response, conference link, recurrence, attachment links (never downloaded). Private events on a granted calendar are
 shown; declined ones are shown and marked. `shaft calendar calendars work` lists the account's calendars;
@@ -262,13 +261,31 @@ saying who wrote it and that it is not your instruction. Trial replays read the 
 with events created after the replayed cycle hidden (an older event edited since shows its edit; the judge is told).
 Battery exams get none.
 
+Write tools require a write grant and the `calendar.events` scope:
+
+| Tool | Request and effect |
+|---|---|
+| `calendar_create` | `calendar`, `title`, `start`, `end`; optional `timezone`, `location`, `description`, `attendees`. Creates one event on the granted calendar. |
+| `calendar_move` | `id`, `start`, `end`; the same optional fields, including `title`. Changes one occurrence, never a recurring series. |
+| `calendar_respond` | `id`, `response=yes|no|maybe`. Proposes an RSVP for operator approval. |
+
+Start must precede end, and both must be within 92 days of now. All-day dates use an
+exclusive end date. Date-times need an offset or IANA time zone; otherwise SHAFT uses
+the calendar's zone. Direct writes use `sendUpdates=none` and require no attendees
+other than the operator. Supplied attendees, invitations, incomplete attendee lists,
+and RSVPs need operator approval through `/calendar/proposals`. The outcome reaches
+the instance's inbox. The default daily limit is 20 submitted write attempts per
+instance (`SHAFT_CALENDAR_WRITES_PER_DAY`; 0 disables writes). Reads and writes share
+the 30-call per-run limit. Trial replays cannot write.
+Sources: `supervisor/broker.py`, `CALENDAR_WRITE_TOOLS` and `Broker._calendar_write`;
+`supervisor/calendar.py`, `write_times` and `direct_only`.
+
 The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
 the instance, its model providers and the judges.
 
-**Watch (changed events, without polling).** `WATCH_CALENDAR` in the instance's `config.env` (`off`, `inbox`,
-`wake`; set with `set_config`) works as the mail watch does: Calendar's `events.list` with a stored sync token, one
-call per granted calendar per pass (the first one pages through the whole calendar once to get the token, reporting
-nothing). Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
+**Watch for changed events.** `WATCH_CALENDAR` in the instance's `config.env` (`off`, `inbox`,
+`wake`; set with `set_config`) works as the mail watch does: Calendar's `events.list` with a stored sync token. Each granted calendar can require several pages per pass.
+The first pass pages through the whole calendar to get the token and reports nothing. Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
 watch)`: each event's handle, time and title, never its description, location or attendees. `wake` uses the same
 wake path (`watch-calendar`) and the same per-instance limit; an expired token (410) starts from now. The instance's
 own `calendar_create` and `calendar_move` changes are reported too. `calendar_event` refuses a deleted event like one
@@ -280,8 +297,8 @@ Source: [calendar tools](../supervisor/calendar.py).
 
 An instance may search, read, and download files from your Google accounts through `drive_search`, `drive_read`,
 and `drive_download`. Access is read-only. The supervisor holds the credential and checks the account grant and
-file reach before returning content. This is separate from [an instance's own Drive](#an-instances-own-drive-sheets-docs-and-slides-shaft-secret-name-google--scope-drive).
-See [Drive tools](../supervisor/broker.py), [Drive access checks](../supervisor/gdrive.py), and the [plan](plans/PLAN-operator-drive.md).
+file reach before returning content. This is separate from [an instance's own Drive](#an-instances-own-drive-sheets-docs-and-slides-shaft-secret-name-google----scope-drive).
+See [Drive tools](../supervisor/broker.py), [Drive access checks](../supervisor/gdrive.py), and the [plan](../docs/plans/PLAN-operator-drive.md).
 
 Enable the **Google Drive API** in each account's OAuth project. In Google Auth Platform → **Data Access**, add
 `https://www.googleapis.com/auth/drive.readonly`. Run `shaft google login` again and tick Drive on the consent page.
@@ -317,6 +334,8 @@ A shortcut and its target must both pass the visibility check. Shared Drive memb
 
 Search covers all granted accounts unless given an `account` or a `folder` handle. It returns 20 files by default,
 at most 50, with handles in the form `<alias>/<fileId>`. Follow its continuation call for more results.
+Use `modified_after` to filter by Drive modification time, for example
+`modified_after="2026-11-01T00:00:00Z"`. The comparison is strictly newer than that value.
 Use `type` (`doc`, `sheet`, `slides`, `pdf`, or `folder`) when looking for a kind of file.
 Without search text, results are newest first by modification time; with text, they keep Google's relevance order within each account.
 It reports accounts it could not search and Google's incomplete-search flag.
@@ -357,7 +376,7 @@ It does not erase memories or copies the instance made elsewhere.
 
 ## Scheduled jobs (`shaft jobs …`)
 
-An instance can run one of its own plugins on a timer ([PLAN-jobs.md](plans/PLAN-jobs.md)), for example a watcher that
+An instance can run one of its own plugins on a timer ([docs/plans/PLAN-jobs.md](../docs/plans/PLAN-jobs.md)), for example a watcher that
 checks the tagged mail every 15 minutes. It declares the job in the plugin's own manifest:
 `"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}` in `plugins/<name>/plugin.json`. A cycle
 writes it, the gate tests it, and the commit records it. No launchd job is installed: SHAFT's scheduler service runs
@@ -378,7 +397,7 @@ Several requests while it is awake make one wake, there is no rate limit, and a 
 For new mail or calendar changes a job is not needed: the supervisor's watch (`WATCH_MAIL`, `WATCH_CALENDAR`, in the
 Mail and Calendar sections) checks every minute and wakes through the same path.
 
-A job's work reaches the instance whole ([PLAN-thelos-review-2.md](plans/PLAN-thelos-review-2.md) M1):
+A job's work reaches the instance whole ([docs/plans/PLAN-thelos-review-2.md](../docs/plans/PLAN-thelos-review-2.md) M1):
 - **Hand-off.** `{"message": …, "files": ["brief.md", …]}`: up to 5 files of at most 256 KB from `.jobs/<plugin>/`
   (a path relative to it, or starting with `.jobs/<plugin>/`; no link is followed) are copied beside the message,
   into `inbox/<stamp>-from-job-<plugin>.files/`. The message lists each with its size and names each refused one
@@ -407,16 +426,16 @@ Source: [jobs execution and scheduling](../supervisor/jobs.py).
 
 ## Images
 
-Instances can see images ([PLAN-vision.md](plans/PLAN-vision.md)). There are two ways:
+Instances can see images ([docs/plans/PLAN-vision.md](../docs/plans/PLAN-vision.md)). There are two ways:
 - **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
   message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
 - **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
   (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`) answers in text, marked as described rather than seen. This
-  is how an instance whose model cannot see images (shaft on Bonsai) learns what is in one, and the cost counts
+  is how an instance whose model cannot see images (an instance on Bonsai) learns what is in one, and the cost counts
   toward its daily cloud cap. At most 10 calls per run.
 
 Which models see images is learned, not listed:
-- Claude models do.
+- Claude models do. Codex and Grok plan models accept images through `planchannel.sees_images`.
 - An OpenRouter model does if OpenRouter's model list includes `image` among its input modalities. The list is
   cached for a day in `.supervisor/models.json`.
 - Self-hosted models do not.
@@ -441,7 +460,7 @@ Sources: [vision validation](../supervisor/vision.py),
 ## A real browser (`shaft browser …`)
 
 Instances can drive a headless Chromium: pages that need JavaScript, logins, forms, clicks
-([PLAN-browser.md](plans/PLAN-browser.md)). The supervisor provides only these:
+([docs/plans/PLAN-browser.md](../docs/plans/PLAN-browser.md)). The supervisor provides only these:
 - **One Chromium for every instance.** `shaft browser install [--playwright X.Y.Z]` downloads Playwright's
   Chromium builds into `.browsers/`, swapped in whole and gitignored. `shaft browser` shows the install and each
   instance's profile.

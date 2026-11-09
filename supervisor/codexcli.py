@@ -203,6 +203,7 @@ class Channel(planchannel.Channel):
             raise CodexFailure("weekly cap")
 
     def _start(self, model, effort):
+        from .runner import RunRefused
         home = Path(HOME).expanduser().resolve()
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
         home.chmod(0o700)
@@ -224,8 +225,11 @@ class Channel(planchannel.Channel):
             self._process = subprocess.Popen(_seatbelt(argv, self._folder, home, auth.resolve()),
                 cwd=self._folder, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True)
-        except OSError as exc:
+        except (OSError, RunRefused) as exc:
             shutil.rmtree(self._folder)
+            if isinstance(exc, RunRefused):
+                from .runner import _refused
+                _refused(self.broker_name, exc)
             raise CodexFailure(f"cannot start Codex: {exc}") from exc
         self._start_workers()
         self._request("initialize", {"clientInfo": {"name": "shaft", "version": "1"},

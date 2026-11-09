@@ -318,9 +318,9 @@ function runLoad(href, closed, narrowSheet) {
     closedKey: storage.get("shaft.docs.closed") || null, expanded: docbtn.getAttribute("aria-expanded"),
     role: docs.getAttribute("role") };
 }
-const wide = runLoad("https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md", true, false);
+const wide = runLoad("https://shaft.test/i/thelos/chat?doc=model-brainstorm.md", true, false);
 assert.deepEqual(wide, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: null });
-const sheet = runLoad("https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md", true, true);
+const sheet = runLoad("https://shaft.test/i/thelos/chat?doc=model-brainstorm.md", true, true);
 assert.deepEqual(sheet, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: "dialog" });
 const plain = runLoad("https://shaft.test/i/thelos/chat", true, false);
 assert.deepEqual(plain, { showdocs: false, hidedocs: true, closedKey: "1", expanded: "false", role: null });
@@ -383,12 +383,12 @@ const clickCard = async (openDoc, openThread) => {
   const firstTick = panel._tick();
   assert.equal(fetched.length, 1);
   assert.equal(grid.classList.contains("hidedocs"), true);
-  await clickCard("example-co-generative-model-brainstorm.md");
+  await clickCard("model-brainstorm.md");
   assert.equal(grid.classList.contains("showdocs"), true);
   assert.equal(grid.classList.contains("hidedocs"), false);
   assert.equal(storage.has("shaft.docs.closed"), false);
-  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md");
-  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=example-co-generative-model-brainstorm.md");
+  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=model-brainstorm.md");
+  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=model-brainstorm.md");
   assert.equal(panel.dataset.etag, undefined);
   // Finish the old in-flight poll: because the card click set again=true, it schedules an immediate 0 ms retry.
   timers = [];

@@ -235,7 +235,8 @@ def delegate(root: Path, instance: str, task: str) -> dict:
         return result
     ok, test_log = test_in_scratch(root, files)
     if not ok:
-        result["error"] = "the changes failed the test gate; nothing applied"
+        result["error"] = (f"test gate refused: {test_log.why}; nothing applied" if getattr(test_log, "refused", False)
+                           else "the changes failed the test gate; nothing applied")
         result["test_output"] = test_log[-2500:]
         return result
     try:

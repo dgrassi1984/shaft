@@ -1,26 +1,75 @@
 # Contributing
 
-SHAFT is Daniele Grassi's personal research project. Issues are welcome; pull requests are considered. Explain the problem, the change and how you checked it. Report vulnerabilities through a private GitHub security advisory, as described in [SECURITY.md](SECURITY.md).
+SHAFT is a research project maintained by one person. Issues are welcome, and pull requests are considered. Bug reports, documentation corrections, tests, and focused improvements are useful contributions. Explain the problem, the proposed change, and how you checked it. There is no response-time promise.
 
-Run the supervisor tests from the repository root:
+Report vulnerabilities through a private GitHub security advisory. See [SECURITY.md](SECURITY.md).
+
+## Development setup
+
+SHAFT runs on macOS. Clone both the supervisor and template branches. A normal clone fetches both. If you use a single-branch clone, fetch `template` before setup.
 
 ```sh
+git clone https://github.com/dgrassi1984/shaft.git
+cd shaft
 bin/shaft setup
-python3 -m unittest discover -s supervisor/tests -t .
-```
-
-Before a merge, commit and run `bin/shaft gate budget`. It runs the suite the way the instances' test gate does, in parallel
-workers, and fails when a part takes more than half the gate's 300-second limit, a test takes more than 10 seconds, or a
-test runs twice ([PLAN-gate-5min](docs/plans/PLAN-gate-5min.md)). A new test that waits has to wait for an event, not for
-a fixed sleep.
-
-`setup` also installs the pre-push hook that refuses `instance/*` branches; never push those with `--no-verify`. For a separate worktree of this repository, follow [docs/worktrees.md](docs/worktrees.md). The tests need the `template` worktree (`supervisor/tests/test_template_client.py:11`). Setup recreates worktrees from local branches or their `origin` counterparts, so the clone must include the `template` branch (`supervisor/__main__.py:236`).
-
-Keep the supervisor on the Python standard library. The optional terminal clients are the exception; install their dependencies in a separate environment (`supervisor/web.py:2`, `supervisor/webpush.py:14`, `supervisor/talk_ui.py:29`):
-
-```sh
 python3 -m venv .venv-ui
 .venv-ui/bin/pip install -r requirements-ui.txt
 ```
 
-Follow [.claude/CLAUDE.md](.claude/CLAUDE.md). Preserve the path for instances to build and test their own plugins before adding supervisor tools. Judges should grade usefulness and correctness first. Keep agent code out of supervisor imports, credentials out of instances, and the API on the tailnet. Hold an instance only while it replies, and do not write up an ongoing conversation. Trial replays must not commit, deliver messages, send writes or compete with instances for the local model. Enforce operator-mail label grants on every returned thread.
+`setup` recreates missing worktrees from local or origin branches and installs the pre-push guard. Tests need the `template/` worktree. For a separate development worktree, follow [worktree setup](docs/worktrees.md). Never copy runtime state into a test worktree.
+
+The supervisor uses the Python standard library. Optional UI dependencies belong in `.venv-ui`.
+
+## Branches
+
+`main` holds the supervisor, apps, and documentation. `template` holds the agent code used to create instances. Make template changes on a branch based on `template` in its worktree.
+
+Each `instance/*` branch contains an instance's code and private history. Never push these branches or bypass the pre-push guard.
+
+## Tests
+
+Run the supervisor tests from the repository root:
+
+```sh
+python3 -m unittest discover -s supervisor/tests -t .
+```
+
+Before proposing a merge, commit your change and run:
+
+```sh
+bin/shaft gate budget
+```
+
+This check uses committed supervisor and template code, so it does not test uncommitted edits. It runs both test parts as the instance gate does. It fails if a part fails, exceeds half the gate timeout, contains a test over 10 seconds, or runs a test twice. The default gate timeout is 300 seconds. Tests that wait must wait for an event rather than a fixed sleep. See [the gate budget plan](docs/plans/PLAN-gate-5min.md).
+
+## Architectural invariants
+
+### Instances build their own plugins
+
+Preserve the path for an instance to build, test, and run `plugins/<name>/plugin.json` and `main.py` through the broker. Consider that path before adding a supervisor tool.
+
+### Judges grade effectiveness first
+
+Useful and correct results take priority over whether an answer sounds like the instance.
+
+### The supervisor and instances stay separate
+
+The supervisor never imports agent code. Instances never see secrets. The API stays tailnet-only.
+
+### Conversations hold an instance only while it replies
+
+Keep open conversations registered. Never write up a conversation while it is still going on.
+
+### Trial replays have no live effects
+
+Replays never settle, commit, deliver, or send. The replay broker records simulated writes. Trials never take an instance's time on the local model.
+
+### Mail and Drive access goes through broker tools
+
+Instances never hold credentials for the operator's mail or Drive. Check label grants on every mail thread returned, read, or downloaded from. Check the grant and reach on every Drive file.
+
+## Documentation and private data
+
+Keep documentation with behavior changes. Use plain English and generic instance names in examples. Never include `.env`, instance data, credentials, or real mail in an issue or pull request, including logs and attachments.
+
+`docs/CODEMAP.md` and `agent-overlay.yaml` are generated or used by the maintainer's own tooling. Contributors need not edit them by hand.

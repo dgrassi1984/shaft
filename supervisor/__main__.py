@@ -241,6 +241,15 @@ def cmd_update(names: list[str]) -> int:
                     print(f"{name}: already up to date")
                     continue
                 ok, test_log = gate.run_tests(root, HOME)
+                if getattr(test_log, "refused", False):
+                    from .runner import RunRefused, _refused
+                    # HEAD is approved code at the next launch. Uncommit the untested merge, keeping its files.
+                    undo = git_wt(root, "reset", "-q", "--mixed", before, check=False)
+                    why = test_log.why
+                    if undo.returncode:
+                        why += f"; could not uncommit the untested merge: {undo.stderr.strip()}"
+                    worst = _refused(name, RunRefused(why))
+                    continue
                 if not ok:
                     # --keep, not --hard: it undoes only the merge and refuses rather than discard a file
                     # that something changed while the gate ran.
@@ -1963,6 +1972,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "check":
         ok, output = gate.run_tests(instance_root(args.name), HOME)
         print(output)
+        if getattr(output, "refused", False):
+            from .runner import RunRefused, _refused
+            return _refused(args.name, RunRefused(output.why))
         print("PASS" if ok else "FAIL")
         return 0 if ok else 1
     if args.cmd == "gate":

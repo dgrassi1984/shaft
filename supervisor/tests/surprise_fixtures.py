@@ -7,7 +7,7 @@ test_surprise_rules.py checks the supervisor's, test_surprise.py the template's.
 """
 from __future__ import annotations
 
-# (result, expected (flag, detail) or None). The result strings are copied from real episodes (2026-10-12/13).
+# (result, expected (flag, detail) or None). The result strings are sanitized from real episodes.
 FLAG_FIXTURES = [
     ("ERROR: PermissionError: self/self.md: use update_self_model", ("error", "PermissionError")),
     ("ERROR: PermissionError: memory/journal.md: the journal is append-only; it is written at the end of each cycle",
@@ -15,7 +15,7 @@ FLAG_FIXTURES = [
     ("ERROR: TypeError: call() got multiple values for argument 'name'", ("error", "TypeError")),
     ("ERROR: BrokerError: ValueError: commit must be a commit id (hex) from the log", ("error", "ValueError")),
     ("ERROR: this trait cites no journal entry: '- I ground my planning in reading'", ("error", "")),
-    # wren 08:58: the heredoc never applied, the test then passed on unchanged code — exit 0 hides it
+    # Sanitized from real episodes: the heredoc never applied, the test then passed on unchanged code — exit 0 hides it
     ("exit 0 · 0.1 s\n--- stdout ---\nexit=0\n\n--- stderr ---\nzsh:1: can't create temp file for here document: "
      "operation not permitted\ntest_add_due_done_cycle ... ok", ("stderr_on_success", "not permitted")),
     ("exit 0 · 0.1 s --- stdout --- === ps -ax (count) === 0 --- stderr --- zsh:1: operation not permitted: ps",

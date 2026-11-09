@@ -32,7 +32,7 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
 
 Each instance is a "model" of an OpenAI-compatible API (`GET /v1/models`, `POST /v1/chat/completions`,
 streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` on port 8443 of this Mac's
-tailnet name; tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
+tailnet name; tailnet only, never Funnel. Chat and model-list requests need the key (`shaft api key`) and a
 Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
 same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), keeps the channel its client names
@@ -43,7 +43,7 @@ still running). `POST /v1/chat/end` requests that write-up now;
 its 202 response confirms the request, not a completed journal entry. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
-(`interjections_heard`), and 409 means no reply is running there ([PLAN-interject.md](plans/PLAN-interject.md)).
+(`interjections_heard`), and 409 means no reply is running there ([docs/plans/PLAN-interject.md](../docs/plans/PLAN-interject.md)).
 A non-streamed chat request may carry `X-Shaft-Request-Id: <id>` (1-64 letters, digits, - or _): asked again with the
 same id, the API gives the answer it gave, without running the reply again (`.supervisor/api-answered.json`, the
 newest 500 kept). Telegram sends each message's update id, so a message answered just before the service restarted is
@@ -65,10 +65,75 @@ poll GitHub itself, or a GitHub Action can join the tailnet.
 curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
+### `/v1` wire contract
+
+Examples use illustrative instance names and values. This API accepts a subset of
+OpenAI chat fields. It does not promise the full OpenAI API contract.
+
+| Route | Request | Success |
+|---|---|---|
+| `GET /v1/models` | Chat bearer key and allowed tailnet login | `200`, `{"object":"list","data":[{"id":"example","object":"model","created":0,"owned_by":"shaft"}]}` |
+| `POST /v1/chat/completions` | JSON `model` equal to an instance name; `messages` ending in a user message; optional `stream`, default false | `200` JSON completion, or SSE when streaming |
+| `POST /v1/chat/interject` | Same model and conversation identity; `messages` ending in a nonempty user message | `202`, `{"interjected":true,"talk_id":"…"}`; `409 conflict` if no reply is outstanding |
+| `POST /v1/chat/end` | JSON `model`; identify the conversation with `X-Shaft-Conversation` or `messages` | `202`, `{"ended":"…"}`; write-up requested in the background |
+| `POST /v1/inbox/<instance>` | Inbox bearer key alone, or chat key and allowed login; text or JSON body | `202`, `{"delivered":"…","instance":"example","source":"ci","wake":"…"}` |
+
+Chat `messages` are forwarded to the instance. A message's `content` may be text
+or OpenAI content parts. Interject extracts only text parts from its last message.
+Client system messages precede SHAFT's delivery instruction; the instance's own
+identity and memory still apply. Fields such as `temperature`, `max_tokens`, and
+client tool definitions are not forwarded from the top-level request.
+
+| Header | Meaning |
+|---|---|
+| `Authorization: Bearer <key>` | Chat key, or the narrower inbox key on inbox routes |
+| `X-Shaft-Conversation` | Optional conversation name, 1–64 letters, digits, `_` or `-`; otherwise identity comes from the instance and first user message |
+| `X-Shaft-Channel` | `api`, `web`, or `telegram`; absent means `api` |
+| `X-Shaft-Request-Id` | Optional request id with the same character limits; non-streamed successful responses can be replayed with `replayed:true` |
+
+A non-streamed completion has `id`, `object:"chat.completion"`, `created` in Unix
+seconds, `model`, and `choices:[{index:0,finish_reason:"stop",message:{role:"assistant",
+content: str,reasoning_content: str}}]`. `usage` contains `prompt_tokens`,
+`completion_tokens`, and `total_tokens`, all currently 0. Top-level
+`interjections_heard` counts accepted interjections actually heard by the agent.
+If the run errors without answer content, the response is `502` with
+`{"error":{"message":"…","type":"server_error"}}`. With partial content, the
+non-streamed response is still `200`; it does not expose `reply_error`.
+
+A stream uses `Content-Type: text/event-stream`. Each `data:` JSON object has
+`id`, `object:"chat.completion.chunk"`, `created`, `model`, and
+`choices:[{index:0,delta:{…},finish_reason:null}]`. The first delta sets
+`role:"assistant"`; subsequent deltas carry `content` or `reasoning_content`.
+The final chunk has an empty delta, `finish_reason:"stop"`, and
+`interjections_heard`. On failure it also has
+`reply_error:{message: str,tools_ran: bool}`. If no answer content exists, a
+preceding content delta contains `[error: …]`. The stream ends with
+`data: [DONE]`. After streaming starts, errors stay in the HTTP 200 stream.
+
+End returns `400` without a conversation identity, `404 not_found` when none is
+open, and `409 conflict` while a reply is outstanding. Interject returns `400`
+for empty text and `500 server_error` if it cannot pass the message to the agent.
+Common errors use `{"error":{"message":str,"type":str}}`: `401 authentication_error`,
+`403 permission_error`, and `400` or `404 invalid_request_error` for invalid JSON,
+headers, message shape, route, or model, as applicable. Request validation is
+limited; this is not a complete OpenAI request-schema validator.
+
+Inbox JSON with `text` uses its `source` and `wake` fields; other JSON is stored
+whole. The request's `wake` uses Python truthiness, so a nonempty string, even
+`"false"`, asks for a wake. Prefer a JSON boolean. `X-Shaft-Wake` accepts `1`,
+`true`, or `yes`, case-insensitively. Source precedence is JSON `source`, then
+`X-Shaft-Source`, then `github:<X-GitHub-Event>`, then `outside`; it is stripped
+and lowercased. The response's `wake` is always a descriptive string, not a boolean,
+and delivery can succeed even if waking is refused. Unknown instances return
+`404`; invalid JSON or refused delivery returns `400`; exceeding the message
+rate limit returns `429 rate_limit_error`.
+
+Source: `supervisor/api.py`, `Handler`, `_chunk`, and `Conversations`.
+
 ## The web UI (`shaft web on`)
 
-`shaft top` in a browser, with a chat-first interface on the tailnet. See [web UI design](plans/PLAN-webui.md)
-and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the same service through a JSON API,
+`shaft top` in a browser, with a chat-first interface on the tailnet. See [web UI design](../docs/plans/PLAN-webui.md)
+and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk to the same service through a JSON API,
 `/app/v1` ([below](#the-native-chat-apps-api-appv1)).
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
@@ -155,7 +220,7 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
   on-screen keyboard leaves the page its height and is not taken for one), Return sends as on a computer, after its
   autocorrection, and Shift/Alt-Return is a new line;
   the shortcuts line under the field then shows (on a screen at least 600 px wide).
-  **Next cycle** ([PLAN-background-messages](plans/PLAN-background-messages.md)) is not answered now: the message,
+  **Next cycle** ([docs/plans/PLAN-background-messages](../docs/plans/PLAN-background-messages.md)) is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
   (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
@@ -263,14 +328,14 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
   hears a short deletion notice with your next message, or immediately while replying. A pending edit followed by
   deletion becomes one deletion notice. Comment threads and their copies are kept; old chat links show that the
   document is gone. Its next run commits the deletion with its notes; earlier committed versions remain in git.
-- **Comments on a document** ([PLAN-comments](plans/PLAN-comments.md)), as on a Claude artifact: select text in it
+- **Comments on a document** ([docs/plans/PLAN-comments](../docs/plans/PLAN-comments.md)), as on a Claude artifact: select text in it
   and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send to <instance>** has three
   choices. **now** (the default): it gets the comment at once (a message of its own, or an interjection while it
   replies) and answers under `### c7`, which lands in the thread. **in its next cycle**: the comment goes to its
   inbox and it answers with a message to you under `### c7`, which lands in the thread too (marked **⏾ for its next
   cycle**). **don't send**: it starts no reply but the instance can read it: leave several, then ask it to review
   them. Each message you send names the open ones waiting, and an answer under `### c7` lands in the thread as well.
-  You can edit, delete or send it until it is answered. It opens threads of its own too. The button says
+  You can edit, delete or send a comment only while it is unsent and unanswered. It opens threads of its own too. The button says
   **Send comment**, **Send for its next cycle** or **Save without sending**, and **Save note** when editing one not
   sent. Feedback says whether delivery succeeded or the comment was saved but not sent, with the reason. A saved,
   unsent comment still has **Send** and **Next cycle** available.
@@ -330,7 +395,7 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
 - **Kill** (last and apart from the other actions: in the ⋯ menu and on Summary; not on the overview's cards) pauses the instance and stops what it runs
   now, as `shaft kill`. **Delete…** is on its Summary page only, enabled once it runs nothing: you type its name to
   confirm (the server checks it again), it runs `shaft delete <name> --yes` with the archive, and the page goes back
-  to the overview ([kill and delete](plans/PLAN-kill-delete.md)).
+  to the overview ([kill and delete](../docs/plans/PLAN-kill-delete.md)).
 - Settings and Config saves update only the saved row, including its next save's comparison value. Use the default,
   Unset, Drive saves and removal, and Access switches update their control in place too. Other rows keep unsaved
   edits. Adding a Config key adds its editable row. A save still refuses a value changed by another writer.
@@ -342,7 +407,7 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
 2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
    and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
 
-**On your iPhone** ([PLAN-pwa.md](plans/PLAN-pwa.md)): open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
+**On your iPhone** ([docs/plans/PLAN-pwa.md](../docs/plans/PLAN-pwa.md)): open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
 paste it into the app's "not paired" page. Expired links show the same paste box for a new link. Pairing and notice
 pages are centred without a sidebar and link back to the app. If pairing is revoked while you use the app, the
@@ -350,7 +415,7 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 - **Notifications:** in the app, ⋯ then **Notify me on this device** (iOS 16.4+). A reply that ends while SHAFT is closed
   or locked then arrives as "example replied", with the badge, through Web Push; so does a message an instance sends
   you when it is routed to the web ("example asks …", see
-  [Where an instance reaches you](integrations.md#where-an-instance-reaches-you-shaft-channel)). The push carries
+  [Where an instance reaches you](integrations.md#where-an-instance-reaches-you-shaft-channel-)). The push carries
   nothing: the app fetches the text over the tailnet, each push its own (queued per device in
   `.supervisor/web/push-queue.json`). Pushes are signed with a key made by `/usr/bin/openssl`, kept in
   `.supervisor/web/`. The button says **Notifications on** only when SHAFT holds this device's subscription (it asks
@@ -369,8 +434,10 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   events and falls back only to that chat's last event, leaving other chats queued. An invalid instance name
   returns `400 bad_request`; omitting the parameter keeps the all-events behaviour. The badge counts instances
   unseen by that device. Tokens record `sandbox`
-  or `production`, which selects the APNs host. A dead token (410, `BadDeviceToken`, `Unregistered`) is dropped;
-  a bad topic or signing key keeps it and logs the actual configuration. Native push needs the three
+  or `production`, which selects the APNs host. HTTP 410, `BadDeviceToken`, `Unregistered`, and `DeviceTokenNotForTopic` remove
+  the matching registration. `ExpiredProviderToken` and `InvalidProviderToken` keep
+  it and clear the cached provider JWT so the next attempt signs a new one. Other
+  configuration errors keep the registration and log the configuration. Native push needs the three
   [APNs settings and key file](configuration.md#supervisor-secrets-and-identity), with missing configuration
   reported by `apns.configured()`; the server imports the APNs module directly.
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
@@ -391,9 +458,18 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 - **Offline:** when SHAFT cannot be reached, the app says so and retries. Opening a page also shows the cached
   offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 
-Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
-response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
-subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
+Every web-service request needs an allowed tailnet login and a host accepted by
+`web.allowed_hosts()`. That is the recorded tailnet host, or `SHAFT_WEB_HOSTS` when
+set. Protected web pages also require a paired-browser cookie; their POSTs require
+same-origin validation and the page's CSRF token. Pairing uses a one-time token and
+its POST requires same origin, without an existing pairing or CSRF token. Static
+and app-shell assets are available before pairing. Native `/app/v1` routes use
+their own bearer rules, with a one-time-token pairing exception and no cookie,
+origin, or CSRF check. Responses forbid inline script. Instances cannot reach the port.
+
+Most management actions run matching CLI subcommands, logged as `web: operator …`.
+Chat, feedback, and calendar approval decisions call in-process functions.
+Config, drive, document and settings edits go through `shaft config` /
 `shaft drive` / `shaft docs` / `shaft settings --from-web`. A chat message carries an id, so sending it again after
 no answer does not send it twice. Any other action that gets no answer says the outcome is unknown and which page
 to check; the page waits at least as long as the server allows that action. Chat
@@ -450,7 +526,7 @@ target wins. Feedback changes no grades. Fine-tuning changes belong to milestone
 
 ## The native chat apps' API (`/app/v1`)
 
-The iPhone, iPad and Mac apps ([PLAN-native-apps.md](plans/PLAN-native-apps.md)) use a JSON API on the web service
+The iPhone, iPad and Mac apps ([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md)) use a JSON API on the web service
 itself, same port, tailnet only. Its contract, every route, field, status code and example, is
 [app-api.md](app-api.md); the JSON the server gives for representative chats is checked in under
 `supervisor/tests/app_api_fixtures/`, the only fixture source. It includes pairing, chats, send and feedback
@@ -458,7 +534,7 @@ responses and retried turns as well as the chat scenarios. The apps' own tests d
 set by `SHAFT_APP_API_FIXTURES`.
 
 - **Who may use it.** As for the web UI, every request needs your tailnet login (`SHAFT_API_LOGINS`) and this Mac's
-  tailnet name as its host. Instead of the cookie it needs `Authorization: Bearer <device>.<secret>`, the same pair a
+  host accepted by `web.allowed_hosts()`, including a configured `SHAFT_WEB_HOSTS` override. Instead of the cookie it needs `Authorization: Bearer <device>.<secret>`, the same pair a
   paired browser's cookie holds, checked the same way (`devices.json`, the secret's hash). `/app/v1` reads no cookie
   and the web pages accept no bearer, so a web page can never reach the API with a credential the browser adds on
   its own; there is no CSRF token and no CORS.
@@ -472,7 +548,8 @@ set by `SHAFT_APP_API_FIXTURES`.
   queued, feedback waiting for your next message.
 - **Live updates.** `GET /app/v1/chat/<name>?since=…&live=…&wait=25` holds the request until the chat changes (a
   long-poll, rather than the PWA's 1.5 s polling); while only the running reply moves it sends the reply alone. A held
-  request for the current chat counts as the chat being on screen, so no push for it reaches that device meanwhile.
+  request for the current chat marks it on screen by default; only `watch=0` suppresses watching. Held polls refresh that mark
+  only when `at` is supplied; without it the initial mark expires. No push goes to a watching device for that chat.
 - **Sending** goes through the same paths as the web composer: **Send now**, **Queue after reply**, **Next cycle**,
   Retry, quotes (made into the message text on the server, exactly as the web composer writes them), files. Each
   message carries the app's id for it (`mid`): sent again while that chat is open, or after it went for the next
@@ -485,7 +562,7 @@ set by `SHAFT_APP_API_FIXTURES`.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
   and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
-  logic. Push to the apps (APNs) is set up separately ([PLAN-native-apps.md](plans/PLAN-native-apps.md) §2.2).
+  logic. Push to the apps (APNs) is set up separately ([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md) §2.2).
 - **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat
   full screen with a chat switcher on a phone, the instances beside it on an iPad with the documents as a third
   column; the same feed, composer (quote cards with answers, Send now, Queue after reply, Next cycle, the keyboard
@@ -505,3 +582,32 @@ set by `SHAFT_APP_API_FIXTURES`.
 
 Sources: [the API](../supervisor/app_api.py), [the chat model](../supervisor/web_chat.py),
 [seen marks](../supervisor/web_seen.py), [authentication and pairing](../supervisor/web.py).
+
+## Web route reference
+
+These routes return HTML or files unless stated otherwise. `<n>` is an instance
+name. Protected routes use the browser checks above. This table groups route
+families from `supervisor/web.py`; `/app/v1` is specified separately.
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET, POST | `/pair` | One-time browser pairing; available before pairing |
+| GET | `/static/<path>`, `/launch/<size>-<scheme>.png`, `/favicon.ico`, `/manifest.webmanifest`, `/sw.js`, `/offline` | Static and app-shell resources before pairing |
+| GET | `/` | Redirect to the last chat, first instance, or overview |
+| GET | `/overview`, `/i/<n>[/<tab>]`, `/costs`, `/messages`, `/messages/<file>` | Operator pages and instance tabs |
+| GET | `/i/<n>/files`, `/i/<n>/file`, `/i/<n>/transcript` | File browser, file download, and transcript detail |
+| GET | `/calendar/proposals` | Pending approval queue |
+| GET | `/experiments`, `/trials`, `/trials/<n>/<id>` | Experiment and trial pages |
+| GET | `/settings`, `/services` | Settings and service status |
+| GET | `/fragment/overview`, `/fragment/changelog`, `/fragment/rail`, `/fragment/calendar-proposals` | Incremental page fragments |
+| GET | `/fragment/i/<n>/cycles-next`, `/fragment/i/<n>/live` | Instance cycle plan and live state |
+| GET | `/fragment/chat/<n>`, `/fragment/chat/<n>/header`, `/fragment/chat/<n>/live`, `/fragment/docs/<n>` | Chat, activity, and document fragments; `/fragment/chat/<n>?away=1&at=<Unix-ms>` clears watching and returns 204 |
+| GET | `/fragment/experiments`, `/fragment/trials`, `/fragment/trials/<n>/<id>`, `/fragment/settings`, `/fragment/services`, `/fragment/services/log` | Refreshable status and report fragments |
+| GET | `/chatfiles/<cid>/<k>/<j>`, `/files/<file>/<j>` | Chat and message attachments |
+| GET | `/google/login`, `/google/callback` | Re-login for existing Google accounts |
+| GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
+| POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
+| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/clear` | Send, remove queued message, or clear chat |
+| POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
+| POST | `/docs/<n>/save`, `/docs/<n>/delete`, `/docs/<n>/comment[/edit\|/delete\|/send\|/state]` | Document and comment changes |
+| POST | `/preview/drive/<n>`, `/action/<verb>` | Drive diff preview and management actions through `web_actions.run` |

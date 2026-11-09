@@ -229,6 +229,7 @@ class Channel(planchannel.Channel):
             self._session = self._signature = None
 
     def _start(self, model, effort):
+        from .runner import RunRefused
         home = Path(HOME).expanduser().resolve()
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
         home.chmod(0o700)
@@ -248,9 +249,12 @@ class Channel(planchannel.Channel):
             self._process = subprocess.Popen(_seatbelt(argv, self._folder, home), cwd=self._folder,
                 env=child_env(home, self._folder), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True)
-        except OSError as exc:
+        except (OSError, RunRefused) as exc:
             shutil.rmtree(self._folder, ignore_errors=True)
-            raise self.failure('cannot start Grok: ' + type(exc).__name__) from exc
+            if isinstance(exc, RunRefused):
+                from .runner import _refused
+                _refused(self.broker_name, exc)
+            raise self.failure('cannot start Grok: ' + (str(exc) if isinstance(exc, RunRefused) else type(exc).__name__)) from exc
         self._launch = (model, effort)
         self._start_workers()
         self._request('initialize', {'protocolVersion': 1, 'clientInfo': {'name': 'shaft', 'version': '1'},

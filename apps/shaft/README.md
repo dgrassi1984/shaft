@@ -1,6 +1,6 @@
 # SHAFT for iPhone, iPad and Mac
 
-The native chat apps ([PLAN-native-apps.md](../../docs/plans/PLAN-native-apps.md)): one SwiftUI codebase, an iOS app
+The native chat apps ([docs/plans/PLAN-native-apps.md](../../docs/plans/PLAN-native-apps.md)): one SwiftUI codebase, an iOS app
 for iPhone and iPad, a native macOS app (not Catalyst), and a notification service extension for each. They talk to
 the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), over the tailnet.
 
@@ -19,20 +19,39 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 
 | Target | Platform | Bundle id |
 |---|---|---|
-| `SHAFT-iOS` | iOS 26+, iPhone and iPad | `io.github.dgrassi1984.shaft` |
-| `SHAFT-macOS` | macOS 26+ | `io.github.dgrassi1984.shaft` |
-| `NotificationService-iOS` | iOS 26+ | `io.github.dgrassi1984.shaft.NotificationService` |
-| `NotificationService-macOS` | macOS 26+ | `io.github.dgrassi1984.shaft.NotificationService` |
-| `SHAFTMacTests` | macOS 26+ | `io.github.dgrassi1984.shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
+| `SHAFT-iOS` | iOS 26+, iPhone and iPad | `$(SHAFT_BUNDLE_PREFIX).shaft` |
+| `SHAFT-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft` |
+| `NotificationService-iOS` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
+| `NotificationService-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
+| `SHAFTMacTests` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
 
-All of them use Swift 6 with complete strict concurrency, team `<TEAM_ID>` and automatic signing. The apps depend on
+All of them use Swift 6 with complete strict concurrency, automatic signing with your local team and bundle prefix. The apps depend on
 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui), pinned to exactly 2.4.1.
 
 ## Generate and build
 
 Requires Xcode 27 or later and XcodeGen (`brew install xcodegen`).
 
+Create `apps/shaft/Signing.local.yml` before generating the project. This file is gitignored.
+Use your Apple Developer Team ID and a bundle prefix you control. The include is required;
+create this file even for an unsigned build. Example, from `apps/shaft/`:
+
 ```bash
+# Working directory: apps/shaft/
+cat > Signing.local.yml <<'YAML'
+settings:
+  base:
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID
+    SHAFT_BUNDLE_PREFIX: com.example
+YAML
+```
+
+The app identifier and APNs topic are `$(SHAFT_BUNDLE_PREFIX).shaft`; extensions append
+`.NotificationService` and tests append `.MacTests`. The shared Keychain group also includes
+`$(DEVELOPMENT_TEAM)`. For unsigned builds, use illustrative values in the local file.
+
+```bash
+# Working directory: repository root
 cd apps/shaft
 xcodegen generate                       # makes SHAFT.xcodeproj and Generated/ from project.yml
 ```
@@ -44,6 +63,7 @@ Regenerate the shared app icon catalog from the PWA mark with `python3 apps/shaf
 Unsigned builds of every target (what agents and CI run):
 
 ```bash
+# Working directory: apps/shaft/
 xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-iOS -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build
 xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=macOS' \
@@ -55,22 +75,25 @@ Each app scheme builds its notification extension too.
 ## Try it against a fixture server
 
 `DevServer/fixture_server.py` runs the web service's own `/app/v1` (app_api, web_chat, documents, comments,
-feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances, a chat with every item
+feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances (`thelos`, `wren`, `ada`), a chat with every item
 kind, an earlier chat, documents with comment threads. It fakes only what lies outside the web service: the tailnet
 login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute, "wide" exercises wide tables and code),
 APNs (each push is written to `<dir>/pushes/` with apns.py's payload, and handed to a simulator with `--simctl`) and
 the instances' live state. It refuses the real `.supervisor/` and the ports of the running services.
 
 ```bash
+# Working directory: repository root
 python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 --simctl <simulator udid>
 python3 apps/shaft/DevServer/fixture_server.py pair --dir /tmp/shaft-fixture --port 8899 --name iphone-app
-python3 apps/shaft/DevServer/fixture_server.py act --dir /tmp/shaft-fixture --port 8899 question thelos "Archive it?"
+python3 apps/shaft/DevServer/fixture_server.py act --dir /tmp/shaft-fixture --port 8899 question <name> "Archive it?"
 ```
 
+Use `thelos`, `wren`, or `ada` for `<name>`; `act` defaults to `thelos` when the name is omitted.
+The fixture accepts each device's APNs topic unless `SHAFT_APNS_TOPIC` is set, which restricts registration to that topic.
 `serve` prints a pairing link; type or paste it into the app. `act` (with the same `--dir`, `--port` and `--simctl`)
 makes an instance send a message or a question (with its push), change its state, write a document, or have a chat
 past the 80-turn window (`long`). Settings writes stay in the fixture's own instance files. Service restarts change
-fake records only; no CLI or launchd runs. `act ... services busy "thelos replying"` makes the API refuse a restart
+fake records only; no CLI or launchd runs. `act ... services busy "<name> replying"` makes the API refuse a restart
 and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
 finishes a pending drain with a new fake pid. Cancel is available in the app. Run
 `python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
@@ -81,10 +104,11 @@ Security whole.
 For a simulator build that keeps the Keychain entitlement, sign it locally (never registers anything with Apple):
 
 ```bash
+# Working directory: apps/shaft/
 xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-iOS -destination 'platform=iOS Simulator,name=iPhone 17' \
   -derivedDataPath build/dd CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build
 xcrun simctl install booted build/dd/Build/Products/Debug-iphonesimulator/SHAFT.app
-xcrun simctl openurl booted shaft://chat/thelos      # opens that chat, as a notification tap does
+xcrun simctl openurl booted shaft://chat/<name>      # opens that chat, as a notification tap does
 ```
 
 ### The Mac app against the fixture server
@@ -92,14 +116,20 @@ xcrun simctl openurl booted shaft://chat/thelos      # opens that chat, as a not
 A Debug build of the Mac app can run unsigned from a terminal. Such a build has no Keychain access group (that needs
 the team's signing), so `SHAFT_DEV_DIR` keeps its pairing, drafts and outbox in a folder instead, and
 `SHAFT_DEV_PAIR` pairs it at launch with the link `serve` printed (Debug builds only: `macOS/MacDevSession.swift`;
-a Release build, or a Debug build started from Xcode or Finder, uses the Keychain):
+a Release build, or a Debug build without `SHAFT_DEV_DIR`, uses the Keychain):
 
 ```bash
+# Working directory: apps/shaft/
 xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=macOS' \
   -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build
 cp -R build/dd/Build/Products/Debug/SHAFT.app /tmp/ && codesign --force --deep -s - /tmp/SHAFT.app
 SHAFT_DEV_DIR=/tmp/shaft-mac SHAFT_DEV_PAIR='http://127.0.0.1:8899/pair?t=…' /tmp/SHAFT.app/Contents/MacOS/SHAFT
 ```
+
+`SHAFT_DEV_DIR` stores credentials as JSON on disk and accepts only loopback servers
+(`127.0.0.1`, `localhost`, or `::1`). Use Keychain pairing for a tailnet server.
+Development runs ask for notification permission only with `SHAFT_DEV_NOTIFY=1`;
+an ad-hoc build still receives no APNs token.
 
 `SHAFT_DEV_DRIVE=<script>` drives it from a script of steps (`macOS/MacDevDriver.swift` lists them: open a chat, keys
 such as `return`, `shift+return`, `cmd+return`, `option+down`, `cmd+.`, `cmd+shift+n` and `slash`, typing, selecting
@@ -113,9 +143,12 @@ the window takes no mouse moves (hover) and runs no animations (an inspector ope
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's) instead.
 
-To check the document-opening crash, seed a long chat with `fixture_server.py act ... long thelos 120`.
-Run the Release build with Debug conditions and `SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` several times.
-The crash is intermittent (unfixed: 2 of 3 runs).
+To check the document-opening crash, seed a long chat with `fixture_server.py act ... long thelos 120`
+(`mac-doc-open.drive` opens `thelos`).
+Run the Release build with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` and Debug's
+`NSAppTransportSecurity.NSAllowsLocalNetworking=true` Info.plist entry, then set
+`SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` and repeat. The `MacDev*` helpers require `#if DEBUG`.
+This is a manual reproduction procedure; no current failure rate is established.
 
 A process started directly stays behind other apps: start the app with `open -n` (`--env` for the variables, `--stdout`
 for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
@@ -124,6 +157,7 @@ for the log) when its window must be in front. The `activate` step then takes th
 ## Tests
 
 ```bash
+# Working directory: repository root
 cd apps/shaft/Packages/SHAFTKit
 swift test                                   # or: xcodebuild test -scheme SHAFTKit -destination 'platform=macOS'
 ```
@@ -136,15 +170,17 @@ read fails the test.
 The Mac app's own tests (`macOSTests/`, no window needed):
 
 ```bash
+# Working directory: apps/shaft/
 xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=macOS' \
   -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO test
 ```
 
-## Sign and install on a device
+## Sign and install on your own devices
 
 Xcode installs the apps directly, development-signed (no TestFlight or App Store).
 
-1. In Xcode → Settings → Accounts, sign in with the Apple ID of team `<TEAM_ID>`.
+1. In Xcode → Settings → Accounts, sign in with your own Apple Developer account.
+   Set its team and your bundle prefix in `Signing.local.yml`, then regenerate the project.
    The team id is the `OU` of the Apple Development certificate, not the id in the certificate's name.
 2. Open `SHAFT.xcodeproj`. Automatic signing registers the two App IDs with Push Notifications and Keychain Sharing on
    the first signed build.
@@ -152,6 +188,7 @@ Xcode installs the apps directly, development-signed (no TestFlight or App Store
    then pick the `SHAFT-iOS` scheme and the device and Run. From the terminal:
 
    ```bash
+   # Working directory: apps/shaft/
    xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-iOS -destination 'platform=iOS,name=<device name>' \
      -derivedDataPath build/dd -allowProvisioningUpdates build
    xcrun devicectl device install app --device <device name or id> \
@@ -164,7 +201,7 @@ Xcode installs the apps directly, development-signed (no TestFlight or App Store
 ### The pairing credential
 
 The apps and their extensions share one Keychain item (the server URL and the device's bearer), in the access group
-`<TEAM_ID>.io.github.dgrassi1984.shaft`. `project.yml` builds the group from `DEVELOPMENT_TEAM` once
+`$(DEVELOPMENT_TEAM).$(SHAFT_BUNDLE_PREFIX).shaft`. `project.yml` builds the group from `DEVELOPMENT_TEAM` once
 (`SHAFT_KEYCHAIN_GROUP`) and writes it both into each target's `keychain-access-groups` entitlement and into its
 Info.plist as `SHAFTKeychainAccessGroup`, which SHAFTKit reads. A target without the key refuses to start rather than
 keep the credential where the extension cannot read it.
@@ -186,9 +223,12 @@ its pairing screen again.
 - An Xcode build is development-signed, so its push token belongs to the APNs sandbox. The app reads `aps-environment`
   from its embedded provisioning profile and registers its token with `env` `sandbox` (`production` for a build with
   no profile or a production one), `topic` its bundle id, at every launch.
-- The server needs `SHAFT_APNS_KEY_ID`, `SHAFT_APNS_TEAM_ID=<TEAM_ID>`, `SHAFT_APNS_TOPIC=io.github.dgrassi1984.shaft`
+- Create your own APNs authentication key for your Apple Developer team. The server needs `SHAFT_APNS_KEY_ID`, `SHAFT_APNS_TEAM_ID=<your-team-id>`, `SHAFT_APNS_TOPIC=<your-bundle-prefix>.shaft`
   and the key at `.supervisor/web/apns/AuthKey_<KEYID>.p8` ([configuration.md](../../docs/configuration.md)). Without
-  them registration answers `503 push_off`, naming what is missing.
+  them registration answers `503 push_off`, naming what is missing. Set each value from the repository root
+  with `bin/shaft settings set KEY=VALUE`, then restart the web service after active work finishes.
+  Use the same team as `Signing.local.yml` and the app's expanded bundle identifier for the topic.
+  These are settings in `supervisor/apns.py`; the server does not read the XcodeGen signing file.
 - A push carries the title only. The notification service extension fetches the body from `/app/v1/push/latest`
   with the shared credential, within its time limit; on any failure the title shows alone.
 - The simulator receives remote pushes too (Xcode 14+ on Apple silicon), so the iOS extension can be tried there.

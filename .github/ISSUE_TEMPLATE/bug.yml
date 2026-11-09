@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem with SHAFT.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove API keys, credentials, real mail, and instance content from every field and attachment.
+        Report security vulnerabilities through a private advisory, not this form.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS version and hardware architecture"
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: SHAFT tag or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: routing
+    attributes:
+      label: Model routing
+      options:
+        - Cloud
+        - Local
+        - Plan
+        - Mixed or not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command and reproduction steps
+      description: Replace private names and content with generic examples.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Remove keys, credentials, mail, and instance content before pasting logs.
+      render: text

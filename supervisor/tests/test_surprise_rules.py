@@ -1,6 +1,6 @@
 """Surprise measurement (docs/plans/PLAN-surprise M0): the rule flags, recurrence and the per-model baseline.
 
-The result strings are copied from real episodes (2026-10-12/13). The template's in-the-moment rule (M1) must
+The result strings are sanitized from real episodes. The template's in-the-moment rule (M1) must
 flag these same strings the same way: surprise_fixtures.py is the contract between the two copies.
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ class BaselineTest(unittest.TestCase):
     def test_recurrence_counts_episodes_not_retries(self):
         denied = "ERROR: PermissionError: self/self.md: use update_self_model"
         self.write([
-            # the same error twice in one episode is one surprise (wren's two secret_set TypeErrors at 11:54)
+            # the same error twice in one episode is one surprise (sanitized from real episodes)
             {"ts": "2026-10-13T01:00:00", "kind": "talk", "tools": [_tool("write_file", denied, "self/self.md"),
                                                                     _tool("write_file", denied, "self/self.md")]},
             {"ts": "2026-10-13T02:00:00", "kind": "live", "steps": 3, "tools": [_tool("list_files", "(empty)", "notes")]},

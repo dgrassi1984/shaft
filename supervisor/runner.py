@@ -284,7 +284,16 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
     last = datetime.fromisoformat(stamp.read_text().strip()) if stamp.exists() else None
     if last and not _core_is_empty(before) and datetime.now() - last < timedelta(hours=CORE_MIN_HOURS):
         caption = "*(values and temperament — change rarely)*"
-        restored = CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", _personality(root), count=1)
+        text = re.sub(r"^#{1,6} Core[ \t]*$", "## Core", _personality(root), flags=re.M)
+        block = f"## Core\n{caption}\n\n{before}\n\n"
+        restored, count = CORE_RE.subn(lambda _: block, text, count=1)
+        if not count:
+            # The template puts Core after its title and introduction, before the other sections.
+            heading = re.search(r"^## ", text, re.M)
+            title = re.match(r"# [^\n]*(?:\n|$)", text)
+            at = heading.start() if heading else title.end() if title else 0
+            prefix = text[:at].rstrip()
+            restored = (prefix + "\n\n" if prefix else "") + block + text[at:].lstrip("\n")
         first = CORE_RE.search(restored)
         tail = CORE_RE.sub("", restored[first.end():]) if first else ""   # no second Core block survives
         try:
@@ -985,7 +994,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     """Everything enforced after the instance acted: append-only journal, core-personality pace, the
     test gate on code and on the config.env lines it set (revert on failure), the commit, probation and
     the personality check. Returns False if the commit failed.
-    A failed gate is reverted whatever its cause; when the cause was the supervisor's side (the baseline: _cause), the
+    A refused sandbox leaves changes unsettled. A failed gate is reverted whatever its cause; when the cause was
+    the supervisor's side (the baseline: _cause), the
     change is also held (gate_held) and re-gated once the baseline is green (regate_held). `regating`: the held change
     this settle gates again — a red baseline then counts one more try instead of holding it twice. `outcome`, when
     given: filled with how the gate ended ({"result": kept / candidate-failed / held / dropped / baseline-failed,
@@ -1029,6 +1039,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                     f"== protected copy ==\n{type(e).__name__}: {e}",
                     "candidate" if isinstance(e, (TreeTooBig, ValueError)) else "baseline",
                     f"the gate's protected copy of my code failed ({type(e).__name__}: {e})")
+        if getattr(test_log, "refused", False):
+            raise RunRefused(test_log.why)   # keep code/config unsettled; no revert, hold attempt or probation
         files = touched + (["config.env"] if configured else [])
         if ok:
             kept = files
@@ -1532,8 +1544,8 @@ def run_conversation(name: str, kind: str, agent_args: list[str], talk_id: str, 
         _trap_runs(saved)
         with Presence(name, talk_id, kind):
             return _conversation(name, root, kind, agent_args, talk_id, driver)
-    except RunRefused:                           # Turn.begin said why
-        return REFUSED
+    except RunRefused as e:                      # includes profile refusal at launch or settlement
+        return _refused(name, e)
     finally:
         for s, handler in saved.items():
             signal.signal(s, handler)

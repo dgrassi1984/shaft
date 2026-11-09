@@ -99,7 +99,7 @@ class Context(RecapCase):
         self.assertIn('calendar_events {"query": "planning"} -> ok', lines[0])
 
     def test_credentials_in_logged_calls_never_reach_the_model(self):
-        """2026-10-16: wren's http_request lines carry the start of GitHub bearer tokens and JWTs."""
+        """http_request log lines may carry the start of bearer tokens and JWTs."""
         (self.sup / "broker.log").write_text(
             "[x]\n"
             f'[{_at(3, " ")}] wren http_request {{"url": "https://api.github.com/x", "headers": {{"Authorization": '

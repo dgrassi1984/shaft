@@ -15,7 +15,7 @@ a command you run from a shell that sets it.
   is checked by its knob's own parser first (for example, a negative timeout or JSON that is not an object): a value it refuses is never written. `--expect` refuses if the file's value changed since you looked.
   Each change is logged in `supervisor.log`.
 - **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
-  file when they start. A long-running service (api, scheduler, telegram, web, model) holds what it read at its start;
+  file when they start. A long-running service (api, scheduler, telegram, web, model, embed) holds what it read at its start;
   each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
   Settings page say "not live yet: restart api (`shaft api on`), …" until the services holding another value
   restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
@@ -58,7 +58,7 @@ restart the web service after changing them.
 
 ## Every supervisor knob
 
-`SHAFT_ACTION_INSTANCES` enables the conservative [operator action classes](safety.md#operator-action-classes-142)
+`SHAFT_ACTION_INSTANCES` enables the conservative [operator action classes](safety.md#operator-action-classes)
 for a comma-separated list of instance names. Its default is `thelos`; an empty value selects nobody.
 It does not add grants. Other instances retain their current behavior. The selection is read at process start;
 class demotion and restoration are read from supervisor-owned state on each dispatch.
@@ -87,6 +87,8 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BATTERY_ITEM_TIMEOUT_S` | `1800` | seconds one battery item may run | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
+| `SHAFT_CALENDAR_WRITES_PER_DAY` | `20` | calendar write attempts per instance per day; 0 disables writes | [broker.py](../supervisor/broker.py) |
+| `SHAFT_CALENDAR_PROPOSAL_HOURS` | `24` | calendar proposal lifetime in hours | [calendar_proposals.py](../supervisor/calendar_proposals.py) |
 | `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
 | `SHAFT_TAILNET_GRANTS` | `{}` | tailnet hosts an instance may call through http_request with one of its keys (JSON: {"<instance>": ["<host>:<port>"]}); its sandbox still reaches none | [broker.py](../supervisor/broker.py) |
 | `SHAFT_PUSH_HOLD` | `1` | hold non-urgent device notifications (0: off) | [pushes.py](../supervisor/pushes.py) |
@@ -101,6 +103,12 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_LOG_HOURS` | `24` | positive integer hours of Codex's own SQLite logs to keep; read by runs and api | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -160,7 +168,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_TRIALS_PER_DAY` | `2` | trials an instance may ask for per day (the operator's are not counted) | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_DAILY_USD` | `3` | dollars per day an instance's own trials may spend on cloud models | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` | `24` | replayed cycles per day an instance's own trials may run on the local model; past it they run on the fallback model | [trial.py](../supervisor/trial.py) |
-| `SHAFT_TRIAL_N_MAX` | `10` | the most past cycles one trial replays | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_N_MAX` | `10` | maximum replay units per arm across selected past states, counting live cycles and sleeps | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_LOCAL_WAIT_H` | `6` | hours a trial waits for the local model's idle time before it runs on the fallback model | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_FALLBACK_MODEL` | `openrouter/xiaomi/mimo-v2.6-pro` | the cloud model a local-model trial runs on when the local model stays busy | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_PARALLEL` | `3` | replayed cycles a cloud-model trial runs at once | [trial.py](../supervisor/trial.py) |
@@ -191,11 +199,10 @@ An empty `OPERATOR_NAME` resolves to `the operator`; setting your name is recomm
 not required. `LLM_BASE_URL` and `LLM_MODEL` are required. Leave `LLM_API_KEY` empty:
 cloud credentials belong to the broker. Config is versioned with instance code.
 
-The following defaults are from the template branch's `shaft/config.py:17`;
-the shipped `config.env:10` supplies the local URL and model. Inspect them without
+The following defaults are from the template branch's `shaft/config.py`;
+the shipped `config.env` supplies the local URL and model. Inspect them without
 creating an instance with `git show template:shaft/config.py` and
-`git show template:config.env` after setup. During publication preparation the
-reviewed ref was `refs/heads/publish-prep-template`.
+`git show template:config.env` after setup.
 
 | Key | Built-in default | Shipped config override |
 |---|---|---|
@@ -247,10 +254,14 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `FIRST_ERROR` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
+### Stale records
+
 `STALE_LINE_HOURS` flags dates older than this many hours in self/goals.md and self/self.md
 at sleep. `STALE_GOAL_HOURS` flags Active goal bullets with no live touch in that window,
 only if the operator sent a conversation turn during it. Set either to 0 to disable that check.
 Sleep asks for a fix, retirement or reason to keep each item, recorded in its journal.
+
+### Conversation reply budgets
 
 `TALK_REPLY_CALLS` (6) and `TALK_REPLY_S` (90) set the default conversation reply budget.
 `plan_reply(calls, seconds, why)` changes it for that reply, counting from the reply's start.
@@ -265,11 +276,15 @@ call finishes normally. Set either knob to 0 to disable that budget.
 with its length, the limit and how many characters to cut, asking for the deliverable's check rather than ritual
 clauses, and ends with the draft so the instance can trim it in one retry (review I8; never trimmed silently).
 
+### Sleep feedback
+
 `SLEEP_VERDICT_CHARS` bounds sleep feedback reads, in the sleep feedback group in `template/config.env`.
 Sleep reads judgment pages (up to 24,000 characters each) until caught up or until the next page would take the
 verdict text past this positive character budget; the block is re-sent on every sleep step, so the default
 (~30k tokens) leaves the rest of a 262,144-token window free. At the budget it tells the model and stderr that
 feedback was cut short; the next finished sleep resumes from the last page it read.
+
+### Loop guards and confidence
 
 `LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
 `loop_shadow` array without changing model input; `on` also appends advice after the call executes;
@@ -277,7 +292,7 @@ feedback was cut short; the next finished sleep resumes from the last page it re
 `LOOP_EFFECT_ROUNDS` is a positive integer, default 3. A first failed result counts as round one;
 new successful observations reset the count. A successful observation seen earlier in this run counts as
 no new evidence. Counts require consecutive calls in the same tool/target family.
-See [effect-loop measurement](architecture.md#effect-loop-measurement) for target rules and replay reporting.
+See [effect-loop measurement](architecture.md#repeated-actions-and-effect-measurement) for target rules and replay reporting.
 `CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
 The gate's scripted cycles declare in a form every mode accepts, and the supervisor's own suite runs them once
 per mode, so an instance that changes the mode is judged on its code, not on tests pinned to `confirm`.
@@ -286,17 +301,19 @@ clauses, each with an integer confidence 0-100. The template records them with a
 the supervisor multiplies their probabilities when it writes the judgment, assuming independence because
 all clauses must hold. This v4 confidence stays apart from v1-v3 in calibration, AUROC and base rates.
 Both `clauses` and `noconfirm` omit the base rate and `confirm_confidence`; `noconfirm` records a single v2 confidence.
-These arms are available for a later trial. No instance configuration changes automatically. If the Thelos trial
-selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
+These arms are available for a later trial. No instance configuration changes automatically.
+The operator can set `noconfirm` in an instance's `config.env`. Invalid values follow the usual warning and fallback.
+
+### Model turns and wake behavior
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `MAX_STEPS_*` count model turns. Plan-channel tool replies marked `shaft_same_turn`
 do not spend a turn; after 10 consecutive such replies, the next one spends a turn to bound missing end signals.
 Other replies count even without usage. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
 values use the instance's own interval unless the operator sets a wake floor, and a wake at that interval runs only with
-something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wakes)). `CURIOSITY_EVERY_CYCLES=5` makes one live
+something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wake-sources-and-background-work)). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
-(0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
+(0 = never; [docs/plans/PLAN-surprise.md](../docs/plans/PLAN-surprise.md)).
 A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and
 inbox; surprises about the instance's own tools, plugins, jobs, ledgers, gate or code are never drawn, and with none
 outward the prompt says so and the goal is free (review I7 in [architecture](architecture.md)).
@@ -305,12 +322,14 @@ no prompt asks for doubtful steps. `LOOK_AHEAD` accepts `on` or `off` (default).
 about what the operator will need within 7 days, asking the instance to prepare it and offer it in one line.
 Off leaves the live instructions unchanged.
 
-The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
+### Experimental mechanisms
+
+These settings switch the mechanisms of [docs/plans/PLAN-consciousness.md](../docs/plans/PLAN-consciousness.md), each on by default:
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
 `WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),
 `ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to for promises to
-Daniele (`operator`) or peers from `list_instances`, settled in live cycles or sleep against the record; own plans belong in goals/notes)
+the configured operator (`operator`) or peers from `list_instances`, settled in live cycles or sleep against the record; own plans belong in goals/notes)
 and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
@@ -322,21 +341,27 @@ In conversations, orders for later work must be recorded with `commit_to`, a due
 With `COMMITMENTS=off`, `queue_for_next_cycle` carries the exact order marked ORDER and its criterion instead.
 A blocked order gets a one-line reply. The conversation write-up lists orders with neither a commitment nor a result,
 using the conversation tool results as evidence.
-Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
+Sources: template `shaft/config.py`, [autonomy.py](../supervisor/autonomy.py).
+
+### Mail and calendar watches
 
 `WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
 new mail under the instance's granted labels and changed events on its granted calendars: `inbox` puts one message
 per pass in its inbox, `wake` also wakes it (at most once per `SHAFT_WATCH_WAKE_MIN` minutes); any other value is
 `off`, logged once. Only what the operator granted is watched; see [integrations](integrations.md#mail-shaft-mail-).
 
-`BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The instance's own
-watchers write it as a scheduled job with the next 48 hours of calendar, actionable mail, open commitments to the
-operator and his last corrections, each dated. Prompt construction only reads the file. A first line
+### Briefing
+
+`BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The template prompt asks the instance to create its own
+watchers as a scheduled job. No briefing watcher is shipped. The requested briefing contains the next 48 hours
+of calendar, actionable mail, open commitments to the operator, and the operator's last corrections, each dated. Prompt construction only reads the file. A first line
 `generated: <ISO time>` dates the briefing; otherwise its mtime does. The prompt shows its age in hours, marks it
 stale after 24 hours, and shows it like goals.md under `BRIEFING_CHARS` (default 6,000): whole `## ` sections, a section
 whose heading names corrections first, then the rest in file order, and one line per section left out with the
 `read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
+
+### Standing context budgets
 
 Every section of the standing context (the system prompt of every run) has a budget: the self-model 10,000
 characters, personality 4,000, the skill list 3,000, facts 6,000, digests 3,500, goals `GOALS_CHARS`, journal
@@ -350,6 +375,8 @@ The open surprises keep their own cap (1,200 characters) and count against the t
 facts, digests, goals, journal, then the last sleep, improvement plan, surprises with commitments, projects,
 corrections, stats and the time, so a prompt cache keeps the longest prefix it can from one run to the next.
 
+### Inbox budget
+
 `INBOX_CHARS` (default 4,000; 0 = no limit) bounds a live cycle's inbox: the operator's messages whole and first (never cut), every other message as one line
 and then by time, with its header but `To` (`Trust` cut at 300 characters, other values at 100, the header at 600
 together) and the first 200 characters of its body; `read_file inbox/<file>` shows one whole. The budget keeps 200
@@ -359,11 +386,15 @@ the rest stay in the inbox for a later cycle, are named under **Left in my inbox
 `inbox_deferred` (its `inbox` still lists every message found at the start, which a trial replay restores). Retrieval
 reads every message whole; attached images and the goal slate come from the listed ones.
 
+### Tool result retention
+
 `RESULTS_KEEP_TURNS` (default 4; 0 = never) shrinks the tool results of model turns older than that many, in live
 cycles, sleeps and conversations, to one line: the tool, its arguments (120 characters), the result's first line, its
 length and `read_file .tmp/results/<pid>/<n>.txt`, where the whole result is kept. Results of 400 characters or less
 stay whole. The call ledger and the workspace's focus line stand under the newest step's last result only; the
 ledger's file writes are cut from their oldest end at 800 characters, each one left out still in its own result.
+
+### Goal selection and error feedback
 
 `GOAL_SLATE` (on, off) shows a live cycle, before `declare_intent`, up to six candidate goals from the instance's own
 records: inbox messages (the operator's first), overdue commitments, projects at risk or past a boundary, its last live
@@ -375,19 +406,24 @@ how often similar goals were met is never shown, since declare_intent's base rat
 similar earlier goal judged `no` or `partial`. Both read `memory/verdicts.jsonl`, which the sleep fills from
 `record(kind='judgments', format='json')` (it carries `value` and `value_for` when the judge gave them).
 
+### Live handoffs
+
 `HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision
 condition, each field cut at 600 characters and the block at 3,000, saying which episode file holds the whole.
 Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
 budget of their structured blocks; a shorter log stays shorter. `off` hides the block. Invalid modes keep the
 next source's value with a warning. These switches affect prompt display; live episodes still record handoffs.
 
+### Cloud and self-hosted routing
+
 Cloud routing uses `LLM_BASE_URL="broker"` and a model in `SHAFT_CLOUD_MODELS`.
 Self-hosted routing uses the same base URL and `<server>/<model>`, where the server
 is configured in `SHAFT_SELF_HOSTED`. Its fallback defaults to `:8780`; set
 `SHAFT_SELF_HOSTED_FALLBACK` to an empty value to fail instead of using local Bonsai.
 Trial replays disable fallback. Sources: [cloudllm.py](../supervisor/cloudllm.py),
-[selfhosted.py](../supervisor/selfhosted.py),
 [selfhosted.py](../supervisor/selfhosted.py).
+
+### Codex plan channel
 
 Codex plan routing also uses `LLM_BASE_URL="broker"`, with `LLM_MODEL="codex/gpt-6-astra"`
 or another model in `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft codex status`
@@ -397,6 +433,8 @@ the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
 `codex/x (fallback y)`. Trial replays and bake-offs fail instead of falling back.
 Judges, image descriptions, consults, coder hand-offs and recaps still require their API models.
 Source: [broker.py](../supervisor/broker.py).
+
+### Codex log retention
 
 Before starting a channel, retention deletes rows older than `SHAFT_CODEX_LOG_HOURS` from
 `SHAFT_CODEX_HOME/logs_2.sqlite` in batches of at most 1,000. A locked stamp file limits attempts

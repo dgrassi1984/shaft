@@ -329,7 +329,7 @@ def _long_slot(name: str):
 def run(name: str, plugin: str) -> int:
     """One run of a job: the plugin in the job sandbox, its output to the inbox, a wake request kept for the
     scheduler. Returns 0 on success, 1 on a failed run, 2 if there is no such job, 3 if it is a long job and another
-    long job of the instance is running."""
+    long job of the instance is running, or runner.REFUSED if its sandbox cannot be built."""
     root = instance_root(name)
     job = next((j for j in declared(name, root)[0] if j["plugin"] == plugin), None)
     if job is None:
@@ -370,8 +370,19 @@ def _run(name: str, root: Path, job: dict) -> int:
     safe_mkdir(root, ".tmp")
     home = safe_mkdir(root, f".jobs/{plugin}/.home")
     prof = state_dir / ".job.sb"
-    prof.write_text(sandbox.job_profile(root, HOME, state_dir, broker.shared, egress_port=broker.egress.port,
-                                        broker_port=broker.port, env_root=broker.env_root))
+    from .runner import RunRefused, _refused
+    try:
+        prof.write_text(sandbox.job_profile(root, HOME, state_dir, broker.shared, egress_port=broker.egress.port,
+                                            broker_port=broker.port, env_root=broker.env_root))
+    except RunRefused as e:
+        broker.stop()
+        prof.unlink(missing_ok=True)
+        _update(name, plugin, running=None, pid=None, resume=before.get("resume"),
+                status="refused", last_error=str(e))
+        _log_row(name, {"ts": stamp.isoformat(timespec="seconds"), "plugin": plugin, "hash": job["hash"],
+                        "done": datetime.now().isoformat(timespec="seconds"), "refused": str(e)})
+        log(f"{name}: job {plugin} refused — {e}")
+        return _refused(name, e)
     python = pyenv.python(broker.env_root)
     env = {"PATH": ":".join([*pyenv.path_dirs(root, broker.env_root), str(Path(PYTHON).parent), "/usr/bin:/bin"]),
            "HOME": str(home), "TMPDIR": str(home), "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
@@ -830,7 +841,9 @@ def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
         if r.get("plugin") != plugin or r.get("skipped"):
             continue
         h = r.get("hash") or job_hash
-        if r.get("exit") == 0 and not r.get("timed_out"):
+        if r.get("refused"):
+            e.update(last_error=r["refused"], status="refused")
+        elif r.get("exit") == 0 and not r.get("timed_out"):
             e.update(last_ok=r["ts"], fails=0, hash=h, last_error=None, status="done")
         elif r.get("resuming"):   # a long job stopped after saving its place: not a failure
             n = int(r.get("resumed") or 0) + 1
@@ -887,7 +900,8 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Pa
     if rows:
         lines.append("  recent runs:")
         for r in rows[-limit:]:
-            what = (f"skipped ({r['skipped']})" if r.get("skipped") else
+            what = (f"refused — {r['refused']}" if r.get("refused") else
+                    f"skipped ({r['skipped']})" if r.get("skipped") else
                     f"{'ok' if r.get('exit') == 0 else 'stopped' if r.get('resuming') else 'FAILED'} {r.get('seconds')}s"
                     + (f" (resume {r['resumed']})" if r.get("resumed") else "")
                     + (", gave up" if r.get("gave_up") else "")

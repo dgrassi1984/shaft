@@ -1627,10 +1627,16 @@ class Broker:
         if not workdir.is_dir():
             raise ValueError(f"no directory {cwd!r} in your folder")
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
+        from .runner import RunRefused, _refused
+        try:
+            profile = sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
+                                          job_state=self.run_confined_to)
+        except RunRefused as e:
+            _refused(self.name, e)
+            raise
         fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
-                                        job_state=self.run_confined_to))
+            f.write(profile)
         bindir = Path(PYTHON).parent
         # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
         # interpreter's folder has no such name), then the system.

@@ -1,5 +1,7 @@
 # secrets
 .env
+# the operator's private records (reviews and bake-off reports on live instances): kept on this Mac, never published
+/private/
 # runtime artefacts
 .supervisor/
 **/logs/
@@ -78,3 +80,6 @@ __pycache__/
 /.opencode/skills/work-issue-batch/
 /.opencode/skills/work-issue/
 # END agent-workflows
+
+# Local Apple signing settings
+/apps/shaft/Signing.local.yml
