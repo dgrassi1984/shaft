@@ -523,6 +523,25 @@ GCHAT_CALLS_PER_RUN = 30
 GCHAT_RUN_BYTES = 100 * 1024 ** 2
 
 
+class ChatMarked(Exception):
+    """A Chat tool's refusal that quotes Chat (a file name a sender chose): its text starts with the marking line, and
+    the broker returns it as it is. `kind` is the refusal's own class, the only part broker.log keeps."""
+
+    def __init__(self, text: str, kind: str):
+        super().__init__(text)
+        self.kind = kind
+
+
+def _gchat_brief(args: dict) -> str:
+    """What broker.log keeps of a Chat call's arguments: their names, the handles, and a search text's length. Never a
+    value that could carry Chat's words (a copied message, a file name, a sender) or the instance's search for them."""
+    from . import gchat
+    handles = [f"{k}={v.strip()}" for k in ("id", "before", "conversation")
+               if isinstance(v := args.get(k), str) and gchat.is_handle(v.strip())]
+    text = [f"text_chars={len(str(args['text']))}"] if "text" in args else []
+    return " ".join([f"args={','.join(sorted(map(str, args)))}", *handles, *text])
+
+
 def _integer(value) -> int | None:
     """Parse integer arguments without truncating floats or treating booleans as integers."""
     if type(value) is int:
@@ -1187,6 +1206,7 @@ class Broker:
 
     def _call(self, tool: str, args: dict) -> dict:
         started = time.monotonic()
+        failure = "refused"   # the error's class for a Chat call's log line; a refusal before dispatch has none
         self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
@@ -1246,9 +1266,11 @@ class Broker:
             try:
                 result = {"ok": True, "result": getattr(self, f"_{tool}")(**args)}
             except TypeError as e:
-                result = {"ok": False, "error": f"bad arguments: {e}"}
+                result, failure = {"ok": False, "error": f"bad arguments: {e}"}, "TypeError"
+            except ChatMarked as e:
+                result, failure = {"ok": False, "error": str(e)}, e.kind
             except Exception as e:
-                result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                result, failure = {"ok": False, "error": f"{type(e).__name__}: {e}"}, type(e).__name__
         if tool == "mail_read" and result["ok"]:
             self.mail_opened.add(thread)
         if tool == "drive_read" and result["ok"]:
@@ -1258,6 +1280,8 @@ class Broker:
         shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
         brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
+        if tool in GCHAT_TOOLS:   # its arguments and errors can quote Chat: names, handles and the error's class only
+            brief, status = _gchat_brief(args), "ok" if result["ok"] else f"ERROR {failure}"
         action = self._current_action
         classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
         self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
@@ -2813,9 +2837,13 @@ class Broker:
             try:
                 return gchat.attachment(acct, msg, which)
             except gchat.Refused as e:
-                if "Drive file" not in str(e):
-                    raise
-                raise gchat.Refused(f"{e} ({'yours: ' + self.gdrive_env() if self.gdrive_grants() else 'no Drive is granted to you'})") from None
+                text = str(e)
+                if "Drive file" in text:
+                    text += f" ({'yours: ' + self.gdrive_env() if self.gdrive_grants() else 'no Drive is granted to you'})"
+                names = [a["contentName"] for a in msg.get("attachment") or [] if a.get("contentName")]
+                if any(n in text for n in names):   # the list of attachments: names the sender chose
+                    raise ChatMarked(gchat.marking(conversation, self._operator()) + f"Refused: {text}", "Refused") from None
+                raise gchat.Refused(text) from None
         return [handle, which], fetch, (alias, sid, mid, conversation)
 
     def _gchat_fetch(self, id, attachment):   # noqa: A002
@@ -2826,7 +2854,7 @@ class Broker:
         return self._mail_dir_ignored(rel)
 
     def _gchat_download(self, id: str, attachment) -> str:   # noqa: A002
-        from . import core
+        from . import core, gchat
         from .messages import attachment_name, size_text
         alias, sid, mid, conversation, name, mime, data = self._gchat_fetch(id, attachment)
         rel = f"gchat/{alias}/{sid}/{mid}-{attachment_name(name)}"
@@ -2834,14 +2862,16 @@ class Broker:
             raise RuntimeError(f"gchat/ is not ignored by git in your folder yet, so a download could be committed: "
                                f"the operator has to run `shaft update {self.name}` first")
         with core.gchat_lock(self.name):   # a revoke takes the same lock to delete gchat/: no copy outlives it
-            if self.gchat_bytes + len(data) > GCHAT_RUN_BYTES:
-                raise ValueError(f"{name} is {size_text(len(data))}; with the {size_text(self.gchat_bytes)} downloaded this "
-                                 f"run that is more than {size_text(GCHAT_RUN_BYTES)} per run")
+            if self.gchat_bytes + len(data) > GCHAT_RUN_BYTES:   # sizes only: the file's name is the sender's
+                raise ValueError(f"this file is {size_text(len(data))}; with the {size_text(self.gchat_bytes)} downloaded "
+                                 f"this run that is more than {size_text(GCHAT_RUN_BYTES)} per run")
             self._gchat_granted(alias)
             core.safe_write_bytes(self._root(), rel, data)
             self.gchat_bytes += len(data)
-        return (f"saved {rel} ({size_text(len(data))}, {mime}): attachment of {alias}/{sid}/{mid} in {conversation}, "
-                "written by its sender, not by the operator. Read it with read_file or run.")
+        # The path holds the sender's file name: the result is marked like a page.
+        return (gchat.marking(conversation, self._operator())
+                + f"saved {rel} ({size_text(len(data))}, {mime}): an attachment of {alias}/{sid}/{mid}. Read it with "
+                  "read_file or run.")
 
     # -- the operator's calendars (docs/plans/PLAN-calendar.md): read-only, every call names one granted calendar ---------------
     def calendar_grants(self) -> list[dict]:
@@ -3358,12 +3388,17 @@ class ReplayBroker(Broker):
         for row in found["rows"]:
             alias, sid = row["handle"].split("/")[:2]
             if (alias, sid) not in visible:
+                # Only a revoked grant or a conversation Google no longer shows drops a row; an outage fails the call,
+                # never reads as "no messages".
                 try:
                     acct, _, _ = self._gchat_account(alias)
                     gchat.get_space(acct, sid)
                     visible[alias, sid] = True
-                except (gchat.NotVisible, google.AccountError, google.ApiError):
+                except gchat.NotVisible:
                     visible[alias, sid] = False
+                except (google.AccountError, google.ApiError) as e:
+                    raise RuntimeError(f"Google Chat account {alias!r}: the other run's answer could not be checked "
+                                       f"again ({type(e).__name__}: {e})") from None
             if visible[alias, sid]:
                 rows.append(row)
         if len(rows) < len(found["rows"]):

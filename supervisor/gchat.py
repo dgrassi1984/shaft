@@ -77,6 +77,16 @@ def _id(value: str, *, message: bool = False) -> str:
     return value
 
 
+def is_handle(handle) -> bool:
+    """Whether `handle` has a handle's shape, asking nothing of Google or the logins (what a log may quote)."""
+    parts = handle.split('/') if isinstance(handle, str) else []
+    try:
+        return (len(parts) in (2, 3) and bool(google.ALIAS_RE.fullmatch(parts[0])) and bool(_id(parts[1]))
+                and (len(parts) == 2 or bool(_id(parts[2], message=True))))
+    except NotVisible:
+        return False
+
+
 def parse_handle(handle: str) -> tuple[str, str, str]:
     """Parse a logged-in account's handle; the broker checks the current grant."""
     parts = handle.split('/') if isinstance(handle, str) else []

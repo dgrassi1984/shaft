@@ -830,8 +830,9 @@ def cmd_gchat(target: str | None, action: str | None, alias: str | None) -> int:
                   file=sys.stderr)
             return 2
         try:
-            google.Account(alias, secrets_env()).require(google.CHAT_MESSAGES).get(
-                "https://chat.googleapis.com/v1/spaces", pageSize=1)
+            # Every scope the broker's Chat tools require: a grant they would refuse is not saved.
+            google.Account(alias, secrets_env()).require(google.CHAT_MESSAGES).require(google.CHAT_SPACES).require(
+                google.CHAT_MEMBERS).get("https://chat.googleapis.com/v1/spaces", pageSize=1)
         except (google.AccountError, google.ApiError) as e:
             print(f"not granted: {e}", file=sys.stderr)
             return 2
