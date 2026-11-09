@@ -427,6 +427,12 @@ VOICE_NOTE = ("\n\nThe operator is talking to you by voice and hears your reply 
               "spoken sentences, and ask at most one question at a time. Keep tables, code and long material for a "
               "document, and say that you made it. Use your tools as you normally would.")
 
+# A voice session (PLAN-voice §7: one process kept for the whole conversation) builds its system prompt once, so the
+# model's session is kept from one turn to the next; what changes between turns comes with each message instead, in
+# this block before the operator's words (talk.answer, `held`).
+TURN_CONTEXT = ("[SHAFT, about this moment of the conversation — not {operator}'s words]\n\n{context}\n\n"
+                "[{operator}]\n\n")
+
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 CURIOSITY = ("\n\nThis is a curiosity cycle: take your goal from the selected outward surprise below. "
