@@ -539,3 +539,62 @@ class SearchTest(unittest.TestCase):
 
     def test_empty_conversation_listing_says_no_conversations(self):
         self.assertEqual(self.chat.search(self.acct), ([], '', 'no conversations'))
+
+
+class AttachmentTest(unittest.TestCase):
+    def setUp(self):
+        from supervisor import gchat
+        self.chat = gchat
+        self.acct = google.Account('work', {})
+        self.upload = {'contentName': 'example.txt', 'contentType': 'text/plain',
+                       'attachmentDataRef': {'resourceName': 'spaces/room/attachments/a?b#c%d e'}}
+        self.msg = {'attachment': [self.upload]}
+        self.open = mock.patch.object(google, 'urlopen').start()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(self.acct, 'token', return_value='token').start()
+        self.open.side_effect = lambda *a, **kw: io.BytesIO(b'example bytes')
+
+    def test_download_by_index_and_name(self):
+        self.msg['attachment'].insert(0, {'contentName': 'drive.txt',
+                                         'driveDataRef': {'driveFileId': 'example'}})
+        for which in ('2', 'example.txt'):
+            with self.subTest(which=which):
+                self.assertEqual(self.chat.attachment(self.acct, self.msg, which),
+                                 ('example.txt', 'text/plain', b'example bytes'))
+                req = self.open.call_args.args[0]
+                self.assertEqual(req.get_method(), 'GET')
+                self.assertEqual(req.full_url,
+                                 'https://chat.googleapis.com/v1/media/spaces/room/attachments/a%3Fb%23c%25d%20e?alt=media')
+
+    def test_drive_attachment_points_to_drive_tools(self):
+        self.msg['attachment'] = [{'contentName': 'drive.txt', 'driveDataRef': {'driveFileId': 'example'}}]
+        with self.assertRaisesRegex(self.chat.Refused, 'drive_read.*drive_download'):
+            self.chat.attachment(self.acct, self.msg, '1')
+        self.open.assert_not_called()
+
+    def test_oversize_refused_with_sizes(self):
+        self.open.side_effect = lambda *a, **kw: io.BytesIO(b'x' * 25_000_001)
+        with self.assertRaises(self.chat.Refused) as caught:
+            self.chat.attachment(self.acct, self.msg, '1')
+        for size in ('25000001', '25000000', '25 MB'):
+            self.assertIn(size, str(caught.exception))
+        self.open.side_effect = lambda *a, **kw: io.BytesIO(b'x' * 25_000_000)
+        self.assertEqual(len(self.chat.attachment(self.acct, self.msg, '1')[2]), 25_000_000)
+
+    def test_attachment_name_cannot_escape(self):
+        for name, expected in (('../../x', 'x'), ('/etc/passwd', 'passwd'), ('', 'attachment'),
+                               ('..', 'attachment'), ('.', 'attachment')):
+            with self.subTest(name=name):
+                self.upload['contentName'] = name
+                self.assertEqual(self.chat.attachment(self.acct, self.msg, '1'),
+                                 (expected, 'text/plain', b'example bytes'))
+
+    def test_unknown_attachment_lists_available(self):
+        for which in ('0', '-1', '2', 'EXAMPLE.txt', '', '1.0', 1, None):
+            with self.subTest(which=which):
+                with self.assertRaises(self.chat.Refused) as caught:
+                    self.chat.attachment(self.acct, self.msg, which)
+                self.assertIn('1: example.txt', str(caught.exception))
+        with self.assertRaisesRegex(self.chat.Refused, 'none'):
+            self.chat.attachment(self.acct, {}, '1')
+        self.open.assert_not_called()

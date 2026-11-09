@@ -8,6 +8,7 @@ from urllib.parse import quote
 from . import google
 
 API = 'https://chat.googleapis.com/v1'
+GCHAT_FILE_MAX = 25_000_000
 PAGE_CHARS = 6_000
 SPACE_RE = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 MESSAGE_RE = re.compile(r'^[A-Za-z0-9_.-]{1,100}$')
@@ -28,6 +29,37 @@ class NotVisible(PermissionError):
 
 class Gone(LookupError):
     """Google no longer has a requested message."""
+
+
+class Refused(ValueError):
+    """An attachment cannot be downloaded through Chat."""
+
+
+def attachment(acct: google.Account, message: dict, which: str) -> tuple[str, str, bytes]:
+    """Download an uploaded attachment selected by 1-based index or exact name."""
+    attachments = message.get('attachment') or []
+    selected = None
+    if isinstance(which, str):
+        selected = next((item for i, item in enumerate(attachments, 1) if which == str(i)), None)
+        if selected is None and which:
+            selected = next((item for item in attachments if item.get('contentName') == which), None)
+    if selected is None:
+        available = ', '.join(f'{i}: {item.get("contentName") or "unnamed"}'
+                              for i, item in enumerate(attachments, 1)) or 'none'
+        raise Refused(f'unknown attachment {which!r}; available attachments: {available}')
+    if selected.get('driveDataRef'):
+        raise Refused('this is a Drive file; use drive_read / drive_download with a Drive grant')
+    resource = (selected.get('attachmentDataRef') or {}).get('resourceName')
+    if not resource:
+        raise Refused('this attachment has no uploaded file to download')
+    name = (selected.get('contentName') or '').rsplit('/', 1)[-1]
+    if name in ('', '.', '..'):
+        name = 'attachment'
+    try:
+        data = acct.download(f'{API}/media/{quote(resource, safe="/")}', GCHAT_FILE_MAX, alt='media')
+    except ValueError as e:
+        raise Refused(f'{e}; Chat file limit is 25 MB ({GCHAT_FILE_MAX} bytes)') from None
+    return name, selected.get('contentType') or 'application/octet-stream', data
 
 
 def _id(value: str, *, message: bool = False) -> str:
