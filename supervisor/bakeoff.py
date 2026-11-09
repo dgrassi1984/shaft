@@ -785,59 +785,40 @@ def operator_record(b: dict, i: int, pair: tuple[str, str], choice: str, note: s
 
 
 ELO = 400 / math.log(10)
+ELO_START = 1000
+PRIOR_SD = 2.0   # logits (about 350 Elo), as docs/bakeoffs/parity_score.py: weak, so a few pairs move a model
 
 
-def elo(outcomes: list[str]) -> dict | None:
-    """A candidate's Elo against the baseline (fixed at 0) from its outcomes against it alone: win 1, tie and both
-    bad ½, loss 0; splits and unjudged left out. The log-odds with half a win and half a loss added, so 5-0 stays
-    finite; 90% range from the normal approximation. None with no pair. (The LLM judges met only the baseline.)"""
-    w, l = outcomes.count("win"), outcomes.count("loss")
-    t = outcomes.count("tie") + outcomes.count("both bad")
-    return bradley_terry([("x", "base", 1.0)] * w + [("x", "base", 0.0)] * l + [("x", "base", 0.5)] * t,
-                         ["base", "x"], "base").get("x")
-
-
-def bradley_terry(games: list[tuple[str, str, float]], arms: list[str], ref: str) -> dict[str, dict | None]:
-    """Elo of every arm from pairwise games (x, y, x's score: 1, ½ or 0), `ref` fixed at 0. Every other arm also gets
-    half a win and half a loss against `ref`, a weak prior that keeps a sweep finite and an arm met only by others
-    tied to the scale. Newton on the log-likelihood; 90% ranges from the inverse Hessian. An arm with no game: None."""
-    others = [a for a in arms if a != ref]
-    idx = {a: k for k, a in enumerate(others)}
-    played = {a for g in games for a in g[:2]}
-    full = games + [(a, ref, 1.0) for a in others] * 1 + [(a, ref, 0.0) for a in others]
-    weight = [1.0] * len(games) + [0.5] * (2 * len(others))
-    theta = [0.0] * len(others)
-    hess = [[0.0] * len(others) for _ in others]
+def bradley_terry(games: list[tuple[str, str, float]], arms: list[str]) -> dict[str, dict]:
+    """Elo of every arm from pairwise games (x, y, x's score: 1, ½ or 0). Every arm starts at ELO_START with a
+    Gaussian prior around it (PRIOR_SD): no arm is the reference, an arm with no game stays at ELO_START, and a
+    sweep stays finite. The maximum a posteriori by Newton; 90% ranges from the inverse Hessian."""
+    idx = {a: k for k, a in enumerate(arms)}
+    lam = 1 / PRIOR_SD ** 2
+    theta = [0.0] * len(arms)
+    hess = [[lam if r == c else 0.0 for c in range(len(arms))] for r in range(len(arms))]
     for _ in range(100):
-        grad = [0.0] * len(others)
-        hess = [[0.0] * len(others) for _ in others]
-        for (x, y, sx), wt in zip(full, weight):
-            tx = theta[idx[x]] if x in idx else 0.0
-            ty = theta[idx[y]] if y in idx else 0.0
-            pr = 1 / (1 + math.exp(ty - tx))
-            r, c = wt * (sx - pr), wt * pr * (1 - pr)
-            if x in idx:
-                grad[idx[x]] += r
-                hess[idx[x]][idx[x]] += c
-            if y in idx:
-                grad[idx[y]] -= r
-                hess[idx[y]][idx[y]] += c
-            if x in idx and y in idx:
-                hess[idx[x]][idx[y]] -= c
-                hess[idx[y]][idx[x]] -= c
+        grad = [-lam * t for t in theta]
+        hess = [[lam if r == c else 0.0 for c in range(len(arms))] for r in range(len(arms))]
+        for x, y, sx in games:
+            i, j = idx[x], idx[y]
+            pr = 1 / (1 + math.exp(theta[j] - theta[i]))
+            grad[i] += sx - pr
+            grad[j] -= sx - pr
+            c = pr * (1 - pr)
+            hess[i][i] += c
+            hess[j][j] += c
+            hess[i][j] -= c
+            hess[j][i] -= c
         step = _solve(hess, grad)
         theta = [t + d for t, d in zip(theta, step)]
         if max((abs(d) for d in step), default=0) < 1e-9:
             break
-    cov = [_solve(hess, [1.0 if k == j else 0.0 for k in range(len(others))]) for j in range(len(others))]
-    out: dict[str, dict | None] = {ref: {"elo": 0, "lo": 0, "hi": 0, "n": sum(ref in g[:2] for g in games)}}
-    for a in others:
-        if a not in played:
-            out[a] = None
-            continue
-        k, se = idx[a], math.sqrt(max(cov[idx[a]][idx[a]], 0.0))
-        out[a] = {"elo": round(theta[k] * ELO), "lo": round((theta[k] - 1.645 * se) * ELO),
-                  "hi": round((theta[k] + 1.645 * se) * ELO), "n": sum(a in g[:2] for g in games)}
+    out = {}
+    for a, k in idx.items():
+        se = math.sqrt(max(_solve(hess, [1.0 if r == k else 0.0 for r in range(len(arms))])[k], 0.0))
+        out[a] = {"elo": round(ELO_START + theta[k] * ELO), "lo": round(ELO_START + (theta[k] - 1.645 * se) * ELO),
+                  "hi": round(ELO_START + (theta[k] + 1.645 * se) * ELO), "n": sum(a in g[:2] for g in games)}
     return out
 
 
@@ -864,17 +845,14 @@ def _games(b: dict) -> list[tuple[str, str, float]]:
 
 
 def ranking(b: dict) -> list[dict]:
-    """Every arm by the operator's Elo (the baseline fixed at 0) from all their verdicts, any pair, with the LLM
-    judges' Elo beside it (they judged each candidate against the baseline only). Arms not judged yet come last."""
+    """Every arm by the operator's Elo from all their verdicts, any pair, every arm starting at ELO_START; the LLM
+    judges' Elo on the same scale beside it (they judged each candidate against the baseline only, splits left out)."""
     base, arms = b["arms"][0]["label"], [a["label"] for a in b["arms"]]
-    mine = bradley_terry(_games(b), arms, base)
-    rows = []
-    for label in arms:
-        theirs = None if label == base else elo(
-            [o for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")])
-        rows.append({"arm": label, "baseline": label == base, "you": mine.get(label),
-                     "llm": {"elo": 0, "lo": 0, "hi": 0, "n": 0} if label == base else theirs})
-    return sorted(rows, key=lambda r: (r["you"] is None, -(r["you"] or {"elo": 0})["elo"]))
+    llm_games = [(label, base, {"win": 1.0, "loss": 0.0, "tie": 0.5}[o]) for label in arms[1:]
+                 for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")]
+    mine, theirs = bradley_terry(_games(b), arms), bradley_terry(llm_games, arms)
+    rows = [{"arm": a, "baseline": a == base, "you": mine[a], "llm": theirs[a]} for a in arms]
+    return sorted(rows, key=lambda r: -r["you"]["elo"])
 
 
 def operator_summary(b: dict) -> list[dict]:

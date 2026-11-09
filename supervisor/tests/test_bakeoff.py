@@ -625,27 +625,34 @@ class OperatorJudgeReviewTest(unittest.TestCase):
 
 
 class OperatorEloTest(unittest.TestCase):
-    """The ranking on the bake-off page: Bradley-Terry Elo from the operator's verdicts on any pair (2026-11-09)."""
+    """The ranking on the bake-off page: every model starts at 1000 and moves with the operator's verdicts on any
+    pair (operator, 2026-11-09: 'start everyone at 1000')."""
 
-    def test_against_the_baseline_alone_it_is_the_log_odds_with_half_a_win_and_half_a_loss_added(self):
-        self.assertIsNone(bakeoff.elo([]))
-        self.assertEqual(bakeoff.elo(["win"] * 14 + ["loss"] * 2)["elo"], 305)   # N24 DeepSeek (parity_score n24: 307)
-        self.assertEqual(bakeoff.elo(["win"] * 3 + ["loss"] * 7)["elo"], -bakeoff.elo(["win"] * 7 + ["loss"] * 3)["elo"])
-        self.assertEqual(bakeoff.elo(["tie"] * 4)["elo"], 0)
-        self.assertEqual(bakeoff.elo(["both bad"] * 2 + ["win"])["elo"], bakeoff.elo(["tie"] * 2 + ["win"])["elo"])
-        sweep = bakeoff.elo(["win"] * 5)
-        self.assertTrue(0 < sweep["elo"] < 1000 and sweep["lo"] < sweep["elo"] < sweep["hi"])
-        self.assertEqual(bakeoff.elo(["split", "unjudged", "win"])["n"], 1)
-        wide, narrow = bakeoff.elo(["win", "loss"]), bakeoff.elo(["win", "loss"] * 20)
-        self.assertGreater(wide["hi"] - wide["lo"], narrow["hi"] - narrow["lo"])
+    def test_with_no_verdict_everyone_is_at_1000(self):
+        r = bakeoff.bradley_terry([], ["a", "b", "c"])
+        self.assertEqual({v["elo"] for v in r.values()}, {1000})
+        self.assertEqual({v["n"] for v in r.values()}, {0})
 
-    def test_models_never_met_with_the_baseline_are_placed_through_the_others(self):
+    def test_a_win_moves_both_models_the_same_distance_from_1000(self):
+        r = bakeoff.bradley_terry([("a", "b", 1.0)], ["a", "b", "c"])
+        self.assertGreater(r["a"]["elo"], 1000)
+        self.assertEqual(r["a"]["elo"] - 1000, 1000 - r["b"]["elo"])
+        self.assertEqual(r["c"]["elo"], 1000)   # not in the pair: where it started
+        tie = bakeoff.bradley_terry([("a", "b", 0.5)], ["a", "b"])
+        self.assertEqual((tie["a"]["elo"], tie["b"]["elo"]), (1000, 1000))
+
+    def test_a_sweep_stays_finite_and_more_pairs_narrow_the_range(self):
+        sweep = bakeoff.bradley_terry([("a", "b", 1.0)] * 8, ["a", "b"])
+        self.assertTrue(1000 < sweep["a"]["elo"] < 2000)
+        one = bakeoff.bradley_terry([("a", "b", 1.0), ("a", "b", 0.0)], ["a", "b"])["a"]
+        many = bakeoff.bradley_terry([("a", "b", 1.0), ("a", "b", 0.0)] * 20, ["a", "b"])["a"]
+        self.assertGreater(one["hi"] - one["lo"], many["hi"] - many["lo"])
+
+    def test_models_that_never_met_are_ordered_through_the_others(self):
         games = [("a", "base", 1.0)] * 6 + [("a", "base", 0.0)] * 2 + [("b", "a", 1.0)] * 6 + [("b", "a", 0.0)] * 2
-        r = bakeoff.bradley_terry(games, ["base", "a", "b", "c"], "base")
-        self.assertEqual(r["base"]["elo"], 0)
-        self.assertGreater(r["b"]["elo"], r["a"]["elo"])   # b beat a, a beat base: b above both, never having met base
-        self.assertGreater(r["a"]["elo"], 0)
-        self.assertIsNone(r["c"])
+        r = bakeoff.bradley_terry(games, ["base", "a", "b"])
+        self.assertGreater(r["b"]["elo"], r["a"]["elo"])
+        self.assertGreater(r["a"]["elo"], r["base"]["elo"])
         self.assertEqual((r["a"]["n"], r["b"]["n"]), (16, 8))
 
     def test_ranking_orders_by_the_operator_s_elo_and_sets_the_judges_beside_it(self):
@@ -656,9 +663,10 @@ class OperatorEloTest(unittest.TestCase):
                     (0, ("base", "c2")): {"pair": ["base", "c2"], "winner": "c2"}}
         with mock.patch.object(bakeoff, "operator_verdicts", return_value=verdicts):
             rank = bakeoff.ranking(b)
-        self.assertEqual([r["arm"] for r in rank], ["c2", "base", "c1", "c3"])   # unjudged c3 last
-        self.assertTrue(rank[1]["baseline"])
-        self.assertIsNone(rank[3]["you"])
+        self.assertEqual(rank[0]["arm"], "c2")
+        self.assertEqual(rank[-1]["arm"], "c1")
+        self.assertEqual(next(r for r in rank if r["arm"] == "c3")["you"]["elo"], 1000)
+        self.assertEqual({r["llm"]["elo"] for r in rank}, {1000})   # no LLM verdict in this record
 
 
 class OperatorPendingTest(unittest.TestCase):

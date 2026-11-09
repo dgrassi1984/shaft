@@ -1737,23 +1737,19 @@ def _short(label: str) -> str:
     return label.rsplit("/", 1)[-1]
 
 
-def _elo_cell(e: dict | None, baseline: bool = False) -> str:
-    if baseline:
-        return "0 (reference)"
-    if not e:
-        return "—"
-    return f"{e['elo']:+d} [{e['lo']:+d}, {e['hi']:+d}]"
+def _elo_cell(e: dict) -> str:
+    return f"{e['elo']} [{e['lo']}, {e['hi']}]" if e["n"] else f"{e['elo']} (no pair yet)"
 
 
 def bakeoff_ranking(rank: list[dict]) -> Html:
-    body = [[str(k), _short(r["arm"]) + (" · baseline" if r["baseline"] else ""), _elo_cell(r["you"], r["baseline"]),
-             str((r["you"] or {}).get("n", 0)), _elo_cell(r["llm"], r["baseline"]),
-             "" if r["baseline"] else str((r["llm"] or {}).get("n", 0))]
-            for k, r in enumerate(rank, 1)]
-    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Bradley-Terry Elo from all your verdicts, '
-             'any pair, the baseline fixed at 0: a win counts 1, equal and both bad ½, a loss 0. In brackets the 90% range: ranks whose '
-             'ranges overlap are not yet told apart. Beside it, the LLM judges\' Elo on every pair they settled '
-             '(splits left out). It changes with each verdict you save.</p></section>',
+    body = [[str(k), _short(r["arm"]) + (" · baseline" if r["baseline"] else ""), _elo_cell(r["you"]),
+             str(r["you"]["n"]), _elo_cell(r["llm"]), str(r["llm"]["n"])] for k, r in enumerate(rank, 1)]
+    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Elo from all your verdicts, any pair: every '
+             'model starts at 1000 and moves with each pair it is in (a win counts 1, equal and both bad ½, a loss '
+             '0; a Bradley-Terry fit, with a weak pull toward 1000 so a few pairs cannot run away). In brackets the '
+             '90% range: models whose ranges overlap are not yet told apart. Beside it, the LLM judges\' Elo on the '
+             'same scale, from the pairs they settled: each model against the baseline only. It changes with each '
+             'verdict you save.</p></section>',
              t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs"], body))
 
 
