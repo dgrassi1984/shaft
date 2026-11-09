@@ -39,7 +39,7 @@ from pathlib import Path
 
 from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, DRIVE_TOOLS, Broker
-from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
+from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, MEMORY_CACHES, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
                    TreeTooBig, UnsafePath, config_values, copy_beneath, dir_beneath, instance_config, instance_root,
                    knob, positive_int, whole, model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write,
                    secrets_env, unlink_beneath)
@@ -157,7 +157,7 @@ def backup() -> Path:
 # its browser profile (the sessions of its own accounts), the operator's mail it downloaded (an exam gets no mail),
 # its jobs' caches, logs and run files (.tmp/, but for its memory index: a cache keyed by chunk hash).
 EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", "gdrive", ".jobs", "logs", ".tmp")
-EXAM_KEEP = (".tmp", ".tmp/memory-index.json")
+EXAM_KEEP = (".tmp", *MEMORY_CACHES)
 
 
 def exam_dir(name: str) -> Path:
