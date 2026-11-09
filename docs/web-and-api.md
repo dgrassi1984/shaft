@@ -90,6 +90,22 @@ uses `VOICE_REASONING_EFFORT` for the reply's model calls when that is set ([con
 marks both talk episodes `voice`. On an interjection it marks that message's episode. A judge shown a spoken turn is
 told its text is transcribed speech and may contain recognition errors.
 
+**Voice session.** A spoken, streamed turn (`"voice": true`, `"stream": true`) is answered by its conversation's
+warm process: the instance's agent (`answer --loop`) is started at the conversation's first spoken turn and kept up
+between turns, so its broker, its model session (Codex: one session for the conversation, not one per turn) and its
+memory index stay warm — about 6 s saved per turn in M0. It holds the instance only while a turn runs, exactly as a
+reply in a process of its own does: the run lock, the cycle paused for it, and the reply's checks and commit at its end;
+between turns cycles run. Its system prompt is built once for the conversation; the time, new journal entries, inbox
+messages and unwritten conversations come with each message instead. Before a turn, a process started from code or a
+`config.env` that is no longer the instance's (a cycle in the pause kept a code change, `shaft update`, a changed
+setting) is ended and a new one answers. The session ends after `SHAFT_VOICE_SESSION_IDLE_S` (300) without a turn,
+when its conversation ends (`/v1/chat/end`, or the idle write-up), when the instance is paused (a kill pauses it first),
+updated or deleted, when its process is killed, and with the API. Stop (the client hanging up) interrupts the turn,
+not the process; a turn that does not stop within 15 s ends the process and the next turn starts a new one. Typed
+turns, non-streamed requests, every turn of a paused instance and every turn with `SHAFT_VOICE_SESSION_IDLE_S=0` run in a
+process of their own, as before, and stream exactly as before. Source: `supervisor/api.py` `VoiceSessions`,
+`supervisor/runner.py` `Warm`, `template/shaft/talk.py` `answer_loop`.
+
 | Header | Meaning |
 |---|---|
 | `Authorization: Bearer <key>` | Chat key, or the narrower inbox key on inbox routes |

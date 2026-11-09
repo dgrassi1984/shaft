@@ -9,9 +9,9 @@ commit, and the run's unchecked code would become the next run's baseline.
 Which processes are the instance's: those whose working folder is inside instances/<name>/ and whose parent is a
 supervisor process (`python -m supervisor …`, or the terminal client `-m supervisor.talk_ui`; never the gate's test
 runner `-m supervisor.gate_suite`, which holds no run) — the agent of a cycle
-or a reply, a job's plugin, a broker `run` command — with everything below them, plus an agent or plugin orphaned by its
-holder's death. The parent rule keeps the operator's own shells in that folder safe. A terminal conversation's client is
-stopped last, once its reply has settled. Spared:
+or a reply (a voice session's too, kept by the API between turns), a job's plugin, a broker `run` command — with
+everything below them, plus an agent or plugin orphaned by its holder's death. The parent rule keeps the operator's
+own shells in that folder safe. A terminal conversation's client is stopped last, once its reply has settled. Spared:
 the gate checking a finished run (its test runners and plugin check, while no agent of that holder is alive: killing
 them would fail the gate and revert the code), and a battery's exams — they run in a copy of the instance, not in its
 folder; the battery process itself gets SIGTERM, its designed stop (it cuts the exam, kills what the exam left running

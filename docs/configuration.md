@@ -80,6 +80,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_API_PORT` | `8781` | the API's local port (OpenAI-compatible; the web UI and Telegram chat through it) | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_PER_HOUR` | `30` | messages per hour the API's inbox (doorbell) accepts for one instance | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_WAKES_PER_HOUR` | `4` | wakes per hour inbox messages may start for one instance | [api.py](../supervisor/api.py) |
+| `SHAFT_VOICE_SESSION_IDLE_S` | `300` | seconds a voice conversation keeps its instance's process up between spoken turns (its model session and memory stay warm); 0: none, every spoken turn starts its own process | [api.py](../supervisor/api.py) |
 | `SHAFT_API_HTTPS_PORT` | `8443` | the API's https port on the tailnet (tailscale serve) | [api.py](../supervisor/api.py) |
 | `SHAFT_PAUSE_ALERT_HOURS` | `3` | hours an operator pause may last before an alert; 0 = off. Read by CLI runs and web. | [core.py](../supervisor/core.py) |
 | `SHAFT_BATTERY_VERSION` | `v1` | the battery item set in use (.supervisor/battery/items/<version>) | [battery.py](../supervisor/battery.py) |
@@ -286,6 +287,9 @@ is `on`. `VOICE_REASONING_EFFORT` is the reasoning effort of spoken turns only: 
 warning and stays empty. A spoken turn is a chat request with `"voice": true`
 ([API](web-and-api.md#v1-wire-contract)): the instance adds `prompts.VOICE_NOTE` to that reply's prompt, makes every
 model call of the reply with this effort, and marks the turn's talk episodes `voice`. Typed turns are unchanged.
+The spoken turns of one conversation share one warm process (supervisor setting `SHAFT_VOICE_SESSION_IDLE_S`, default 300 s
+between turns; [API](web-and-api.md#v1-wire-contract)); a change to `config.env` starts a new one at the next turn, so a
+changed setting is never answered with the old one.
 
 ### Sleep feedback
 

@@ -216,6 +216,16 @@ Conversation replies take priority over autonomous work on the same local model 
 An instance pauses its cycle while replying and resumes it when the reply ends;
 a quiet open conversation does not prevent cycles.
 
+A run is one sandboxed agent process with its own broker (`supervisor/runner.py`): the run lock, a snapshot of the
+approved code, and after it the checks (append-only journal, core pace, the gate on code) and the commit. A
+conversation whose agent stays up between replies — the terminal client (`run_conversation`) and an API voice session
+(`Warm`, [web and API](web-and-api.md#v1-wire-contract)) — is checked one reply at a time instead: each reply takes the
+run lock and a Reply presence (`Turn`), and gives them back when it is checked and committed, so cycles run in the
+pauses and pause only while a reply is written. A voice session's process is started again before a reply whose
+approved code or `config.env` changed since it started; it is registered under `.supervisor/warm/<instance>/`, so
+`shaft update` and `shaft delete` end a quiet one from their own process (`end_warm`, under the run lock), `shaft kill`
+stops it as any process of the instance, and a stopped API ends it with its other runs.
+
 The native `/app/v1` API belongs to the web service, not the separate API service
 (`supervisor/web.py`, `supervisor/app_api.py`). It accepts paired device bearers in
 `Authorization: Bearer <device>.<secret>`. Browser pages use cookies instead.

@@ -391,12 +391,17 @@ Its Telegram bot token is not here: `shaft telegram token {name}` sets one again
 def delete(name: str, *, keep_archive: bool = True, say=print) -> int:
     """Remove the instance (refusals raise Refused). The caller has asked for the confirmation."""
     from . import browser, kill, mind
-    from .runner import Busy, run_lock
+    from .runner import Busy, end_warm, run_lock
     if not NAME_RE.match(name) or name == "operator":
         raise Refused(f"not an instance name: {name!r}")
     found = find(name)
     if not found.anything():
         raise Refused(f"no instance named {name!r}, and nothing of one left")
+    try:   # a quiet voice session's process holds nothing, but its folder goes: ended first, never in the way
+        with run_lock(name, wait=False, kind="delete"):
+            end_warm(name)
+    except Busy:
+        pass   # a reply holds it: kill.running says so
     if left := kill.running(name):
         raise Refused(f"{name} is busy ({'; '.join(left)}): shaft kill {name} first")
     set_paused(name, True, reason="a delete")
