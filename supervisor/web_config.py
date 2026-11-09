@@ -20,7 +20,7 @@ from .web_actions import Refused, button, post_attrs
 from .web_pages import Html, h, join
 
 WHO = "web"
-VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar", "gdrive",
+VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar", "gdrive", "gchat",
          "battery-switch", "channel", "orders-add", "orders-drop")
 DRIVE_MAX = 20000
 
@@ -95,6 +95,14 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
             raise Refused("gdrive grant or revoke needs an account")
         return _ran(["gdrive", name, op, alias] +
                     (["--all"] if op == "grant" and form.get("all") == "1" else []))
+    if verb == "gchat":
+        op, alias = form.get("op", ""), form.get("alias", "").strip()
+        if op == "off":
+            return _ran(["gchat", name, "off"])
+        if op not in ("grant", "revoke") or not alias:
+            raise Refused("gchat grant or revoke needs an account")
+        return _ran(["gchat", name, op, alias])
+
     if verb in ("mail", "calendar"):
         op = form.get("op", "")
         if op == "off":
@@ -355,6 +363,22 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                          button("gdrive", "Revoke all Drive", f"revoke every Drive grant of {n} and delete its copies?",
                                 {"name": n, "op": "off"}, "" if drive_items else "none granted", cls="small")])
 
+    chat_items = a.get("gchat", [])
+    chat_rows = [h('<li>{alias} {b}</li>', alias=g["account"],
+                    b=button("gchat", "Revoke", f"revoke {n}'s Chat grant {g['account']} and delete its copies?",
+                             {"name": n, "op": "revoke", "alias": g["account"]}, cls="small")) for g in chat_items]
+    chat_grant = (h('<form class="act" data-post="/action/gchat" data-confirm="Let {n} read every Google Chat conversation on this account? '
+                     'Downloads are deleted on revoke."{a}>'
+                     '<input type="hidden" name="name" value="{n}"><input type="hidden" name="op" value="grant">'
+                     '<select name="alias" aria-label="account">{o}</select>'
+                     '<button type="submit" class="small">Grant</button></form>',
+                     n=n, o=acct_opts, a=post_attrs("Access", actions.RUN_NOW_S)) if accounts else
+                   h('<p class="dim">No Google account logged in: <code>shaft google login …</code> in your terminal.</p>'))
+    chat_access = join([h('<ul class="lines">{r}</ul>', r=join(chat_rows)) if chat_rows else
+                         h('<p class="dim">none</p>'), chat_grant,
+                         button("gchat", "Revoke all Chat", f"revoke every Chat grant of {n} and delete its copies?",
+                                {"name": n, "op": "off"}, "" if chat_items else "none granted", cls="small")])
+
     bat_op = "on" if a["battery_off"] else "off"
     battery = join([h('<p>The capability battery is <b>{s}</b> for {n}.</p>', s="off" if a["battery_off"] else "on",
                       n=n),
@@ -380,6 +404,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                 ("mail", "Your mail it may read (shaft mail)", grants("mail", a["mail"], "label", "label")),
                 ("calendar", "Your calendars (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
                 ("gdrive", "Your Drive it may read (shaft gdrive)", drive_access),
+                ("gchat", "Your Google Chat it may read (shaft gchat)", chat_access),
                 ("", "Google accounts", google_accounts(n, a.get("google_accounts", {}))),
                 ("battery-switch", "Capability battery", battery),
                 ("", "Its own keys (shaft secret): names only", join([keys, h(
@@ -392,7 +417,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
 def access(name: str) -> dict:
     """What the Access page shows, from the readers the CLI verbs use."""
     from . import autonomy, battery, cloudllm, google, jobs
-    from .core import (calendar_grants, gdrive_grants, describe_key, disabled_tools, instance_root, mail_grants, read_secrets,
+    from .core import (calendar_grants, gdrive_grants, gchat_grants, describe_key, disabled_tools, instance_root, mail_grants, read_secrets,
                        shared_folder)
     from . import channel
     floor = autonomy.wake_floor(name)
@@ -404,7 +429,7 @@ def access(name: str) -> dict:
             "wake_floor_own": floor != autonomy.WAKE_FLOOR_MIN, "cloud_cap": cap, "cloud_cap_default": cloudllm.DAILY_USD,
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
-            "mail": mail_grants(name), "calendar": calendar_grants(name), "gdrive": gdrive_grants(name), "accounts": sorted(accounts),
+            "mail": mail_grants(name), "calendar": calendar_grants(name), "gdrive": gdrive_grants(name), "gchat": gchat_grants(name), "accounts": sorted(accounts),
             "google_accounts": {alias: {k: data.get(k) for k in ("address", "client", "scope", "created")}
                                 for alias, data in accounts.items()},
             "battery_off": battery.off_path(name).exists(),

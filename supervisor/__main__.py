@@ -365,11 +365,13 @@ def cmd_status(names: list[str]) -> int:
         if (folder := shared_folder(name)):
             print(f"  may read    {folder}{'' if folder.is_dir() else ' (MISSING: left out of its runs)'} "
                   f"(shaft share {name} off)")
-        from .core import calendar_grants, gdrive_grants, mail_grants
+        from .core import calendar_grants, gdrive_grants, gchat_grants, mail_grants
         if (grants := mail_grants(name)):
             print(f"  mail        {', '.join(g['account'] + '/' + g['label'] for g in grants)} (shaft mail {name} off)")
         if (grants := gdrive_grants(name)):
             print(f"  gdrive      {', '.join(g['account'] + ' (' + g['reach'] + ')' for g in grants)} (shaft gdrive {name} off)")
+        if (grants := gchat_grants(name)):
+            print(f"  gchat       {', '.join(g['account'] for g in grants)} (shaft gchat {name} off)")
         if (grants := calendar_grants(name)):
             print(f"  calendar    {'; '.join(g['account'] + '/' + g['name'] for g in grants)} (shaft calendar {name} off)")
         if entries:
@@ -635,7 +637,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
                   f"Access list): the tools that need it refuse, naming this login. To add it, run this login again "
                   "and tick it.", file=sys.stderr)
         print(f"Grant with shaft mail <instance> grant {alias} <label> · shaft calendar <instance> grant {alias} "
-              f"<calendar> · shaft gdrive <instance> grant {alias}")
+              f"<calendar> · shaft gdrive <instance> grant {alias} · shaft gchat <instance> grant {alias}")
         return 0
     if action == "migrate":
         try:
@@ -788,6 +790,70 @@ def cmd_gdrive(target: str | None, action: str | None, alias: str | None, all_re
     if all_reach:
         print("everything the account can reach, including files strangers share with it, reaches the instance")
     print(f"(from {target}'s next Drive call; the prompt line changes from its next run)")
+    return 0
+
+
+def cmd_gchat(target: str | None, action: str | None, alias: str | None) -> int:
+    """Show or change the operator's read-only Google Chat grants."""
+    from . import google
+    from .core import gchat_grants, gchat_lock, remove_gchat_copies, secrets_env, set_gchat_grants, UnsafePath
+
+    def show(name: str) -> None:
+        grants = gchat_grants(name)
+        print(f"{name} may read: " + (", ".join(g["account"] for g in grants)
+                                     if grants else "no Google Chat"))
+
+    if not target:
+        accts = google.accounts()
+        print("accounts: " + (", ".join(f"{a} ({d.get('address', '?')})" for a, d in accts.items()) if accts
+                              else "none") + " (shaft google)")
+        for name in instance_names():
+            show(name)
+        return 0
+    instance_root(target)
+    if not action:
+        show(target)
+        return 0
+    if action not in ("grant", "revoke", "off") or (action != "off" and not alias):
+        print(f"usage: shaft gchat {target} grant <alias> | revoke <alias> | off", file=sys.stderr)
+        return 2
+    if alias and not google.ALIAS_RE.fullmatch(alias):
+        print(f"invalid Google account alias {alias!r}", file=sys.stderr)
+        return 2
+    if action == "grant":
+        if not google.account(alias):
+            known = ", ".join(google.accounts()) or "none"
+            print(f"no Google account {alias!r} (logged in: {known}); first: shaft google login {alias} <address>",
+                  file=sys.stderr)
+            return 2
+        try:
+            google.Account(alias, secrets_env()).require(google.CHAT_MESSAGES).get(
+                "https://chat.googleapis.com/v1/spaces", pageSize=1)
+        except (google.AccountError, google.ApiError) as e:
+            print(f"not granted: {e}", file=sys.stderr)
+            return 2
+    with gchat_lock(target):
+        grants = gchat_grants(target)
+        rest = [g for g in grants if g["account"] != alias]
+        if action == "grant":
+            set_gchat_grants(target, rest + [{"account": alias}])
+            log(f"{target}: gchat grant {alias} added by the operator")
+        else:
+            if action == "revoke" and rest == grants:
+                print(f"{target} has no gchat grant {alias}", file=sys.stderr)
+                return 1
+            set_gchat_grants(target, [] if action == "off" else rest)
+            log(f"{target}: gchat {action} {alias or 'all'} by the operator (were: {grants})")
+            path = instance_root(target) / "gchat"
+            if action == "revoke":
+                path /= alias
+            try:
+                remove_gchat_copies(target, alias if action == "revoke" else "")
+            except (OSError, UnsafePath) as e:
+                print(f"grant revoked, but copies left at {path}: {e}", file=sys.stderr)
+                return 1
+    show(target)
+    print(f"(from {target}'s next Google Chat call; the prompt line changes from its next run)")
     return 0
 
 
@@ -1508,6 +1574,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", choices=("grant", "revoke", "off"))
     p.add_argument("alias", nargs="?", help="the Google account alias")
     p.add_argument("--all", dest="all_reach", action="store_true", help="include everything shared from outside")
+    p = sub.add_parser("gchat", help="your Google Chat an instance may read: '<name> grant|revoke <alias>', "
+                                     "'<name> off'; alone lists accounts and grants")
+    p.add_argument("target", nargs="?", help="an instance")
+    p.add_argument("action", nargs="?", choices=("grant", "revoke", "off"))
+    p.add_argument("alias", nargs="?", help="the Google account alias")
     p = sub.add_parser("calendar", help="your calendars an instance may read, one per grant: "
                                         "'<name> grant|revoke|grant-write|revoke-write <alias> primary|<title>|<id>', '<name> off', '<name>' "
                                         "shows; 'calendars <alias>' lists an account's; alone lists all grants")
@@ -1706,6 +1777,8 @@ def main(argv: list[str]) -> int:
             print(f"unknown mail action {args.action!r}: grant, revoke or off", file=sys.stderr)
             return 2
         return cmd_mail(args.target, args.action, args.alias, args.label)
+    if args.cmd == "gchat":
+        return cmd_gchat(args.target, args.action, args.alias)
     if args.cmd == "gdrive":
         return cmd_gdrive(args.target, args.action, args.alias, args.all_reach)
     if args.cmd == "calendar":

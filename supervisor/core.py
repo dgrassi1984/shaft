@@ -671,14 +671,14 @@ def set_gdrive_grants(name: str, grants: list[dict]) -> list[dict]:
 
 
 @contextlib.contextmanager
-def gdrive_lock(name: str):
+def _grant_lock(name: str, lock_name: str):
     """Serialize grants and copy removal with broker download publication across processes."""
     import fcntl
     if not NAME_RE.fullmatch(name):
         raise ValueError("invalid instance name")
     locks = SUP_DIR / "locks"
     locks.mkdir(parents=True, exist_ok=True)
-    with (locks / f"gdrive-{name}.lock").open("a") as f:
+    with (locks / f"{lock_name}-{name}.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             yield
@@ -686,11 +686,51 @@ def gdrive_lock(name: str):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def gdrive_lock(name: str):
+    return _grant_lock(name, "gdrive")
+
+
+def gchat_lock(name: str):
+    return _grant_lock(name, "gchat")
+
+
 def remove_gdrive_copies(name: str, alias: str = "") -> None:
     from . import google
     if alias and not google.ALIAS_RE.fullmatch(alias):
         raise ValueError("invalid Google account alias")
     path = contained(instance_root(name), "gdrive", *([alias] if alias else []))
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        if path.exists():
+            raise
+
+
+# -- the operator's read-only Google Chat grants ---------------------------------------------------------------
+def gchat_grants(name: str) -> list[dict]:
+    from . import google
+    raw = _tool_settings(name).get("gchat")
+    return [{"account": g["account"]} for g in raw if isinstance(g, dict)
+            and isinstance(g.get("account"), str) and google.ALIAS_RE.fullmatch(g["account"])] if isinstance(raw, list) else []
+
+
+def set_gchat_grants(name: str, grants: list[dict]) -> list[dict]:
+    from . import google
+    keep: dict[str, dict] = {}
+    for g in grants:
+        if not google.ALIAS_RE.fullmatch(g["account"]):
+            raise ValueError("a Chat grant needs a Google account alias")
+        keep[g["account"]] = {"account": g["account"]}
+    result = list(keep.values())
+    _update_tool_settings(name, gchat=result or None)
+    return result
+
+
+def remove_gchat_copies(name: str, alias: str = "") -> None:
+    from . import google
+    if alias and not google.ALIAS_RE.fullmatch(alias):
+        raise ValueError("invalid Google account alias")
+    path = contained(instance_root(name), "gchat", *([alias] if alias else []))
     try:
         shutil.rmtree(path)
     except FileNotFoundError:
