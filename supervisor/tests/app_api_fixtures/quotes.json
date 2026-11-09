@@ -1,7 +1,7 @@
 {
   "instance": "wren",
   "partial": false,
-  "version": "bc78f129fdc27553",
+  "version": "9e53dfc788c8d9b0",
   "live": "",
   "reply": null,
   "chat": {
@@ -43,6 +43,7 @@
       "text": "Thanks.\n\n> Should the nightly report keep the per-account lines?\n\nYes.\n\n> (from notes/docs/ledger.md)\n> Net daily totals are rounded once,\n> at the end.\n\nPer account.",
       "mid": "c1a2b3c4-0000-4000-8000-000000000001",
       "interjected": false,
+      "via": null,
       "attachments": [],
       "edits": [],
       "deleted": [],

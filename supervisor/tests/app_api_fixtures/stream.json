@@ -1,0 +1,58 @@
+[
+  {
+    "seq": 1,
+    "type": "status",
+    "reply": "3f0c9e21a4b7d658",
+    "phase": "model",
+    "detail": "thinking"
+  },
+  {
+    "seq": 2,
+    "type": "draft",
+    "reply": "3f0c9e21a4b7d658",
+    "text": "Let me look."
+  },
+  {
+    "seq": 3,
+    "type": "step_end",
+    "reply": "3f0c9e21a4b7d658",
+    "answer": false
+  },
+  {
+    "seq": 4,
+    "type": "tool_start",
+    "reply": "3f0c9e21a4b7d658",
+    "name": "read_file"
+  },
+  {
+    "seq": 5,
+    "type": "tool_end",
+    "reply": "3f0c9e21a4b7d658",
+    "name": "read_file",
+    "ok": true
+  },
+  {
+    "seq": 6,
+    "type": "draft",
+    "reply": "3f0c9e21a4b7d658",
+    "text": "It is sunny in Milan."
+  },
+  {
+    "seq": 7,
+    "type": "step_end",
+    "reply": "3f0c9e21a4b7d658",
+    "answer": true
+  },
+  {
+    "seq": 8,
+    "type": "answer",
+    "reply": "3f0c9e21a4b7d658",
+    "text": "It is sunny in Milan."
+  },
+  {
+    "seq": 9,
+    "type": "end",
+    "reply": "3f0c9e21a4b7d658",
+    "failure": null
+  }
+]

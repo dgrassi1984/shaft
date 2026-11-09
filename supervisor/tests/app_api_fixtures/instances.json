@@ -11,7 +11,8 @@
       "last": "2026-11-03T14:12:00+01:00",
       "replying": false,
       "unread": true,
-      "next_cycle": "for wren's next cycle, which this starts now"
+      "next_cycle": "for wren's next cycle, which this starts now",
+      "voice_mode": "off"
     }
   ],
   "badge": 1

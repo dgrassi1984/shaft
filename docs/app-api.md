@@ -74,7 +74,8 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 | 403 | `pair_expired` | The pairing token is unknown, used, or older than 10 minutes | — |
 | 404 | `not_found` | No such route, instance, chat, turn, attachment, document | — |
 | 405 | `method` | The route exists, the method does not | — |
-| 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
+| 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, `voices.Refused` (§17), a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
+| 409 | `not_replying` | The stream (§6.1) with no reply running and nothing buffered after `after` | — |
 | 409 | `stale` | A document save or delete with an old `sha`, or a setting save with an old `expect` | Documents: `sha`, `diff` (§10.4). Settings: `settings`, the fresh settings (§15) |
 | 409 | `busy` | An API restart would interrupt a run or reply; the message is the service guard's reason | — |
 | 409 | `restarting` | Another restart of the same service is still running | — |
@@ -184,6 +185,7 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
   | `replying` | bool | a reply is running in its web chat |
   | `unread` | bool | it has something this device has not seen (§12) |
   | `next_cycle` | str | what Next cycle does now (`autonomy.next_cycle`): the composer's Next cycle hint; `""` when it cannot be read |
+  | `voice_mode` | str | `"on"`: offer voice for this instance (the chat's Talk button, §6.1); `"off"` otherwise, also when its `config.env` has no `VOICE_MODE` or anything but `on` (`opconfig.voice_mode`) |
 
 ```json
 {
@@ -192,10 +194,11 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
      "busy_note": "Your message pauses its cycle; the cycle resumes after the reply.", "usd_today": 0.42,
      "line": "Merged the ledger fix; the nightly report is in notes/docs/ledger.md.",
      "last": "2026-11-03T14:06:40+01:00", "replying": false, "unread": true,
-     "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends"},
+     "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends",
+     "voice_mode": "on"},
     {"name": "example2", "state": "idle", "since": "", "model": "qwen3.6-35b", "busy_note": null, "usd_today": 0,
      "line": "you: thanks", "last": "2026-11-02T22:10:05+01:00", "replying": false, "unread": false,
-     "next_cycle": "for example2's next cycle, which this starts now"}
+     "next_cycle": "for example2's next cycle, which this starts now", "voice_mode": "off"}
   ],
   "badge": 1
 }
@@ -302,6 +305,7 @@ line, as the HTML sorts them).
 | `text` | str | what the operator wrote (`shown`), `""` for a turn that is only a comment or a document edit. Not Markdown: lines starting `> ` are a quote block, a fenced code block (```) is code, the rest is plain text with its line breaks (`web_views._my_text`) |
 | `mid` | str or null | its message id |
 | `interjected` | bool | sent while a reply ran ("· during its reply") |
+| `via` | str or null | `"voice"`: spoken and transcribed on the device (sent with `voice=1`, §6; the HTML says "· spoken"), so it may hold recognition errors; null: typed |
 | `attachments` | list | files sent with it: `{name, bytes, image, text, url}` (below) |
 | `edits` | list of str | documents edited with it ("✎ edited <path>": opens the document) |
 | `deleted` | list of str | documents deleted with it ("🗑 deleted <path>": nothing to open) |
@@ -457,7 +461,7 @@ the instance sent, a Next-cycle message, and a failed reply with a safe Retry.
   "items": [
     {"key": "u0", "type": "user", "k": 0, "ts": "2026-11-03T13:58:40+01:00",
      "text": "> Ship the ledger fix today?\n\nYes, once the tests pass. This is the failing run:",
-     "mid": "0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b", "interjected": false,
+     "mid": "0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b", "interjected": false, "via": null,
      "attachments": [{"name": "ci-run.png", "bytes": 48213, "image": true, "text": false,
                       "url": "/app/v1/file/chat/web-3f9a1c0d7e2b4a65/0/0"}],
      "edits": [], "deleted": [], "comments": [], "feedback": []},
@@ -475,7 +479,7 @@ the instance sent, a Next-cycle message, and a failed reply with a safe Retry.
      "text": "Look at the March reconciliation when you have time.", "mid": "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54",
      "read": false, "attachments": [], "comments": []},
     {"key": "u2", "type": "user", "k": 2, "ts": "2026-11-03T14:05:50+01:00", "text": "Rerun the report for October.",
-     "mid": "a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13", "interjected": false, "attachments": [], "edits": [],
+     "mid": "a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13", "interjected": false, "via": "voice", "attachments": [], "edits": [],
      "deleted": [], "comments": [], "feedback": []},
     {"key": "a3", "type": "assistant", "k": 3, "ts": "2026-11-03T14:06:40+01:00", "content": "", "activity": [],
      "incomplete": false,
@@ -561,6 +565,7 @@ The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multip
   | `quotes` | str | JSON list of `{quote, answer, doc}` (↩ Reply cards), `[]` or absent for none. `quote`: the selected text as shown; `answer`: its own answer, may be `""`; `doc`: the `notes/docs/`-relative path when it was quoted from a document, else `""` |
   | `in_reply_to` | str | optional stable `file` identity of the delivered `sent` item being answered. Accepted sends append statistics-only evidence to `.supervisor/reply-links.jsonl`. Unknown, malformed or wrong-instance identities are ignored and logged; they never refuse a send. Absent leaves the send unchanged. |
   | `retry_of` | str | `retry.retry_of` of a failed reply (§4.4), with `mode=now` only; the text must be `retry.text` |
+  | `voice` | str | `"1"`: spoken, transcribed on the device. The turn is recorded `via: "voice"` (§4.4), and the reply's request to the API carries `"voice": true` (the instance is told it is heard aloud, and uses `VOICE_REASONING_EFFORT`, §15.1). An interjection (`mode=now` while it replies) carries it too, and a queued one (`mode=queue`) when it goes. `"0"` or absent: typed. Anything else, or `"1"` with `mode=background`: `400` |
   | files | file parts | any part with a filename. At most 10 files, 20 MB each, 50 MB in all |
 
 Reply identity: `sent.file` is the raw `file` key from `.supervisor/messages.jsonl`,
@@ -587,7 +592,7 @@ after the window. These links have no grade, probation or reward consumers.
   | `chat` | str or null | the chat it went into (null for `background`) |
   | `file` | str or null | `background`: the inbox file (a `later` item's `file`); else null |
 
-- **Errors:** `400 bad_request` (no `mid`, a bad `mode`, `quotes` not a JSON list of those objects); `409 refused`
+- **Errors:** `400 bad_request` (no `mid`, a bad `mode`, `quotes` not a JSON list of those objects, a bad `voice`); `409 refused`
   ("an empty message is not sent", "a message is at most 20000 characters (…)", a file over the limits, "the API is
   not reachable …"); `413 too_large`.
 - If the chat ended meanwhile, the message starts a new chat, as the web's send does.
@@ -596,6 +601,96 @@ after the window. These links have no grade, probation or reward consumers.
 // mode=now, text="Rerun it", quotes=[{"quote":"Should the nightly report keep the per-account lines?","answer":"Yes","doc":""}]
 {"said": "sent to example · answers its question", "chat": "web-3f9a1c0d7e2b4a65", "file": null}
 ```
+
+### 6.1 `GET /app/v1/chat/<n>/stream` — the reply as it streams
+
+Server-Sent Events of the reply running in the current chat, for voice mode: the app speaks the reply as it is
+written. The events come from the web server's own memory (`web_chat.Relay`), appended as the API's chunks arrive. They
+never wait for the chat file, written every second, or the feed's 0.5 s look (up to 1.5 s per piece: PLAN-voice M0).
+The feed (§4) still carries the reply for clients not on the stream.
+
+- **Auth:** §1.2.
+- **Query:**
+
+  | Param | Type | |
+  |---|---|---|
+  | `after` | int | the `seq` of the last event the app has; default 0. A `Last-Event-ID` header stands for it when `after` is absent. Not a whole number ≥ 0: `400` |
+  | `reply` | str | the `reply` of the events the app has. When it is not the buffered reply's (a newer one began), `after` is ignored and the whole reply comes |
+  | `at` | int | as the feed's (§4): orders the watching mark against `away` |
+
+- **Response 200:** `Content-Type: text/event-stream; charset=utf-8`, no `Content-Length`; the connection closes when
+  the stream ends. Each event is `id: <seq>` and one `data:` line of JSON, then a blank line. Lines starting with `:`
+  are comments: one names the reply at the start (`: reply <id>`), and `: keepalive` comes every 2 s with nothing else
+  to send. The stream replays the buffered events with `seq > after`, then follows live, and ends after `end`.
+- **`409 not_replying`:** no reply is running in the current chat and none ended in the last 30 s
+  (`STREAM_KEEP_S`), or the one buffered ended and the app has all of it (`after` ≥ its last `seq`). The app listens
+  again; it does not retry.
+- **Watching:** holding the stream marks this device as watching the chat, refreshed every 2 s while held, as a held
+  feed with `at` is (§4). A reply that ends while the device listens is not pushed to it. With `at`, an `away` sent
+  later (§7.6) wins over the stream. Without `at`, a voice session on a locked iPhone still counts as listening.
+- **Leaving:** the server notices within 2 s that the client closed the connection, and the hold ends with it.
+- **One reply per stream.** After `end`, the next reply (the operator's next sentence, or the instance's own answer to
+  an interjection it heard too late) is a new stream. It has its own `reply` and its `seq` starts at 1 again.
+
+Every event:
+
+| Field | Type | |
+|---|---|---|
+| `seq` | int | 1, 2, … in order, per reply |
+| `type` | str | below |
+| `reply` | str | 16 hex: the reply's id, the same on every event of the reply |
+
+| `type` | Other fields | When |
+|---|---|---|
+| `draft` | `text`: str, a piece | the model wrote text in the current step. It comes before the step is known to be the answer: speak it as tentative |
+| `step_end` | `answer`: bool | the step ended. `true`: it was the final answer. `false`: it went on to call tools, so its text was narration |
+| `status` | `phase`: str, `detail`: str | what the reply waits on, as the activity says it ("pausing its cycle for you") |
+| `tool_start` | `name`: str | a tool call started: start the working sound |
+| `tool_end` | `name`: str, `ok`: bool | it finished |
+| `answer` | `text`: str | the reply ended: the answer as the chat keeps it (the `assistant` item's `content`); `""` when none, partial when it failed |
+| `end` | `failure`: str or null | the last event. null: the reply ended normally. Else the reply's note: `"stopped by you"`, or `"error: …"` |
+
+`draft`, `step_end`, `status`, `tool_start` and `tool_end` come only on a voice turn, when the API sends them
+(PLAN-voice C3). A typed reply's stream carries only `answer` and `end`. A field the API left out is `null`.
+
+```text
+GET /app/v1/chat/example/stream?after=0
+
+: reply 3f0c9e21a4b7d658
+
+id: 1
+data: {"seq": 1, "type": "status", "reply": "3f0c9e21a4b7d658", "phase": "model", "detail": "thinking"}
+
+id: 2
+data: {"seq": 2, "type": "draft", "reply": "3f0c9e21a4b7d658", "text": "Let me look."}
+
+id: 3
+data: {"seq": 3, "type": "step_end", "reply": "3f0c9e21a4b7d658", "answer": false}
+
+id: 4
+data: {"seq": 4, "type": "tool_start", "reply": "3f0c9e21a4b7d658", "name": "read_file"}
+
+: keepalive
+
+id: 5
+data: {"seq": 5, "type": "tool_end", "reply": "3f0c9e21a4b7d658", "name": "read_file", "ok": true}
+
+id: 6
+data: {"seq": 6, "type": "draft", "reply": "3f0c9e21a4b7d658", "text": "It is sunny in Milan."}
+
+id: 7
+data: {"seq": 7, "type": "step_end", "reply": "3f0c9e21a4b7d658", "answer": true}
+
+id: 8
+data: {"seq": 8, "type": "answer", "reply": "3f0c9e21a4b7d658", "text": "It is sunny in Milan."}
+
+id: 9
+data: {"seq": 9, "type": "end", "reply": "3f0c9e21a4b7d658", "failure": null}
+```
+
+A voice turn: send with `voice=1` and `mode=now`, then open the stream with no `after` once the send has answered.
+The send starts the reply before it answers, so the stream has it. When the send was an interjection, the stream is
+the reply already running: continue it with the `reply` and `after` you hold.
 
 ## 7. Chat actions
 
@@ -899,6 +994,7 @@ Every piece `web_views.chat_feed` and `live_activity` draw, and where it is in t
 | "Show the N earlier messages" | `more` | `earlier` > 0 |
 | The operator's turn: text with quotes and code, time | `u<k>` | `items[]` `user`: `text`, `ts` |
 | "· during its reply" | | `user.interjected` |
+| "· spoken" | | `user.via` `"voice"` |
 | "✎ edited <path>" / "🗑 deleted <path>" | | `user.edits` / `user.deleted` |
 | "💬 c3" (comments sent) | | `user.comments` |
 | "👎 feedback" | | `user.feedback` |
@@ -963,6 +1059,8 @@ plugin grants or global settings.
 | `cloud_cap` | `{"value": float or null, "spent_today": float}`, in dollars |
 | `channel` | `{"value": str, "choices": ["auto", "web", "telegram"]}` |
 | `operator_name` | `{"value": str}` |
+| `voice_mode` | `{"value": str, "choices": ["on", "off"]}`: `VOICE_MODE`, `"off"` when its `config.env` has none |
+| `voice_effort` | `{"value": str, "choices": [str] or null}`: `VOICE_REASONING_EFFORT`, the reasoning effort on spoken turns. `""` (also when not set) means its `effort`. Choices are `""` and the effort choices; null when those are |
 
 Model choices come from `opconfig.model_choices()`. A current model absent from that list is appended with its
 model name as its label. Effort choices come from the instance's own `shaft/config.py`, parsed as text without
@@ -982,6 +1080,8 @@ unknown field, wrong type or non-finite number gives `400 bad_request`. Domain w
 | `cloud_cap` | `core.limit_value` and `core._update_tool_settings` with `expect`; null removes the override | `now` |
 | `channel` | `channel.set_preference` with `expect`; only `auto`, `web`, `telegram` | `now` |
 | `operator_name` | `opconfig.set_values` | `next run` |
+| `voice_mode` | `opconfig.set_values`; only `on` or `off`, else `409 refused` | `now` |
+| `voice_effort` | `opconfig.set_values`; only `""` or an effort choice, else `409 refused` | `next run` |
 
 Cloud-cap null means the per-instance override is off, matching `shaft limits ... off`. The configured supervisor
 default cap still applies. It does not mean unlimited cloud spending.
@@ -1128,6 +1228,36 @@ A failed judge can have a null verdict and a nonempty error. The instance's clai
 `left` contains `unfinished` (list of strings), `next_action` (the recorded object or null), and `next_goal`
 (string or null). A next action normally contains `action` and `revise_if` text.
 
+## 17. Voices
+
+Each instance speaks with its own voice, one per language (`"en"`, `"it"`). The voices are kept by the supervisor
+(`supervisor/voices.py`, `.supervisor/voices.json`), not in the instance's `config.env`, so the iPhone and the Mac use
+the same one. Two instances never hold the same voice for a language. The instance proposes its own voice with the
+broker tool `propose_voice`; the operator accepts or rejects the proposal here, or picks a voice, which overrides it.
+Every route answers `409 refused` with the reason (`voices.Refused`), for example an unknown language, a voice no
+device reported, or a voice another instance holds.
+
+| Method | Route under `/app/v1` | Request (JSON) | Success |
+|---|---|---|---|
+| GET | `/voices/<n>` | | 200, the voices object below |
+| POST | `/voices/<n>` | `{"language", "identifier"}`: pick that voice (`by: "operator"`); or `{"language", "clear": true}`: no voice for that language | 200, the voices object |
+| POST | `/voices/<n>/proposals/<id>` | `{"accept": bool, "reason": str}` (`reason` optional): the instance is told either way, with the reason on a rejection | 200, the voices object |
+| POST | `/voices/report` | `{"platform": "ios" or "macos", "voices": [{identifier, name, language, quality}]}`: the device's installed voices (`AVSpeechSynthesisVoice.speechVoices()`), replacing that platform's list | 200, `{"available": …}` |
+
+Any other shape: `400 bad_request`. `/voices/report` is matched before `/voices/<n>`, so an instance named `report`
+cannot have its voices read here.
+
+The voices object:
+
+| Field | Type | |
+|---|---|---|
+| `voices` | object | `{"en": voice or null, "it": voice or null}`. A voice: `{identifier, name, by, ts}`, `by` `"operator"` or `"instance"` (a proposal accepted), `ts` a timestamp |
+| `proposals` | list | the instance's proposals: `{id, language, identifier, name, why, ts, state}`, `state` `"open"` until decided |
+| `available` | object | `{platform: [voice]}`: what each platform reported, `{identifier, name, language, quality}` (`language` BCP-47, `quality` `"default"`, `"enhanced"` or `"premium"`) |
+
+The app reports its voices at launch and when the voice settings open. When the chosen voice is not installed on
+the device, the app says so on screen and speaks with the system voice for that language.
+
 ## Appendix A. Implementation notes
 
 These Python server refactor notes describe internal implementation, not additional wire fields.
@@ -1176,6 +1306,15 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - The long-poll (§4): a loop on `web_chat.feed` every 0.5 s up to `wait`, refreshing `web_chat.watching` every 2 s only when `at` is supplied;
   without `at`, only the initial watching mark is made, so a later `/away` stays effective;
   each held request is one thread of the web server's `ThreadingHTTPServer`.
+- The stream (§6.1): `web_chat.Relay` keeps the reply's events (`emit`, `events_after`, `close_stream`) under a
+  `threading.Condition`; the relay thread appends each `shaft_event` as its chunk arrives, and `answer` and `end` once
+  the final turn is saved. `web_chat.stream_of(cid)` is the chat's latest relay, kept `STREAM_KEEP_S` after it ended.
+  `app_api._stream` answers a `web.Response` with `stream` (an iterator of bytes) set. `web.Handler._pour` writes each
+  piece and flushes it on the request's own thread, with no `Content-Length` and `Connection: close`. After each piece
+  it checks whether the client closed the socket (readable with nothing to read), then closes the iterator. A
+  keepalive comment every `KEEPALIVE_S` (2 s) makes that check happen, and refreshes the watching mark, even while the
+  reply is quiet. `tailscale serve` passes `text/event-stream` on unbuffered (Go's reverse proxy flushes a response
+  without a length at once). `app_api.held(n)` counts the streams held now.
 - It calls the same functions the web routes do (`web_chat.send/queue/background/unqueue/stop/end/clear`,
   `web._serve_attachment`, `doc_comments`, `apns`, `webpush.take`, `web_seen`). Where a web route builds its answer as
   HTML inline, the logic moves into a function both call:
@@ -1217,6 +1356,6 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
   rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
   `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
-  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`. SHAFTKit reads only this folder, or
+  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`, `stream` (the events of §6.1, as a list). SHAFTKit reads only this folder, or
   `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.

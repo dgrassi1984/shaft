@@ -1,7 +1,7 @@
 {
   "instance": "wren",
   "partial": false,
-  "version": "dd8afb34f9634507",
+  "version": "0f76ac8c614ba070",
   "live": "",
   "reply": null,
   "chat": {
@@ -21,6 +21,7 @@
       "text": "hi",
       "mid": null,
       "interjected": false,
+      "via": null,
       "attachments": [],
       "edits": [],
       "deleted": [],

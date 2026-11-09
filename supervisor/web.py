@@ -33,11 +33,13 @@ import mimetypes
 import os
 import re
 import secrets
+import socket
 import stat
 import sys
 import threading
 import time
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -272,6 +274,9 @@ class Response:
     status: int
     body: bytes
     headers: dict = field(default_factory=dict)
+    # A response written as it is made (the app's SSE stream, app_api._stream): Handler writes each piece at once, with
+    # no Content-Length, then closes the connection; a client that left is noticed at the next piece (Handler._pour).
+    stream: Iterator[bytes] | None = None
 
 
 def _html(status: int, text: str, headers: dict | None = None) -> Response:
@@ -613,6 +618,8 @@ def _post(req: Request, dev: str) -> Response:
             send = (web_chat.background if fields.get("background") == "1" else
                     web_chat.queue if fields.get("queue") == "1" else web_chat.send)
             extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
+            if send is not web_chat.background:          # spoken (PLAN-voice C1): a turn of the chat, not the inbox
+                extra["voice"] = fields.get("voice") == "1"
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
             reply_links.record(m[1], fields.get("in_reply_to"), f"send:{m[1]}:{fields.get('mid') or secrets.token_hex(16)}")
@@ -1538,9 +1545,34 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in r.headers.items():
             for one in v if isinstance(v, list) else [v]:
                 self.send_header(k, one)
+        if r.stream is not None:
+            self._pour(r.stream)
+            return
         self.send_header("Content-Length", str(len(r.body)))
         self.end_headers()
         self.wfile.write(r.body)
+
+    def _pour(self, stream: Iterator[bytes]) -> None:
+        """Write a streamed response piece by piece, flushed each time, on this request's own thread (the server is a
+        ThreadingHTTPServer: other requests go on meanwhile). It ends when the stream does or the client leaves: a
+        write that fails, or a socket the client closed (readable with nothing to read) — then the stream is closed,
+        so its `finally` runs at once."""
+        self.close_connection = True
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.flush()
+            for piece in stream:
+                self.wfile.write(piece)
+                self.wfile.flush()
+                if _client_gone(self.connection):
+                    break
+        except OSError:                           # BrokenPipeError, ConnectionResetError: it left mid-write
+            pass
+        finally:
+            close = getattr(stream, "close", None)
+            if close:
+                close()
 
     def do_GET(self):
         self._serve("GET")
@@ -1550,6 +1582,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):                          # the apps' DELETE /app/v1/push/register
         self._serve("DELETE")
+
+
+def _client_gone(sock) -> bool:
+    """The client closed its end: the socket reads as ready with nothing in it. A streamed response's client sends
+    nothing after its request, so anything readable is the close (or a reset)."""
+    import select
+    try:
+        ready, _, _ = select.select([sock], [], [], 0)
+        return bool(ready) and sock.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
 
 
 def serve() -> int:

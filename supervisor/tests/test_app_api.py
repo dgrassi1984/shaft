@@ -1118,7 +1118,7 @@ class FixturesTest(AppTest):
                  activity=["read_file notes/docs/ledger.md", "run tests: 412 passed"],
                  docs=[{"path": "ledger.md", "created": False}], answered=[{"id": "c3", "doc": "ledger.md"}]),
             turn("user", "2026-11-03T14:05:50", "Rerun the report for October.", shown="Rerun the report for October.",
-                 mid="a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13"),
+                 mid="a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13", via="voice"),          # spoken (PLAN-voice: via)
         ]
 
     def test_write_or_check_the_fixtures(self):
@@ -1254,7 +1254,27 @@ class FixturesTest(AppTest):
         self.keep("plan", self.get("/app/v1/plan/wren"))
         self.keep("cycles", self.get("/app/v1/cycles/wren"))
         self.keep("cycle", self.get("/app/v1/cycles/wren/2026-11-03T13:58:40"))
+        self.keep("stream", self.stream_events())
         self.check()
+
+    def stream_events(self) -> list[dict]:
+        """A voice turn's stream (§6.1) as the server writes it: every event type, decoded from its SSE lines."""
+        chat = self.chat([turn("user", "2026-11-03T14:30:00", "Weather?", shown="Weather?", via="voice")],
+                         state="replying", reply={"started": "2026-11-03T14:30:01", "activity": [], "answer": ""})
+        relay = web_chat.Relay(chat["id"])
+        relay.id = "3f0c9e21a4b7d658"
+        web_chat._streams[chat["id"]] = relay
+        self.addCleanup(web_chat._streams.clear)
+        for kind, fields in (("status", {"phase": "model", "detail": "thinking"}), ("draft", {"text": "Let me look."}),
+                             ("step_end", {"answer": False}), ("tool_start", {"name": "read_file"}),
+                             ("tool_end", {"name": "read_file", "ok": True}),
+                             ("draft", {"text": "It is sunny in Milan."}), ("step_end", {"answer": True})):
+            relay.emit(kind, **fields)
+        relay.close_stream("It is sunny in Milan.", None)
+        r = self.api("/app/v1/chat/wren/stream")
+        self.assertEqual(r.status, 200, r.body)
+        raw = b"".join(r.stream).decode()
+        return [json.loads(line[6:]) for line in raw.split("\n") if line.startswith("data: ")]
 
     def errors(self, feed: dict) -> dict:
         """One answer of each error code, as the server gives it."""
@@ -1276,6 +1296,7 @@ class FixturesTest(AppTest):
         p.write_text("x" * (docs.MAX_BYTES + 1))
         grab("too_big", self.api("/app/v1/docs/wren/doc?path=huge.md"))
         grab("stale_version", self.api("/app/v1/chat/wren/seen", "POST", {"version": feed["version"]}))
+        grab("not_replying", self.api("/app/v1/chat/wren/stream"))
         out["too_large"] = {"status": 413, "body": json.loads(app_api.error(
             413, "too_large", f"Too large: at most {(messages.ATTACH_MAX_TOTAL + 1_000_000) // 1_000_000} MB can be "
                               "sent at once.").body)}
@@ -1286,13 +1307,13 @@ class FixturesTest(AppTest):
                                                                      "platform": "ios"}))
         self.assertEqual({v["body"]["error"]["code"] for v in out.values()},
                          {"unpaired", "login", "host", "pair_expired", "bad_request", "not_found", "method", "refused",
-                          "stale", "too_big", "stale_version", "too_large", "internal", "push_off"})
+                          "stale", "too_big", "stale_version", "too_large", "internal", "push_off", "not_replying"})
         return out
 
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
                  "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                 "send", "feedback-response", "retried", "plan", "cycles", "cycle"}
+                 "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream"}
         self.assertEqual(set(self.out), names)
         if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
             FIXTURES.mkdir(exist_ok=True)
