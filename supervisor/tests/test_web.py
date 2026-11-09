@@ -436,3 +436,18 @@ class BakeoffJudgePagesTest(WebTest):
         self.assertIn("<h2>Ranking of wren</h2>", page)             # the instance's ranking, updated by this verdict
         ds = re.search(r"deepseek-v4.1-flash</td><td data-label=\"Your Elo \[90%\]\">(\d+) \[", page)
         self.assertTrue(ds and (int(ds[1]) > 1000) == ds_won, page[-3000:])   # moved from 1000 by the verdict
+
+    def test_judging_across_all_bake_offs_of_the_instance(self):
+        cookie = self.paired()
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/judge-all", cookie=cookie).body)   # none started
+        b = self.bakeoff.load("wren", "x1")
+        pair = ("codex/gpt-6.1-sol", "openrouter/deepseek/deepseek-v4.1-flash")
+        self.bakeoff.operator_path(b).parent.mkdir(parents=True, exist_ok=True)
+        self.bakeoff.operator_path(b).write_text("")   # judging started on it
+        page = self.req("/bakeoffs/wren/judge-all", cookie=cookie)
+        self.assertEqual(page.status, 200)
+        self.assertIn(b"Run A", page.body)
+        self.assertIn(b'data-post="/bakeoffs/wren/x1/judge"', page.body)   # the verdict goes to the pair's bake-off
+        self.assertIn(b"/bakeoffs/wren/judge-all", self.req("/bakeoffs", cookie=cookie).body)
+        self.assertEqual(self.req("/bakeoffs/nobody/judge-all", cookie=cookie).status, 404)
+

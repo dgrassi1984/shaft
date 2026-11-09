@@ -1725,7 +1725,9 @@ def calendar_proposals_page(rows: list[dict], names: list[str], csrf: str) -> Ht
 # -- bake-offs judged by the operator (supervisor/bakeoff.py § the operator as judge) --------------------------------
 def bakeoffs_page(items: list[dict], names: list[str], csrf: str, rankings: dict | None = None) -> Html:
     body = [r for r in items]
-    ranks = join(bakeoff_ranking(r, inst, here=False) for inst, r in (rankings or {}).items() if r)
+    ranks = join(join([bakeoff_ranking(r, inst, here=False),
+                       h('<p><a class="button" href="/bakeoffs/{n}/judge-all">Judge pairs across all your bake-offs of '
+                         '{i}</a></p>', n=q(inst), i=inst)]) for inst, r in (rankings or {}).items() if r)
     t = table(["Bake-off", "Instance", "Saved"],
               [[link(f"/bakeoffs/{q(i['name'])}/{q(i['id'])}", i["id"]), i["name"], i["modified"].strftime("%m-%d %H:%M")]
                for i in body]) if body else h("<p>No bake-off saved yet (<code>shaft trial models</code>).</p>")
@@ -1786,7 +1788,7 @@ def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str, rank
              '<section class="panel"><h2>Judge pairs</h2><form method="get" action="/bakeoffs/{qn}/{qid}/judge">'
              '<p>Each page is a random pair of the models ticked, on one cycle, each side drawn at random: you do '
              'not know which model ran which side.</p>{pick}<p><button type="submit">Start</button></p></form>'
-             '</section>',
+             '<p><a href="/bakeoffs/{qn}/judge-all">Or judge pairs across all your bake-offs of {n}</a></p></section>',
              id=b["id"], n=b["name"], base=_short(base), s=str(len(b["states"])), rev=b.get("code_rev", "")[:10],
              t=table(["Model", "Your pairs", "Its W–L–T", "Agrees with the LLM judges (vs baseline)"], rows_),
              qn=q(b["name"]), qid=q(b["id"]), pick=pick, ranking=bakeoff_ranking(rank, b["name"]) if rank else "")
@@ -1832,8 +1834,10 @@ def _pending_html(p: dict) -> Html:
              more=more, bl=str(p.get("backlog", 0)), q=queue or h("<li>none</li>"), c=prom or h("<li>none</li>"))
 
 
-def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str) -> Html:
-    back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off and its ranking</a></p>', n=q(b["name"]), id=q(b["id"]))
+def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str,
+                       back: str = "") -> Html:
+    back = h('<p><a href="{href}">← {t}</a></p>', href=back, t="the bake-offs and the ranking") if back else \
+        h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off and its ranking</a></p>', n=q(b["name"]), id=q(b["id"]))
     if case is None:
         return frame("Judge", join([back, h("<h1>Nothing left to judge</h1><p>Every pair of these models has your "
                                             "verdict.</p>")]), names, csrf, current="/bakeoffs")

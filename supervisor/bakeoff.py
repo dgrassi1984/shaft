@@ -643,6 +643,51 @@ def operator_queue(b: dict, labels: list[str]) -> list[tuple[int, tuple[str, str
     return sorted(todo, key=lambda t: hashlib.sha256(f"{b['id']}:{t[0]}:{t[1][0]}|{t[1][1]}".encode()).hexdigest())
 
 
+def _history(bs: list[dict]) -> list[tuple[str, int, tuple[str, str]]]:
+    """The operator's verdicts on these bake-offs, oldest first: (bake-off id, state, pair)."""
+    rows = []
+    for b in bs:
+        p = operator_path(b)
+        for line in p.read_text().splitlines() if p.exists() else []:
+            try:
+                v = json.loads(line)
+                pair = _pair(*v["pair"]) if "pair" in v else _pair(b["arms"][0]["label"], v["arm"])
+                rows.append((str(v.get("at", "")), b["id"], v["state"], pair))
+            except (ValueError, KeyError, TypeError):
+                continue
+    return [(bid, i, pair) for _, bid, i, pair in sorted(rows, key=lambda r: r[0])]
+
+
+RECENT = 4   # verdicts whose cycles and model pairs the next page avoids
+
+
+def operator_next(bs: list[dict], labels=None, rng=None):
+    """The next pair to show, drawn from the bake-offs `bs`: (bake-off, state, pair, pairs left), or None. Not a fixed
+    order: among the pairs not judged yet it drops the cycles and the model pairs of the last RECENT verdicts while
+    anything else is left, and draws at random from what remains, a pair's weight a little lower the more its two
+    models (against the average model) and its cycle have been judged already: every pair can come up, the less
+    judged ones a bit more often. `labels(b)` names the models to pair (all)."""
+    rng = rng or random.SystemRandom()
+    todo = [(b, i, pair) for b in bs for i, pair in operator_queue(b, labels(b) if labels else
+                                                                     [a["label"] for a in b["arms"]])]
+    if not todo:
+        return None
+    history = _history(bs)
+    per_model, per_cycle = {}, {}
+    for bid, i, pair in history:
+        per_cycle[(bid, i)] = per_cycle.get((bid, i), 0) + 1
+        for a in pair:
+            per_model[a] = per_model.get(a, 0) + 1
+    recent = history[-RECENT:]
+    fresh = [t for t in todo if all((t[0]["id"], t[1]) != (bid, i) and t[2] != pair for bid, i, pair in recent)]
+    pool = fresh or todo
+    mean = max(1.0, sum(per_model.values()) / max(1, len(per_model)))
+    weight = [1 / ((1 + per_model.get(t[2][0], 0) / mean) * (1 + per_model.get(t[2][1], 0) / mean)
+                   * (1 + per_cycle.get((t[0]["id"], t[1]), 0))) for t in pool]
+    b, i, pair = rng.choices(pool, weights=weight)[0]
+    return b, i, pair, len(todo)
+
+
 def _diff_files(diff: str) -> list[dict]:
     """trial.file_diff's text as one record per file: {path, added, removed, created, deleted, binary, cut}. Parsed by
     headers and hunk lengths, so a content line that starts with '--- ' or '+++ ' stays content."""
@@ -1042,6 +1087,7 @@ def saved() -> list[dict]:
 
 
 _LOADED: dict[Path, tuple[float, dict]] = {}
+LOADED_MAX = 2
 _LOADED_LOCK = threading.Lock()
 
 
@@ -1059,7 +1105,9 @@ def load(name: str, bid: str) -> dict | None:
                 return held[1]
         b = json.loads(p.read_text())
         with _LOADED_LOCK:
-            _LOADED.clear()
+            _LOADED.pop(p, None)
+            while len(_LOADED) >= LOADED_MAX:   # the oldest out: judging across bake-offs reads two in turn
+                _LOADED.pop(next(iter(_LOADED)))
             _LOADED[p] = (mtime, b)
         return b
     except (OSError, ValueError):

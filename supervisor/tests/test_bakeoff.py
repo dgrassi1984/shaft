@@ -784,3 +784,34 @@ class RankingCostTest(InstanceRankingTest):
         self.assertTrue(cost["codex/gpt-6.1-sol"]["plan"])
         # 50K uncached at $2/M + 150K cached at $0.10/M + 1K out at $10/M
         self.assertAlmostEqual(cost["codex/gpt-6.1-sol"]["usd"], 0.1 + 0.015 + 0.01)
+
+
+class OperatorNextTest(InstanceRankingTest):
+    """The next pair shown: a balanced random draw, not a fixed order (operator, 2026-11-09: 'randomize better')."""
+
+    def test_avoids_the_last_cycles_and_pairs_and_favours_the_models_judged_least(self):
+        import random
+        arms = ["a", "b", "c", "d"]
+        b = self.record("x", arms, [("a", "b", "a")])
+        b["states"] += [json.loads(json.dumps(b["states"][0])) for _ in range(3)]   # four cycles
+        (self.tmp / "thelos-x.json").write_text(json.dumps(b))
+        seen, pairs = set(), []
+        for k in range(300):
+            got = bakeoff.operator_next([b], rng=random.Random(k))
+            b_, i, pair, left = got
+            self.assertNotEqual(i, 0)                                # cycle 0 was just judged
+            self.assertNotEqual(set(pair), {"a", "b"})               # nor the two models judged together
+            seen.add(i)
+            pairs.append(pair)
+        self.assertEqual(seen, {1, 2, 3})                            # drawn, not one fixed cycle
+        self.assertEqual(len(set(pairs)), 5)                         # every other pair comes up...
+        self.assertGreater(pairs.count(("c", "d")), pairs.count(("a", "c")))   # ...the never-judged models more often
+        self.assertEqual(left, 4 * 6 - 1)
+
+    def test_draws_across_bake_offs_and_returns_none_when_all_are_judged(self):
+        import random
+        b1 = self.record("n24", ["a", "b"], [("a", "b", "a")])
+        b2 = self.record("op24", ["a", "b"], [])
+        nxt = bakeoff.operator_next([b1, b2], rng=random.Random(1))
+        self.assertEqual((nxt[0]["id"], nxt[3]), ("op24", 1))       # the only pair left is in the other bake-off
+        self.assertIsNone(bakeoff.operator_next([b1]))
