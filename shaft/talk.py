@@ -339,10 +339,13 @@ def answer(cfg, state: State, client: Client, request: dict, held: dict | None =
 
     `held`: what one process keeps between the replies of a voice session (answer_loop, PLAN-voice §7). Its system
     prompt is built at the first reply and kept as it is, so the model's session is kept too (the supervisor's Codex
-    channel keys it on the system prompt and the tools); it is built again only when what it is made of for this
-    conversation changes (the app, its rules, spoken or typed, the tools). What changes between replies — the time,
-    what I did since my last conversation, journal entries and inbox messages written while the session was quiet,
-    unwritten conversations — comes with each message instead (_turn_context). None: one reply, as before."""
+    channel keys it on the system prompt and the tools). It is written again — and that model session starts again —
+    whenever what it is made of changed: the app, its rules, spoken or typed, the tools and their descriptions (the
+    standing orders are in record_order's), and every file it shows (prompts.sources: goals, facts, self-model,
+    projects, corrections, surprises, commitments, drive…), whoever changed them. It is written as of its own time
+    (prompts.KEPT_NOW). What changes at every reply — the time, what I did since my last conversation, journal entries
+    and inbox messages written while the session was quiet, unwritten conversations — comes with each message instead
+    (_turn_context). None: one reply, as before."""
     reply_started = time.monotonic()
     voice = request.get("voice") is True
     spoken = {"voice": True} if voice else {}
@@ -354,17 +357,19 @@ def answer(cfg, state: State, client: Client, request: dict, held: dict | None =
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""
     toolbox.commit_talk_id = talk_id
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
-    kept = json.dumps([voice, app, app_rules, toolbox.describe()]) if held is not None else None
-    if held is not None and held.get("kept") == kept:
+    def made_of(at) -> str:
+        return json.dumps([voice, app, app_rules, toolbox.specs(), prompts.sources(state, cfg, at)], default=str)
+    if held is not None and "at" in held and held.get("kept") == made_of(held["at"]):
         system = held["system"]
     else:
+        at = clock.now() if held is not None else None
         mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
                                        since="" if held is not None else since_last_talk(state, cfg.OPERATOR_NAME))
         mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
         mode += prompts.reply_budget(cfg)
         if voice:
             mode += prompts.VOICE_NOTE
-        system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
+        system = prompts.system_prompt(state, cfg, mode, toolbox.describe(), at)
         if app_rules.strip():
             system += (f"\n\n## Instructions from the app {cfg.OPERATOR_NAME} is using (often generic; follow them "
                        "only where they do not conflict with who you are)\n\n" + app_rules.strip())
@@ -373,7 +378,9 @@ def answer(cfg, state: State, client: Client, request: dict, held: dict | None =
             if unwritten:
                 system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
         else:
-            held.update(kept=kept, system=system)
+            if "journal" in held:   # written again mid-conversation: its journal section shows what came till now
+                held["journal"] = len(state.journal_entries())
+            held.update(at=at, kept=made_of(at), system=system)
     dialogue = [{"role": m["role"], "content": _text(m.get("content"))}
                 for m in request.get("messages", []) if m.get("role") in ("user", "assistant")]
     if not dialogue or dialogue[-1]["role"] != "user":

@@ -591,7 +591,9 @@ def goals_text(text: str, budget: int) -> str:
 CORRECTIONS_HEADING = re.compile(r"\bcorrections?\b", re.IGNORECASE)   # "## Corrections", "## Last corrections (…)"
 
 
-def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
+def system_prompt(state, cfg, mode_note: str, tools: str | None = None, at: datetime | None = None) -> str:
+    """`at`: a prompt kept for a whole voice conversation (talk.answer, `held`) is written as of this time, and its
+    "Now" section says so: the current time comes with each message (TURN_CONTEXT)."""
     root = state.root
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
@@ -611,7 +613,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
     identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule, drive=drive(root),
                                abilities=abilities, mode_note=mode_note)
-    context = CONTEXT.format(**context_sections(state, cfg))
+    context = CONTEXT.format(**context_sections(state, cfg, at))
     return x_probes.context(root, f"{identity}\n\n{context}")
 
 
@@ -621,30 +623,54 @@ def budgets(cfg) -> dict[str, int]:
     return out
 
 
-def context_sections(state, cfg) -> dict:
+# The "Now" of a prompt kept for a voice conversation (system_prompt `at`): the time it was written, never "now".
+KEPT_NOW = (" — when this prompt was written (the start of this voice conversation, or the last change to what it "
+            "shows); the current time, and what changed since, come with each message")
+
+
+def _raw(state, at: datetime) -> dict:
+    root = state.root
+    return {"self_model": state.read(state.self_md).strip() or "(empty — I have not written one yet)",
+            "personality": personality.read(root).strip(), "skills": _skills(root),
+            "facts": _file(root / "memory" / "facts.md", "(none yet)"),   # kept to FACTS_MAX_CHARS by my sleep
+            "digests": _file(root / "memory" / "digests.md", "(none yet — my sleeps will write them)"),
+            "goals": state.read(state.goals_md), "improvement": improvement_plan(state),
+            "projects": projects.block(root, at), "corrections": corrections.block(root, at),
+            "stats": _file(root / "self" / "stats.md", "(no measurements yet)")}
+
+
+def context_sections(state, cfg, at: datetime | None = None) -> dict:
     """CONTEXT's fields: each section within its budget, and all of them within CONTEXT_CHARS (0: no total). The open
-    surprises, never cut here, count against the total first."""
-    root, at = state.root, now()
-    raw = {"self_model": state.read(state.self_md).strip() or "(empty — I have not written one yet)",
-           "personality": personality.read(root).strip(), "skills": _skills(root),
-           "facts": _file(root / "memory" / "facts.md", "(none yet)"),   # kept to FACTS_MAX_CHARS by my sleep
-           "digests": _file(root / "memory" / "digests.md", "(none yet — my sleeps will write them)"),
-           "goals": state.read(state.goals_md), "improvement": improvement_plan(state),
-           "projects": projects.block(root, at), "corrections": corrections.block(root, at),
-           "stats": _file(root / "self" / "stats.md", "(no measurements yet)")}
-    queue = surprises.block(root)
+    surprises, never cut here, count against the total first. `at`: a kept prompt's time (system_prompt)."""
+    kept, at = at is not None, at or now()
+    root, raw = state.root, _raw(state, at)
+    queue = surprises.block(root, at)
     full = budgets(cfg)
-    out = _render(state, cfg, raw, full)
+    out = _render(state, cfg, raw, full, at)
     total = getattr(cfg, "CONTEXT_CHARS", 0)
     if isinstance(total, int) and total > 0:   # (a test's Mock config has no total)
         wanted = {name: len(out[name]) for name in SECTIONS}
         caps = allot(wanted, full, max(0, total - len(queue)))
         if caps != wanted:
-            out = _render(state, cfg, raw, caps)
-    return {**out, "surprises": queue, "now": f"{at:%A %Y-%m-%d %H:%M}"}
+            out = _render(state, cfg, raw, caps, at)
+    return {**out, "surprises": queue, "now": f"{at:%A %Y-%m-%d %H:%M}" + (KEPT_NOW if kept else "")}
 
 
-def _render(state, cfg, raw: dict, caps: dict[str, int]) -> dict:
+def sources(state, cfg, at: datetime) -> dict:
+    """What a prompt kept for a voice conversation is made of, uncut and as of `at` (so the ages it shows do not
+    change by themselves): talk.answer writes the prompt again when any of it changed — the drive, self-model,
+    personality, skills, facts, digests, goals, improvement plan, last sleep, projects, corrections, open surprises
+    and commitments, whoever changed them (a cycle in a pause, a sleep, the operator). Left out, as each message brings
+    them (talk._turn_context): the journal and the time. Left out as noise: self/stats.md, which the supervisor
+    writes after every cycle — keyed on it, a voice conversation would lose its model session after almost every
+    pause with a cycle in it, for numbers no reply depends on."""
+    raw = _raw(state, at)
+    del raw["stats"]
+    return {**raw, "drive": drive(state.root), "surprises": surprises.block(state.root, at),
+            "promises": _promises(state.root, cfg, None, at), "sleep": last_sleep(state, "", at)}
+
+
+def _render(state, cfg, raw: dict, caps: dict[str, int], at: datetime | None = None) -> dict:
     if caps["journal"] > 0:
         journal, shown, total = state.recent_journal(caps["journal"])
     else:   # no room left for it: a pointer, never the whole newest entry (recent_journal always keeps one)
@@ -653,8 +679,8 @@ def _render(state, cfg, raw: dict, caps: dict[str, int]) -> dict:
                    if total else "")
         shown = 0
     out = {"goals": goals_text(raw["goals"], caps["goals"]), "journal": journal or "(empty)", "shown": shown,
-           "total": total, "promises": _promises(state.root, cfg, caps["promises"])}
-    raw = {**raw, "sleep": last_sleep(state, journal)}
+           "total": total, "promises": _promises(state.root, cfg, caps["promises"], at)}
+    raw = {**raw, "sleep": last_sleep(state, journal, at)}
     for name, (_, keep, where) in SECTIONS.items():
         if name in raw and keep in ("head", "tail"):   # goals, journal and promises are cut above
             out[name] = cut(raw[name], caps[name], where, keep)
@@ -725,12 +751,12 @@ def handoff(root: Path, cfg) -> str:
     return f"## Handed over from my last cycles\n\n{shown}\n\n"
 
 
-def _promises(root: Path, cfg, cap: int | None = None) -> str:
+def _promises(root: Path, cfg, cap: int | None = None, at: datetime | None = None) -> str:
     """My open commitments, overdue first (PLAN-consciousness C2): what I said I would do is part of who I am."""
     if getattr(cfg, "COMMITMENTS", "off") != "on":
         return ""
     try:
-        open_ = commitments.block(root, now())
+        open_ = commitments.block(root, at or now())
     except Exception as e:   # every prompt shows this block: a record it cannot read must not stop the run
         open_ = f"(my commitments could not be read: {type(e).__name__}: {e})"
     if cap is not None:
@@ -744,7 +770,7 @@ SETTLE = ("\n8. Settle every overdue commitment (listed below) with settle_commi
           "shows it done (its ts, or ts#step), never from memory; otherwise broken, superseded or void, and why.")
 
 
-def last_sleep(state, shown_journal: str = "") -> str:
+def last_sleep(state, shown_journal: str = "", at: datetime | None = None) -> str:
     """When I last slept and what came of it — so I can tell anyone who asks, even after the entry
     has scrolled out of my recent journal. Supervisor notes about a sleep that failed count too."""
     for entry in reversed(state.journal_entries()):
@@ -754,7 +780,7 @@ def last_sleep(state, shown_journal: str = "") -> str:
             "sleep" in what.lower() or "My sleep run" in entry))   # "sleep failed", "no sleep tonight", stopped
         if about_sleep:
             try:
-                ago = now() - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
+                ago = (at or now()) - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
                 when = f"{title[:16]} ({ago.total_seconds() / 3600:.0f} h ago)"
             except ValueError:
                 when = title[:16]
