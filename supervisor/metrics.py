@@ -2169,6 +2169,8 @@ def restore_change(name: str, entry: dict) -> str | None:
     ok, out = gate.run_tests(root, HOME)
     if not ok:
         gate.restore(root, current, files)
+        if getattr(out, "refused", False):
+            return f"the probation restore gate was refused ({out.why})"
         last = [l for l in out.strip().splitlines() if l.strip()][-1:] or ["(no output)"]
         return f"the tests fail with the earlier version ({last[0].strip()[:200]})"
     msg = (f"{name}: supervisor restored {len(files)} file(s) to before {commit[:8]} (failed probation)\n\n"

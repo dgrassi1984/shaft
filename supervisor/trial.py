@@ -567,6 +567,10 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
                         except ProcessLookupError:
                             pass
                         code_ = proc.wait()
+    except runner.RunRefused as e:
+        runner._refused(name, e)
+        ended, code_ = "refused", runner.REFUSED
+        out_path.write_text(str(e))
     finally:
         broker.stop()
         Path(prof).unlink(missing_ok=True)
@@ -1213,6 +1217,10 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
         log(f"{name}: trial {t['id']} past cycle {i + 1} preempted ({s['preempted']}×): the model was needed")
         save(t)
         return
+    if any(a["ended"] == "refused" for a in arms.values()):
+        s["why"] = next(a["output_tail"] for a in arms.values() if a["ended"] == "refused")
+        save(t)   # still pending: no judgment or failed trial for unavailable infrastructure
+        return
     judgments: list[dict | None] = []
     ctx = state_context(project, name, s)
     # One judge for both orders of the pair (the order swap checks position bias, not judge variance), never the
@@ -1352,6 +1360,9 @@ def _gate_job(project: Path, t: dict) -> None:
     ok, out = gate_check(project, t["instance"], t)
     t = load(t["instance"], t["id"])
     t["gate"] = {"ok": ok, "output": out[-4000:]}
+    if getattr(out, "refused", False):
+        save(t)   # stays testing, retried by the worker; no rejection or delivery
+        return
     t["status"] = "queued" if ok else "rejected"
     t["queued_at"] = datetime.now().isoformat(timespec="seconds")
     save(t)

@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use SHAFT in your work, please cite this software."
+type: software
+title: SHAFT
+authors:
+  - family-names: Grassi
+    given-names: Daniele
+license: MIT
+repository-code: "https://github.com/dgrassi1984/shaft"
+abstract: "SHAFT is a macOS supervisor for persistent AI agent instances with autonomous cycles, conversations, evaluation, and operator-controlled access."

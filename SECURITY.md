@@ -1,42 +1,85 @@
 # Security
 
-SHAFT runs self-modifying LLM instances. Treat their code and the content they read as untrusted.
+SHAFT runs LLM agents that write and execute their own code. Treat that code, and everything the agents read, as
+untrusted. This page states what the supervisor protects, what it does not, and how to report a problem. The full list
+of enforced rules is in [docs/safety.md](docs/safety.md).
 
-## What can go wrong
+## Threat model in one paragraph
 
-Instances run their own Python and plugins under macOS `sandbox-exec`. The sandbox restricts filesystem access and network connections; it is a security boundary, not a guarantee that generated code is safe. See `supervisor/sandbox.py:113`, `supervisor/sandbox.py:172`, `supervisor/sandbox.py:228` and the launch path in `supervisor/runner.py:435`. When a run ends, the supervisor ends its process group and any orphaned process still working in the instance's folder before it judges the run; a process that starts its own session and also leaves that folder is not found, and only the sandbox limits it (it can write nothing outside the instance's folder, and what it writes there is gated at the next run).
+The supervisor assumes an instance may be wrong, manipulated by what it reads (prompt injection), or actively trying
+to escape its rules. It keeps the instance away from your credentials, your files outside its own folder, your local
+network and the supervisor's code. It does not stop an instance from sending what it has read to the public internet,
+from acting within the access you granted it, or from spending money up to the checks described below. Granting access
+is granting it to the instance and to anyone who can put text in front of it.
 
-Instances can reach the public internet through the supervisor's egress proxy. It rejects non-public addresses, including localhost, LAN and tailnet addresses, and connects to the IP it checked after resolving the hostname. The instance's sandbox permits selected local service ports, including the proxy. Public internet access can still send data out or perform actions on external services (`supervisor/egress.py:44`, `supervisor/egress.py:126`, `supervisor/sandbox.py:138`). The broker's own `fetch_page` and `http_request`, which run outside the sandbox, hold to the same rule: each connection, redirects included, goes to an address resolved and checked for that connection, while TLS still verifies the requested name (`supervisor/broker.py:410`, `supervisor/broker.py:435`, `supervisor/broker.py:485`). The one exception is `SHAFT_TAILNET_GRANTS`, set by the operator: it names, per instance, tailnet `host:port` pairs that instance's `http_request` may reach while it sends one of its keys. Only the Tailscale ranges (100.64.0.0/10, fd7a:115c:a1e0::/48) open for a granted name, and only for that one request; `fetch_page`, redirects, other instances, other ports and the sandbox's egress proxy still refuse every tailnet address (`tailnet_grants` and `Broker._http_request` in `supervisor/broker.py`). A granted service sees whatever the key may do there, and a write there is not one of the operator action classes: grant a read-only token unless the instance should write.
+## What the supervisor protects
 
-Instances do not receive the supervisor's API keys. The supervisor reads the root `.env`; the broker holds credentials and adds them to authorised requests. The sandbox denies access to an instance's secret store and passes on only an allow-list of inherited environment variables, none of them `LLM_*` (`supervisor/core.py:263`, `supervisor/broker.py:473`, `supervisor/broker.py:1097`, `supervisor/sandbox.py:24`, `supervisor/sandbox.py:227`). These controls protect configured credentials; they cannot prevent an operator from putting a secret into a message or a readable file.
+| Boundary | How | Limits |
+|---|---|---|
+| Filesystem | Each run executes under macOS `sandbox-exec` (`supervisor/sandbox.py`). Writes are limited to the instance's own folder (minus `secrets/`, `config.env`, `drive.md` and `shaft-docs/`), permitted devices and the image tools' temporary files; the broker's `run` tool may write less. A shared folder you grant is read-only. Your home folder, `/private/tmp`, `/Users/Shared`, `/Volumes` and the per-user temp and cache folder are closed; if macOS does not say where that per-user folder is, the run refuses to start. | `sandbox-exec` is a containment layer, not a virtual machine, and Apple marks it deprecated. |
+| Supervisor code and state | Instances cannot write `supervisor/`, `.supervisor/`, their `config.env` or `drive.md`. Each live run imports its `shaft` package from a read-only copy of its last approved code. | Plugins and the broker's `run` tool execute the writable working tree; what they changed is gated when the run settles. |
+| Self-changes | Changes to the instance's code paths (`shaft/`, `tests/`, `plugins/`, `.python-version`, `requirements.txt`) and the config lines it set through the broker must pass the test gate. A failed check reverts them. | If the gate cannot run at all (its sandbox cannot be built), nothing is reverted: the change stays unsettled and the run is refused until a later gate settles it. Memory, notes and other non-code files are not gated. |
+| Journal and core | The journal must stay append-only: a rewrite is replaced by the previous text. Once a core personality exists, another core change within 72 hours is put back. | If `memory/` is a link or a write fails, the supervisor records a note instead of restoring. A first core, or a change from an empty core, is kept. |
+| Credentials | The supervisor reads the root `.env`. The broker attaches keys to the requests it makes; the sandbox passes on only an allow-list of environment variables and denies the instance's secret store. | These controls protect configured credentials. They cannot stop you from pasting a secret into a message or a readable file. |
+| Local network | The egress proxy (`supervisor/egress.py`) and the broker's `fetch_page` and `http_request` refuse non-public addresses (localhost, LAN, link-local, tailnet), check the address for every connection and redirect, and connect to the address they checked. The sandbox opens only the supervisor's own local ports. | One opt-in exception: `SHAFT_TAILNET_GRANTS` lets one instance's keyed `http_request` reach named tailnet `host:port` pairs. The granted service sees whatever that key may do there. |
+| Leftover processes | When a run ends, the supervisor ends its process group and any orphan still working in the instance's folder before it settles the run. | A process that starts its own session and leaves that folder is not found; only the sandbox limits it. |
 
-Instances can spend money on cloud models and coding hand-offs. Per-instance daily controls include `SHAFT_CLOUD_DAILY_USD` and `SHAFT_CODER_DAILY_USD`. Instance-requested trials also have `SHAFT_TRIALS_PER_DAY`, `SHAFT_TRIAL_DAILY_USD` and `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY`. Cloud and coder checks compare recorded spending before starting work, so do not treat these as exact billing ceilings (`supervisor/cloudllm.py:54`, `supervisor/cloudllm.py:229`, `supervisor/coder.py:39`, `supervisor/coder.py:139`, `supervisor/trial.py:45`, `supervisor/trial.py:738`).
+## What it does not protect
 
-The operator can grant read access to Gmail threads with selected labels and to selected calendars. The supervisor holds OAuth credentials and checks grants; Gmail's OAuth scope itself is not restricted to a label (`supervisor/mail.py:56`, `supervisor/broker.py:1295`, `supervisor/calendar.py:1`, `supervisor/google.py:3`). Mail and calendar text can contain prompt injection: a sender can try to make an instance follow instructions in material it reads. Granting read access exposes that content to the instance.
+- **The public internet is open.** An instance can send anything it has read to any public address, and can act on
+  public services with keys you gave it.
+- **Prompt injection.** Mail, calendar events, Drive files and web pages can carry instructions. An instance acting on
+  them uses the authority you granted.
+- **Spending.** Per-instance daily checks exist for the cloud model (`SHAFT_CLOUD_DAILY_USD`), coding hand-offs
+  (`SHAFT_CODER_DAILY_USD`), consultations and the instance's own trials. Each is compared with recorded spending
+  before work starts, so one admitted task can exceed it. Judging has an alert threshold, not a cap.
+- **What an instance remembers.** Revoking access removes the grant and downloaded copies, not what the instance
+  wrote down or copied elsewhere.
 
-The operator can also grant read-only Drive access per account. The supervisor holds a whole-Drive read token;
-`own` is a supervisor-enforced reach, not a label or a narrower OAuth scope. It includes files the account owns,
-files in Shared Drives it belongs to, and same-domain files only when Drive's `about` reports `canCreateDrives=true`
-for the account. A Workspace that blocks Shared Drive creation shows no same-domain files under `own` unless they
-qualify as owned files or files in a member Shared Drive.
-`--all` includes external shares. Both exclude trash. The broker checks the grant and reach before returning files
-(`supervisor/google.py:40`, `supervisor/broker.py:2401`, `supervisor/gdrive.py:46`, `supervisor/gdrive.py:52`). Drive content can carry prompt
-injection and reaches model providers when the instance reads it. Revoke removes the grant and downloaded copies
-under that account's `gdrive/` directory, reporting deletion failures. It does not erase what the instance remembers
-or copies elsewhere (`supervisor/__main__.py:749`, `supervisor/core.py:689`).
+## Access you can grant
 
-The operator can also authorise an instance-owned Google account. Its Gmail scope allows reading, sending, labelling and trashing mail. Its Drive scope covers its files and files shared with it, and allows sharing, trashing and permanent deletion of its own files. This is broader authority than operator-mail label grants. The broker refuses an instance-owned Google key that belongs to a registered operator account (`supervisor/google.py:38`, `supervisor/google.py:47`, `supervisor/broker.py:1153`). Prompt injection can therefore lead to actions using the instance's granted authority even though the instance never sees the credential.
+All Google credentials stay with the supervisor; the broker checks the grant on every call.
 
-Native push keeps the operator's APNs signing key at `.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`), outside instance sandboxes. APNs receives only the event title, instance name and badge, never the message body; the app fetches that over the tailnet. Signing uses `/usr/bin/openssl`; `/usr/bin/curl --http2` is the second stdlib-only exception because APNs requires HTTP/2 (`supervisor/apns.py`).
+- **Operator Gmail:** read-only, limited to threads carrying a label you granted. The OAuth scope itself is not
+  label-limited; the supervisor checks the label on every thread it returns, reads or downloads from.
+- **Operator calendars:** read access per calendar. Write grants let an instance create and move events. A change that
+  involves other attendees, and every reply to an invitation, becomes a proposal that waits for your approval. For
+  instances listed in `SHAFT_ACTION_INSTANCES`, an action you mark as over-reach also demotes that class of action to
+  approval-only or refused until you restore it.
+- **Operator Drive:** read-only per account. The supervisor holds a whole-Drive read token. `own` reach covers files
+  the account owns, its Shared Drives, and same-domain files only when Drive reports that the account can create
+  Shared Drives. `--all` adds external shares. Content an instance reads goes to whichever model serves that call;
+  with a cloud model, it leaves your Mac.
+- **Instance-owned Google accounts:** an account you create for the instance. Its Gmail access can read, send, label
+  and trash mail; its Drive access covers the account's files and files shared with it, including sharing, trashing
+  and permanent deletion. This is far broader than the operator grants. The broker refuses a key for an account
+  registered as yours.
+- **Native push:** the APNs signing key stays at `.supervisor/web/apns/AuthKey_<KEY_ID>.p8`, outside every sandbox;
+  keep it at mode 600 (the supervisor forces that mode on `apns.json`, not on the key). A push carries no message
+  body: only the title, instance name, badge, sound and thread; the app fetches the text over the tailnet.
 
 ## Network access to the supervisor
 
-The web UI and API bind to localhost and are exposed remotely through Tailscale Serve, for the tailnet only. Do not expose them through a public proxy or Tailscale Funnel (`supervisor/api.py:531`, `supervisor/api.py:609`, `supervisor/web.py:1518`, `supervisor/web.py:1557`).
+The web UI, the chat API and the native apps' API bind to localhost and are reached through Tailscale Serve, on your
+tailnet only. Do not expose them through a public proxy or Tailscale Funnel.
 
-The chat API requires a bearer key and an allowed Tailscale login. Private web UI pages require an allowed login and a paired browser cookie. The inbox endpoint is an explicit exception: its narrower `SHAFT_INBOX_KEY` works without a login, but the endpoint still has the same network boundary (`supervisor/api.py:223`, `supervisor/api.py:244`, `supervisor/web.py:376`, `supervisor/web.py:382`).
+- The chat API (`/v1`) needs a bearer key and an allowed Tailscale login. The inbox endpoint is the exception: it
+  accepts the narrower `SHAFT_INBOX_KEY` alone, without the login check, so anyone on your tailnet who holds that key
+  can deliver a message and wake an instance.
+- Web UI pages need an allowed login, the expected host, and a paired browser cookie; their form posts check origin and
+  a CSRF token.
+- The native apps' API (`/app/v1`) needs the same login and host and a paired device's bearer token. It reads no
+  cookie, and the web pages accept no bearer, so a browser can never send an app credential on its own.
+  `shaft web unpair` revokes a device.
 
-The native apps' API (`/app/v1`, on the web UI's port) requires the same allowed login and host, and a paired device's `Authorization: Bearer <device>.<secret>` instead of the cookie: the same pair, checked against the same hash in `devices.json`. It reads no cookie and the web UI's pages accept no bearer, so a page in a browser can never reach the API with a credential the browser sends on its own; that is why it has no CSRF token, and it sends no CORS headers. The pairing link is the only way to a bearer; `shaft web unpair` revokes it (`supervisor/web.py:388`, `supervisor/app_api.py:112`, `supervisor/web.py:233`).
+## Supported versions
+
+Only the latest release tag on `main` is supported. Fixes are not backported.
 
 ## Reporting a vulnerability
 
-Open a private GitHub security advisory on this repository. Include the affected revision, reproduction steps, expected and observed behaviour, and the security boundary involved. Do not include real credentials or private instance data, and do not open a public issue with exploit details.
+Use GitHub's private vulnerability reporting: **Security → Report a vulnerability** on this repository. Include the
+affected tag or commit, reproduction steps, expected and observed behaviour, and the boundary involved (from the table
+above). Do not include real credentials or private instance data, and do not open a public issue with exploit details.
+
+This is a one-person project. Reports are read and fixed as time allows; there is no response-time commitment.

@@ -256,9 +256,9 @@ class ProtectedSnapshotTest(RunTransactionCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_gate_tests_find_the_instance_data_beside_their_protected_code(self):
-        """Regression, 2026-10-29: #86 ran the gate's tests in a copy that held only the code, so a test finding the
-        instance's notes from its own file (wren's Path(__file__).parent.parent / "notes/ledger/…") failed with
-        FileNotFoundError, and every code change wren made was reverted whatever it was. Real gate, real sandbox: the
+        """Regression: #86 ran the gate's tests in a copy that held only the code, so a test finding the
+        instance's notes from its own file (Path(__file__).parent.parent / "notes/data/…") failed with
+        FileNotFoundError, and every code change the instance made was reverted whatever it was. Real gate, real sandbox: the
         tests read and write the instance's data as before #86, and still write neither copy of the code."""
         shutil.copy(Path(__file__).resolve().parents[2] / "template/shaft/plugin_runner.py",
                     self.root / "shaft/plugin_runner.py")
@@ -295,7 +295,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
 
     def test_launched_code_finds_the_instance_data_from_its_own_file(self):
         """Regression, 2026-10-29: the same #86 gap at launch — approved code that finds the instance's notes from its
-        own file (wren's treasury key) looked in the protected copy, which had no notes."""
+        own file (a data file under notes/) looked in the protected copy, which had no notes."""
         (self.root / "notes/ledger").mkdir(parents=True)
         (self.root / "notes/ledger/key").write_text("treasury")
         (self.root / "shaft/__main__.py").write_text(

@@ -30,11 +30,19 @@ def _no_secrets(root: Path) -> str:
 
 @functools.lru_cache(maxsize=1)
 def user_folder() -> Path | None:
-    """macOS's per-user folder (/private/var/folders/<xx>/<id>/: T temp files, C caches): outside the home, but the
-    operator's — every app they run keeps its temp files and caches there. None if macOS does not say where it is."""
-    r = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True)
+    """macOS's per-user folder (/private/var/folders/<xx>/<id>/: T temp files, C caches).
+    Refuse the run if its location cannot be determined: every app's temp files must be closed."""
+    from .runner import RunRefused
+    command = ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"]
+    try:
+        r = subprocess.run(command, capture_output=True, text=True)
+    except OSError as e:
+        raise RunRefused(f"cannot build sandbox: {' '.join(command)} failed: {e}; no output captured") from None
     temp = r.stdout.strip()
-    return Path(temp).resolve().parent if r.returncode == 0 and temp else None
+    if r.returncode != 0 or not temp:
+        raise RunRefused(f"cannot build sandbox: {' '.join(command)} failed to locate the per-user folder "
+                         f"(exit {r.returncode}; stdout={r.stdout!r}; stderr={r.stderr!r})")
+    return Path(temp).resolve().parent
 
 
 # The operator's places outside their home. Until 2026-10-16 only the home was denied, and any sandboxed process could
@@ -48,11 +56,7 @@ def _operator_places_closed() -> list[str]:
     the rules after it still open what an instance may use there: its own folder, shared folder and environment (a
     test's instance lives in a temp folder), and the image tools' temp names (_image_temp_names)."""
     folder = user_folder()
-    if folder is None:
-        from .core import log
-        log("sandbox: macOS did not say where the per-user temp folder is (getconf DARWIN_USER_TEMP_DIR); "
-            "it is left readable")
-    places = [*([folder] if folder else []), *OUTSIDE_HOME]
+    places = [folder, *OUTSIDE_HOME]
     return ["(deny file-read* file-write* " + " ".join(f"(subpath {_q(p)})" for p in places) + ")"]
 
 
@@ -63,8 +67,6 @@ def _image_temp_names() -> list[str]:
     other app's file is reachable. After the write rules (writes are denied there). SBPL regexes have no {n}
     counts — a pattern with them never matches — so `+` it is."""
     folder = user_folder()
-    if folder is None:
-        return []
     hexes = "[0-9A-F]+"
     name = rf"^{re.escape(str(folder / 'T'))}/\.?{hexes}-{hexes}-{hexes}-{hexes}-{hexes}(-[A-Za-z0-9]+)?$"
     return [f'(allow file-read* file-write* (regex #"{name}"))']

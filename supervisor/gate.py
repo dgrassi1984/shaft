@@ -754,7 +754,9 @@ class Output(str):
     a check that reads the change failed (the instance part, the plugins, the instance's own tests). `why`: one line
     saying which. `failing`: the failing tests' names. `recheck`: when the supervisor's instance part is the only
     check of the change that failed, its failing names, for the caller to run against the approved code (a test that
-    fails there too is the baseline's). Only the classification: whatever the cause, a failed gate keeps nothing."""
+    fails there too is the baseline's). `refused`: profile infrastructure is unavailable; no check failed and the
+    caller must leave the change unsettled. Other failed gates keep nothing."""
+    refused = False   # profile infrastructure unavailable: leave the change unsettled, never a failed check
     cause: str | None
     why: str
     failing: tuple[str, ...]
@@ -787,6 +789,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     The output is an Output: a failed gate says whether the change failed it or the supervisor's side did (M2 of
     docs/plans/PLAN-thelos-review-2.md); either way it failed."""
     from . import pyenv
+    from .runner import RunRefused
     from .core import safe_mkdir
     env_root = Path(env_root or instance_root)
     outputs, ok = [], True
@@ -853,6 +856,11 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
             if not passed:
                 candidate.append("my own tests fail")
                 failing += failing_tests(whole)
+    except RunRefused as e:
+        _log(f"{instance_root}: run refused — {e}")
+        out = Output(f"== gate refused ==\n{e}\n(no checks ran; the change remains unsettled)", "baseline", str(e))
+        out.refused = True
+        return False, out
     except StageTimedOut as t:
         _log(f"gate: {instance_root}: {t}")
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")

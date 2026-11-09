@@ -47,7 +47,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 ME = "operator@example.com"
-TOPIC = "io.github.dgrassi1984.shaft"
+TOPIC = os.environ.get("SHAFT_APNS_TOPIC", "")
 INSTANCES = ("thelos", "wren", "ada")
 
 
@@ -248,7 +248,7 @@ def _stub_apns(base: Path) -> ModuleType:
             raise ValueError("APNs token must be nonempty hex bytes")
         if env not in ("sandbox", "production") or platform not in ("ios", "macos"):
             raise ValueError("APNs env must be sandbox or production, platform ios or macos")
-        if topic != TOPIC:
+        if TOPIC and topic != TOPIC:
             raise ValueError(f"APNs topic must equal SHAFT_APNS_TOPIC={TOPIC!r}")
         data = devices()
         data[device] = {"token": token.lower(), "env": env, "topic": topic, "platform": platform}
@@ -277,7 +277,7 @@ def _stub_apns(base: Path) -> ModuleType:
             out.write_text(json.dumps(payload))
             print(f"push to {device}: {event['title']} -> {out}", flush=True)
             for udid in SIMCTL:
-                subprocess.run(["xcrun", "simctl", "push", udid, TOPIC, str(out)], check=False)
+                subprocess.run(["xcrun", "simctl", "push", udid, native[device]["topic"], str(out)], check=False)
 
     apns.configured, apns.devices, apns.register, apns.unregister, apns.status = (
         lambda: None, devices, register, unregister, status)
@@ -310,7 +310,7 @@ def net_daily(rows):
 The summary is in `notes/docs/ledger.md`."""
 
 
-# What must scroll and never widen the column (PLAN-native-design-build.md, Review Focus 1), and every language that gets
+# What must scroll and never widen the column (docs/plans/PLAN-native-design-build.md, Review Focus 1), and every language that gets
 # syntax colours, in one answer. Ask for "wide" to have it streamed; the seed has it as a finished answer too.
 WIDE_LINE = "totals = " + " + ".join(f"account_{i:02d}.net_daily(rounded=True)" for i in range(12))
 WIDE = f"""A table of twelve columns scrolls inside its block, and so does a long line of code.

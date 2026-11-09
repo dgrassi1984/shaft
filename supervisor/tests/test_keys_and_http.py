@@ -133,7 +133,7 @@ class KeysAndHttpTest(unittest.TestCase):
 
 
 class TailnetGrantTest(unittest.TestCase):
-    """SHAFT_TAILNET_GRANTS (the operator, 2026-11-01: thelos needs a granted service on box, a tailnet host): a granted
+    """SHAFT_TAILNET_GRANTS: an instance needs a service on box.tailnet-name.ts.net. A granted
     host:port opens for that instance's keyed http_request only. Before it, every tailnet address was refused
     (BlockedAddress 100.100.1.2) and nothing else may have changed: no other instance, port, tool, unkeyed request,
     non-tailnet address or sandbox socket gets through."""

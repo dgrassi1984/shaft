@@ -470,7 +470,7 @@ def front(project: Path, name: str, dest: Path, state: dict, index: dict | None 
     import os
     import subprocess
     import tempfile
-    from . import sandbox
+    from . import sandbox, runner
     from .core import EMBED_PORT, HOME, PYTHON, safe_mkdir, safe_read_bytes, safe_write_bytes
     if index and index.get("data"):
         safe_mkdir(dest, ".tmp")
@@ -485,6 +485,9 @@ def front(project: Path, name: str, dest: Path, state: dict, index: dict | None 
                                 SHAFT_NOW=state["t0"], SHAFT_OPEN_TALKS=",".join(trial._talk_ids(dest)))
         r = subprocess.run(sandbox.wrap(Path(prof), [PYTHON, "-E", "-s", "-m", "shaft", "front"]), cwd=dest, env=env,
                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=FRONT_TIMEOUT_S)
+    except runner.RunRefused as e:
+        runner._refused(name, e)
+        raise ExperimentError(str(e)) from None
     except subprocess.TimeoutExpired:
         raise ExperimentError(f"{name}: `shaft front` did not finish in {FRONT_TIMEOUT_S}s") from None
     finally:

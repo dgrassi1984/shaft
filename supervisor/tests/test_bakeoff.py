@@ -1,6 +1,6 @@
 """Model bake-offs (supervisor/bakeoff.py): past cycles replayed once per model from the same state, each candidate
 judged blind against the baseline in both orders. `shaft trial run` could not do this: it refuses LLM_* changes and
-gives both arms one model (docs/plans/REVIEW-thelos-model-2026-10-30.md)."""
+gives both arms one model (docs/bakeoffs/README.md)."""
 from __future__ import annotations
 
 import json

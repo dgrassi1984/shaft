@@ -359,6 +359,8 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")
         gated = gate.snapshot(root)
         ok, test_log = gate.run_tests(root, HOME)
+        if getattr(test_log, "refused", False):
+            return False, test_log   # leave the child's untested code in place, unsettled
         if ok:
             message = f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}"
             # The child's code as the gate checked it, never the working tree read again: its own tests ran in
@@ -411,6 +413,9 @@ def breed(a: str, b: str, child: str, attempts: int = 2) -> int:
         record["attempts"].append({"choices": choices, "summary": summary, "passed": born,
                                    "gate": test_log[-3000:]})
         out.write_text(json.dumps(record, indent=1, ensure_ascii=False))
+        if getattr(test_log, "refused", False):
+            from .runner import RunRefused, _refused
+            return _refused(child, RunRefused(test_log.why))
         if born:
             break
         feedback = test_log[-2500:]

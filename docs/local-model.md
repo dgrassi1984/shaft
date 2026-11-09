@@ -13,6 +13,18 @@ Sources: [pack path](../supervisor/bonsai_lora.py),
 [service command](../supervisor/autonomy.py),
 [model loader](../supervisor/bonsai_server.py).
 
+Obtaining the pack is up to the reader. SHAFT has no model download step.
+`supervisor/bonsai_lora.py` reads `config.json` and `model.safetensors` and imports
+`Packed` from the pack's `runtime` module under `runtime/`. Its text helper also reads
+`tokenizer.json`. `supervisor/bonsai_server.py` reads `generation_config.json` and
+delegates tokenizer loading to `mlx_lm.utils.load_tokenizer` on the pack directory.
+Keep the tokenizer metadata supplied with the pack as well as `tokenizer.json`. Keep the complete
+pack and its runtime dependencies; these are not bundled with SHAFT.
+
+The defaults assume a 64 GB Apple Silicon Mac, with about 8 GB of model weights
+and an 8 GB prompt cache (`SHAFT_PROMPT_CACHE_GB`). Lower the cache for less memory;
+this is an assumption for sizing, not a tested minimum.
+
 After acquiring the pack at that path:
 
 ```bash
@@ -29,13 +41,14 @@ end-to-end tested installation procedure.
 Set the instance's `LLM_BASE_URL` to `http://127.0.0.1:8780/v1` and `LLM_MODEL`
 to `ternary-bonsai-2-27b-mlx`. `SHAFT_LLM_PORTS` defaults to `8780`; other local
 OpenAI-compatible servers with tool calling must use an allowed port.
-Sources: template branch `config.env:10`,
+Sources: template branch `config.env` (`LLM_BASE_URL`, `LLM_MODEL`),
 [port allowlist](../supervisor/core.py),
 [sandbox](../supervisor/sandbox.py).
 
 ## Generation and service lifecycle
 
-The server uses the pack's loader behind `mlx_lm`'s OpenAI-compatible interface.
+The server uses SHAFT's own loader, `bonsai_lora.load_text_model`, with the pack's
+`Packed` layer implementation, behind `mlx_lm`'s OpenAI-compatible interface.
 It permits 16,384 output tokens. Temperature defaults to 0.6; top-p and top-k
 come from the pack's generation config, with fallbacks of 0.95 and 20.
 `SHAFT_THINK_BUDGET` defaults to 4,096 reasoning tokens, after which the server
@@ -45,7 +58,7 @@ for tool follow-ups; `LLM_PRESENCE_PENALTY` is in tenths. The template's context
 size setting is 262,144 tokens; it is a client configuration value.
 Sources: [server setup](../supervisor/bonsai_server.py),
 [thinking budget](../supervisor/bonsai_server.py),
-[model knobs](../supervisor/localmodel.py), template `shaft/config.py:17`.
+[model knobs](../supervisor/localmodel.py), template branch `shaft/config.py`, `FIELDS`.
 
 `SHAFT_PROMPT_CACHE_GB` defaults to 8; trimming occurs when the next request
 starts. Cache bookkeeping arrays are evaluated each step to bound lazy graphs.
@@ -54,13 +67,24 @@ restart it. Sources: [generation failure](../supervisor/bonsai_server.py),
 [cache graphs](../supervisor/bonsai_server.py),
 [cache size](../supervisor/localmodel.py).
 
-An instance pointing directly to this server keeps it running. Otherwise it
+An instance pointing directly to this server keeps it running. A broker-routed
+self-hosted configuration that resolves to this server also keeps it running. Otherwise it
 exits after 15 idle minutes, with no requests in flight. Zero disables idle exit.
 Launchd restarts crashes, not normal idle exits; supervisor call paths start the
 server on demand and wait up to 300 seconds by default. The panel distinguishes
 an idle server from a failed start. Sources:
 [pinning and idle checks](../supervisor/localmodel.py),
 [service lifecycle](../supervisor/autonomy.py).
+
+To serve a retained adapter, run from the repository root with the Bonsai service
+stopped and no active work using it:
+
+```bash
+.venv-bonsai/bin/python -m supervisor.bonsai_server --adapter DIR
+```
+
+`DIR` must contain `adapter_config.json` and `adapters.safetensors` from fine-tuning.
+The adapter is loaded at startup, not selected per request.
 
 ## Battery perturbation hook (#110)
 
@@ -81,12 +105,14 @@ label or the self report. A JSON response format names no candidate perturbation
 The SSE connection closes on interruption. Whether Bonsai immediately cancels
 GPU generation after disconnect has not been verified on the real server.
 The M6 adapter swap is reported as unavailable (`perturbation.adapter_swap()`, shown in `shaft battery report`):
-the Bonsai provider loads its adapter at startup only and ignores a per-request `adapter_path`, and on
-2026-10-28 every adapter was DISCARDED. It needs per-request adapter loading in `bonsai_server.py` first. Steering is reserved for later. No model run was performed
+the Bonsai provider loads its adapter at startup only and ignores a per-request `adapter_path`. It needs per-request adapter loading in `bonsai_server.py` first. Steering is reserved for later. No model run was performed
 while building this hook. Source: [perturbation.py](../supervisor/perturbation.py).
 
 ## Codex plan routing
 
+Install the Codex CLI first. The default executable is
+`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`; install the app
+there or set `SHAFT_CODEX_BIN` to your CLI executable.
 Run `bin/shaft codex login` to sign in using SHAFT's private Codex home, then
 `bin/shaft config <name> set LLM_MODEL=codex/gpt-6-astra`.
 The broker keeps one Codex session per run. It needs no local model server and accepts text and images;
@@ -128,13 +154,17 @@ Sources: [fine-tuning](../supervisor/finetune.py),
 
 `shaft embed on|off|status` manages the optional embedding service for memory
 search. It uses the Bonsai environment and port 8782 by default.
+It needs a separate model directory, `.models/qwen3-embedding-0.6b/`, containing
+`config.json`, `model.safetensors`, and `tokenizer.json` (`supervisor/embed_server.py`).
+Obtain these files yourself; the embedding service does not download them.
 Sources: [service command](../supervisor/autonomy.py),
 [embedding port](../supervisor/core.py).
 See [configuration](configuration.md) for all related knobs.
 
 ## Grok plan routing
 
-Run `bin/shaft grok login`, then
+Install the Grok CLI first. The default executable is `~/.grok/bin/grok`;
+`SHAFT_GROK_BIN` overrides it. Run `bin/shaft grok login`, then
 `bin/shaft config <name> set LLM_MODEL=grok/grok-4.7`.
 `bin/shaft grok status` shows login, offered models and any outage. The broker keeps
 an ACP session per run and routes only SHAFT tools through a standalone MCP bridge.

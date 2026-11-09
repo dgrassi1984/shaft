@@ -1,4 +1,4 @@
-"""Model bake-offs: which cloud model should an instance run on? (docs/plans/REVIEW-thelos-model-2026-10-30.md)
+"""Model bake-offs: which cloud model should an instance run on? (docs/bakeoffs/README.md)
 
 A trial compares two versions of an instance's code on one model; a bake-off compares models on one version of its
 code, its committed one. For each chosen past live cycle it rebuilds the state the cycle began from and replays the

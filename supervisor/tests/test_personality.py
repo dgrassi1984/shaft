@@ -103,6 +103,50 @@ class LayerWriterTest(unittest.TestCase):
 
 
 class CorePaceTest(unittest.TestCase):
+    def test_deleting_core_preserves_template_preamble(self):
+        restored = self.check_restoration(
+            "# Personality\n\n*Grown from experience.*\n\n## Surface\n- retained interest\n")
+        self.assertTrue(restored.startswith("# Personality\n\n*Grown from experience.*\n\n## Core\n"))
+
+    def check_restoration(self, changed):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "self").mkdir()
+            p = root / "self/personality.md"
+            p.write_text(changed)
+            (root / "core-changed-example").write_text(datetime.now().isoformat())
+            before = "- previous value\n* previous temperament"
+            with mock.patch.object(runner, "SUP_DIR", root):
+                note = runner.enforce_core("example", root, before)
+            restored = p.read_text()
+            self.assertIn("## Core\n*(values and temperament — change rarely)*\n\n" + before, restored)
+            self.assertEqual(runner._core(root), before)
+            self.assertEqual(restored.splitlines().count("## Core"), 1)
+            self.assertTrue(restored.startswith("# Personality\n"))
+            self.assertIn("## Surface\n- retained interest", restored)
+            self.assertIn("supervisor restored it", note)
+            return restored
+
+    def test_deleting_core_section_is_restored_within_limit(self):
+        self.check_restoration("# Personality\n\n## Surface\n- retained interest\n")
+
+    def test_renamed_core_heading_is_restored_within_limit(self):
+        for heading in ("## Values", "### Core", "## Core "):
+            with self.subTest(heading=heading):
+                self.check_restoration(f"# Personality\n\n{heading}\n- changed value\n\n"
+                                       "## Surface\n- retained interest\n")
+
+    def test_first_core_is_not_rate_limited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "self").mkdir()
+            p = root / "self/personality.md"
+            p.write_text(FILE)
+            (root / "core-changed-example").write_text(datetime.now().isoformat())
+            with mock.patch.object(runner, "SUP_DIR", root), mock.patch.object(runner, "log"):
+                self.assertIsNone(runner.enforce_core("example", root, ""))
+            self.assertEqual(p.read_text(), FILE)
+
     def test_a_core_change_hidden_in_a_second_block_is_refused_and_removed(self):
         root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
         sup = Path(tempfile.mkdtemp(prefix="shaft-sup-"))

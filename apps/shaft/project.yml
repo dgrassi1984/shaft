@@ -3,8 +3,10 @@
 # by hand. apps/shaft/README.md says how to build, sign and install.
 name: SHAFT
 
+# Create this gitignored file from the example in README.md before generation.
+include: Signing.local.yml
+
 options:
-  bundleIdPrefix: io.github.dgrassi1984
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
@@ -13,7 +15,6 @@ options:
 
 settings:
   base:
-    DEVELOPMENT_TEAM: <TEAM_ID>
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
@@ -37,7 +38,7 @@ targetTemplates:
   SHAFTTarget:
     settings:
       base:
-        SHAFT_KEYCHAIN_GROUP: $(DEVELOPMENT_TEAM).io.github.dgrassi1984.shaft
+        SHAFT_KEYCHAIN_GROUP: $(DEVELOPMENT_TEAM).$(SHAFT_BUNDLE_PREFIX).shaft
 
 targets:
   SHAFT-iOS:
@@ -56,7 +57,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: SHAFT
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -71,7 +72,7 @@ targets:
         UIBackgroundModes: [remote-notification]
         # shaft://chat/<instance> opens that chat, as a notification tap does (SHAFTApp.onOpenURL).
         CFBundleURLTypes:
-          - CFBundleURLName: io.github.dgrassi1984.shaft
+          - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
             CFBundleURLSchemes: [shaft]
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -118,7 +119,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: SHAFT
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -132,7 +133,7 @@ targets:
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # shaft://chat/<instance> opens that chat, as a notification click does (MacRoot.onOpenURL).
         CFBundleURLTypes:
-          - CFBundleURLName: io.github.dgrassi1984.shaft
+          - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
             CFBundleURLSchemes: [shaft]
     postBuildScripts:
       # As for iOS: plain http to this machine (the fixture server) in Debug builds only.
@@ -177,7 +178,7 @@ targets:
       - package: SHAFTKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.MacTests
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MacTests
         GENERATE_INFOPLIST_FILE: YES
 
   NotificationService-iOS:
@@ -192,7 +193,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: NotificationService
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.NotificationService
         TARGETED_DEVICE_FAMILY: "1,2"
     info:
       path: Generated/NotificationService-iOS-Info.plist
@@ -221,7 +222,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: NotificationService
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.NotificationService
         ENABLE_HARDENED_RUNTIME: YES
     info:
       path: Generated/NotificationService-macOS-Info.plist

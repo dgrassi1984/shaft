@@ -1,12 +1,12 @@
 # The native apps' API: `/app/v1`
 
 The contract between the SHAFT web service and the native chat apps for iPhone, iPad and Mac
-([PLAN-native-apps.md](plans/PLAN-native-apps.md) M0). The server side is `supervisor/app_api.py` (M1). Every field
+([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md) M0). The server side is `supervisor/app_api.py` (M1). Every field
 below is what the server sends; the Swift side (`SHAFTKit`) decodes the fixtures the server's own serialiser writes
-(§13.5), never a hand-written copy.
+(Appendix A.5), never a hand-written copy.
 
 The API shows a chat exactly as the PWA's chat page shows it. One function says what a chat shows
-(`web_chat.feed`, §13.1); the HTML feed renders it and this API serialises it, so a fix to one cannot miss the other.
+(`web_chat.feed`, Appendix A.1); the HTML feed renders it and this API serialises it, so a fix to one cannot miss the other.
 §14 maps every piece of the HTML feed to its JSON field.
 
 ## 1. Basics
@@ -23,7 +23,8 @@ Every request passes three checks, in this order:
 
 1. **The tailnet login.** `tailscale serve` adds `Tailscale-User-Login`; it must be in `SHAFT_API_LOGINS`, as for
    the web UI (`web._route`). Refused: `403 login`.
-2. **The host.** `Host` must be the recorded tailnet name (`web.allowed_hosts`). Refused: `403 host`.
+2. **The host.** `Host` must be in `web.allowed_hosts()`: the recorded tailnet host, or the
+   `SHAFT_WEB_HOSTS` override when set. Refused: `403 host`.
 3. **The device.** `Authorization: Bearer <device>.<secret>`: the same pair a paired browser's cookie holds, checked
    against `.supervisor/web/devices.json` (the secret's SHA-256, compared in constant time). Refused when the header is
    missing or malformed, the device is unknown (never paired, or unpaired since) or the secret is wrong: `401 unpaired`.
@@ -54,7 +55,8 @@ Every request passes three checks, in this order:
 - JSON, `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, with the web UI's security
   headers. Files (§8) and a document's raw download (§10.3) are the exceptions.
 - **Presence:** every field listed is always present. A field with no value is `null` (or `[]`, `""`, `false` where
-  the type says so). The only absent fields are those of a partial feed (§4.2), marked there.
+  the type says so). Partial feeds (§4.2) omit fields as marked there. Queue rows omit `due_at_text`
+  when no unparseable due text exists. Only scheduler service rows have `drain`; API rows omit it (§15.2).
 - **Status codes:** `200` success; `304` a long-poll or a conditional `GET` with nothing new (empty body); the errors
   below.
 
@@ -65,14 +67,14 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 
 | Status | `code` | When | Extra fields |
 |---|---|---|---|
-| 400 | `bad_request` | Malformed JSON or multipart, a field missing or of the wrong type, `wait` out of range, a bad `mid` or `pid`, a bad push token, env, topic or platform | — |
+| 400 | `bad_request` | Malformed JSON or multipart, a field missing or of the wrong type, `wait` out of range, a bad `mid`, a bad push token, env, topic or platform | — |
 | 401 | `unpaired` | No bearer, a malformed one, an unknown device, a wrong secret | — |
 | 403 | `login` | The tailnet login is missing or not in `SHAFT_API_LOGINS` | — |
-| 403 | `host` | `Host` is not this Mac's tailnet name | — |
+| 403 | `host` | `Host` is not in `web.allowed_hosts()` | — |
 | 403 | `pair_expired` | The pairing token is unknown, used, or older than 10 minutes | — |
-| 404 | `not_found` | No such route, instance, chat, turn, attachment, document or rating | — |
+| 404 | `not_found` | No such route, instance, chat, turn, attachment, document | — |
 | 405 | `method` | The route exists, the method does not | — |
-| 409 | `refused` | A settings writer, service command, or action refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
+| 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
 | 409 | `stale` | A document save or delete with an old `sha`, or a setting save with an old `expect` | Documents: `sha`, `diff` (§10.4). Settings: `settings`, the fresh settings (§15) |
 | 409 | `busy` | An API restart would interrupt a run or reply; the message is the service guard's reason | — |
 | 409 | `restarting` | Another restart of the same service is still running | — |
@@ -186,14 +188,14 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
 ```json
 {
   "instances": [
-    {"name": "thelos", "state": "in a cycle", "since": "14:01", "model": "cloud claude-sonnet-5",
+    {"name": "example", "state": "in a cycle", "since": "14:01", "model": "cloud claude-sonnet-5",
      "busy_note": "Your message pauses its cycle; the cycle resumes after the reply.", "usd_today": 0.42,
      "line": "Merged the ledger fix; the nightly report is in notes/docs/ledger.md.",
      "last": "2026-11-03T14:06:40+01:00", "replying": false, "unread": true,
      "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends"},
-    {"name": "wren", "state": "idle", "since": "", "model": "qwen3.6-35b", "busy_note": null, "usd_today": 0,
+    {"name": "example2", "state": "idle", "since": "", "model": "qwen3.6-35b", "busy_note": null, "usd_today": 0,
      "line": "you: thanks", "last": "2026-11-02T22:10:05+01:00", "replying": false, "unread": false,
-     "next_cycle": "for wren's next cycle, which this starts now"}
+     "next_cycle": "for example2's next cycle, which this starts now"}
   ],
   "badge": 1
 }
@@ -226,8 +228,9 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
   - Else it holds the request up to `wait` seconds, looking every 0.5 s, and answers within 0.5 s of either revision
     moving. Nothing moved: `304`, empty body. The app asks again at once.
   - The app's request timeout must exceed `wait` (URLSession's default 60 s does).
-- **Watching:** a request for the current chat (`/chat/<n>`, not `/<cid>`) with `watch=1` marks this device as having
-  that chat on screen (`web_chat.watching(name, device, at)`), and keeps it marked every 2 s while it is held. A watching
+- **Watching:** a request for the current chat (`/chat/<n>`, not `/<cid>`) marks this device as having that chat on screen by default unless
+  `watch=0` is supplied (`web_chat.watching(name, device, at)`), and refreshes it every 2 s while held only if `at` is supplied.
+  Without `at`, it marks watching initially but does not refresh it while held. A watching
   device gets no push for that chat (`web_chat.watchers`, `WATCH_S` 6 s). `watch=0` unmarks it, as the web's covering
   sheet does. `at` orders it against `away` (§7.6): a poll sent before the app went away does not mark it again.
 - **Response 200:** a full feed (§4.2), or a partial one when only `live` moved.
@@ -436,12 +439,14 @@ becomes an `assistant` item and `version` moves.
 
 ### 4.9 Examples
 
+Instance names, timestamps, identifiers, and payload values in examples are illustrative.
+
 A full feed: an idle chat with a quoted answer and a picture, an answer that made a document and was rated, a question
 the instance sent, a Next-cycle message, and a failed reply with a safe Retry.
 
 ```json
 {
-  "instance": "thelos",
+  "instance": "example",
   "partial": false,
   "version": "9f2c4e1ab07d3c55",
   "live": "",
@@ -462,7 +467,7 @@ the instance sent, a Next-cycle message, and a failed reply with a safe Retry.
      "docs": [{"path": "ledger.md", "created": false}], "answered": [{"id": "c3", "doc": "ledger.md"}], "opened": [],
      "rating": {"id": "f-6a0c2e4b8d1f3a5c7e9b0d2f", "thumb": "up", "reason": "", "sent": null, "pending": false},
      "last": false},
-    {"key": "s20261103-140230-118204-from-thelos.md", "type": "sent", "file": "20261103-140230-118204-from-thelos.md",
+    {"key": "s20261103-140230-118204-from-example.md", "type": "sent", "file": "20261103-140230-118204-from-example.md",
      "ts": "2026-11-03T14:02:30+01:00", "kind": "question", "read": false,
      "text": "Should the nightly report keep the per-account lines?", "attachments": [], "rating": null},
     {"key": "b20261103-140301-552019-from-operator.md", "type": "later",
@@ -496,7 +501,7 @@ The same chat while a reply runs, with a message queued (full):
 
 ```json
 {
-  "instance": "thelos", "partial": false, "version": "41d07be2c95a8f13", "live": "c08e57f2a1b9d364",
+  "instance": "example", "partial": false, "version": "41d07be2c95a8f13", "live": "c08e57f2a1b9d364",
   "reply": {"started": "2026-11-03T14:07:02+01:00",
             "activity": ["read_file notes/docs/ledger.md", "run report --month 2026-10"],
             "answer": "October's report is running; so far"},
@@ -513,7 +518,7 @@ The same chat while a reply runs, with a message queued (full):
 A second later, only the streamed answer moved (`?since=41d07be2c95a8f13&live=c08e57f2a1b9d364&wait=25`):
 
 ```json
-{"instance": "thelos", "partial": true, "version": "41d07be2c95a8f13", "live": "7b19e4c0d2a65f38",
+{"instance": "example", "partial": true, "version": "41d07be2c95a8f13", "live": "7b19e4c0d2a65f38",
  "reply": {"started": "2026-11-03T14:07:02+01:00",
            "activity": ["read_file notes/docs/ledger.md", "run report --month 2026-10", "write notes/docs/october.md"],
            "answer": "October's report is running; so far 214 accounts reconciled."}}
@@ -578,7 +583,7 @@ after the window. These links have no grade, probation or reward consumers.
 
   | Field | Type | |
   |---|---|---|
-  | `said` | str | what happened, for a status line: "sent to thelos", "thelos reads it at its next step", "queued — sent when this reply ends", "for thelos's next cycle, which this starts now", "already sent to thelos", " · answers its question" appended when it answered a quoted question |
+  | `said` | str | what happened, for a status line: "sent to example", "example reads it at its next step", "queued — sent when this reply ends", "for example's next cycle, which this starts now", "already sent to example", " · answers its question" appended when it answered a quoted question |
   | `chat` | str or null | the chat it went into (null for `background`) |
   | `file` | str or null | `background`: the inbox file (a `later` item's `file`); else null |
 
@@ -589,7 +594,7 @@ after the window. These links have no grade, probation or reward consumers.
 
 ```json
 // mode=now, text="Rerun it", quotes=[{"quote":"Should the nightly report keep the per-account lines?","answer":"Yes","doc":""}]
-{"said": "sent to thelos · answers its question", "chat": "web-3f9a1c0d7e2b4a65", "file": null}
+{"said": "sent to example · answers its question", "chat": "web-3f9a1c0d7e2b4a65", "file": null}
 ```
 
 ## 7. Chat actions
@@ -737,7 +742,7 @@ A post:
 | `by` | str | `"operator"` or the instance's name |
 | `text` | str | Markdown |
 | `ts` | timestamp | |
-| `unsent` | bool | not delivered yet (`doc_comments.delivered` false): only such a post can be edited, deleted or sent ("not sent") |
+| `unsent` | bool | unsent and unanswered (`doc_comments.delivered` false): only such a post can be edited, deleted or sent ("not sent") |
 | `sent` | str or null | how it was sent: `"<cid>#<k>"` (a chat turn), `"inbox/<file>"` ("⏾ for its next cycle", file = a message file), `"message:<file>"` ("in a message") |
 | `turn` | str or null | the instance's own post: the chat turn or message that wrote it, same forms |
 | `seen` | str or null | answered from the copy without being sent: the turn that answered it |
@@ -756,7 +761,7 @@ A post:
      "posts": [
        {"pid": "p-1e2d3c4b5a697887", "by": "operator", "text": "Per account or overall?", "ts": "2026-11-03T13:50:12+01:00",
         "unsent": false, "sent": null, "turn": null, "seen": "web-3f9a1c0d7e2b4a65#1"},
-       {"pid": "p-9a8b7c6d5e4f3021", "by": "thelos", "text": "Per account, then summed.",
+       {"pid": "p-9a8b7c6d5e4f3021", "by": "example", "text": "Per account, then summed.",
         "ts": "2026-11-03T14:01:12+01:00", "unsent": false, "sent": null, "turn": "web-3f9a1c0d7e2b4a65#1", "seen": null}]}
   ]
 }
@@ -764,8 +769,10 @@ A post:
 
 ### 10.3 `GET /app/v1/docs/<n>/raw?path=<p>`
 
-The document's bytes as a download (`text/markdown; charset=utf-8`, `attachment`), whatever its size: the way to a
-`too_big` one. `404 not_found` when it is not there.
+The document's bytes as a download (`text/markdown; charset=utf-8`, `attachment`),
+up to `SHAFT_FILE_READ_MAX_MB`. This can download a document too large for the text
+view. Exceeding the raw-read limit currently returns `500 internal`, not `409 too_big`.
+`404 not_found` when it is not there.
 
 ### 10.4 `POST /app/v1/docs/<n>/save`
 
@@ -774,7 +781,7 @@ at once while it replies, else with the operator's next message.
 
 - **Request:** `{"path": str, "text": str, "sha": str, "dir": str}`. `sha`: the one the app read; `"none"` to create.
   `dir` (optional): a folder the new document goes in. `.md` is added when missing.
-- **Response 200:** `{"said": str, "path": str, "sha": str}`: the path as stored and the new sha ("saved · thelos gets
+- **Response 200:** `{"said": str, "path": str, "sha": str}`: the path as stored and the new sha ("saved · example gets
   the change with your next message").
 - **`409 stale`**: the document changed since the app read it (or, creating, it exists). `error.sha` is what it has now
   and `error.diff` what it has that the app's text has not (`yours` → `now`); both null when creating. Save again with
@@ -795,8 +802,8 @@ app reads the document again (§10.2).
 |---|---|---|
 | `POST /app/v1/docs/<n>/comment` | `{pid, doc, anchor, sha, text, send}` | a new thread on `doc` (`anchor` null: the whole document; `sha`: the document's, as read) |
 | `POST /app/v1/docs/<n>/comment` | `{pid, thread, text, send}` | a reply in `thread` |
-| `POST /app/v1/docs/<n>/comment/edit` | `{pid, text}` | edit an unsent post |
-| `POST /app/v1/docs/<n>/comment/delete` | `{pid}` | delete an unsent post (its thread goes with its last post) |
+| `POST /app/v1/docs/<n>/comment/edit` | `{pid, text}` | edit an unsent, unanswered post |
+| `POST /app/v1/docs/<n>/comment/delete` | `{pid}` | delete an unsent, unanswered post (its thread goes with its last post) |
 | `POST /app/v1/docs/<n>/comment/send` | `{pid, when}` | send a stored post: `when` `"now"` (a chat message: "Send to <n>") or `"cycle"` (its inbox, for its next cycle) |
 | `POST /app/v1/docs/<n>/comment/state` | `{thread, state}` | `"resolved"` or `"open"` (Resolve / Reopen) |
 
@@ -808,9 +815,9 @@ app reads the document again (§10.2).
 
 ## 11. Push
 
-Native push goes through APNs (`supervisor/apns.py`, PLAN §2.2). The notification carries only the title ("thelos
-replied", "thelos's reply failed", "thelos asks"), the badge and the instance; the app's notification extension fetches
-the body from `/push/latest`, over the tailnet.
+Native push goes through APNs (`supervisor/apns.py`, PLAN §2.2). The notification carries only the title ("example
+replied", "example's reply failed", "example asks"), the badge and the instance; the app's notification extension fetches
+the body from `/app/v1/push/latest` with the device bearer, over the tailnet.
 
 ### 11.1 `POST /app/v1/push/register`
 
@@ -851,16 +858,16 @@ are taken as before.
 | Field | Type | |
 |---|---|---|
 | `events` | list | `{title, body, url, tag, instance}` |
-| `title` | str | "thelos replied", "thelos's reply failed", "thelos asks", "thelos says" |
+| `title` | str | "example replied", "example's reply failed", "example asks", "example says" |
 | `body` | str | its first line, at most 160 characters |
-| `url` | str | the web path it opens (`/i/thelos/chat`) |
+| `url` | str | the web path it opens (`/i/example/chat`) |
 | `tag` | str | replaces an earlier notification with the same tag |
 | `instance` | str or null | the chat to open: parsed from `url` (`/i/<n>/chat`); null for the plain one |
 | `badge` | int | as §12 |
 
 ```json
-{"events": [{"title": "thelos replied", "body": "October's report is ready: 214 accounts reconciled.",
-             "url": "/i/thelos/chat", "tag": "thelos", "instance": "thelos"}], "badge": 1}
+{"events": [{"title": "example replied", "body": "October's report is ready: 214 accounts reconciled.",
+             "url": "/i/example/chat", "tag": "example", "instance": "example"}], "badge": 1}
 ```
 
 It does not mark the device as watching, and it is a `GET` with an effect (it takes the events): only the bearer
@@ -877,101 +884,10 @@ reaches it, so no other page can spend them.
   their timestamp-only comparison until the next seen. The operator's own messages never make it unread.
 - An instance the device never marked counts from the device's pairing time: what came before it is not unread.
 - The badge is the number of unread instances (`web_seen.badge(device)`), sent with `/instances`, `seen`,
-  `/push/latest` and every APNs push.
+  `/app/v1/push/latest` and every APNs push.
 - The native apps mark a chat seen when the newest item's end is on screen and the app is in front, retry failures
   (§7.5), and discard list answers from polls that began before a successful seen request.
 - A device that unpairs loses its marks.
-
-## 13. The Python side (server lane, M1)
-
-### 13.1 `web_chat.feed(name: str, cid: str | None = None, whole: bool = False) -> dict`
-
-The one model of what a chat shows. `cid` None: the current chat (`shown(name)`); else that chat of `name` (`None`
-returned when it is not one: the routes answer 404). `whole`: every turn (`?all=1`).
-
-- It loads the chat and its span's messages (`sent_during`) and calls `web_chat.build`.
-- `web_chat.build(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> dict`
-  is the pure part, which the tests and `web_views.chat_feed` call with a chat they hold.
-- The dict is the JSON of §4.2 (full), with two differences that the serialiser removes:
-  - times are the stored local ISO strings (or epoch floats), not yet offset;
-  - an attachment has `path` (`"chat/<cid>/<k>/<j>"` or `"message/<file>/<j>"`) instead of `url`. The HTML maps it to
-    `/chatfiles/<cid>/<k>/<j>` and `/files/<file>/<j>`; the JSON to `/app/v1/file/<path>` (the file URL-encoded).
-- `version` and `live` are computed in `build`, over the whole chat, before the window.
-- Internal `last_count` counts instance items at `last` over the whole feed; `summary` counts the same span.
-  The serialiser removes it, and it does not enter the revisions.
-- `last` and `web_chat.summary(name)["last"]` come from one helper (`web_chat.last_from(chat, sent)`), so unread never
-  drifts from the rail; a test pins them equal.
-- `web._sent_during` moves to `web_chat.sent_during(name, chat, archived=False)`; `web._sent_during` stays as the web
-  routes' one-line caller of it (the web tests patch it there).
-
-### 13.2 The HTML views on the model
-
-- `web_views.chat_feed(name, chat, sent, archived=False, whole=False)` keeps its signature (the existing web tests stay
-  unchanged) and renders `web_chat.build(...)` (`web_views.feed_html(model)`): every `data-k` it writes is an item's
-  `key`. Its HTML is byte-identical to what it was before the model.
-- `web_views.live_activity(chat)` renders the model's `reply` (and, once it ended, the last answer's `activity`).
-- `_reply_failure`'s sentences and choices move into the model (`failure`, §4.4); the HTML renders them.
-- `_overwritten` splits into `web_views.overwritten(saved, sha, text) -> dict | None` (the §10.2 object) and its HTML.
-- `chat_header`'s "what a message does now" becomes `web_views.busy_note(name, state) -> str | None`, used by the header
-  and `/app/v1/instances`.
-- The HTML ETags stay as they are.
-
-### 13.3 `supervisor/app_api.py`
-
-- `route(req: web.Request) -> web.Response`: the entry point. `web._route` calls it for every path under `/app/v1/`
-  after the login and host checks and before the cookie check; it does its own bearer check (§1.2) and answers every
-  path under `/app/v1/` (an unknown one: `404 not_found`). It catches everything and answers `500 internal` with the
-  error, logged, never an empty body.
-- `device(req) -> str | None`: the paired device of the bearer (refreshing `last_seen`).
-- `stamp(ts: str | float | None) -> str | None` (§1.6) and `to_json(model: dict) -> dict` (stamps and URLs, §13.1).
-- `error(status: int, code: str, message: str, **extra) -> web.Response`.
-- The long-poll (§4): a loop on `web_chat.feed` every 0.5 s up to `wait`, refreshing `web_chat.watching` every 2 s only when `at` is supplied;
-  without `at`, only the initial watching mark is made, so a later `/away` stays effective;
-  each held request is one thread of the web server's `ThreadingHTTPServer`.
-- It calls the same functions the web routes do (`web_chat.send/queue/background/unqueue/stop/end/clear`,
-  `web._serve_attachment`, `doc_comments`, `apns`, `webpush.take`, `web_seen`). Where a web route builds its answer as
-  HTML inline, the logic moves into a function both call:
-  - `web.feedback_action(name, login, form) -> tuple[str, dict | None]` (said, the current rating; `ValueError` when
-    refused), from `web._post`'s `/feedback/<n>` branch;
-  - `web.save_doc` / `web.delete_doc` / `web.comment_action`, returning data and raising `DocStale(sha, diff)` or the
-    module's `Refused`, from `_save_doc`, `_delete_doc`, `_comment`.
-- `web.Handler._serve` allows a send's body size on `/app/v1/chat/<n>/send` too, and answers its 413 as JSON there.
-  The server takes `DELETE` (`do_DELETE`).
-- `web.paired_device(dev, secret) -> bool` is the one device check: the cookie's (`web._paired`) and the bearer's.
-- The document functions raise `web.DocStale(message, sha, diff, changed)` (a save or delete refused: `changed` when
-  the document is not what the app read, else the CLI refused the text) and `web.DocRefused` (the CLI refused a
-  deletion); `docs.Refused` for a bad path or folder. `docs.raw(name, path)` reads a document whatever its size.
-- The push routes import `supervisor/apns.py` directly; `apns.configured()` reports missing settings or a key file.
-- `web.unpair` also calls `apns.unregister(device)` and `web_seen.forget(device)`.
-- Pairing reuses `web._use_pairing` and `web._token_from_link`; the device record gains `"platform"`.
-
-### 13.4 `supervisor/web_seen.py`
-
-- `seen(device: str, name: str, version: str) -> bool`: True when `version` is the current feed's (`web_chat.feed(name)`);
-  then it records `{version, last, last_count, at}` for the device and instance. False otherwise, recording nothing (the route
-  answers `409 stale_version`).
-- `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` (each
-  instance's `web_chat.summary`) when the caller has them already (`/app/v1/instances`).
-- `badge(device: str) -> int`: how many are unread. The APNs lane calls it for each push.
-- `forget(device: str) -> None`: drops the device's marks.
-- The store `.supervisor/web/seen.json`, written atomically (mode 600) under a lock, as `web._write` does.
-
-### 13.5 Tests and fixtures
-
-- `supervisor/tests/test_app_api.py` drives `web.respond` with requests built in a temporary `SUP_DIR`, never the real
-  `.supervisor/`:
-  - auth: no bearer, a wrong secret, an unpaired (stale) device, a wrong login, a wrong host — each refused with its
-    code;
-  - the HTML and the JSON of the same chat have the same keys in the same order;
-  - the long-poll answers on a version move, on a live move (partial), and `304` after `wait`;
-  - `seen` with a stale version is refused; unread follows `summary`'s `last`.
-- The same test writes the fixtures the Swift Kit decodes, from the API's own answers, to
-  `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
-  rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
-  `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
-  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`. SHAFTKit reads only this folder, or
-  `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
-  `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.
 
 ## 14. The HTML feed, piece by piece
 
@@ -1211,3 +1127,96 @@ A failed judge can have a null verdict and a nonempty error. The instance's clai
 
 `left` contains `unfinished` (list of strings), `next_action` (the recorded object or null), and `next_goal`
 (string or null). A next action normally contains `action` and `revise_if` text.
+
+## Appendix A. Implementation notes
+
+These Python server refactor notes describe internal implementation, not additional wire fields.
+
+### A.1 `web_chat.feed(name: str, cid: str | None = None, whole: bool = False) -> dict`
+
+The one model of what a chat shows. `cid` None: the current chat (`shown(name)`); else that chat of `name` (`None`
+returned when it is not one: the routes answer 404). `whole`: every turn (`?all=1`).
+
+- It loads the chat and its span's messages (`sent_during`) and calls `web_chat.build`.
+- `web_chat.build(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> dict`
+  is the pure part, which the tests and `web_views.chat_feed` call with a chat they hold.
+- The dict is the JSON of §4.2 (full), with two differences that the serialiser removes:
+  - times are the stored local ISO strings (or epoch floats), not yet offset;
+  - an attachment has `path` (`"chat/<cid>/<k>/<j>"` or `"message/<file>/<j>"`) instead of `url`. The HTML maps it to
+    `/chatfiles/<cid>/<k>/<j>` and `/files/<file>/<j>`; the JSON to `/app/v1/file/<path>` (the file URL-encoded).
+- `version` and `live` are computed in `build`, over the whole chat, before the window.
+- Internal `last_count` counts instance items at `last` over the whole feed; `summary` counts the same span.
+  The serialiser removes it, and it does not enter the revisions.
+- `last` and `web_chat.summary(name)["last"]` come from one helper (`web_chat.last_from(chat, sent)`), so unread never
+  drifts from the rail; a test pins them equal.
+- `web._sent_during` moves to `web_chat.sent_during(name, chat, archived=False)`; `web._sent_during` stays as the web
+  routes' one-line caller of it (the web tests patch it there).
+
+### A.2 The HTML views on the model
+
+- `web_views.chat_feed(name, chat, sent, archived=False, whole=False)` keeps its signature (the existing web tests stay
+  unchanged) and renders `web_chat.build(...)` (`web_views.feed_html(model)`): every `data-k` it writes is an item's
+  `key`. Its HTML is byte-identical to what it was before the model.
+- `web_views.live_activity(chat)` renders the model's `reply` (and, once it ended, the last answer's `activity`).
+- `_reply_failure`'s sentences and choices move into the model (`failure`, §4.4); the HTML renders them.
+- `_overwritten` splits into `web_views.overwritten(saved, sha, text) -> dict | None` (the §10.2 object) and its HTML.
+- `chat_header`'s "what a message does now" becomes `web_views.busy_note(name, state) -> str | None`, used by the header
+  and `/app/v1/instances`.
+- The HTML ETags stay as they are.
+
+### A.3 `supervisor/app_api.py`
+
+- `route(req: web.Request) -> web.Response`: the entry point. `web._route` calls it for every path under `/app/v1/`
+  after the login and host checks and before the cookie check; it does its own bearer check (§1.2) and answers every
+  path under `/app/v1/` (an unknown one: `404 not_found`). It catches everything and answers `500 internal` with the
+  error, logged, never an empty body.
+- `device(req) -> str | None`: the paired device of the bearer (refreshing `last_seen`).
+- `stamp(ts: str | float | None) -> str | None` (§1.6) and `to_json(model: dict) -> dict` (stamps and URLs, Appendix A.1).
+- `error(status: int, code: str, message: str, **extra) -> web.Response`.
+- The long-poll (§4): a loop on `web_chat.feed` every 0.5 s up to `wait`, refreshing `web_chat.watching` every 2 s only when `at` is supplied;
+  without `at`, only the initial watching mark is made, so a later `/away` stays effective;
+  each held request is one thread of the web server's `ThreadingHTTPServer`.
+- It calls the same functions the web routes do (`web_chat.send/queue/background/unqueue/stop/end/clear`,
+  `web._serve_attachment`, `doc_comments`, `apns`, `webpush.take`, `web_seen`). Where a web route builds its answer as
+  HTML inline, the logic moves into a function both call:
+  - `web.feedback_action(name, login, form) -> tuple[str, dict | None]` (said, the current rating; `ValueError` when
+    refused), from `web._post`'s `/feedback/<n>` branch;
+  - `web.save_doc` / `web.delete_doc` / `web.comment_action`, returning data and raising `DocStale(sha, diff)` or the
+    module's `Refused`, from `_save_doc`, `_delete_doc`, `_comment`.
+- `web.Handler._serve` allows a send's body size on `/app/v1/chat/<n>/send` too, and answers its 413 as JSON there.
+  The server takes `DELETE` (`do_DELETE`).
+- `web.paired_device(dev, secret) -> bool` is the one device check: the cookie's (`web._paired`) and the bearer's.
+- The document functions raise `web.DocStale(message, sha, diff, changed)` (a save or delete refused: `changed` when
+  the document is not what the app read, else the CLI refused the text) and `web.DocRefused` (the CLI refused a
+  deletion); `docs.Refused` for a bad path or folder. `docs.raw(name, path)` reads a document up to `SHAFT_FILE_READ_MAX_MB`; exceeding it currently becomes `500 internal`.
+- The push routes import `supervisor/apns.py` directly; `apns.configured()` reports missing settings or a key file.
+- `web.unpair` also calls `apns.unregister(device)` and `web_seen.forget(device)`.
+- Pairing reuses `web._use_pairing` and `web._token_from_link`; the device record gains `"platform"`.
+
+### A.4 `supervisor/web_seen.py`
+
+- `seen(device: str, name: str, version: str) -> bool`: True when `version` is the current feed's (`web_chat.feed(name)`);
+  then it records `{version, last, last_count, at}` for the device and instance. False otherwise, recording nothing (the route
+  answers `409 stale_version`).
+- `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` (each
+  instance's `web_chat.summary`) when the caller has them already (`/app/v1/instances`).
+- `badge(device: str) -> int`: how many are unread. The APNs lane calls it for each push.
+- `forget(device: str) -> None`: drops the device's marks.
+- The store `.supervisor/web/seen.json`, written atomically (mode 600) under a lock, as `web._write` does.
+
+### A.5 Tests and fixtures
+
+- `supervisor/tests/test_app_api.py` drives `web.respond` with requests built in a temporary `SUP_DIR`, never the real
+  `.supervisor/`:
+  - auth: no bearer, a wrong secret, an unpaired (stale) device, a wrong login, a wrong host — each refused with its
+    code;
+  - the HTML and the JSON of the same chat have the same keys in the same order;
+  - the long-poll answers on a version move, on a live move (partial), and `304` after `wait`;
+  - `seen` with a stale version is refused; unread follows `summary`'s `last`.
+- The same test writes the fixtures the Swift Kit decodes, from the API's own answers, to
+  `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
+  rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
+  `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
+  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`. SHAFTKit reads only this folder, or
+  `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
+  `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.

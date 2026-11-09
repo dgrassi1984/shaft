@@ -1,4 +1,6 @@
-# Deploying a release
+# Maintainer release-deploy runbook
+
+This is the maintainer's release-deploy runbook, not an installation guide.
 
 The release workflow tags `main`; this file is what comes after the tag, when the operator has asked for a deploy.
 It is not a bump or tag procedure (agent-overlay.yaml `ship.procedure` points here for deploy and verify only).
@@ -6,8 +8,9 @@ It is not a bump or tag procedure (agent-overlay.yaml `ship.procedure` points he
 SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its `template` worktree:
 
 - every wake, sleep, job and replay is a fresh `python -m supervisor` started by the scheduler in that checkout,
-  so a fast-forward of `main` there reaches the instances at their next wake;
-- the long-running launchd services (`com.shaft.scheduler`, `com.shaft.web`, `com.shaft.api`, `com.shaft.telegram`)
+  so the deployed release reaches the instances at their next wake;
+- the long-running launchd services (`com.shaft.scheduler`, `com.shaft.web`, `com.shaft.api`, `com.shaft.telegram`,
+  `com.shaft.model`, `com.shaft.embed`)
   keep the code they started with until restarted;
 - template fixes reach an instance only through `shaft update`, under its run lock.
 
@@ -17,27 +20,24 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
    the primary checkout holds other sessions' untracked files, which a fast-forward leaves alone.
 
    ```bash
+   # Set RELEASE_TAG to the exact release tag and TEMPLATE_COMMIT to its matching template commit.
    cd ~/Development/shaft
-   git fetch origin
+   git fetch origin --tags
    git status -sb                       # on main; no tracked changes
-   git merge --ff-only origin/main
+   git merge --ff-only "$RELEASE_TAG"
    git -C template status -sb           # on template; no tracked changes
-   git -C template merge --ff-only origin/template
+   git -C template merge --ff-only "$TEMPLATE_COMMIT"
    ```
 
    Stop if either is not on its branch, has tracked changes, or cannot fast-forward: that is someone's work.
-   A gate warm-up that starts between the two fast-forwards tests the new `main` against the old template and can fail
-   once (2026-10-30 09:49, a release whose tests and template changed together); the next warm-up, on the new pair,
-   records its pass. A test in the gate's instance part must never pin a template change: an instance not yet updated
-   runs it against its own code (that 09:59, a pinned call count reverted a good thelos change).
+   Use the release's recorded template commit, not `origin/template` or another branch tip.
+   Check that each resulting HEAD equals its selected commit. A fast-forward can succeed without moving
+   an already newer checkout, so a successful merge alone does not prove the release is deployed.
 2. **Update the instances** from the template: `bin/shaft update --all`. It is gate-tested per instance; a busy
    instance is queued and updated by the scheduler as soon as it is idle. A refused update (a merge conflict, a red
    gate) is a stop: report it, do not force it.
 3. **Restart the long-running services** so they load the new code:
-   - `scheduler`: with a drain-restart, never `kickstart -k`. On SIGTERM it stops its wakes on purpose ("live
-     stopped with the supervisor (signal 15)"), so a SIGTERM restart mid-cycle throws that cycle away (2026-10-28:
-     v0.17.0 cut three live cycles short). Waiting for a moment with no instance awake did not work either: on
-     2026-11-03 thelos and wren covered each other's cycles for 90 min without one.
+   - `scheduler`: use a drain-restart so active work finishes before the process restarts.
 
      ```bash
      bin/shaft autonomy restart --wait
@@ -55,7 +55,7 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
      Ask again, or force it with `bin/shaft autonomy on --force` (that one cuts the runs). `--cancel` withdraws a
      pending restart. The web Services page offers the same: *Restart when idle*, then *Cancel restart*.
 
-     **Once, from a scheduler older than the drain** (one that started before this release): `autonomy restart`
+     **Once, from a scheduler older than the drain** (one without drain support): `autonomy restart`
      refuses it, because such a scheduler cannot drain. Instead: `bin/shaft pause`. It then starts no wake, sleep,
      job, battery, warm-up or trial, but a queued update still starts. Wait until nothing is left in the scheduler's
      process group but the scheduler itself; this command must print nothing:
@@ -73,12 +73,16 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
      launchctl kickstart -k gui/$(id -u)/com.shaft.<service>
      ```
 
-   Only services that are loaded (`launchctl list | grep com.shaft`) are restarted; `model` and `embed` do not
-   run supervisor code that a release changes.
+   - `model` and `embed`: restart after active work using them finishes when their code or loaded settings
+     change. Use `bin/shaft model on` and `bin/shaft embed on`; do not force a busy service.
+     `supervisor/version.py` maps model code to `supervisor/bonsai_server.py` and `supervisor/bonsai_lora.py`,
+     and embedding code to `supervisor/embed_server.py`. `supervisor/actions.py` guards CLI service changes; `supervisor/autonomy.py` restarts the service.
+
+   Restart only loaded services (`launchctl list | grep com.shaft`).
 
 ## Verify
 
-- `git -C ~/Development/shaft rev-parse HEAD` equals the tag's commit; the same for `template`.
+- `git -C ~/Development/shaft rev-parse HEAD` equals the selected release tag's commit; `template` equals the selected matching template commit.
 - `launchctl list | grep com.shaft`: each restarted service has a new PID. Its exit status is 0, or -15 for the
   scheduler: its drain ends with its own `kickstart -k`, which stops it with SIGTERM once no run is left.
 - The scheduler's log has `scheduler: drained after N min — restarting on <commit>`, and no run of it "stopped with
