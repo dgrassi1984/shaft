@@ -598,6 +598,21 @@ CALENDAR_WRITES_PER_DAY, _ = knob(
     group="Runs and conversations", services=("runs", "api"))
 CALENDAR_TOOLS = ("calendar_events", "calendar_event", *CALENDAR_WRITE_TOOLS)
 CALENDAR_CALLS_PER_RUN = 30
+SPECS["list_voices"] = _spec(
+    "list_voices",
+    "List the voices last reported by the operator's iOS and macOS devices, optionally filtered by language "
+    "(en or it). current marks your assigned voice; taken_by names another instance holding that voice for "
+    "the language. Use an available identifier with propose_voice.",
+    {"language": {"type": "string", "enum": ["en", "it"]}}, [])
+SPECS["propose_voice"] = _spec(
+    "propose_voice",
+    "Propose your speaking voice for English (en) or Italian (it), using an identifier from list_voices. "
+    "Explain why you chose it. The operator will confirm or reject it in Settings; the decision reaches your "
+    "inbox. A new proposal replaces your open proposal for that language. A voice held by another instance "
+    "for that language is refused.",
+    {"language": {"type": "string", "enum": ["en", "it"]}, "identifier": S, "why": S})
+
+
 # Images (docs/plans/PLAN-vision.md): a vision model looks at an image in the instance's folder and answers in text — for every
 # instance, whatever its own model; one whose model sees images can also look itself (its view_image tool).
 SPECS["describe_image"] = _spec(
@@ -2676,6 +2691,16 @@ class Broker:
             raise gcal.NotVisible(gcal.HIDDEN)
         return alias, grant, eid, acct, ev
 
+    def _list_voices(self, language: str | None = None) -> str:
+        from . import voices
+        return json.dumps(voices._for_instance(self.name, language), ensure_ascii=False)
+
+    def _propose_voice(self, language: str, identifier: str, why: str) -> str:
+        from . import voices
+        row = voices.propose(self.name, language, identifier, why)
+        return json.dumps({"proposal": row, "message": "The operator will confirm or reject it in Settings."},
+                          ensure_ascii=False)
+
     def _calendar_create(self, calendar: str, title: str, start: str, end: str, timezone: str = "",
                          location: str | None = None, description: str | None = None, attendees=None) -> str:
         return self._calendar_write("calendar_create", calendar, title, start, end, timezone, location, description,
@@ -2988,6 +3013,16 @@ class ReplayBroker(Broker):
         """Both stop at the replayed cycle: its starting commit, and its mind as of the cycle's start."""
         from . import mind
         return self.start_commit, mind.at(self.name, self.history_as_of, self.project)
+
+    def _list_voices(self, language: str | None = None) -> str:
+        return self._shared(["list_voices", language], lambda: Broker._list_voices(self, language))
+
+    def _propose_voice(self, language: str, identifier: str, why: str) -> str:
+        from . import voices
+        row = voices._proposal(voices._read(), self.name, language, identifier, why)
+        self._tag("simulated: not proposed")
+        return json.dumps({"proposal": row, "message": "The operator will confirm or reject it in Settings."},
+                          ensure_ascii=False)
 
     # -- reads: real, shared by the pair ---------------------------------------------------------------
     def _web_search(self, query: str, page: int = 1) -> str:
