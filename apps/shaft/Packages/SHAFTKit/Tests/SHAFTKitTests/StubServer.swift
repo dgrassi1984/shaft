@@ -32,6 +32,22 @@ final class StubServer: @unchecked Sendable {
         var body: Data
         /// Hold an answer without blocking other requests, for tests of responses arriving out of order.
         var beforeReply: (@Sendable () async -> Void)?
+        /// A streamed body (§6.1): after `body`, each piece goes as its own read, once `beforePiece(index)` returns.
+        var pieces: [Data] = []
+        var beforePiece: (@Sendable (Int) async -> Void)?
+        /// After the body and its pieces, the connection drops (`URLError.networkConnectionLost`) instead of closing,
+        /// 150 ms later: as a network drop comes, after the bytes before it were read. (A failure right after the last
+        /// read makes URLSession drop the bytes it had not handed over yet.)
+        var dropsAtEnd = false
+
+        var isStreamed: Bool { !pieces.isEmpty || dropsAtEnd }
+
+        /// Server-Sent Events as the stream route sends them.
+        static func events(_ text: String, pieces: [String] = [], dropsAtEnd: Bool = false,
+                           beforePiece: (@Sendable (Int) async -> Void)? = nil) -> Response {
+            Response(status: 200, headers: ["Content-Type": "text/event-stream; charset=utf-8"], body: Data(text.utf8),
+                     pieces: pieces.map { Data($0.utf8) }, beforePiece: beforePiece, dropsAtEnd: dropsAtEnd)
+        }
 
         static func json(_ status: Int = 200, _ text: String, headers: [String: String] = [:]) -> Response {
             var response = Response(status: status, body: Data(text.utf8))
@@ -118,7 +134,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
                                           timeout: request.timeoutInterval)
         do {
             let response = try server.handle(recorded)
-            if let beforeReply = response.beforeReply {
+            if response.isStreamed {
+                nonisolated(unsafe) let stub = self
+                Task { await stub.stream(response, url: url) }
+            } else if let beforeReply = response.beforeReply {
                 nonisolated(unsafe) let stub = self
                 Task {
                     await beforeReply()
@@ -140,6 +159,24 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: response.body)
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    /// A body in several reads, then a close or a dropped connection.
+    private func stream(_ response: StubServer.Response, url: URL) async {
+        let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1",
+                                   headerFields: response.headers)!
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        if !response.body.isEmpty { client?.urlProtocol(self, didLoad: response.body) }
+        for (index, piece) in response.pieces.enumerated() {
+            await response.beforePiece?(index)
+            client?.urlProtocol(self, didLoad: piece)
+        }
+        if response.dropsAtEnd {
+            try? await Task.sleep(for: .milliseconds(150))
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+        } else {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
 
     private static func read(_ stream: InputStream) -> Data {
