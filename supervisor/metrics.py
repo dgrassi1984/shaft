@@ -111,7 +111,8 @@ Delivery: delivery_supported is yes only when a successful call on finish.delive
 cycle's result to the operator; no when a channel is claimed with no matching successful call, a failed \
 claim, never a bonus; na when delivered_via is none or absent. message: send_message with to=operator. \
 mail: http_request POST to Gmail messages/send (or a sending plugin's logged equivalent), addressed to \
-the operator; mail_search, mail_read, mail_attachment, drive_search, drive_read and drive_download are read-only, not sends. notion: a plugin \
+the operator; mail_search, mail_read, mail_attachment, drive_search, drive_read, drive_download, gchat_search, \
+gchat_read and gchat_download are read-only, not sends. notion: a plugin \
 write or http_request POST/PATCH to api.notion.com pages or blocks, carrying the result where the operator \
 can read it. Plugin tool names come from plugin.json, not a fixed Notion or mail tool. web_document: \
 write_file or append_file under notes/docs/*.md, shown in the web chat, or a plugin/http_request write \

@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge, localmodel, metrics, sandbox
-from .broker import CALENDAR_TOOLS, MAIL_TOOLS, DRIVE_TOOLS, Broker
+from .broker import CALENDAR_TOOLS, MAIL_TOOLS, DRIVE_TOOLS, GCHAT_TOOLS, Broker
 from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
                    TreeTooBig, UnsafePath, config_values, copy_beneath, dir_beneath, instance_config, instance_root,
                    knob, positive_int, whole, model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write,
@@ -72,8 +72,8 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
             "withdraw_held", "record_order",   # keyed by the live instance's name: held changes and standing orders
-            *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS}   # the operator's mail, calendars and Drive never reach an exam (its broker has
-                                            # none either: root= is set)
+            *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS, *GCHAT_TOOLS}   # the operator's mail, calendars, Drive and Google
+                                            # Chat never reach an exam (its broker has none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
 
 
@@ -154,9 +154,10 @@ def backup() -> Path:
 # Left out of an instance's copy: .git (the copy is no worktree, so nothing an exam does reaches its branch; its
 # history is read in the real one, ExamBroker), its keys (secrets/: the broker reads them in the real folder, the
 # sandbox never), its Python environment (.venv/, .uv/: linked, read in place and read-only, as in a trial replay),
-# its browser profile (the sessions of its own accounts), the operator's mail it downloaded (an exam gets no mail),
-# its jobs' caches, logs and run files (.tmp/, but for its memory index: a cache keyed by chunk hash).
-EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", "gdrive", ".jobs", "logs", ".tmp")
+# its browser profile (the sessions of its own accounts), the operator's mail, Drive and Chat files it downloaded (an
+# exam gets none of them), its jobs' caches, logs and run files (.tmp/, but for its memory index: a cache keyed by
+# chunk hash).
+EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", "gdrive", "gchat", ".jobs", "logs", ".tmp")
 EXAM_KEEP = (".tmp", ".tmp/memory-index.json")
 
 

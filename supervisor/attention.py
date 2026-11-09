@@ -32,6 +32,7 @@ MEMORY_TOOLS = ("search_memory", "remember", "rewrite_facts", "write_digest", "u
 TOOL_SOURCES = {
     "web_search": ("web",), "fetch_page": ("web",), "http_request": ("web",), "browse": ("web",),
     "drive_search": ("drive",), "drive_read": ("drive",), "drive_download": ("drive",),
+    "gchat_search": ("gchat",), "gchat_read": ("gchat",), "gchat_download": ("gchat",),
     "web_research": ("web",), "mail_search": ("mail",), "mail_read": ("mail",), "mail_attachment": ("mail",),
     "calendar_events": ("calendar",), "calendar_event": ("calendar",), "calendar_create": ("calendar",),
     "calendar_move": ("calendar",), "calendar_respond": ("calendar",), "record": ("record",), "history": ("record",),
@@ -46,11 +47,13 @@ AGENT_TOOLS = frozenset({
     "close_surprise", "retire_fact", "open_project", "close_project", "propose_drive_amendment", "record_correction",
     "close_correction", *CONTROLS})
 PATH_ARGS = ("path", "save_to", "save_as", "body_file")
-# Words a declared source may use for what the calls touch.
+# Words a declared source may use for what the calls touch. Plain "chat" is not one: it reads as the web UI's
+# conversations with an instance, not the operator's Google Chat.
 SYNONYMS = {"internet": ("web",), "email": ("mail",), "e-mail": ("mail",), "google drive": ("drive",),
+            "google chat": ("gchat",),
             "history": ("record",), "code": ("shaft", "plugins", "tests", "run"), "another instance": ("instance",),
             "other instance": ("instance",), "instances": ("instance",), "the operator": ("operator",)}
-VOCAB = frozenset({"web", "memory", "mail", "calendar", "drive", "notion", "record", "coder", "operator", "instance",
+VOCAB = frozenset({"web", "memory", "mail", "calendar", "drive", "gchat", "notion", "record", "coder", "operator", "instance",
                    "plugin", "run", "notes", "self", "skills", "shaft", "plugins", "tests", "inbox", "attachments",
                    *SYNONYMS, *TOOL_SOURCES})
 _PATH = re.compile(r"(?:\.{1,2}/|/|~/)?[\w.@+~*-]+(?:(?:/[\w.@+~*-]+)+/?|/)")

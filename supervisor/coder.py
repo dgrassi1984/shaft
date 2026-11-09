@@ -43,8 +43,8 @@ MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
 # secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied;
 # .browser: its browser profile — its sessions and the passwords of its own accounts (docs/plans/PLAN-browser.md). Also what
-# trial.gate_check leaves out of its copy. mail/gdrive: private copies of the operator's files, never to the coder.
-HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv", ".browser", "mail", "gdrive")
+# trial.gate_check leaves out of its copy. mail/gdrive/gchat: private copies of the operator's files, never to the coder.
+HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv", ".browser", "mail", "gdrive", "gchat")
 USAGE = SUP_DIR / "coder_usage.jsonl"
 API = "https://api.anthropic.com/v1/messages"
 

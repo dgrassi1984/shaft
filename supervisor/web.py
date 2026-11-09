@@ -696,7 +696,7 @@ def _post(req: Request, dev: str) -> Response:
 # -- read-only pages (M1): each from the same panel reader as its TUI tab --------------------------------------------
 INSTANCE_PAGE = re.compile(r"^/i/(?P<name>[A-Za-z0-9_-]+)(?:/(?P<tab>[a-z]+))?$")
 TEXT_MAX = 200_000                                          # an attachment shown inline as text, at most
-FILE_EXCLUSIONS = frozenset({"secrets", "config.env", ".git", "mail", "gdrive", ".browser"})
+FILE_EXCLUSIONS = frozenset({"secrets", "config.env", ".git", "mail", "gdrive", "gchat", ".browser"})
 FILES_PER_PAGE = 200
 FILE_MAX = 100 * 2**20            # a download is read whole into the web service: past this, a terminal copies it
 IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF87a", "image/gif"),

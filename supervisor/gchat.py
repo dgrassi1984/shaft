@@ -31,6 +31,14 @@ class Gone(LookupError):
     """Google no longer has a requested message."""
 
 
+GONE = 'this message is no longer in Google Chat (history off or deleted)'
+
+
+def marking(conversation: str, operator: str) -> str:
+    """The line every page and listing starts with, with the blank line after it."""
+    return _MARKING.format(conversation=conversation[:80], operator=operator[:40])
+
+
 class Refused(ValueError):
     """An attachment cannot be downloaded through Chat."""
 
@@ -96,6 +104,11 @@ def spaces(acct: google.Account) -> list[dict]:
         token = found.get('nextPageToken') or ''
         if not token:
             return rows
+
+
+def get_space(acct: google.Account, space_id: str) -> dict:
+    """One conversation, or NotVisible if Google no longer shows it to the login."""
+    return _get(acct, f'{API}/spaces/{_id(space_id)}')
 
 
 def me(acct: google.Account, any_space: str) -> str:
@@ -265,7 +278,18 @@ def _message(acct: google.Account, space: str, mid: str) -> dict:
             raise
         # A missing space must retain the same refusal as other invisible conversations.
         _get(acct, f'{API}/spaces/{space}')
-        raise Gone('this message is no longer in Google Chat (history off or deleted)') from None
+        raise Gone(GONE) from None
+
+
+def get_message(acct: google.Account, space_id: str, message_id: str, as_of: datetime | None = None) -> dict:
+    """One message; one created at or after `as_of` (a trial replay) is answered as if it did not exist."""
+    msg = _message(acct, _id(space_id), _id(message_id, message=True))
+    if as_of:
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        if datetime.fromisoformat(msg['createTime'].replace('Z', '+00:00')) >= as_of:
+            raise Gone(GONE)
+    return msg
 
 
 def page(acct: google.Account, space_id: str, *, upto_message: str = '', before: str = '',
@@ -322,7 +346,7 @@ def page(acct: google.Account, space_id: str, *, upto_message: str = '', before:
 def render(handle: str, conversation: str, msgs: list[dict], me_id: str, operator: str, older: str,
            offset: int = 0) -> str:
     """An attributed page; oversized single messages continue at source-text offsets."""
-    head = _MARKING.format(conversation=conversation[:80], operator=operator[:40])
+    head = marking(conversation, operator)
     conversation_handle = '/'.join(handle.split('/')[:2])
     end = (f'Older: gchat_read(id="{conversation_handle}", before="{conversation_handle}/{older}")'
            if older else 'Start of conversation')

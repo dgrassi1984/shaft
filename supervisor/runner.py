@@ -632,8 +632,8 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     """The sandboxed command and environment for the agent in `root`, talking to `broker` (already started):
     it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
-    is told which of the operator's mail labels, calendars and Drive accounts its broker serves it (SHAFT_MAIL, shaft mail;
-    SHAFT_CALENDAR, shaft calendar; SHAFT_GDRIVE, shaft gdrive), whether its model sees images (SHAFT_VISION, docs/plans/PLAN-vision.md),
+    is told which of the operator's mail labels, calendars, Drive and Google Chat accounts its broker serves it (SHAFT_MAIL,
+    shaft mail; SHAFT_CALENDAR, shaft calendar; SHAFT_GDRIVE, shaft gdrive; SHAFT_GCHAT, shaft gchat), whether its model sees images (SHAFT_VISION, docs/plans/PLAN-vision.md),
     and the instance's Python environment when `root` is a copy (trial replay). SHAFT_CODE_ROOT in `extra`
     redirects live launches to their protected code; replay callers already own a copy and leave it unset."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
@@ -657,6 +657,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
                             SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
                             **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}),
                             **({"SHAFT_GDRIVE": granted} if (granted := broker.gdrive_env()) else {}),
+                            **({"SHAFT_GCHAT": granted} if (granted := broker.gchat_env()) else {}),
                             **({"SHAFT_MAIL": granted} if (granted := broker.mail_env()) else {}),
                             **({"SHAFT_CALENDAR": granted} if (granted := broker.calendar_env()) else {}),
                             **({"SHAFT_VISION": "1"} if _sees_images(root, extra) else {}),

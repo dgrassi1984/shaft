@@ -76,10 +76,10 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
-# mail/ and gdrive/: downloads from the operator's accounts are copies, not state: never in the judge's diff.
+# mail/, gdrive/ and gchat/: downloads from the operator's accounts are copies, not state: never in the judge's diff.
 # .browser/: a browser profile a replay's `run` created (docs/plans/PLAN-browser.md) — cookies, never shown to the judge.
 # shaft-docs/: the supervisor's copy of SHAFT's docs, staged at the replay's start (runner.stage_docs) — not its work.
-NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", "gdrive", ".browser", DOCS_COPY)
+NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", "gdrive", "gchat", ".browser", DOCS_COPY)
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
 

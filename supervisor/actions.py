@@ -44,6 +44,7 @@ CLASSES = ('reversible', 'staged', 'irreversible')
 # operator credentials. New operator write tools must be added here before being offered by the broker.
 OPERATOR_TOOLS = {
     'drive_search': 'read', 'drive_read': 'read', 'drive_download': 'read',
+    'gchat_search': 'read', 'gchat_read': 'read', 'gchat_download': 'read',
     'mail_search': 'read', 'mail_read': 'read', 'mail_attachment': 'read',
     'calendar_events': 'read', 'calendar_event': 'read',
     'calendar_create': 'calendar', 'calendar_move': 'calendar', 'calendar_respond': 'staged',
