@@ -349,7 +349,9 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
   what was sent.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (its **standing orders** first — each in force
   with its Drop, the corrections its messages are still checked against, a field to add one, all through `shaft orders`
-  ([architecture](architecture.md)) — then `config.env`, a field per key; each value is named for its key),
+  ([architecture](architecture.md)) — then `config.env`, a field per key; each value is named for its key; the voice
+  keys `VOICE_MODE` (on/off: the apps' Talk button) and `VOICE_REASONING_EFFORT` (empty: its own effort) are always
+  listed, with their choices, as the apps' Settings show them),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text; an
   unsaved edit is kept in this browser and restored after a reload, and leaving asks first, as it does for an
   unsaved Config or Settings value),
@@ -554,6 +556,14 @@ set by `SHAFT_APP_API_FIXTURES`.
   Retry, quotes (made into the message text on the server, exactly as the web composer writes them), files. Each
   message carries the app's id for it (`mid`): sent again while that chat is open, or after it went for the next
   cycle, it is not sent twice.
+- **Voice** (PLAN-voice). A send with `voice=1` (the web's `/chat/<n>/send` form takes the same field) is a spoken
+  message: the turn is recorded `via: "voice"` ("· spoken" in the feed), and the web chat's request to the API carries
+  `"voice": true` whenever the operator's last message was spoken, an interjection included. `GET
+  /app/v1/chat/<name>/stream` is Server-Sent Events of the running reply, from the web server's memory as the API's
+  chunks arrive: drafts, step ends, status, tool starts and ends, then the answer and the end. It does not wait for the
+  chat file (written every second) or a poll. Holding it counts as watching the chat. `/app/v1/instances` says
+  `voice_mode` per instance; Settings has `voice_mode` and `voice_effort`; `/app/v1/voices/…` holds each instance's
+  voice per language. See [the contract](app-api.md#61-get-appv1chatnstream--the-reply-as-it-streams).
 - **Unread and the badge.** The PWA keeps its unread marks in the browser. The apps need the server to know, for the
   icon's badge: `.supervisor/web/seen.json` holds, per app and instance, what the app last showed. An instance is
   unread when its own newest answer or message is newer than that; your own messages never make a chat unread.

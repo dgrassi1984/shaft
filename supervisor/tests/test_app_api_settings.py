@@ -71,7 +71,9 @@ class SettingsTest(AppTest):
             "wake_interval": {"value": 5, "floor": 1, "effective": 5},
             "cloud_cap": {"value": None, "spent_today": 0.25},
             "channel": {"value": "auto", "choices": ["auto", "web", "telegram"]},
-            "operator_name": {"value": "the operator"}})
+            "operator_name": {"value": "the operator"},
+            "voice_mode": {"value": "off", "choices": ["on", "off"]},             # not in its config.env: the defaults
+            "voice_effort": {"value": "", "choices": ["", "medium", "xhigh", "low"]}})
         self.assertIs(type(got["wake_interval"]["floor"]), int)
         self.assertNotIn(self.fake.encode(), r.body)
         self.assertNotIn(b"base_url", r.body)
@@ -168,6 +170,52 @@ class SettingsTest(AppTest):
             self.assertIn(message, err["message"])
         for field, value, expect in (("channel", "unknown", "auto"), ("cloud_cap", -1, None)):
             self.error(self.save(field, value, expect), 409, "refused")
+
+    def test_voice_settings_round_trip_through_config_env(self):
+        """The bug: voice mode and voice effort (PLAN-voice C2) could not be set from the app, or saved without the
+        compare-and-set the other config fields have."""
+        for field, value, expect, key, applies in (("voice_mode", "on", "off", "VOICE_MODE", "now"),
+                                                   ("voice_effort", "low", "", "VOICE_REASONING_EFFORT", "next run"),
+                                                   ("voice_effort", "", "low", "VOICE_REASONING_EFFORT", "next run"),
+                                                   ("voice_mode", "off", "on", "VOICE_MODE", "now")):
+            with self.subTest(field=field, value=value):
+                r = self.save(field, value, expect)
+                self.assertEqual(r.status, 200, r.body)
+                got = json.loads(r.body)
+                self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
+                self.assertEqual(core.instance_config("wren")[key], value)
+        self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "off")
+        self.save("voice_mode", "on", "off")
+        self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "on")
+
+    def test_voice_settings_stale_and_bad_values_are_refused(self):
+        """The bug: a voice setting changed elsewhere since the app drew it was overwritten, or a value the talk loop
+        cannot use (VOICE_MODE "yes", an effort its code does not accept) was written to config.env."""
+        opconfig.set_values("wren", {"VOICE_MODE": "on"})
+        with mock.patch.object(opconfig, "set_values") as writer:
+            err = self.error(self.save("voice_mode", "off", "off"), 409, "stale")    # shown off, it is on now
+            writer.assert_not_called()
+        self.assertEqual(err["settings"]["voice_mode"]["value"], "on")
+        self.error(self.save("voice_effort", "low", "medium"), 409, "stale")
+        for field, value, expect, message in (("voice_mode", "yes", "on", "on or off"),
+                                               ("voice_effort", "turbo", "", "must be empty")):
+            err = self.error(self.save(field, value, expect), 409, "refused")
+            self.assertIn(message, err["message"])
+        self.assertNotIn("VOICE_REASONING_EFFORT", core.instance_config("wren"))
+        for field, value, expect in (("voice_mode", None, "on"), ("voice_mode", True, "on"), ("voice_effort", None, "")):
+            self.error(self.save(field, value, expect), 400, "bad_request")
+
+    def test_the_web_config_page_offers_the_voice_keys(self):
+        """The bug: the web's instance settings (Config page) had no voice keys until the template documented them,
+        or offered a free text box where only on/off or an effort works."""
+        fields = {f["key"]: f for f in opconfig.fields("wren")}
+        self.assertEqual((fields["VOICE_MODE"]["choices"], fields["VOICE_MODE"]["default"], fields["VOICE_MODE"]["set"]),
+                         (["on", "off"], "off", False))
+        self.assertEqual(fields["VOICE_REASONING_EFFORT"]["choices"], ["", "medium", "xhigh", "low"])
+        self.assertTrue(fields["VOICE_MODE"]["help"])
+        from supervisor import web_config
+        row = str(web_config.config_row("wren", fields["VOICE_MODE"]))
+        self.assertIn('<option value="on">on</option>', row)
 
     def test_wrong_shapes_are_bad_request(self):
         for data in ([], {}, {"field": "model", "value": "new-model"},

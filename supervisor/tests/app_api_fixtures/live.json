@@ -1,7 +1,7 @@
 {
   "instance": "wren",
   "partial": false,
-  "version": "b713d0c3dc0ad5b4",
+  "version": "2d764345726b89c0",
   "live": "cc72a715f5f61774",
   "reply": {
     "started": "2026-11-03T14:07:02+01:00",
@@ -28,6 +28,7 @@
       "text": "> Ship the ledger fix today?\n\nYes, once the tests pass. This is the failing run:",
       "mid": "0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b",
       "interjected": false,
+      "via": null,
       "attachments": [
         {
           "name": "ci-run.png",
@@ -106,6 +107,7 @@
       "text": "Rerun the report for October.",
       "mid": "a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13",
       "interjected": false,
+      "via": "voice",
       "attachments": [],
       "edits": [],
       "deleted": [],
