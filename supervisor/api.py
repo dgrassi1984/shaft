@@ -9,7 +9,7 @@
   POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
                                optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
-Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
+Each request is a normal sandboxed run (broker, run lock, gate, commit); a spoken one, a turn of a warm run (below). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
 same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id, and
 the channel the client names in X-Shaft-Channel (web, telegram; `api` when absent) — where a message the instance sends
@@ -22,6 +22,13 @@ A message sent to /v1/chat/interject while that conversation's reply runs is app
 .tmp/interject-<talk id>.jsonl; the agent takes it at its next step and says so (`heard`). The reply's JSON counts
 them in `interjections_heard` (in the order sent): the client answers any others with its next request
 (docs/plans/PLAN-interject.md).
+
+`"voice": true` in a chat or interject body: the operator spoke it. The agent's request (or the interjection's line)
+carries it, and a voice request's stream also carries `shaft_event` chunks: the step's text as it is written (`draft`),
+whether it was the answer (`step_end`), status and tool events (_chat; docs/web-and-api.md). Typed: unchanged.
+A spoken, streamed turn is answered by its conversation's warm process (VoiceSessions, runner.Warm): one agent kept up
+between turns, so its model session and memory stay warm; it holds the instance only while a turn runs, and ends after
+SHAFT_VOICE_SESSION_IDLE_S without one, with its conversation, or when its instance is paused, updated or deleted.
 
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
@@ -54,8 +61,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import tom
 from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
-                   port, safe_write, secrets_env, unlink_beneath, whole)
-from .runner import REFUSED, Reply, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
+                   paused, port, safe_write, secrets_env, unlink_beneath, whole)
+from .runner import REFUSED, Reply, Warm, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
 
 PORT, _ = knob(
     "SHAFT_API_PORT", "8781", port, "the API's local port (OpenAI-compatible; the web UI and Telegram chat through it)",
@@ -66,6 +73,10 @@ INBOX_PER_HOUR, _ = knob(
 INBOX_WAKES_PER_HOUR, _ = knob(
     "SHAFT_INBOX_WAKES_PER_HOUR", "4", whole, "wakes per hour inbox messages may start for one instance",
     group="Inbox and benchmarks", services=("api",))
+VOICE_SESSION_IDLE_S, _ = knob(
+    "SHAFT_VOICE_SESSION_IDLE_S", "300", whole, "seconds a voice conversation keeps its instance's process up between "
+    "spoken turns (its model session and memory stay warm); 0: none, every spoken turn starts its own process",
+    group="Runs and conversations", services=("api",))
 DOORBELL_LOG = "doorbell.jsonl"
 CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation
 CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)
@@ -120,6 +131,11 @@ class Conversations:
         with self.lock:
             t = self.talks.get(self._key(model, messages, cid))
             return t["talk_id"] if t and not t.get("written") else None
+
+    def is_open(self, talk_id: str) -> bool:
+        """A conversation with this talk id is still going on (not written up)."""
+        with self.lock:
+            return any(t["talk_id"] == talk_id and not t.get("written") for t in self.talks.values())
 
     def end(self, model: str, messages: list[dict], cid: str | None = None) -> str | None:
         """Close the conversation now (as SHAFT_IDLE_MINUTES of silence would): its talk id, or None if none is open."""
@@ -232,7 +248,7 @@ class Live:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.replies: dict[str, dict] = {}       # talk id -> {"requests": [entry, ...], "held": [text, ...]}
+        self.replies: dict[str, dict] = {}       # talk id -> {"requests": [entry, ...], "held": [line, ...]}
 
     @staticmethod
     def _rel(talk_id: str) -> str:
@@ -257,9 +273,9 @@ class Live:
             self.replies[talk_id]["requests"].append(entry)
         return entry
 
-    def _write(self, entry: dict, text: str) -> None:
+    def _write(self, entry: dict, line: dict) -> None:
         safe_write(instance_root(entry["model"]), self._rel(entry["talk_id"]),
-                   json.dumps({"text": text}, ensure_ascii=False) + "\n", append=True)
+                   json.dumps(line, ensure_ascii=False) + "\n", append=True)
 
     def started(self, entry: dict) -> None:
         with self.lock:
@@ -267,19 +283,21 @@ class Live:
             self._drop(entry["model"], entry["talk_id"])   # an earlier agent's, unheard: its client sends it again
             entry["started"] = True
             held, talk["held"] = talk["held"], []
-            for text in held:
-                self._write(entry, text)
+            for line in held:
+                self._write(entry, line)
 
-    def interject(self, talk_id: str, text: str) -> bool:
+    def interject(self, talk_id: str, text: str, voice: bool = False) -> bool:
+        """`voice`: the operator spoke it (C1 of PLAN-voice M1); the agent records it on the interjection's episode."""
+        line = {"text": text, **({"voice": True} if voice else {})}
         with self.lock:
             talk = self.replies.get(talk_id)
             if talk is None:
                 return False
             running = [e for e in talk["requests"] if e["started"]]
             if running:
-                self._write(running[-1], text)
+                self._write(running[-1], line)
             else:
-                talk["held"].append(text)
+                talk["held"].append(line)
             return True
 
     def end(self, entry: dict) -> None:
@@ -291,6 +309,93 @@ class Live:
             if not talk["requests"]:                    # the last of the talk: nobody can read the file any more
                 del self.replies[entry["talk_id"]]
                 self._drop(entry["model"], entry["talk_id"])
+
+
+class VoiceSessions:
+    """The voice conversations' warm processes (runner.Warm, PLAN-voice §7), by talk id: a spoken, streamed request in
+    a conversation that has one is answered by its process, which stays up between turns; one that has none starts it.
+    Every M0 cost of a fresh run per reply is paid once per conversation instead: process start, the memory index read,
+    the Codex session opened. A session holds the instance only while a turn runs (runner.Warm), and it ends:
+    - after SHAFT_VOICE_SESSION_IDLE_S without a turn;
+    - when its conversation ends (/v1/chat/end, or written up after SHAFT_IDLE_MINUTES);
+    - when its instance is paused (a kill pauses it first) or no longer exists, or its process ended (killed);
+    - with the API (its agent is one of the runs end_all_runs ends).
+    `shaft update` and `shaft delete` end it from their own process (runner.end_warm). A typed request never comes
+    here: it runs as before, in a process of its own (its prompt, and so its model session, differ)."""
+
+    SWEEP_S = 1.0
+
+    def __init__(self, is_open=lambda talk_id: True):
+        self.lock = threading.Lock()
+        self.sessions: dict[str, Warm] = {}
+        self.is_open = is_open
+        self.sweeper: threading.Thread | None = None
+
+    def get(self, model: str, talk_id: str) -> Warm:
+        """The conversation's session, made (with no process yet: its first turn starts one) if it has none."""
+        with self.lock:
+            s = self.sessions.get(talk_id)
+            if s is None or s.closed or s.name != model:
+                s = self.sessions[talk_id] = Warm(model, "api", ["answer", "--loop"], talk_id)
+            if self.sweeper is None:
+                self.sweeper = threading.Thread(target=self._sweep_forever, daemon=True)
+                self.sweeper.start()
+            return s
+
+    def end(self, talk_id: str, why: str) -> bool:
+        """End the conversation's session now, unless a turn of it runs (the sweep ends it then, once it is over)."""
+        with self.lock:
+            s = self.sessions.get(talk_id)
+        if s is None or not s.close(why, wait=False):
+            return False
+        with self.lock:
+            if self.sessions.get(talk_id) is s:
+                del self.sessions[talk_id]
+        return True
+
+    def why_end(self, s: Warm, names: set[str]) -> str | None:
+        if s.closed:
+            return "ended"
+        if s.name not in names:
+            return "its instance no longer exists"
+        if paused(s.name):
+            return "its instance is paused"
+        if not self.is_open(s.talk_id):
+            return "its conversation ended"
+        if s.started and not s.alive():         # killed, crashed or stopped: the next turn makes a new session
+            return "its process ended"
+        if time.monotonic() - s.last > VOICE_SESSION_IDLE_S:
+            return f"no turn for {VOICE_SESSION_IDLE_S}s"
+        return None
+
+    def sweep(self) -> None:
+        """End the sessions that are over (why_end); a session in a turn is left for the next sweep."""
+        with self.lock:
+            sessions = list(self.sessions.items())
+        if not sessions:
+            return
+        names = set(instance_names())
+        for talk_id, s in sessions:
+            if s.busy() or not (why := self.why_end(s, names)):
+                continue
+            if s.close(f"voice session over: {why}", wait=False):
+                with self.lock:
+                    if self.sessions.get(talk_id) is s:
+                        del self.sessions[talk_id]
+
+    def _sweep_forever(self) -> None:
+        """Sweeps while there are sessions; the next get() starts it again. It waits on an Event, never time.sleep: a
+        thread left sleeping for ever took the sleeps another part of the process counted on (a test's patched
+        time.sleep in the scheduler's loop ran out under it)."""
+        while not threading.Event().wait(self.SWEEP_S):
+            try:
+                self.sweep()
+            except Exception as e:   # never the end of the sweeps
+                log(f"api: voice sessions sweep FAILED: {type(e).__name__}: {e}")
+            with self.lock:
+                if not self.sessions:
+                    self.sweeper = None
+                    return
 
 
 def _chunk(cid: str, model: str, delta: dict, finish: str | None = None, **extra) -> bytes:
@@ -321,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
     conversations: Conversations
     live: Live
     answered: Answered | None = None
+    voice: VoiceSessions | None = None     # the warm voice sessions (serve makes them; None: every turn runs cold)
 
     def log_message(self, fmt, *args):
         log("api " + (fmt % args))
@@ -443,13 +549,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._end(model, messages, cid)
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
+        voice = body.get("voice") is True        # the last user message was spoken (PLAN-voice C1); anything else: typed
         if route == "/v1/chat/interject":
-            return self._interject(model, messages, cid, channel)
+            return self._interject(model, messages, cid, channel, voice)
         rid = self.headers.get("X-Shaft-Request-Id") or None
         if rid is not None and not CONVERSATION_ID.match(rid):
             return self._error(400, "X-Shaft-Request-Id is 1-64 letters, digits, - or _")
         self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel,
-                   rid)
+                   rid, voice)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
         """POST /v1/chat/end: the conversation is over. The write-up is scheduled now (202) and finishes in the
@@ -462,24 +569,27 @@ class Handler(BaseHTTPRequestHandler):
         if talk_id in self.live.replies:
             return self._error(409, f"{model} is still replying: stop the reply first", "conflict")
         self.conversations.end(model, messages, cid)
+        if Handler.voice is not None:
+            Handler.voice.end(talk_id, "its conversation was ended by its client")
         spawn_recover(model)
         log(f"api: conversation {talk_id} with {model} ended by its client")
         self._json(202, {"ended": talk_id})
 
-    def _interject(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api") -> None:
+    def _interject(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api",
+                   voice: bool = False) -> None:
         """The last user message joins the reply running in this conversation (same first user message)."""
         text = _last_text(messages)
         if not text:
             return self._error(400, "the message to add is empty")
         talk_id = self.conversations.current(model, messages, cid)
         try:
-            ok = bool(talk_id) and self.live.interject(talk_id, text)
+            ok = bool(talk_id) and self.live.interject(talk_id, text, voice)
         except (OSError, UnsafePath) as e:
             return self._error(500, f"could not pass it to {model}: {e}", "server_error")
         if not ok:
             return self._error(409, f"{model} is not replying in this conversation now: send it as a new message",
                                "conflict")
-        tom.heard(model, text, channel)
+        tom.heard(model, text, channel, voice)
         log(f"api: a message for {model}'s running reply ({talk_id})")
         self._json(202, {"interjected": True, "talk_id": talk_id})
 
@@ -491,8 +601,38 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return True
 
+    def _warm_turn(self, model: str, talk_id: str, request: dict, live: dict, events: queue.Queue, answered, errored,
+                   stops: list, cancelled) -> tuple[int | None, str | None]:
+        """One spoken turn in the conversation's warm process (VoiceSessions): the same request and events as a turn
+        in a process of its own. Messages sent while it waited reach the agent before the request does (Live.started
+        first: the process is already running and may take its first step at once). Returns (the process's exit code,
+        or None when it is still up for the next turn — or REFUSED; its stderr's tail when it ended)."""
+        def on_start(stop) -> None:
+            stops.append(stop)
+            try:
+                self.live.started(live)
+            except (OSError, UnsafePath) as e:
+                log(f"api: could not pass held messages to {model}: {e}")
+
+        def on_event(ev: dict) -> None:
+            if ev.get("type") in ("content", "turn_end"):
+                answered.set()
+            if ev.get("type") == "error":
+                errored.set()
+            events.put(ev)
+
+        for _ in range(3):                        # a session the sweep ended just now: the next one takes the turn
+            session = Handler.voice.get(model, talk_id)
+            code = session.reply(request, on_event, on_start, cancelled=cancelled.is_set)
+            if code != Warm.CLOSED:
+                break
+        else:
+            raise RuntimeError(f"{model}'s voice session kept ending before it could take the turn")
+        stops.clear()                             # over: a late Stop must not reach the next turn
+        return code, (session.stderr_tail() if code is not None else None)
+
     def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None,
-              channel: str = "api", rid: str | None = None) -> None:
+              channel: str = "api", rid: str | None = None, voice: bool = False) -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
         if rid and not stream:
@@ -502,13 +642,17 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
         if text := _last_text(messages):
-            tom.heard(model, text, channel)         # what the operator said, for scoring reply predictions (tom.py)
+            tom.heard(model, text, channel, voice)   # what the operator said, for scoring reply predictions (tom.py)
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
+        # A spoken, streamed turn goes to the conversation's warm process (VoiceSessions); a typed one, or any turn
+        # while the instance is paused or warm sessions are off, runs in a process of its own, as before.
+        warm = (voice and stream and Handler.voice is not None and VOICE_SESSION_IDLE_S > 0 and not paused(model))
+        stops: list = []                         # a warm turn's own stop (Warm.reply on_start)
         request = {"messages": [*(m for m in messages if m.get("role") == "system"),
                                 {"role": "system", "content": LAST_STEP_NOTE},
                                 *(m for m in messages if m.get("role") != "system")],
-                   "talk_id": talk_id, "client": app.split()[0][:40]}
+                   "talk_id": talk_id, "client": app.split()[0][:40], **({"voice": True} if voice else {})}
 
         def driver(proc):
             procs.append(proc)
@@ -550,13 +694,20 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 if cancelled.is_set():
                     return
-                code = run_agent(model, "api", ["answer"], interactive=True, driver=driver)
+                if warm:
+                    code, err = self._warm_turn(model, talk_id, request, live, events, answered, errored, stops,
+                                                cancelled)
+                else:
+                    code = run_agent(model, "api", ["answer"], interactive=True, driver=driver)
+                    err = None
                 if code == REFUSED:
                     events.put({"type": "error", "message": f"the supervisor refused to start {model}'s run: its "
                                 "code could not be checked (the reason is in the panel's alerts and supervisor.log)"})
                 elif not answered.is_set() and not errored.is_set():   # keep the agent's own reason if it gave one
-                    err = (procs[0].stderr.read() if procs and procs[0].stderr else "")[-800:].strip()
-                    events.put({"type": "error", "message": f"{model} stopped without answering (exit {code})"
+                    if err is None:
+                        err = (procs[0].stderr.read() if procs and procs[0].stderr else "")[-800:].strip()
+                    events.put({"type": "error", "message": f"{model} stopped without answering"
+                                                           + (f" (exit {code})" if code is not None else "")
                                                            + (f": {err}" if err else "")})
             except Exception as e:   # surface, never hang the client
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
@@ -581,6 +732,16 @@ class Handler(BaseHTTPRequestHandler):
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
         tools_ran = False
+        spoken = stream and voice
+
+        def event(**shaft_event) -> None:
+            """A voice reply's own event (PLAN-voice C3), in a chunk of its own with an empty delta: OpenAI clients
+            see nothing new, and a typed request never gets one. A step's text goes out at once as `draft` pieces
+            (the app speaks them) and is still held in `step` as above; `step_end` then says whether it was the
+            answer (its whole text also comes as `content`) or narration before a tool call (only reasoning)."""
+            if spoken:
+                self.wfile.write(_chunk(cid, model, {}, shaft_event=shaft_event))
+
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -611,10 +772,17 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 if t == "content":
                     step.append(ev["text"])
+                    if spoken:
+                        event(type="draft", text=ev["text"])
+                        self.wfile.flush()
                     continue
                 if t in ("tool_start", "tool_end"):
                     tools_ran = True
+                if t == "retry" and step:       # a call cut off at max_tokens is discarded and asked again (llm._answer):
+                    event(type="step_end", answer=False)   # its text was never the answer, nor in the agent's record
+                    step = []
                 if t == "tool_start" and step:           # that step called tools: its text was narration
+                    event(type="step_end", answer=False)
                     said = "".join(step).strip()
                     step = []
                     if said:
@@ -623,6 +791,8 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.write(_chunk(cid, model, {"reasoning_content": f"{said}\n"}))
                 if t == "turn_end":
                     ended = ev
+                    if step:
+                        event(type="step_end", answer=True)
                     content, step = step, []
                     if stream and content:
                         self.wfile.write(_chunk(cid, model, {"content": "".join(content)}))
@@ -635,9 +805,16 @@ class Handler(BaseHTTPRequestHandler):
                     notes.append(n)
                     if stream:
                         self.wfile.write(_chunk(cid, model, {"reasoning_content": n}))
+                if t == "status":
+                    event(type="status", phase=ev.get("phase", ""), detail=ev.get("detail") or "")
+                elif t == "tool_start":
+                    event(type="tool_start", name=ev["name"])
+                elif t == "tool_end":
+                    event(type="tool_end", name=ev["name"], ok=bool(ev["ok"]))
                 if stream:
                     self.wfile.flush()
             if not content and step:                     # interrupted before a turn_end: the text so far
+                event(type="step_end", answer=True)
                 content = step
                 if stream:
                     self.wfile.write(_chunk(cid, model, {"content": "".join(step)}))
@@ -668,6 +845,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, answer)
         except (BrokenPipeError, ConnectionResetError):
             cancelled.set()
+            for stop in stops:                         # a warm turn: only this reply is stopped, its process stays
+                stop()
             if procs and procs[0].poll() is None:      # the client left: stop the reply
                 try:
                     os.killpg(procs[0].pid, signal.SIGINT)
@@ -686,7 +865,8 @@ def serve() -> int:
     record_service("api", {"port": PORT, "idle_minutes": IDLE_MINUTES})
     Handler.conversations = Conversations()
     Handler.live = Live()
-    stop_runs_on_signal()                        # stopped (launchd), it ends its replies' agents first
+    Handler.voice = VoiceSessions(Handler.conversations.is_open)
+    stop_runs_on_signal()                        # stopped (launchd), it ends its replies' agents first (warm ones too)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
 

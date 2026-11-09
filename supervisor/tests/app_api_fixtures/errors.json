@@ -97,7 +97,16 @@
       "error": {
         "code": "stale_version",
         "message": "The chat moved since it was drawn: mark it seen once the new version is on screen.",
-        "version": "7b25e7cc78a4ace0"
+        "version": "41593303c00c84a8"
+      }
+    }
+  },
+  "not_replying": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "not_replying",
+        "message": "wren is not replying: nothing to stream."
       }
     }
   },

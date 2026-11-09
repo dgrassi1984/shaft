@@ -357,7 +357,8 @@ class ChatRoutesTest(WebTest):
             no = self.req("/chat/wren/send", "POST", cookie=self.cookie, body=body,
                           headers={"content-type": ctype, "sec-fetch-site": "same-origin"})
         self.assertEqual((ok.status, no.status), (200, 403))
-        send.assert_called_once_with("wren", ME, "hi", [], mid="", retry_of="")   # retry_of: Retry in place (P9)
+        # retry_of: Retry in place (P9); voice: typed unless the form says voice=1 (PLAN-voice C1)
+        send.assert_called_once_with("wren", ME, "hi", [], mid="", retry_of="", voice=False)
 
     def test_issue_70_queue_routes_require_csrf(self):
         """Reverting #70 bypasses queuing and leaves cancellation unavailable to the paired page."""

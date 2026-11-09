@@ -40,7 +40,7 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
+from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MEMORY_CACHES, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
                    TreeTooBig, UnsafePath,
                    cloud_model, instance_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
                    read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
@@ -358,11 +358,11 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
     for rel in ("logs", ".tmp"):
         shutil.rmtree(dest / rel, ignore_errors=True)
     (dest / ".tmp").mkdir()
-    try:   # a cache keyed by chunk hash
-        (dest / ".tmp" / "memory-index.json").write_bytes(
-            safe_read_bytes(project / "instances" / name, ".tmp/memory-index.json"))
-    except (OSError, UnsafePath):
-        pass
+    for rel in MEMORY_CACHES:   # a cache keyed by chunk hash, in whichever format the instance's code writes
+        try:
+            (dest / rel).write_bytes(safe_read_bytes(project / "instances" / name, rel))
+        except (OSError, UnsafePath):
+            pass
     return dest
 
 

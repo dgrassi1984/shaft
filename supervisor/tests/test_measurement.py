@@ -568,7 +568,7 @@ class BatteryExamCopyTest(unittest.TestCase):
                  "skills/s.md": "a skill", "self/self.md": "me", "inbox/20261024-x-from-operator.md": "unread",
                  "config.env": 'LLM_MODEL="m"\n', "secrets/secrets.json": '{"k": {"value": "SECRET-KEY"}}',
                  ".venv/bin/python": "py", ".browser/Cookies": "SESSION", "mail/a/1/x.pdf": "MAIL", "gdrive/work/x.pdf": "DRIVE",
-                 ".tmp/memory-index.json": "{}", ".tmp/activity.json": "{}", "logs/llm_usage.jsonl": "{}\n",
+                 ".tmp/memory-index.json": "{}", ".tmp/memory-index.bin": "LOG", ".tmp/activity.json": "{}", "logs/llm_usage.jsonl": "{}\n",
                  "plugins/__pycache__/p.cpython-312.pyc": "pyc"}
         for rel, text in files.items():
             (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -592,7 +592,8 @@ class BatteryExamCopyTest(unittest.TestCase):
         self.assertEqual((copy.parent.parent, copy.name), (self.sup / "battery" / "exam" / "b", "b"))
         got = tree(copy)
         for rel in ("memory/journal.md", "notes/keep.md", "notes/uncommitted.md", "plugins/p.py", "skills/s.md",
-                    "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json"):
+                    "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json",
+                    ".tmp/memory-index.bin"):   # bug (PLAN-voice M1): the vector log was left out, the exam re-embedded all
             self.assertEqual(got.get(rel), (self.root / rel).read_bytes(), rel)
         for top in (".git", "secrets", ".browser", "mail", "gdrive", "logs", ".tmp/activity.json", "plugins/__pycache__"):
             self.assertFalse([k for k in got if k == top or k.startswith(top + "/")], top)

@@ -665,7 +665,7 @@ def _provenance_evidence(name: str, ep: dict) -> str:
     for rec in _episodes(name, "talk"):
         t = _ts(rec.get("ts", ""))
         if rec.get("role") == "user" and t and since <= t <= at:
-            who = rec.get("speaker") or "operator"
+            who = (rec.get("speaker") or "operator") + judge.spoken(rec)
             talk.append(f"- {rec['ts'][:16]} {who}: {' '.join(str(rec.get('content', '')).split())[:300]}")
     if talk:
         parts.append("### What was said to the agent in conversations (last 72 h)\n" + "\n".join(talk[-20:]))

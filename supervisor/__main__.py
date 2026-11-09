@@ -240,6 +240,7 @@ def cmd_update(names: list[str]) -> int:
                 if "Already up to date" in r.stdout:
                     print(f"{name}: already up to date")
                     continue
+                runner.end_warm(name)   # a quiet voice session's process runs the old code: ended (it holds no lock)
                 ok, test_log = gate.run_tests(root, HOME)
                 if getattr(test_log, "refused", False):
                     from .runner import RunRefused, _refused

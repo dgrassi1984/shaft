@@ -216,6 +216,16 @@ Conversation replies take priority over autonomous work on the same local model 
 An instance pauses its cycle while replying and resumes it when the reply ends;
 a quiet open conversation does not prevent cycles.
 
+A run is one sandboxed agent process with its own broker (`supervisor/runner.py`): the run lock, a snapshot of the
+approved code, and after it the checks (append-only journal, core pace, the gate on code) and the commit. A
+conversation whose agent stays up between replies — the terminal client (`run_conversation`) and an API voice session
+(`Warm`, [web and API](web-and-api.md#v1-wire-contract)) — is checked one reply at a time instead: each reply takes the
+run lock and a Reply presence (`Turn`), and gives them back when it is checked and committed, so cycles run in the
+pauses and pause only while a reply is written. A voice session's process is started again before a reply whose
+approved code or `config.env` changed since it started; it is registered under `.supervisor/warm/<instance>/`, so
+`shaft update` and `shaft delete` end a quiet one from their own process (`end_warm`, under the run lock), `shaft kill`
+stops it as any process of the instance, and a stopped API ends it with its other runs.
+
 The native `/app/v1` API belongs to the web service, not the separate API service
 (`supervisor/web.py`, `supervisor/app_api.py`). It accepts paired device bearers in
 `Authorization: Bearer <device>.<secret>`. Browser pages use cookies instead.
@@ -684,3 +694,12 @@ Sources: [instance creation](../supervisor/__main__.py),
 The `template/` worktree is gitignored and materialized by `setup`; it is a branch,
 not a directory shipped on `main` ([setup](../supervisor/__main__.py)).
 See [enforced rules](safety.md) and [design milestones](../docs/plans/PLAN.md).
+
+### Device voices
+
+`supervisor/voices.py` holds device-reported voice lists, per-language assignments and proposals in
+`.supervisor/voices.json`. Each write locks the store through `core.config_lock` and replaces the whole JSON file
+atomically, following `core._update_tool_settings`. Reports replace only the reporting platform's list and stamp
+its report time. Assignment and proposal acceptance check voice ownership under the same lock. Decisions use
+`messages.deliver_background` after releasing the lock, as calendar proposal outcomes do. A delivery failure is
+logged and does not undo the saved decision. See [speaking voices](integrations.md#speaking-voices) for broker tools.

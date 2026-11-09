@@ -12,12 +12,17 @@ so it holds the lock (and is checked and committed) one reply at a time — an o
 (open_conversations): autonomous cycles run while a conversation waits for the operator,
 pause only while a reply is being written and resume after, and every run sees the open
 conversations so no journal write-up closes one still going on.
+
+An API voice conversation keeps its agent the same way (Warm, PLAN-voice §7): one process for the whole
+conversation, held and checked one reply at a time, started again when the code it runs is no longer the
+approved code; `shaft update` and `shaft delete` end a quiet one from their own process (end_warm).
 """
 from __future__ import annotations
 
 import fcntl
 import json
 import os
+import queue
 import re
 import signal
 import subprocess
@@ -935,6 +940,9 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                 _end_run(proc, root)   # nothing the run started outlives it, however it ended (B9): settled next
                 for r in readers:
                     r.join(timeout=5)
+                for pipe in (proc.stderr, proc.stdout):   # read to their end above: closed, never left to the GC
+                    if pipe is not None and not any(r.is_alive() for r in readers):
+                        pipe.close()
             if output is not None:
                 output.append("".join(out_all))
     except subprocess.TimeoutExpired:
@@ -1581,3 +1589,287 @@ def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_
                 protected.remove(Path(env["SHAFT_CODE_ROOT"]))
     log(f"{name}: end {kind} {talk_id} exit={code} broker_calls={broker.counts or {}}")
     return code
+
+
+# -- a warm conversation: one agent process kept between the replies of an API conversation (PLAN-voice §7) ----------
+WARM_DONE = "request_done"   # the agent's end of one reply in `answer --loop` (template talk.answer_loop)
+WARM_STOP_GRACE_S = 15       # a stopped reply must say it is done within this, or its process is ended
+WARM_END_S = 5               # how long a quiet process has to leave on its own (EOF on stdin) before its group is ended
+
+
+class Warm:
+    """An API conversation whose agent process stays up between replies, as a terminal talk's does: a voice session
+    (PLAN-voice §7). The process, its broker — and the broker's model channel, so a Codex session is kept — and the
+    agent's own caches (its memory index) live from one reply to the next, instead of a fresh sandboxed run for each.
+
+    It holds the instance only while it replies: each reply is one Turn (the Reply presence, the run lock, _reconcile;
+    on leaving, the checks and the commit), so cycles run in the pauses exactly as with a terminal talk, and nothing is
+    held between replies. The broker's call budget is a run's, so it starts again at each reply.
+
+    A reply never runs on stale code or config: when the approved code (_reconcile, at the reply's start) or config.env
+    differ from what the process started from — a cycle in the pause kept a code change, `shaft update` merged the
+    template, the operator changed a setting — the process is ended and a new one started for that reply, under the
+    same hold. One that ended (killed, crashed, stopped) is started again the same way.
+
+    While its process lives it is registered (SUP_DIR/warm/<name>/<talk id>.<agent pid>, held by this process), so
+    another process can end it while it is quiet (end_warm: `shaft update`, `shaft delete`). `shaft kill` stops it as
+    any process of the instance (kill.targets: its parent is a supervisor process), and a stopped API ends it with
+    every run of its own (end_all_runs: the agent is tracked in _LIVE)."""
+
+    CLOSED = "closed"   # reply(): the session was ended before it took the reply; ask a new one
+
+    def __init__(self, name: str, kind: str, agent_args: list[str], talk_id: str):
+        self.name, self.kind, self.agent_args, self.talk_id = name, kind, list(agent_args), talk_id
+        self.root = instance_root(name)
+        self.turn = Turn(name, self.root, kind)
+        self.lock = threading.Lock()          # one reply at a time; ending waits for none
+        self._sig = threading.Lock()          # a Stop reaches only the reply it was meant for
+        self.proc = self.broker = self.env = self.presence = None
+        self.code = self.config = None        # what the running process started from
+        self.events: queue.Queue | None = None
+        self.err: list[str] = []
+        self.current = None                   # the reply running now (its token)
+        self.stopped_at: float | None = None
+        self.last = time.monotonic()          # when its last reply ended (or it was made)
+        self.closed = False
+        self.started = 0                      # processes started so far
+
+    # -- what the API asks ----------------------------------------------------------------------------------------
+    def busy(self) -> bool:
+        """A reply is running or about to: never ended from outside then."""
+        return self.lock.locked()
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def stderr_tail(self) -> str:
+        return "".join(self.err)[-800:].strip()
+
+    def reply(self, request: dict, on_event, on_start=None, on_wait=None, cancelled=lambda: False):
+        """One reply: `request` is written to the agent as one line, and each event it writes is passed to on_event
+        until its request_done. on_start(stop) is called once the process has the instance and before it reads the
+        request; stop() interrupts this reply (the client left) and nothing else. Returns None when the reply ended
+        and the process is still up for the next, its exit code when the process ended, REFUSED when the run could
+        not start (its code could not be checked), Warm.CLOSED when the session was ended before taking it."""
+        while not self.lock.acquire(timeout=0.5):   # another reply of this conversation still runs
+            if cancelled():
+                return None
+        try:
+            if self.closed:
+                return Warm.CLOSED
+            if cancelled():
+                return None
+            try:
+                self.turn.begin(on_wait)
+            except RunRefused:                      # Turn.begin said it (_refused)
+                return REFUSED
+            token = object()
+            try:
+                if self.proc is not None and not self._current():
+                    self._end_process("it is stale" if self.alive() else "it had ended")
+                if self.proc is None:
+                    self._start()
+                self.broker.calls = 0               # a reply's budget is a run's (BROKER_MAX_CALLS)
+                with self._sig:
+                    self.current, self.stopped_at = token, None
+
+                def stop() -> None:
+                    with self._sig:
+                        proc = self.proc                    # read once: the reply may end its process meanwhile
+                        if self.current is token and proc is not None and proc.poll() is None:
+                            self.stopped_at = time.monotonic()
+                            try:
+                                os.killpg(proc.pid, signal.SIGINT)   # as a run of its own is stopped
+                            except OSError:
+                                pass
+                if on_start:
+                    on_start(stop)
+                try:
+                    self.proc.stdin.write(json.dumps(request) + "\n")
+                    self.proc.stdin.flush()
+                except OSError:                     # it ended in the pause, after the check above
+                    return self._ended()
+                return self._pump(on_event)
+            except RunRefused as e:                 # at launch: nothing ran, nothing to check (as _conversation)
+                if self.proc is None and self.turn.held:
+                    self.turn.held.close()
+                    self.turn.held = None
+                return _refused(self.name, e)
+            finally:
+                with self._sig:
+                    self.current = None
+                if self.proc is not None and self.proc.poll() is not None:
+                    self._end_process("it ended")   # its processes gone before the reply is checked (B9)
+                self.turn.end()
+                self.last = time.monotonic()
+        finally:
+            self.lock.release()
+
+    def close(self, why: str, wait: bool = True) -> bool:
+        """End the session: its process, broker, code copy and registration. Never under a reply: with `wait` False a
+        session that is replying is left as it is (False); with it, the reply is waited for."""
+        if not self.lock.acquire(blocking=wait):
+            return False
+        try:
+            self.closed = True
+            self._end_process(why)
+        finally:
+            self.lock.release()
+        return True
+
+    # -- inside -------------------------------------------------------------------------------------------------------
+    def _current(self) -> bool:
+        """The process can take this reply: it runs, from the approved code and the config.env there are now."""
+        return (self.alive() and self.code is not None and self.code == self.turn.before.get("code")
+                and self.config == safe_read_bytes(self.root, "config.env", b""))
+
+    def _start(self) -> None:
+        code = self.turn.before.get("code")
+        config = safe_read_bytes(self.root, "config.env", b"")
+        broker, cmd, env = _launch(self.name, self.root, self.kind, self.agent_args, None, code)
+        broker.talk_id = self.talk_id   # record_order: an order heard in this conversation names it as its source
+        try:
+            proc = _popen(cmd, self.root, env)
+        except BaseException:
+            try:
+                broker.stop()
+            finally:
+                if env.get("SHAFT_CODE_ROOT"):
+                    protected.remove(Path(env["SHAFT_CODE_ROOT"]))
+            raise
+        self.proc, self.broker, self.env, self.code, self.config = proc, broker, env, code, config
+        self.turn.broker, self.turn.handoffs_seen, self.turn.config_seen = broker, 0, 0   # this reply's, from here
+        self.events, self.err = queue.Queue(), []
+        self.presence = Presence(self.name, self.talk_id, str(proc.pid), folder="warm").__enter__()
+        self.started += 1
+        threading.Thread(target=self._read, args=(proc, self.events), daemon=True).start()
+        threading.Thread(target=self._drain, args=(proc, self.err), daemon=True).start()
+        log(f"{self.name}: start {self.kind} {self.talk_id} warm, pid {proc.pid} {describe_knobs()}")
+
+    def _read(self, proc, events: queue.Queue) -> None:
+        for line in proc.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                events.put(ev)
+        events.put(None)
+        proc.stdout.close()
+        try:
+            proc.wait(timeout=30)                   # reaped here: its pid is not alive for end_warm any more
+        except subprocess.TimeoutExpired:
+            pass
+        if self.lock.acquire(blocking=False):       # quiet: nothing else will notice it ended
+            try:
+                if proc is self.proc:
+                    self._end_process("it ended")
+            finally:
+                self.lock.release()
+
+    @staticmethod
+    def _drain(proc, keep: list[str]) -> None:
+        """Its stderr, read as it comes (a pipe nobody reads stops its writer), the last ~4 KB kept."""
+        for chunk in iter(lambda: proc.stderr.read(512), ""):
+            keep.append(chunk)
+            while sum(map(len, keep)) > 4096 and len(keep) > 1:
+                keep.pop(0)
+        proc.stderr.close()
+
+    def _pump(self, on_event):
+        while True:
+            try:
+                ev = self.events.get(timeout=0.5)
+            except queue.Empty:
+                if self.stopped_at is not None and time.monotonic() - self.stopped_at > WARM_STOP_GRACE_S:
+                    log(f"{self.name}: warm {self.talk_id} did not finish its stopped reply in {WARM_STOP_GRACE_S}s; "
+                        "its process is ended (the next reply starts a new one)")
+                    self._end_process("its stopped reply did not end")
+                    return self.proc_code
+                continue
+            if ev is None:                          # EOF: the process ended
+                return self._ended()
+            if ev.get("type") == WARM_DONE:
+                return None
+            on_event(ev)
+
+    def _ended(self) -> int | None:
+        try:
+            self.proc.wait(timeout=WARM_END_S)
+        except subprocess.TimeoutExpired:
+            pass
+        self._end_process("it ended")
+        return self.proc_code
+
+    proc_code: int | None = None   # the exit code of the last process ended
+
+    def _end_process(self, why: str) -> None:
+        proc, broker, env, presence = self.proc, self.broker, self.env, self.presence
+        if proc is None:
+            return
+        self.proc = self.broker = self.env = self.presence = None
+        self.code = self.config = None
+        try:
+            try:
+                proc.stdin.close()                  # EOF: answer_loop ends on its own
+            except OSError:
+                pass
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=WARM_END_S)
+                except subprocess.TimeoutExpired:
+                    pass
+            _end_run(proc, self.root)               # its whole group, and whatever slipped out of it (B9)
+            try:
+                proc.wait(timeout=WARM_END_S)
+            except subprocess.TimeoutExpired:
+                pass
+        finally:
+            try:
+                if broker is not None:
+                    broker.stop()
+            finally:
+                if env and env.get("SHAFT_CODE_ROOT"):
+                    protected.remove(Path(env["SHAFT_CODE_ROOT"]))
+                if presence is not None:            # after the reap: a registered pid is never another process's
+                    presence.__exit__(None, None, None)
+        self.proc_code = proc.returncode
+        log(f"{self.name}: end {self.kind} {self.talk_id} warm, pid {proc.pid} exit={proc.returncode} ({why}) "
+            f"broker_calls={(broker.counts if broker is not None else None) or {}}")
+
+
+def warm_pids(name: str) -> dict[str, int]:
+    """{talk id: agent pid} of the instance's warm conversations whose keeper (the API) still holds them."""
+    out = {}
+    for talk_id, pid in _held(SUP_DIR / "warm" / name).items():
+        try:
+            out[talk_id] = int(pid)
+        except ValueError:
+            continue
+    return out
+
+
+def end_warm(name: str, wait_s: float = 20) -> list[int]:
+    """End the instance's warm conversation agents (voice sessions the API keeps between replies), from any process.
+    `shaft update` and `shaft delete` call it holding the run lock, so none of them is replying: a quiet process holds
+    nothing and changes nothing, but it must not outlive an update (it would run the old code) or a delete (its folder
+    goes). SIGTERM to each agent's group, then up to `wait_s` for it to be gone (its keeper reaps it and ends the rest
+    of its session: broker, code copy, registration); SIGKILL after that. Returns the pids it signalled."""
+    pids = []
+    for talk_id, pid in warm_pids(name).items():
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            continue
+        pids.append(pid)
+        log(f"{name}: warm conversation {talk_id} (pid {pid}) ended from outside")
+    deadline = time.monotonic() + wait_s
+    while any(_pid_alive(p) for p in pids) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    for pid in pids:
+        if _pid_alive(pid):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return pids

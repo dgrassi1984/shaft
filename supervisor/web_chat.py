@@ -37,6 +37,7 @@ from .core import SUP_DIR, UnsafePath, log
 from .web_md import first_line
 
 SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is written for the page to read
+STREAM_KEEP_S = 30.0               # a reply's stream events are kept this long after it ends: a reconnect gets its end
 MAX_TEXT = 20000                   # a message, at most
 
 
@@ -373,6 +374,7 @@ def _turn_items(name: str, chat: dict, archived: bool, ratings: dict, pending: s
             items.append({"key": f"u{k}", "type": "user", "k": k, "ts": t["ts"],
                           "text": t.get("shown", t.get("content", "")), "mid": t.get("mid") or None,
                           "interjected": bool(t.get("interjected")),
+                          "via": "voice" if t.get("via") == "voice" else None,
                           "attachments": _attachments(t.get("attachments"), f"chat/{chat['id']}/{k}"),
                           "edits": list(t.get("edits") or []), "deleted": list(t.get("deleted") or []),
                           "comments": [{"id": c["id"], "doc": c["doc"]} for c in t.get("comments") or []],
@@ -551,6 +553,8 @@ def _flush_queue(chat: dict) -> bool:
     turn = {"role": "user", "content": "\n\n".join(t["content"] for t in queued),
             "shown": "\n\n".join(t.get("shown", "") for t in queued), "ts": _now(),
             "attachments": [a for t in queued for a in t.get("attachments", [])]}
+    if queued[-1].get("via") == "voice":           # the reply is heard as the latest message was said (PLAN-voice C1)
+        turn["via"] = "voice"
     _take_feedback(chat, turn)
     edits, paths, deleted = _take_edits(chat)
     if edits:
@@ -626,6 +630,12 @@ def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int,
         conn.close()
 
 
+def spoken(chat: dict) -> bool:
+    """The operator's last message in the conversation was spoken (`via: voice`, PLAN-voice C1): the API is told so."""
+    last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "user" and not t.get("retried")), {})
+    return last.get("via") == "voice"
+
+
 def _api_messages(chat: dict) -> list[dict]:
     """The conversation for the API — without a try that failed and was retried (mark_retried): the model would read the
     question twice and a failed answer between."""
@@ -668,9 +678,47 @@ def classify_reply(*, stopped: bool, status: int | None, exc: BaseException | No
 
 
 # -- the relay: one reply, streamed, saved as it goes ----------------------------------------------------------------
+# What the stream endpoint (app_api, GET /app/v1/chat/<n>/stream; docs/app-api.md §6.1) passes on from the API's chunks:
+# its `shaft_event` (PLAN-voice C3), only these types and only these fields. Then `answer` and `end` when the reply ends.
+STREAM_EVENTS = {"draft": ("text",), "step_end": ("answer",), "status": ("phase", "detail"),
+                 "tool_start": ("name",), "tool_end": ("name", "ok")}
+
+
 class Relay:
+    """One reply: the API connection it reads, and its events in order for the stream endpoint, held in memory as the
+    chunks arrive — never through the chat file, which is written every SAVE_EVERY_S and read by a 0.5 s poll (up to
+    1.5 s added before each piece of a spoken reply: PLAN-voice M0)."""
+
     def __init__(self, cid: str):
         self.cid, self.conn, self.sock, self.stopped = cid, None, None, False
+        self.id = secrets.token_hex(8)                 # the reply, as its events name it
+        self.events: list[dict] = []                   # {seq, type, reply, …}; seq = index + 1
+        self.changed = threading.Condition()
+        self.ended: float | None = None                # time.monotonic() when `end` went in
+
+    def emit(self, kind: str, **fields) -> None:
+        """Buffer one event and wake every stream holding this reply. Nothing goes in after `end`."""
+        with self.changed:
+            if self.ended is not None:
+                return
+            self.events.append({"seq": len(self.events) + 1, "type": kind, "reply": self.id, **fields})
+            if kind == "end":
+                self.ended = time.monotonic()
+            self.changed.notify_all()
+
+    def events_after(self, after: int, timeout: float) -> list[dict]:
+        """The events with seq > `after`, waiting up to `timeout` seconds for one when there are none yet and the reply
+        has not ended."""
+        with self.changed:
+            if len(self.events) <= after and self.ended is None:
+                self.changed.wait(timeout)
+            return self.events[max(0, after):]
+
+    def close_stream(self, answer: str, failure: str | None) -> None:
+        """`answer` (the answer as the chat keeps it) and `end`, once: a stream ends when its reply does."""
+        if self.ended is None:
+            self.emit("answer", text=answer)
+            self.emit("end", failure=failure)
 
     def stop(self) -> None:
         """Close the connection under the reading thread. The socket is kept from before the response: the API answers
@@ -686,15 +734,27 @@ class Relay:
 
 
 _relays: dict[str, Relay] = {}
+_streams: dict[str, Relay] = {}            # the chat's latest reply, kept STREAM_KEEP_S after it ended
 
 
 def replying(cid: str) -> bool:
     return cid in _relays
 
 
+def stream_of(cid: str) -> Relay | None:
+    """The chat's reply for the stream endpoint: the running one, or the last one for STREAM_KEEP_S after it ended."""
+    relay = _streams.get(cid)
+    if relay is not None and relay.ended is not None and time.monotonic() - relay.ended > STREAM_KEEP_S:
+        _streams.pop(cid, None)
+        return None
+    return relay
+
+
 def _start(cid: str) -> None:
     relay = Relay(cid)
-    _relays[cid] = relay
+    for old in [c for c, r in _streams.items() if r.ended is not None and time.monotonic() - r.ended > STREAM_KEEP_S]:
+        _streams.pop(old, None)
+    _relays[cid] = _streams[cid] = relay
     threading.Thread(target=_run, args=(relay,), daemon=True, name=f"chat-{cid}").start()
 
 
@@ -708,9 +768,10 @@ def _run(relay: Relay) -> None:
         sent = chat["reply"].get("interjections", 0)
     try:
         relay.conn = conn = _api_conn(3600)
-        conn.request("POST", "/v1/chat/completions",
-                     json.dumps({"model": chat["instance"], "messages": _api_messages(chat), "stream": True}),
-                     _headers(chat))
+        body = {"model": chat["instance"], "messages": _api_messages(chat), "stream": True}
+        if spoken(chat):                            # the API tells the instance it is heard aloud (PLAN-voice C1.3)
+            body["voice"] = True
+        conn.request("POST", "/v1/chat/completions", json.dumps(body), _headers(chat))
         posted = True
         relay.sock = conn.sock
         if relay.stopped:                           # Stop came before the socket was there
@@ -740,6 +801,9 @@ def _run(relay: Relay) -> None:
                     tools = failure.get("tools_ran")
                 if "interjections_heard" in ev:
                     heard = int(ev["interjections_heard"])
+                se = ev.get("shaft_event")
+                if isinstance(se, dict) and se.get("type") in STREAM_EVENTS:     # at once: no file, no poll between
+                    relay.emit(se["type"], **{k: se.get(k) for k in STREAM_EVENTS[se["type"]]})
                 delta = (ev.get("choices") or [{}])[0].get("delta") or {}
                 if delta.get("reasoning_content"):
                     activity.append(delta["reasoning_content"].strip())
@@ -773,6 +837,9 @@ def _run(relay: Relay) -> None:
     # A comment send must mark its post sent before even a very fast reply is attached.
     with _inst_lock(chat["instance"]):
         docs_to_sync = _finish(relay, answer, activity, error, heard, status=status, posted=posted, exc=exc, tools=tools)
+    # _finish ends the stream once the answer is saved; a reply it had nothing to save for (a chat cleared, or taken
+    # over by a newer relay meanwhile) ends it here
+    relay.close_stream(answer.strip(), "stopped by you" if relay.stopped else f"error: {error}" if error else None)
     _sync_copies(chat["instance"], docs_to_sync)
 
 
@@ -820,6 +887,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
                                                         **_reply_comments(interjected[-unheard:] if unheard else []),
                                                         "turn_start": len(chat["turns"])}
         save(chat)
+    relay.close_stream(answer.strip(), note or None)   # after the save: a client that reads the feed on `end` sees it
     if not note:
         from . import doc_comments
         try:
@@ -1042,10 +1110,12 @@ def send_comment_background(name: str, login: str, pid: str) -> str:
 
 
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
-         comment_block: str = "", comments: list[dict] | None = None, retry_of: str = "") -> tuple[dict, str]:
+         comment_block: str = "", comments: list[dict] | None = None, retry_of: str = "",
+         voice: bool = False) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice.
-    `retry_of`: the index of the failed reply this sends again (Retry): it and its question fold (mark_retried)."""
+    `retry_of`: the index of the failed reply this sends again (Retry): it and its question fold (mark_retried).
+    `voice`: spoken and transcribed on the device (PLAN-voice C1): the turn is `via: voice`, and the API is told."""
     from . import messages
     with _inst_lock(name):
         if _in_chat(c := open_chat(name), mid):
@@ -1057,7 +1127,8 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
                 c = load(c["id"])
                 if mark_retried(c, int(retry_of), text):
                     save(c)
-        chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
+        chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid,
+                           voice=voice)
     # a question it quotes is answered, as a Telegram reply answers it
     if (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
@@ -1065,18 +1136,19 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     return chat, said
 
 
-def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "") -> tuple[dict, str]:
+def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "",
+          voice: bool = False) -> tuple[dict, str]:
     """Keep a message for the next reply; an idle chat sends it now."""
     from . import messages
     with _inst_lock(name):
         chat = open_chat(name)
         if not chat or chat["state"] != "replying":
-            return send(name, login, text, files, mid=mid)
+            return send(name, login, text, files, mid=mid, voice=voice)
         if messages.sent_mid(name, mid):
             return chat, f"already sent to {name} for its next cycle"
         if _in_chat(chat, mid):
             return chat, f"already sent to {name}"
-        return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True)
+        return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True, voice=voice)
 
 
 def unqueue(name: str, mid: str) -> str:
@@ -1091,7 +1163,8 @@ def unqueue(name: str, mid: str) -> str:
 
 
 def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
-          comment_block: str = "", comments: list[dict] | None = None, mid: str = "", queued: bool = False) -> tuple[dict, str]:
+          comment_block: str = "", comments: list[dict] | None = None, mid: str = "", queued: bool = False,
+          voice: bool = False) -> tuple[dict, str]:
     from . import messages, doc_comments
     text = text.strip()
     if not text and not files and not comment_block and not (open_chat(name) or {}).get("pending_edits"):
@@ -1114,6 +1187,8 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
         turn["comments"] = comments
     if mid:
         turn["mid"] = mid
+    if voice:
+        turn["via"] = "voice"
     if queued:                                       # #70: kept raw; edits and notices go with it when it is sent
         with _lock(cid):
             chat = load(cid)
@@ -1146,7 +1221,7 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
                 turn["content"] += "\n\n" + DOCS_NOTE
             if chat["state"] == "replying":
                 status, body = _post(chat, "interject", {"model": name, "messages": _api_messages(chat) + [
-                    {"role": "user", "content": turn["content"]}]})
+                    {"role": "user", "content": turn["content"]}], **({"voice": True} if voice else {})})
                 if status not in (202, 409):
                     raise Refused(body.get("error", {}).get("message") or f"API HTTP {status}")
                 turn["interjected"] = True

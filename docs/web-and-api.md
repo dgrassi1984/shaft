@@ -73,8 +73,8 @@ OpenAI chat fields. It does not promise the full OpenAI API contract.
 | Route | Request | Success |
 |---|---|---|
 | `GET /v1/models` | Chat bearer key and allowed tailnet login | `200`, `{"object":"list","data":[{"id":"example","object":"model","created":0,"owned_by":"shaft"}]}` |
-| `POST /v1/chat/completions` | JSON `model` equal to an instance name; `messages` ending in a user message; optional `stream`, default false | `200` JSON completion, or SSE when streaming |
-| `POST /v1/chat/interject` | Same model and conversation identity; `messages` ending in a nonempty user message | `202`, `{"interjected":true,"talk_id":"…"}`; `409 conflict` if no reply is outstanding |
+| `POST /v1/chat/completions` | JSON `model` equal to an instance name; `messages` ending in a user message; optional `stream`, default false; optional `voice` | `200` JSON completion, or SSE when streaming |
+| `POST /v1/chat/interject` | Same model and conversation identity; `messages` ending in a nonempty user message; optional `voice` | `202`, `{"interjected":true,"talk_id":"…"}`; `409 conflict` if no reply is outstanding |
 | `POST /v1/chat/end` | JSON `model`; identify the conversation with `X-Shaft-Conversation` or `messages` | `202`, `{"ended":"…"}`; write-up requested in the background |
 | `POST /v1/inbox/<instance>` | Inbox bearer key alone, or chat key and allowed login; text or JSON body | `202`, `{"delivered":"…","instance":"example","source":"ci","wake":"…"}` |
 
@@ -83,6 +83,32 @@ or OpenAI content parts. Interject extracts only text parts from its last messag
 Client system messages precede SHAFT's delivery instruction; the instance's own
 identity and memory still apply. Fields such as `temperature`, `max_tokens`, and
 client tool definitions are not forwarded from the top-level request.
+
+`"voice": true` (a JSON `true`; anything else is a typed turn) says the last user message was spoken and the reply
+will be read aloud. The instance's request carries it: the instance adds one note to its prompt (`prompts.VOICE_NOTE`),
+uses `VOICE_REASONING_EFFORT` for the reply's model calls when that is set ([configuration](configuration.md)), and
+marks both talk episodes `voice`. On an interjection it marks that message's episode. A judge shown a spoken turn is
+told its text is transcribed speech and may contain recognition errors.
+
+**Voice session.** A spoken, streamed turn (`"voice": true`, `"stream": true`) is answered by its conversation's
+warm process: the instance's agent (`answer --loop`) is started at the conversation's first spoken turn and kept up
+between turns, so its broker, its model session (Codex: one session for the conversation, not one per turn) and its
+memory index stay warm — about 6 s saved per turn in M0. It holds the instance only while a turn runs, exactly as a
+reply in a process of its own does: the run lock, the cycle paused for it, and the reply's checks and commit at its end;
+between turns cycles run. Its system prompt is kept from turn to turn, so the model session is kept too; it is written
+again (and the model session starts again) only when something it shows changed — goals, facts, digests, self-model,
+personality, skills, drive, improvement plan, last sleep, projects, corrections, open surprises, commitments — or the
+tools and their descriptions (the standing orders are in `record_order`'s). It is written as of its own time and says
+so in its "Now" section. The current time, new journal entries, inbox messages and unwritten conversations come with
+each message instead; `self/stats.md`, rewritten after every cycle, does not count as a change. Before a turn, a process started from code or a
+`config.env` that is no longer the instance's (a cycle in the pause kept a code change, `shaft update`, a changed
+setting) is ended and a new one answers. The session ends after `SHAFT_VOICE_SESSION_IDLE_S` (300) without a turn,
+when its conversation ends (`/v1/chat/end`, or the idle write-up), when the instance is paused (a kill pauses it first),
+updated or deleted, when its process is killed, and with the API. Stop (the client hanging up) interrupts the turn,
+not the process; a turn that does not stop within 15 s ends the process and the next turn starts a new one. Typed
+turns, non-streamed requests, every turn of a paused instance and every turn with `SHAFT_VOICE_SESSION_IDLE_S=0` run in a
+process of their own, as before, and stream exactly as before. Source: `supervisor/api.py` `VoiceSessions`,
+`supervisor/runner.py` `Warm`, `template/shaft/talk.py` `answer_loop`.
 
 | Header | Meaning |
 |---|---|
@@ -109,6 +135,38 @@ The final chunk has an empty delta, `finish_reason:"stop"`, and
 `reply_error:{message: str,tools_ran: bool}`. If no answer content exists, a
 preceding content delta contains `[error: …]`. The stream ends with
 `data: [DONE]`. After streaming starts, errors stay in the HTTP 200 stream.
+
+Only the reply's last step is its `content`: text written before a tool call is narration and arrives as
+`reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. Text of a model
+call cut off at its token limit is dropped when the call is asked again (`retry`), as the instance drops it. A `voice`
+request's stream is the same stream with extra chunks in between: each has an empty delta and a top-level
+`shaft_event` (a typed request never gets one).
+
+| `shaft_event.type` | Fields | Sent |
+|---|---|---|
+| `draft` | `text` | each piece of text the model writes, as it arrives, before the step is known to be the answer |
+| `step_end` | `answer` (bool) | after a step's drafts: `true` when that text is the answer (its whole text then comes as `content`), `false` when the step went on to call a tool (narration) or the model call was cut off at its token limit and asked again (that text is discarded) |
+| `status` | `phase`, `detail` | each status of the reply, the wait for a running cycle included |
+| `tool_start` | `name` | a tool call started |
+| `tool_end` | `name`, `ok` (bool) | it finished |
+
+For a reply that checks the weather and answers:
+
+```
+{"role":"assistant","content":""}                      delta
+{"type":"status","phase":"waiting for the model","detail":""}   (after its reasoning_content line)
+{"type":"draft","text":"Let me check "}
+{"type":"draft","text":"the weather."}
+{"type":"step_end","answer":false}
+reasoning_content "Let me check the weather.\n", then "⚙ get_weather …\n"
+{"type":"tool_start","name":"get_weather"}
+reasoning_content "✓ get_weather\n", then {"type":"tool_end","name":"get_weather","ok":true}
+reasoning_content "waiting for the model\n", then its status event
+{"type":"draft","text":"It is "}  {"type":"draft","text":"sunny."}
+{"type":"step_end","answer":true}
+content "It is sunny."
+the final chunk (finish_reason "stop"), then data: [DONE]
+```
 
 End returns `400` without a conversation identity, `404 not_found` when none is
 open, and `409 conflict` while a reply is outstanding. Interject returns `400`
@@ -349,7 +407,9 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
   what was sent.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (its **standing orders** first — each in force
   with its Drop, the corrections its messages are still checked against, a field to add one, all through `shaft orders`
-  ([architecture](architecture.md)) — then `config.env`, a field per key; each value is named for its key),
+  ([architecture](architecture.md)) — then `config.env`, a field per key; each value is named for its key; the voice
+  keys `VOICE_MODE` (on/off: the apps' Talk button) and `VOICE_REASONING_EFFORT` (empty: its own effort) are always
+  listed, with their choices, as the apps' Settings show them),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text; an
   unsaved edit is kept in this browser and restored after a reload, and leaving asks first, as it does for an
   unsaved Config or Settings value),
@@ -554,6 +614,14 @@ set by `SHAFT_APP_API_FIXTURES`.
   Retry, quotes (made into the message text on the server, exactly as the web composer writes them), files. Each
   message carries the app's id for it (`mid`): sent again while that chat is open, or after it went for the next
   cycle, it is not sent twice.
+- **Voice** (PLAN-voice). A send with `voice=1` (the web's `/chat/<n>/send` form takes the same field) is a spoken
+  message: the turn is recorded `via: "voice"` ("· spoken" in the feed), and the web chat's request to the API carries
+  `"voice": true` whenever the operator's last message was spoken, an interjection included. `GET
+  /app/v1/chat/<name>/stream` is Server-Sent Events of the running reply, from the web server's memory as the API's
+  chunks arrive: drafts, step ends, status, tool starts and ends, then the answer and the end. It does not wait for the
+  chat file (written every second) or a poll. Holding it counts as watching the chat. `/app/v1/instances` says
+  `voice_mode` per instance; Settings has `voice_mode` and `voice_effort`; `/app/v1/voices/…` holds each instance's
+  voice per language. See [the contract](app-api.md#61-get-appv1chatnstream--the-reply-as-it-streams).
 - **Unread and the badge.** The PWA keeps its unread marks in the browser. The apps need the server to know, for the
   icon's badge: `.supervisor/web/seen.json` holds, per app and instance, what the app last showed. An instance is
   unread when its own newest answer or message is newer than that; your own messages never make a chat unread.

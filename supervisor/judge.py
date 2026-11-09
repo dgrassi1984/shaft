@@ -43,6 +43,17 @@ class JudgeError(Exception):
     pass
 
 
+# A conversation turn the operator spoke (its talk episode says `voice`, PLAN-voice C1): the text is what speech
+# recognition heard on the device. Every judge prompt that shows such a turn marks it, so a misheard word ("music" for
+# "mutex") is not taken for what the operator meant.
+SPOKEN = "spoken: transcribed speech, may contain recognition errors"
+
+
+def spoken(turn: dict) -> str:
+    """The mark a judge sees after the speaker of a talk turn: SPOKEN for a spoken one, nothing for a typed one."""
+    return f" ({SPOKEN})" if turn.get("voice") is True else ""
+
+
 def _norm(model: str) -> str:
     """'openrouter/xiaomi/mimo-v2.6-pro', 'xiaomi/mimo-v2.6-pro' and 'anthropic/claude-haiku-5.5' compare by model."""
     from . import planchannel

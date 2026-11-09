@@ -326,11 +326,10 @@ PLACES = ("notes", "facts-archive")
 CONTROL = "control"
 CONTROL_MIN = 0.5
 # `shaft front` on a copy: four memory searches over the whole mind, and embedding every chunk the copy's index lacks —
-# all of them (~14,000 on Thelos, >10 min) when the instance has no .tmp/memory-index.json; a run embeds once and hands
-# the index on to its next copies (front's `index`).
+# all of them (~14,000 on Thelos, >10 min) when the instance has no memory index (core.MEMORY_CACHES); a run embeds
+# once and hands the index on to its next copies (front's `index`).
 FRONT_TIMEOUT_S = 1800
 PROBES = "notes/probes.md"
-INDEX = ".tmp/memory-index.json"   # the agent's memory-search vectors (template shaft/memory.py INDEX)
 
 
 def _nonce(seed: str) -> str:
@@ -465,16 +464,17 @@ def front(project: Path, name: str, dest: Path, state: dict, index: dict | None 
     """What each WORKSPACE mode would put in front of the cycle that starts from the copy `dest`: the copy's own
     `python -m shaft front`, in the agent's sandbox (its folder, the embedding service; no model port, no broker),
     with the replay's clock. Deterministic codelets and memory search only: no model is called. `index`: the run's
-    memory-search vectors ({"data": bytes}), put in the copy before and taken from it after, so each chunk is embedded
-    once per run (the replay that follows searches with them too)."""
+    memory-search vectors ({"files": {path: bytes}}, core.MEMORY_CACHES), put in the copy before and taken from it
+    after, so each chunk is embedded once per run (the replay that follows searches with them too)."""
     import os
     import subprocess
     import tempfile
     from . import sandbox, runner
-    from .core import EMBED_PORT, HOME, PYTHON, safe_mkdir, safe_read_bytes, safe_write_bytes
-    if index and index.get("data"):
+    from .core import EMBED_PORT, HOME, MEMORY_CACHES, PYTHON, safe_mkdir, safe_read_bytes, safe_write_bytes
+    if index and index.get("files"):
         safe_mkdir(dest, ".tmp")
-        safe_write_bytes(dest, INDEX, index["data"])
+        for rel, data in index["files"].items():
+            safe_write_bytes(dest, rel, data)
     fd, prof = tempfile.mkstemp(prefix=f"shaft-front-{name}-", suffix=".sb")
     os.close(fd)
     try:
@@ -492,8 +492,8 @@ def front(project: Path, name: str, dest: Path, state: dict, index: dict | None 
         raise ExperimentError(f"{name}: `shaft front` did not finish in {FRONT_TIMEOUT_S}s") from None
     finally:
         Path(prof).unlink(missing_ok=True)
-    if index is not None and (data := safe_read_bytes(dest, INDEX, b"")):
-        index["data"] = data
+    if index is not None and (files := {rel: data for rel in MEMORY_CACHES if (data := safe_read_bytes(dest, rel, b""))}):
+        index["files"] = files   # what the copy left: after a migration, the log only (its code deleted the JSON)
     if "invalid choice: 'front'" in r.stderr:
         raise ExperimentError(f"{name}'s code has no `shaft front` (what each arm puts in front of a cycle): update it "
                               f"to the template first")

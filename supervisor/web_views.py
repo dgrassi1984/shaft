@@ -1501,6 +1501,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def _user_item(name: str, it: dict) -> Html:
     tag = h(' <span class="dim">· during its reply</span>') if it["interjected"] else Html("")
+    if it.get("via") == "voice":                 # transcribed speech (PLAN-voice §5.1): it may hold recognition errors
+        tag = join([tag, h(' <span class="dim" title="spoken, transcribed on the device">· spoken</span>')])
     if it["edits"]:
         tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
                                 u=q(p), p=p) for p in it["edits"])])

@@ -16,6 +16,10 @@ ThreadingHTTPServer — until either revision of the feed moves (web_chat.build:
 web_chat.save() and looking again every LOOK_S, or `wait` seconds pass (304). Held for the current chat, it marks the
 device as watching it (web_chat.watching). Only a poll with `at` refreshes that mark during the hold, so a later
 away cannot be undone by a held poll without `at`.
+
+The stream (§6.1): GET /app/v1/chat/<n>/stream?after= is Server-Sent Events of the running reply, from the relay's own
+memory (web_chat.Relay.events), on its own thread of the same server for as long as the reply runs (web.Handler._pour).
+Held, it counts as watching the chat.
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ import hashlib
 import json
 import math
 import re
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -35,6 +40,8 @@ PREFIX = "/app/v1"
 WAIT_MAX = 25                       # a long-poll is held at most this long (s): under URLSession's 60 s timeout
 LOOK_S = 0.5                        # a held long-poll looks at the feed again this often, saved or not
 WATCH_EVERY_S = 2.0                 # and marks its device watching again this often (web_chat.WATCH_S is 6)
+KEEPALIVE_S = 2.0                   # a held stream (§6.1) writes a comment this often with nothing else to send: its
+#                                     client's leaving is noticed and its watching refreshed even while the reply is quiet
 MID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 PLATFORMS = ("ios", "macos")
 
@@ -217,7 +224,7 @@ def _unpair(req: Request) -> Response:
 
 # -- the chat list (§3) -----------------------------------------------------------------------------------------------
 def _instances(req: Request) -> Response:
-    from . import messages, web_chat, web_seen, web_views
+    from . import core, messages, opconfig, web_chat, web_seen, web_views
     history = messages.history()
     names = web._names()
     summaries = {n: web_chat.summary(n, history) for n in names}
@@ -231,7 +238,8 @@ def _instances(req: Request) -> Response:
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
                      "line": s.get("line") or "", "last": stamp(s.get("last")), "replying": replying,
-                     "unread": unread.get(n, False), "next_cycle": web._next_cycle(n)})
+                     "unread": unread.get(n, False), "next_cycle": web._next_cycle(n),
+                     "voice_mode": opconfig.voice_mode(core.instance_config(n))})
     return _etagged(req, {"instances": rows, "badge": sum(unread.values())})
 
 
@@ -407,6 +415,12 @@ def _send(req: Request, n: str) -> Response:
         raise Refusal(400, "bad_request", "mode is now, queue or background.")
     if retry_of and (mode != "now" or not retry_of.isdigit()):
         raise Refusal(400, "bad_request", "retry_of is a reply's k, sent with mode now.")
+    voice = fields.get("voice", "0")
+    if voice not in ("0", "1", ""):
+        raise Refusal(400, "bad_request", 'voice is "1" (spoken) or "0" (typed).')
+    voice = voice == "1"
+    if voice and mode == "background":
+        raise Refusal(400, "bad_request", "voice is for a chat message (mode now or queue), not for its next cycle.")
     text = quote_text(fields.get("text", ""), _quotes(fields.get("quotes", "")))
     login = _login(req)
     try:
@@ -415,9 +429,9 @@ def _send(req: Request, n: str) -> Response:
             reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
             return _said(said, chat=None, file=file or None)
         if mode == "queue":
-            chat, said = web_chat.queue(n, login, text, files, mid=mid)
+            chat, said = web_chat.queue(n, login, text, files, mid=mid, voice=voice)
         else:
-            chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of)
+            chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of, voice=voice)
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
     reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
@@ -452,6 +466,68 @@ def _action(req: Request, n: str, act: str) -> Response:
         return _said(web_chat.clear(n, cid))
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
+
+
+# -- the reply as it streams (§6.1) -------------------------------------------------------------------------------------
+_held: dict[str, int] = {}                  # streams being held now, per instance
+_held_lock = threading.Lock()
+
+
+def held(n: str) -> int:
+    """How many clients hold `n`'s stream now."""
+    return _held.get(n, 0)
+
+
+def sse(event: dict) -> bytes:
+    """One event as Server-Sent Events: its seq as the `id` (a reconnect may send it back as Last-Event-ID), the
+    event as one line of JSON."""
+    return f"id: {event['seq']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+
+def _stream(req: Request, n: str) -> Response:
+    """The running reply's events, in order, from the relay's memory (web_chat.Relay): no chat-file write, no poll
+    between the API's chunk and the app. Replays those after `after`, then follows live; ends after `end`."""
+    from . import web_chat
+    qs = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query,
+                                                     keep_blank_values=True).items()}
+    raw = qs.get("after", req.headers.get("last-event-id", "0")) or "0"
+    if not raw.isdigit():
+        raise Refusal(400, "bad_request", "after is the seq of the last event the app has, 0 for none.")
+    after, reply, at = int(raw), qs.get("reply"), web._page_ms(qs.get("at"))
+    chat = web_chat.open_chat(n)
+    relay = web_chat.stream_of(chat["id"]) if chat else None
+    if relay is not None and reply is not None and reply != relay.id:
+        after = 0                                  # a newer reply than the app's: all of it
+    if relay is None or (relay.ended is not None and len(relay.events) <= after):
+        raise Refusal(409, "not_replying", f"{n} is not replying: nothing to stream.")
+    dev = req.device
+    web_chat.watching(n, dev, at)                  # listening to it: no push for this chat reaches this device
+
+    def pour():
+        sent, marked = after, time.monotonic()
+        with _held_lock:
+            _held[n] = _held.get(n, 0) + 1
+        try:
+            yield f": reply {relay.id}\n\n".encode()
+            while True:
+                events = relay.events_after(sent, KEEPALIVE_S)
+                if time.monotonic() - marked >= WATCH_EVERY_S:
+                    web_chat.watching(n, dev, at)
+                    marked = time.monotonic()
+                if not events:
+                    yield b": keepalive\n\n"
+                    continue
+                yield b"".join(sse(e) for e in events)
+                sent = events[-1]["seq"]
+                if events[-1]["type"] == "end":
+                    return
+        except Exception as e:                    # noqa: BLE001 — past route(): say what broke, end the stream
+            log(f"app api: {n}'s stream failed: {type(e).__name__}: {e}")
+        finally:                                  # the reply ended, or the client left (web.Handler._pour closes it)
+            with _held_lock:
+                _held[n] -= 1
+    return Response(200, b"", {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store"},
+                    stream=pour())
 
 
 # -- files (§8) -------------------------------------------------------------------------------------------------------
@@ -647,7 +723,8 @@ def _latest(req: Request) -> Response:
 
 # -- instance settings and services (§15) -----------------------------------------------------------------------------
 CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
-                 "wake_interval": "WAKE_INTERVAL_MINUTES", "operator_name": "OPERATOR_NAME"}
+                 "wake_interval": "WAKE_INTERVAL_MINUTES", "operator_name": "OPERATOR_NAME",
+                 "voice_mode": "VOICE_MODE", "voice_effort": "VOICE_REASONING_EFFORT"}
 
 
 def _who(req: Request) -> str:
@@ -675,7 +752,12 @@ def _settings(n: str, cfg: dict | None = None) -> dict:
                               "effective": int(interval.total_seconds() // 60) if interval else 0},
             "cloud_cap": {"value": float(cap) if cap is not None else None, "spent_today": cloudllm.spent_today(n)},
             "channel": {"value": channel.preference(n), "choices": ["auto", "web", "telegram"]},
-            "operator_name": {"value": cfg.get("OPERATOR_NAME", "")}}
+            "operator_name": {"value": cfg.get("OPERATOR_NAME", "")},
+            # PLAN-voice C2: as config.env has them (the defaults when it does not), so `expect` compares what was shown
+            "voice_mode": {"value": cfg.get("VOICE_MODE", opconfig.VOICE_DEFAULTS["VOICE_MODE"]),
+                           "choices": list(opconfig.VOICE_MODES)},
+            "voice_effort": {"value": cfg.get("VOICE_REASONING_EFFORT", opconfig.VOICE_DEFAULTS["VOICE_REASONING_EFFORT"]),
+                             "choices": [""] + list(efforts) if efforts is not None else None}}
 
 
 def _get_settings(req: Request, n: str) -> Response:
@@ -734,7 +816,81 @@ def _set_settings(req: Request, n: str) -> Response:
     except ValueError as e:
         raise Refusal(409, "refused", str(e)) from None
     return _json(200, {"settings": _settings(n),
-                       "applies": "next run" if field in ("model", "effort", "operator_name") else "now"})
+                       "applies": "next run" if field in ("model", "effort", "operator_name", "voice_effort") else "now"})
+
+
+# -- voices (§17) -----------------------------------------------------------------------------------------------------
+# supervisor.voices keeps them (PLAN-voice C5); imported in each route, as every route here imports what it uses.
+VOICE_FIELDS = ("identifier", "name", "language", "quality")
+
+
+def _voices_of(n: str) -> dict:
+    from . import voices
+
+    def stamped(row: dict | None) -> dict | None:
+        return row and {**row, **({"ts": stamp(row["ts"]) or row["ts"]} if row.get("ts") else {})}
+    return {"voices": {lang: stamped(v) for lang, v in voices.get(n).items()},
+            "proposals": [stamped(p) for p in voices.proposals(n)], "available": voices.available()}
+
+
+def _voices(req: Request, n: str) -> Response:
+    return _json(200, _voices_of(n))
+
+
+def _refused_voice(e: Exception) -> Refusal:
+    return Refusal(409, "refused", str(e) or type(e).__name__)
+
+
+def _set_voice(req: Request, n: str) -> Response:
+    """The operator picks a voice for a language ({language, identifier}), or clears it ({language, clear: true})."""
+    from . import voices
+    data = _body(req)
+    language = _str(data, "language")
+    if data.get("clear") is True and set(data) == {"language", "clear"}:
+        act = lambda: voices.clear(n, language)                                    # noqa: E731
+    elif set(data) == {"language", "identifier"}:
+        identifier = _str(data, "identifier")
+        act = lambda: voices.assign(n, language, identifier, "operator")           # noqa: E731
+    else:
+        raise Refusal(400, "bad_request", "Send {language, identifier} to pick a voice, or {language, clear: true}.")
+    log(f"{_who(req)}: operator voice {language} for {n}: {data.get('identifier') or 'cleared'}")
+    try:
+        act()
+    except voices.Refused as e:
+        raise _refused_voice(e) from None
+    return _json(200, _voices_of(n))
+
+
+def _decide_voice(req: Request, n: str, pid: str) -> Response:
+    """The operator accepts or rejects the instance's proposal; the instance hears either way (voices.decide)."""
+    from . import voices
+    data = _body(req)
+    if not isinstance(data.get("accept"), bool) or not isinstance(data.get("reason", ""), str):
+        raise Refusal(400, "bad_request", "Send {accept: true|false, reason: str}.")
+    log(f"{_who(req)}: operator {'accepted' if data['accept'] else 'rejected'} {n}'s voice proposal {pid}")
+    try:
+        voices.decide(n, pid, data["accept"], data.get("reason", ""))
+    except voices.Refused as e:
+        raise _refused_voice(e) from None
+    return _json(200, _voices_of(n))
+
+
+def _report_voices(req: Request) -> Response:
+    """The device's installed voices (AVSpeechSynthesisVoice.speechVoices()), replacing its platform's list: what the
+    instance may propose from and the operator may pick from."""
+    from . import voices
+    data = _body(req)
+    platform, rows = data.get("platform"), data.get("voices")
+    if platform not in PLATFORMS:
+        raise Refusal(400, "bad_request", f"platform must be one of {', '.join(PLATFORMS)}.")
+    if not isinstance(rows, list) or not all(isinstance(v, dict) and all(isinstance(v.get(k), str) for k in VOICE_FIELDS)
+                                             for v in rows):
+        raise Refusal(400, "bad_request", "voices is a list of {identifier, name, language, quality}, all strings.")
+    try:
+        voices.report(platform, [{k: v[k] for k in VOICE_FIELDS} for v in rows])
+    except voices.Refused as e:
+        raise _refused_voice(e) from None
+    return _json(200, {"available": voices.available()})
 
 
 def _pending_drain() -> dict | None:
@@ -811,11 +967,15 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/cycles/{N}/(?P<ts>\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}})", {"GET": _cycle}),
     (rf"/settings/{N}", {"GET": _get_settings, "POST": _set_settings}),
     (rf"/settings/{N}/(?P<act>pause|resume)", {"POST": _pause_resume}),
+    (r"/voices/report", {"POST": _report_voices}),            # before /voices/<n>: "report" is not an instance
+    (rf"/voices/{N}", {"GET": _voices, "POST": _set_voice}),
+    (rf"/voices/{N}/proposals/(?P<pid>[A-Za-z0-9_-]{{1,64}})", {"POST": _decide_voice}),
     (r"/services", {"GET": _get_services}),
     (r"/services/(?P<service>api|scheduler)/(?P<act>restart)", {"POST": _service_action}),
     (r"/services/(?P<service>scheduler)/(?P<act>cancel)", {"POST": _service_action}),
     (rf"/chat/{N}", {"GET": _feed}),
     (rf"/chat/{N}/send", {"POST": _send}),
+    (rf"/chat/{N}/stream", {"GET": _stream}),
     (rf"/chat/{N}/(?P<act>unqueue|stop|end|clear|seen|away)", {"POST": _action}),
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),

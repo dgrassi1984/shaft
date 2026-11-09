@@ -1,7 +1,7 @@
 {
   "instance": "wren",
   "partial": false,
-  "version": "a0265d47b5465e0f",
+  "version": "df1d2a4375a1e4d6",
   "live": "",
   "reply": null,
   "chat": {
@@ -43,6 +43,7 @@
       "text": "Two files.",
       "mid": "c1a2b3c4-0000-4000-8000-000000000002",
       "interjected": false,
+      "via": null,
       "attachments": [
         {
           "name": "ci-run.png",

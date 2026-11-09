@@ -30,6 +30,10 @@ from .core import (TEMPLATE, UnsafePath, config_lock, config_set_line, config_va
 # LLM_CONTEXT_TOKENS, which a first, looser pattern hid as secrets (live, 2026-10-19).
 SECRET_KEY = re.compile(r"(?:^|_)(?:KEY|TOKEN)$|SECRET|PASSWORD|PASSPHRASE")
 LOCAL_URL = "http://127.0.0.1:8780/v1"              # SHAFT's own model server (the template's default)
+# Voice turns (PLAN-voice C2): what an instance whose config.env does not set them has. The app shows its Talk button
+# only for VOICE_MODE "on"; "" for VOICE_REASONING_EFFORT means its LLM_REASONING_EFFORT.
+VOICE_DEFAULTS = {"VOICE_MODE": "off", "VOICE_REASONING_EFFORT": ""}
+VOICE_MODES = ("on", "off")
 
 
 class Refused(Exception):
@@ -121,10 +125,10 @@ def fields(name: str) -> list[dict]:
     root = instance_root(name)
     text = safe_read(root, "config.env", "")
     tmpl = _template_text()
-    values, defaults = config_values(text), config_values(tmpl)
+    values, defaults = config_values(text), {**VOICE_DEFAULTS, **config_values(tmpl)}
     helps, tmpl_helps = _comments(text), _comments(tmpl)
     order = list(dict.fromkeys([k for l in text.splitlines() if (k := _key(l))] +
-                               [k for l in tmpl.splitlines() if (k := _key(l))]))
+                               [k for l in tmpl.splitlines() if (k := _key(l))] + list(VOICE_DEFAULTS)))
     efforts = effort_choices(root)
     out = []
     for key in order:
@@ -138,8 +142,22 @@ def fields(name: str) -> list[dict]:
             f["choices"] = [c["model"] for c in model_choices()]
         elif key == "LLM_REASONING_EFFORT" and efforts:
             f["choices"] = list(efforts)
+        elif key == "VOICE_MODE":
+            f["choices"] = list(VOICE_MODES)
+        elif key == "VOICE_REASONING_EFFORT" and efforts:
+            f["choices"] = [""] + list(efforts)
+        f["help"] = f["help"] or VOICE_HELP.get(key, "")
         out.append(f)
     return out
+
+
+VOICE_HELP = {"VOICE_MODE": "Voice mode offered for this instance: on shows the Talk button in the apps (PLAN-voice).",
+              "VOICE_REASONING_EFFORT": "Reasoning effort on spoken turns; empty: its LLM_REASONING_EFFORT."}
+
+
+def voice_mode(cfg: dict) -> str:
+    """"on" or "off": whether the apps offer voice for an instance with this config (anything but "on" is off)."""
+    return "on" if cfg.get("VOICE_MODE", VOICE_DEFAULTS["VOICE_MODE"]) == "on" else "off"
 
 
 def _check(name: str, root: Path, key: str, value: str) -> None:
@@ -150,6 +168,11 @@ def _check(name: str, root: Path, key: str, value: str) -> None:
                       + ", ".join(c["model"] for c in model_choices()))
     if key == "LLM_REASONING_EFFORT" and (efforts := effort_choices(root)) and value not in efforts:
         raise Refused(f"LLM_REASONING_EFFORT must be one of {', '.join(efforts)} (its shaft/config.py), not {value!r}")
+    if key == "VOICE_MODE" and value not in VOICE_MODES:
+        raise Refused(f"VOICE_MODE is on or off, not {value!r}")
+    if key == "VOICE_REASONING_EFFORT" and value and (efforts := effort_choices(root)) and value not in efforts:
+        raise Refused(f"VOICE_REASONING_EFFORT must be empty (its LLM_REASONING_EFFORT) or one of {', '.join(efforts)} "
+                      f"(its shaft/config.py), not {value!r}")
     numeric = re.fullmatch(r"\d+", config_values(_template_text()).get(key, "") or "x")
     if numeric and not re.fullmatch(r"\d+", value):
         raise Refused(f"{key} is a whole number, not {value!r}")
