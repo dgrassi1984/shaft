@@ -237,7 +237,10 @@ class IncrementalMemoryTest(InstanceFixture, unittest.TestCase):
         self.assertEqual(decode.call_count, 0)
         self.assertEqual([h.text for h in hits], ["orchard rain forecast"])
         self.assertEqual(self.embed.call_args_list[-1], mock.call(["orchard rain forecast"], query=False))
-        self.assertEqual(len(json.loads((self.root / memory.INDEX).read_text())), 1)
+        self.assertFalse((self.root / memory.INDEX).exists())
+        with (self.root / memory.BINARY_INDEX).open("rb") as index:
+            self.assertEqual(json.loads(index.readline())["version"], 2)
+            self.assertEqual(len(index.read()), 24 + 2 * 4)  # one SHA1/length record and two floats
         self.b.write_text("orchard new note")
         self.assertEqual({h.text for h in memory.search(self.root, "orchard")}, {"orchard rain forecast", "orchard new note"})
 
@@ -269,10 +272,11 @@ class IncrementalMemoryTest(InstanceFixture, unittest.TestCase):
 
 
     def test_row_25_loaded_vectors_decode_once_and_roots_do_not_mix(self):
+        """Loading the new binary cache must not decode vectors again on an unchanged query."""
         memory.search(self.root, "orchard")
         memory._vector_root = None   # simulate the next process loading the disk cache
         self.embed.reset_mock()
-        with mock.patch.object(memory.base64, "b64decode", wraps=memory.base64.b64decode) as decode:
+        with mock.patch.object(memory, "array", wraps=memory.array) as decode:
             expected = memory.search(self.root, "orchard")
             self.assertEqual(decode.call_count, 2)
             self.assertEqual(memory.search(self.root, "orchard"), expected)

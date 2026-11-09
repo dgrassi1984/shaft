@@ -178,7 +178,7 @@ class SemanticSearchTest(unittest.TestCase):
         self.assertEqual(sum(len(c["input"]) for c in documents), 3)
         self.search("job")
         self.assertEqual(sum(len(c["input"]) for c in self.fake.calls if c["input_type"] == "document"), 3)
-        self.assertTrue((self.root / ".tmp" / "memory-index.json").exists())
+        self.assertTrue((self.root / memory.BINARY_INDEX).exists())
 
     def test_with_the_service_it_says_so_too(self):
         # Regression: the label appeared only when meaning search failed, so shaft used it daily and still wrote
