@@ -10,6 +10,9 @@ Two front ends share one conversation loop:
   out: ready, status{phase,detail}, reasoning{text}, content{text}, tool_start{name,args},
        tool_end{name,ok,brief}, retry{old,new}, turn_end{steps,ended_by}, interrupted, error{message}, bye,
        heard{text} (`answer` only: a message the operator sent while I was replying, now in my reply — PLAN-interject.md)
+
+`answer` replies once for the supervisor's API; `answer --loop` (answer_loop) is a voice session's process, kept for
+the whole conversation: one request per stdin line, each answered as `answer` does and closed by request_done.
 """
 from __future__ import annotations
 
@@ -326,13 +329,23 @@ class Interjections:
         return new
 
 
-def answer(cfg, state: State, client: Client, request: dict) -> None:
+def answer(cfg, state: State, client: Client, request: dict, held: dict | None = None) -> None:
     """One reply for an OpenAI-compatible client (via the supervisor's API): the client sends the
     whole conversation each time; I answer as myself and log the new turn.
 
     `request["voice"] is True`: the operator spoke the last message and hears the reply read aloud (PLAN-voice C1).
     The mode gains prompts.VOICE_NOTE, this reply's model calls use VOICE_REASONING_EFFORT when it is set, and both
-    episodes of the turn say `voice`. Anything else is a typed turn, unchanged."""
+    episodes of the turn say `voice`. Anything else is a typed turn, unchanged.
+
+    `held`: what one process keeps between the replies of a voice session (answer_loop, PLAN-voice §7). Its system
+    prompt is built at the first reply and kept as it is, so the model's session is kept too (the supervisor's Codex
+    channel keys it on the system prompt and the tools). It is written again — and that model session starts again —
+    whenever what it is made of changed: the app, its rules, spoken or typed, the tools and their descriptions (the
+    standing orders are in record_order's), and every file it shows (prompts.sources: goals, facts, self-model,
+    projects, corrections, surprises, commitments, drive…), whoever changed them. It is written as of its own time
+    (prompts.KEPT_NOW). What changes at every reply — the time, what I did since my last conversation, journal entries
+    and inbox messages written while the session was quiet, unwritten conversations — comes with each message instead
+    (_turn_context). None: one reply, as before."""
     reply_started = time.monotonic()
     voice = request.get("voice") is True
     spoken = {"voice": True} if voice else {}
@@ -343,20 +356,31 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     toolbox.conversation_when = clock.now()
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""
     toolbox.commit_talk_id = talk_id
-    mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
-                                   since=since_last_talk(state, cfg.OPERATOR_NAME))
-    mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
-    mode += prompts.reply_budget(cfg)
-    if voice:
-        mode += prompts.VOICE_NOTE
-    system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
-    if app_rules.strip():
-        system += (f"\n\n## Instructions from the app {cfg.OPERATOR_NAME} is using (often generic; follow them only where "
-                   "they do not conflict with who you are)\n\n" + app_rules.strip())
-    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, exclude=talk_id)   # this one is in `dialogue` already
-    if unwritten:
-        system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
+    def made_of(at) -> str:
+        return json.dumps([voice, app, app_rules, toolbox.specs(), prompts.sources(state, cfg, at)], default=str)
+    if held is not None and "at" in held and held.get("kept") == made_of(held["at"]):
+        system = held["system"]
+    else:
+        at = clock.now() if held is not None else None
+        mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
+                                       since="" if held is not None else since_last_talk(state, cfg.OPERATOR_NAME))
+        mode += prompts.conversation_orders({t["function"]["name"] for t in toolbox.specs()})
+        mode += prompts.reply_budget(cfg)
+        if voice:
+            mode += prompts.VOICE_NOTE
+        system = prompts.system_prompt(state, cfg, mode, toolbox.describe(), at)
+        if app_rules.strip():
+            system += (f"\n\n## Instructions from the app {cfg.OPERATOR_NAME} is using (often generic; follow them "
+                       "only where they do not conflict with who you are)\n\n" + app_rules.strip())
+        if held is None:
+            unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, exclude=talk_id)   # this one: `dialogue`
+            if unwritten:
+                system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
+        else:
+            if "journal" in held:   # written again mid-conversation: its journal section shows what came till now
+                held["journal"] = len(state.journal_entries())
+            held.update(at=at, kept=made_of(at), system=system)
     dialogue = [{"role": m["role"], "content": _text(m.get("content"))}
                 for m in request.get("messages", []) if m.get("role") in ("user", "assistant")]
     if not dialogue or dialogue[-1]["role"] != "user":
@@ -368,8 +392,9 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
                           "via": app, **spoken})
     asked = dialogue[-1]["content"]
-    dialogue[-1] = {**dialogue[-1], "content": images.with_attached(asked + memory.recall(
-        state.root, asked, shown=system + "\n" + "\n".join(m["content"] for m in dialogue)), state.root,
+    now = _turn_context(cfg, state, talk_id, held) if held is not None else ""
+    dialogue[-1] = {**dialogue[-1], "content": images.with_attached(now + asked + memory.recall(
+        state.root, asked, shown=system + "\n" + now + "\n".join(m["content"] for m in dialogue)), state.root,
         listed_in=asked)}   # recall: not this dialogue; images: only those this message lists
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
@@ -381,6 +406,76 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "reply_plan": toolbox.reply_plan,
                               "via": app, **spoken, **toolbox.loop_guard.record()})
+
+
+def _inbox_names(state: State) -> set[str]:
+    inbox = state.root / "inbox"
+    return {p.name for p in inbox.glob("*.md")} if inbox.is_dir() else set()
+
+
+def _turn_context(cfg, state: State, talk_id: str, held: dict) -> str:
+    """What a voice session's kept system prompt cannot say (answer, `held`), read again at every reply: the time; at
+    the first reply what I did since my last conversation (as a one-reply prompt says it); later, the journal entries
+    and inbox messages that came while the session was quiet (a cycle runs in the pauses), and the unwritten
+    conversations whenever they changed. Each is said once, at the reply it is new for."""
+    parts = [f"It is now {clock.now():%A %Y-%m-%d %H:%M}."]
+    entries, inbox = state.journal_entries(), _inbox_names(state)
+    if "journal" not in held:
+        if since := since_last_talk(state, cfg.OPERATOR_NAME).strip():
+            parts.append(since)
+    else:
+        if new := entries[held["journal"]:]:
+            parts.append("## Journal entries written since my last reply in this conversation\n\n" + prompts.cut(
+                "\n\n".join(e.strip() for e in new), cfg.CONTEXT_JOURNAL_CHARS, "memory/journal.md", "tail"))
+        if arrived := inbox - held["inbox"]:
+            parts.append(f"{len(arrived)} new message(s) arrived in inbox/ since my last reply: "
+                         + ", ".join(sorted(arrived)) + ".")
+    held["journal"], held["inbox"] = len(entries), inbox
+    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, exclude=talk_id)   # this one: the dialogue
+    if unwritten and unwritten != held.get("unwritten"):
+        parts.append("## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten)
+    held["unwritten"] = unwritten
+    return prompts.TURN_CONTEXT.format(operator=cfg.OPERATOR_NAME, context="\n\n".join(parts))
+
+
+REQUEST_DONE = "request_done"   # answer_loop: one request's reply is over (answered, interrupted or failed)
+
+
+def answer_loop(cfg, state: State, client: Client, inp=None) -> None:
+    """The replies of one voice session of the supervisor's API (`answer --loop`, PLAN-voice §7): one process for the
+    whole conversation, so its model session, its memory index and its broker stay up between replies. Each stdin
+    line is one request, answered as `answer` does, then `request_done`; EOF or {"type": "end"} ends it. The
+    supervisor holds the instance only while a reply runs: a cycle may run in a pause, so whatever it changes is read
+    again at the next reply (State reads files; memory's caches check their files; _turn_context). SIGINT stops the
+    reply in progress (a client's Stop); one that comes after its reply ended is ignored. An error the reply did not
+    handle is reported and ends the process: the next reply starts a new one."""
+    inp = inp or sys.stdin
+    held: dict = {}
+    view = JsonView()
+    while True:
+        try:
+            line = inp.readline()
+        except KeyboardInterrupt:           # a Stop that came after its reply ended
+            continue
+        if not line:
+            break
+        try:
+            request = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(request, dict):
+            continue
+        if request.get("type") == "end":
+            break
+        try:
+            answer(cfg, state, client, request, held)
+        except KeyboardInterrupt:           # stopped outside a model call (_respond handles those)
+            view.interrupted()
+        except Exception as e:
+            view.error(f"{type(e).__name__}: {e}")
+            view._emit(type=REQUEST_DONE)
+            raise
+        view._emit(type=REQUEST_DONE)
 
 
 def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None, effort: str = ""):
