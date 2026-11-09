@@ -724,3 +724,42 @@ class OperatorSetTest(unittest.TestCase):
                          [("you", "Prepara la risposta a Concordia"), ("the instance", "Lo faccio nel prossimo ciclo")])
         with mock.patch("supervisor.web_chat.chats", return_value=chats[1:]):
             self.assertEqual(bakeoff._asked("thelos", "2026-11-05T12:33:26", lambda t: t), [])
+
+
+class InstanceRankingTest(unittest.TestCase):
+    """One ranking per instance across its bake-offs (operator, 2026-11-09: 'the ranking must carry over from one
+    bake-off to the next')."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-rank-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for p in (mock.patch.object(bakeoff, "DIR", self.tmp), mock.patch.object(bakeoff, "INSTANCES", self.tmp / "i")):
+            p.start()
+            self.addCleanup(p.stop)
+        bakeoff._POOLED.clear()
+        bakeoff._LOADED.clear()
+
+    def record(self, bid, arms, verdicts):
+        rec = {"exit": 0, "ended": "ok", "completed": True, "usd": 0, "seconds": 1, "usage": {}, "trace": [], "diff": ""}
+        b = {"id": bid, "name": "thelos", "created": "c", "arms": [{"label": a} for a in arms],
+             "states": [{"ts": "t", "t0": "t", "arms": {a: dict(rec, model=a) for a in arms}, "outcomes": {}}]}
+        (self.tmp / f"thelos-{bid}.json").write_text(json.dumps(b))
+        (self.tmp / "operator").mkdir(exist_ok=True)
+        rows = [{"state": 0, "pair": list(bakeoff._pair(x, y)), "winner": w,
+                 "runs": bakeoff._pair_runs(b["states"][0], bakeoff._pair(x, y))} for x, y, w in verdicts]
+        (self.tmp / "operator" / f"thelos-{bid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return b
+
+    def test_verdicts_from_every_bake_off_of_the_instance_make_one_ranking(self):
+        b1 = self.record("n24", ["sol", "ds", "argon"], [("sol", "ds", "ds"), ("sol", "argon", "sol")])
+        b2 = self.record("op24", ["sol", "ds", "hy4"], [("ds", "hy4", "ds")])
+        r1, r2 = bakeoff.ranking(b1), bakeoff.ranking(b2)
+        self.assertEqual([(r["arm"], r["you"]["elo"]) for r in r1], [(r["arm"], r["you"]["elo"]) for r in r2])
+        self.assertEqual(r1[0]["arm"], "ds")                       # 2 wins across the two bake-offs
+        self.assertEqual({r["arm"] for r in r1}, {"sol", "ds", "argon", "hy4"})
+        here = {r["arm"]: r["here"] for r in r2}
+        self.assertEqual((here["ds"], here["sol"]), (1, 0))       # pairs judged in this bake-off
+        self.assertFalse(next(r for r in r2 if r["arm"] == "argon")["in_this"])
+        alone = bakeoff.ranking(None, "thelos")                    # the list page: the instance on its own
+        self.assertEqual([r["arm"] for r in alone], [r["arm"] for r in r1])
+        self.assertEqual(bakeoff.judged_instances(), ["thelos"])

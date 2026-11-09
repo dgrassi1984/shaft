@@ -876,14 +876,61 @@ def _games(b: dict) -> list[tuple[str, str, float]]:
              else 0.5) for v in operator_verdicts(b).values()]
 
 
-def ranking(b: dict) -> list[dict]:
-    """Every arm by the operator's Elo from all their verdicts, any pair, every arm starting at ELO_START; the LLM
-    judges' Elo on the same scale beside it (they judged each candidate against the baseline only, splits left out)."""
-    base, arms = b["arms"][0]["label"], [a["label"] for a in b["arms"]]
-    llm_games = [(label, base, {"win": 1.0, "loss": 0.0, "tie": 0.5}[o]) for label in arms[1:]
-                 for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")]
-    mine, theirs = bradley_terry(_games(b), arms), bradley_terry(llm_games, arms)
-    rows = [{"arm": a, "baseline": a == base, "you": mine[a], "llm": theirs[a]} for a in arms]
+def _llm_games(b: dict) -> list[tuple[str, str, float]]:
+    base = b["arms"][0]["label"]
+    return [(a["label"], base, {"win": 1.0, "loss": 0.0, "tie": 0.5}[o]) for a in b["arms"][1:]
+            for o in (_outcome(b, s, a["label"]) for s in b["states"]) if o in ("win", "loss", "tie")]
+
+
+_POOLED: dict[tuple[str, str], tuple[tuple, dict]] = {}
+_POOLED_LOCK = threading.Lock()
+
+
+def _pooled(name: str, bid: str, b: dict | None = None) -> dict | None:
+    """One bake-off's share of the instance's ranking: its arms, the operator's games and the LLM judges' games. Kept
+    until the record or the operator's verdicts change, so a page does not parse every record on each view."""
+    rec, op = path(name, bid), DIR / "operator" / f"{name}-{bid}.jsonl"
+    try:
+        stamp = (rec.stat().st_mtime, op.stat().st_mtime if op.exists() else 0.0)
+    except OSError:   # no record on disk: only the one in hand, not kept
+        if b is not None and b.get("id") == bid:
+            return {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b)}
+        return None
+    with _POOLED_LOCK:
+        hit = _POOLED.get((name, bid))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    b = b if b is not None and b.get("id") == bid else load(name, bid)
+    if not b:
+        return None
+    got = {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b)}
+    with _POOLED_LOCK:
+        _POOLED[(name, bid)] = (stamp, got)
+    return got
+
+
+def judged_instances() -> list[str]:
+    """The instances with at least one bake-off the operator has judged."""
+    return sorted({s["name"] for s in saved() if (DIR / "operator" / f"{s['name']}-{s['id']}.jsonl").exists()})
+
+
+def ranking(b: dict | None, name: str = "") -> list[dict]:
+    """The instance's ranking, the same on every bake-off page of it: a Bradley-Terry fit of all the operator's
+    verdicts in all its bake-offs (a model is the same model wherever it ran), every model starting at ELO_START;
+    the LLM judges' Elo beside it, from the same bake-offs. `here` counts the pairs judged in bake-off `b` (with no
+    `b`: the instance `name`'s ranking alone)."""
+    name = b["name"] if b else name
+    judged = [s["id"] for s in saved() if s["name"] == name and (DIR / "operator" / f"{name}-{s['id']}.jsonl").exists()]
+    parts = [p for bid in dict.fromkeys(([b["id"]] if b else []) + judged) if (p := _pooled(name, bid, b))]
+    arms = list(dict.fromkeys(a for p in parts for a in p["arms"]))
+    games = [g for p in parts for g in p["games"]]
+    llm = [g for p in parts for g in p["llm"]]
+    mine, theirs = bradley_terry(games, arms), bradley_terry(llm, arms)
+    here = _games(b) if b else []
+    base = b["arms"][0]["label"] if b else ""
+    rows = [{"arm": a, "baseline": a == base, "you": mine[a], "llm": theirs[a],
+             "here": sum(a in g[:2] for g in here), "in_this": not b or a in [x["label"] for x in b["arms"]]}
+            for a in arms]
     return sorted(rows, key=lambda r: -r["you"]["elo"])
 
 

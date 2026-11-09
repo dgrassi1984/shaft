@@ -1723,13 +1723,14 @@ def calendar_proposals_page(rows: list[dict], names: list[str], csrf: str) -> Ht
 
 
 # -- bake-offs judged by the operator (supervisor/bakeoff.py § the operator as judge) --------------------------------
-def bakeoffs_page(items: list[dict], names: list[str], csrf: str) -> Html:
+def bakeoffs_page(items: list[dict], names: list[str], csrf: str, rankings: dict | None = None) -> Html:
     body = [r for r in items]
+    ranks = join(bakeoff_ranking(r, inst, here=False) for inst, r in (rankings or {}).items() if r)
     t = table(["Bake-off", "Instance", "Saved"],
               [[link(f"/bakeoffs/{q(i['name'])}/{q(i['id'])}", i["id"]), i["name"], i["modified"].strftime("%m-%d %H:%M")]
                for i in body]) if body else h("<p>No bake-off saved yet (<code>shaft trial models</code>).</p>")
     return frame("Bake-offs", join([h("<h1>Bake-offs</h1><p>Model bake-offs replay past cycles once per model. "
-                                      "Open one to judge its pairs yourself, blind.</p>"), t]), names, csrf,
+                                      "Open one to judge its pairs yourself, blind.</p>"), ranks, t]), names, csrf,
                  current="/bakeoffs")
 
 
@@ -1741,15 +1742,19 @@ def _elo_cell(e: dict) -> str:
     return f"{e['elo']} [{e['lo']}, {e['hi']}]" if e["n"] else f"{e['elo']} (no pair yet)"
 
 
-def bakeoff_ranking(rank: list[dict]) -> Html:
-    body = [[str(k), _short(r["arm"]) + (" · baseline" if r["baseline"] else ""), _elo_cell(r["you"]),
-             str(r["you"]["n"]), _elo_cell(r["llm"]), str(r["llm"]["n"])] for k, r in enumerate(rank, 1)]
-    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Elo from all your verdicts, any pair: every '
-             'model starts at 1000 and moves with each pair it is in (a win counts 1, equal and both bad ½, a loss '
-             '0; a Bradley-Terry fit, with a weak pull toward 1000 so a few pairs cannot run away). In brackets the '
-             '90% range: models whose ranges overlap are not yet told apart. Beside it, the LLM judges\' Elo on the '
-             'same scale, from the pairs they settled: each model against the baseline only. It changes with each '
-             'verdict you save.</p></section>',
+def bakeoff_ranking(rank: list[dict], instance: str = "", here: bool = True) -> Html:
+    body = [[str(k), _short(r["arm"]) + (" · baseline" if r.get("baseline") else "")
+             + ("" if r.get("in_this", True) else " · not in this bake-off"),
+             _elo_cell(r["you"]), f"{r['you']['n']}" + (f" ({r.get('here', 0)} here)" if here else ""),
+             _elo_cell(r["llm"]), str(r["llm"]["n"])] for k, r in enumerate(rank, 1)]
+    return h('<section class="panel"><h2>Ranking{of}</h2>{t}<p class="muted">One ranking for the instance: Elo from '
+             'all your verdicts in all its bake-offs, any pair; every model starts at 1000 and moves with each pair '
+             'it is in (a win counts 1, equal and both bad ½, a loss 0; a Bradley-Terry fit, with a weak pull toward '
+             '1000 so a few pairs cannot run away). In brackets the 90% range: models whose ranges overlap are not yet '
+             'told apart. Beside it, the LLM judges\' Elo on the same scale from the same bake-offs (each model '
+             'against that bake-off\'s baseline only). It changes with each verdict you save. Bake-offs replay '
+             'different cycles and code: pooling them assumes a model is as good in one as in another.</p></section>',
+             of=f" of {instance}" if instance else "",
              t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs"], body))
 
 
@@ -1775,7 +1780,7 @@ def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str, rank
              '</section>',
              id=b["id"], n=b["name"], base=_short(base), s=str(len(b["states"])), rev=b.get("code_rev", "")[:10],
              t=table(["Model", "Your pairs", "Its W–L–T", "Agrees with the LLM judges (vs baseline)"], rows_),
-             qn=q(b["name"]), qid=q(b["id"]), pick=pick, ranking=bakeoff_ranking(rank) if rank else "")
+             qn=q(b["name"]), qid=q(b["id"]), pick=pick, ranking=bakeoff_ranking(rank, b["name"]) if rank else "")
     return frame(f"Bake-off {b['id']}", body, names, csrf, current="/bakeoffs")
 
 

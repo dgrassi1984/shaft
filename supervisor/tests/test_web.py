@@ -433,6 +433,6 @@ class BakeoffJudgePagesTest(WebTest):
         page = self.req("/bakeoffs/wren/x1", cookie=cookie).body.decode()
         self.assertIn('deepseek-v4.1-flash</td><td data-label="Your pairs">1</td><td data-label="Its W–L–T">'
                       + ("1–0–0" if ds_won else "0–1–0"), page)
-        self.assertIn("<h2>Ranking</h2>", page)                    # updated by the verdict just saved
+        self.assertIn("<h2>Ranking of wren</h2>", page)             # the instance's ranking, updated by this verdict
         ds = re.search(r"deepseek-v4.1-flash</td><td data-label=\"Your Elo \[90%\]\">(\d+) \[", page)
         self.assertTrue(ds and (int(ds[1]) > 1000) == ds_won, page[-3000:])   # moved from 1000 by the verdict

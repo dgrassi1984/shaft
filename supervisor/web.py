@@ -817,7 +817,8 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _html(200, v.experiments_page(live, name, names, csrf))
     if path == "/bakeoffs":
         from . import bakeoff
-        return _html(200, v.bakeoffs_page(bakeoff.saved(), names, csrf))
+        return _html(200, v.bakeoffs_page(bakeoff.saved(), names, csrf,
+                                          {n: bakeoff.ranking(None, n) for n in bakeoff.judged_instances()}))
     if m := re.fullmatch(r"/bakeoffs/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)(/judge)?", path):
         from . import bakeoff
         b = bakeoff.load(m[1], m[2])
