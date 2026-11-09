@@ -506,3 +506,71 @@ class ReviewFixesFollowUpTest(unittest.TestCase):
     def test_draw_refuses_a_size_below_one(self):
         with self.assertRaises(bakeoff.BakeoffError):
             bakeoff.draw("thelos", 0, since="2026-11-07T00:00:00")
+
+
+class OperatorJudgeTest(unittest.TestCase):
+    """The operator as judge: pairs shown blind as A and B with what each run would have put in front of them, their
+    verdicts kept apart and set beside the LLM judges' (review 2026-11-09: the rubric was not the operator's)."""
+    setUp, create = BakeoffTest.setUp, BakeoffTest.create
+
+    def replayed(self):
+        def replay(project, name, st, code, *, model, cache, cache_lock, billed, env):
+            rec = _rec(model)
+            rec["trace"] = [{"tool": "send_message", "args": json.dumps({"to": "operator", "text": f"hello from {model}"}),
+                             "ok": True, "result": "delivered", "tags": ["simulated: not delivered"]}]
+            rec["diff"] = ("--- /dev/null\n+++ b/notes/brief.md\n@@ -0,0 +1 @@\n+a brief <script>x</script>\n"
+                           "--- a/memory/journal.md\n+++ b/memory/journal.md\n@@ -1 +1,2 @@\n x\n+y\n")
+            rec["episode"] = {"intent": {"goal": "check the inbox"}, "finish": {"what_happened": f"done by {model}"}}
+            return rec
+        b = self.create(arms=("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/deepseek/deepseek-v4.1-flash"))
+        with mock.patch.object(trial, "replay_arm", side_effect=replay):
+            bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)
+        return b
+
+    def test_a_pair_is_shown_blind_and_a_choice_reads_back_as_the_candidate_s_outcome(self):
+        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
+        todo = bakeoff.operator_queue(b, [cand])
+        self.assertEqual(sorted(todo), [(0, cand), (1, cand)])
+        for i, label in todo:
+            case = bakeoff.operator_case(b, i, label, project=self.tmp)
+            text = json.dumps(case).lower()
+            self.assertNotIn("deepseek", text.replace(cand.lower(), ""))   # only in the pair's key, never in what is shown
+            self.assertNotIn("mimo", text)
+            self.assertEqual([f["path"] for f in case["A"]["files"]], ["notes/brief.md"])
+            self.assertEqual(case["A"]["internal"], ["memory/journal.md"])
+            self.assertEqual(case["context"], "ctx")
+            flipped = bakeoff._flipped(b, i, label)
+            shown_a = "candidate" if flipped else "baseline"
+            row = bakeoff.operator_record(b, i, label, "A", "clearer")
+            self.assertEqual(row["outcome"], "win" if shown_a == "candidate" else "loss")
+        self.assertEqual(bakeoff.operator_queue(b, [cand]), [])
+        s = next(r for r in bakeoff.operator_summary(b) if r["arm"] == cand)
+        self.assertEqual((s["judged"], s["left"], s["W"] + s["L"]), (2, 0, 2))
+        with self.assertRaises(bakeoff.BakeoffError):
+            bakeoff.operator_record(b, 0, cand, "first")
+        with self.assertRaises(bakeoff.BakeoffError):
+            bakeoff.operator_record(b, 5, cand, "A")
+
+    def test_sides_are_drawn_per_pair(self):
+        b = self.replayed()
+        sides = {bakeoff._flipped(b, i, f"arm{k}") for i in range(20) for k in range(3)}
+        self.assertEqual(sides, {True, False})   # not one fixed side the operator could learn
+
+    def test_a_verdict_on_runs_replayed_since_no_longer_counts(self):
+        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
+        bakeoff.operator_record(b, 0, cand, "tie")
+        b["states"][0]["arms"][cand] = {**b["states"][0]["arms"][cand], "usd": 0.09}   # replayed again
+        self.assertNotIn((0, cand), bakeoff.operator_verdicts(b))
+        self.assertIn((0, cand), bakeoff.operator_queue(b, [cand]))
+
+    def test_agreement_with_the_llm_judges_counts_only_pairs_they_settled(self):
+        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
+        win = {**VERDICT, "winner": "second"}
+        b["states"][0]["outcomes"][cand] = {"outcome": "win", "why": "", "judgments": [win, {**win, "winner": "first"}],
+                                            "judge_usd": 0}
+        b["states"][1]["outcomes"][cand] = {"outcome": "split", "why": "", "judgments": [win, win], "judge_usd": 0}
+        flipped = bakeoff._flipped(b, 0, cand)
+        bakeoff.operator_record(b, 0, cand, "A" if flipped else "B")   # the candidate, as the LLM judges said
+        bakeoff.operator_record(b, 1, cand, "tie")
+        s = next(r for r in bakeoff.operator_summary(b) if r["arm"] == cand)
+        self.assertEqual((s["W"], s["T"], s["agree"], s["compared"]), (1, 1, 1, 1))   # the split is not compared

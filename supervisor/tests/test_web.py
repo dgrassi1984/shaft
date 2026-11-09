@@ -363,3 +363,63 @@ class FaviconTest(WebTest):
             self.assertEqual((r.status, r.headers["Content-Type"]), (200, ctype), path)
         self.assertTrue(self.req("/favicon.ico").body.startswith(b"\x89PNG"))
         self.assertEqual(self.req("/favicon.ico", login=None).status, 403)    # still the operator's tailnet only
+
+
+class BakeoffJudgePagesTest(WebTest):
+    """/bakeoffs: the operator judges bake-off pairs blind in the web UI; their verdicts are saved apart (review
+    2026-11-09). The pages go through the same front door as every other: paired browser, CSRF token on the POST."""
+
+    def setUp(self):
+        super().setUp()
+        from supervisor import bakeoff, trial
+        self.bakeoff = bakeoff
+        d = self.sup / "bakeoffs"
+        d.mkdir()
+        rec = lambda model, text: {   # noqa: E731
+            "exit": 0, "ended": "ok", "seconds": 60, "model": model, "completed": True, "usd": 0, "usage": {},
+            "output_tail": "", "episode": {"intent": {"goal": "<b>goal</b>"}, "finish": {"what_happened": text}},
+            "trace": [{"tool": "send_message", "args": json.dumps({"to": "operator", "text": text}), "ok": True,
+                       "result": "delivered", "tags": []}], "diff": ""}
+        b = {"id": "x1", "name": "wren", "created": "2026-11-09T09:00:00", "judge": "j", "code_rev": "abc",
+             "arms": [{"label": "codex/gpt-6.1-sol", "model": "codex/gpt-6.1-sol", "env": {}},
+                      {"label": "openrouter/deepseek/deepseek-v4.1-flash", "model": "m", "env": {}}],
+             "states": [{"ts": "2026-11-08T10:00:00", "t0": "2026-11-08T09:55:00", "stratum": "check", "outcomes": {},
+                         "arms": {"codex/gpt-6.1-sol": rec("a", "Sol <script>alert(1)</script>"),
+                                  "openrouter/deepseek/deepseek-v4.1-flash": rec("b", "deepseek did it")}}]}
+        (d / "wren-x1.json").write_text(json.dumps(b))
+        for p in (mock.patch.object(bakeoff, "DIR", d), mock.patch.object(trial, "state_context", return_value="ctx")):
+            p.start()
+            self.addCleanup(p.stop)
+        bakeoff._LOADED.clear()
+
+    def test_list_bakeoff_and_judge_pages_render_blind_and_escaped(self):
+        cookie = self.paired()
+        self.assertIn(b"/bakeoffs/wren/x1", self.req("/bakeoffs", cookie=cookie).body)
+        page = self.req("/bakeoffs/wren/x1", cookie=cookie)
+        self.assertEqual(page.status, 200)
+        self.assertIn(b"Judge pairs", page.body)
+        judge = self.req("/bakeoffs/wren/x1/judge?vs=1", cookie=cookie)
+        self.assertEqual(judge.status, 200)
+        self.assertIn(b"Run A", judge.body)
+        self.assertNotIn(b"<script>alert", judge.body)          # instance-written text never runs as markup
+        self.assertNotIn(b"deepseek", judge.body.lower())      # blind: the run's own words name no model
+        self.assertIn(b"1 left", judge.body)
+        self.assertEqual(self.req("/bakeoffs/wren/nope", cookie=cookie).status, 404)
+        self.assertEqual(self.req("/bakeoffs/wren/x1", login=None).status, 403)   # not on the tailnet login list
+
+    def test_a_verdict_posts_with_the_token_and_the_pair_leaves_the_queue(self):
+        cookie = self.paired()
+        post = lambda body, token=True: self.req(   # noqa: E731
+            "/bakeoffs/wren/x1/judge", "POST", cookie=cookie, body=body.encode(),
+            headers={"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded",
+                     **({"x-csrf-token": self.csrf(cookie)} if token else {})})
+        self.assertEqual(post("state=0&arm=1&choice=A", token=False).status, 403)
+        self.assertEqual(post("state=0&arm=1&choice=maybe").status, 409)
+        self.assertEqual(post("state=0&arm=0&choice=A").status, 409)            # the baseline is not a candidate
+        self.assertEqual(post("state=0&arm=1&choice=A&note=crisper").status, 200)
+        b = self.bakeoff.load("wren", "x1")
+        v = self.bakeoff.operator_verdicts(b)[(0, "openrouter/deepseek/deepseek-v4.1-flash")]
+        self.assertEqual((v["choice"], v["note"], v["by"]), ("A", "crisper", ME))
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/x1/judge?vs=1", cookie=cookie).body)
+        flipped = self.bakeoff._flipped(b, 0, "openrouter/deepseek/deepseek-v4.1-flash")   # A was the candidate
+        self.assertIn(("1–0–0" if flipped else "0–1–0").encode(), self.req("/bakeoffs/wren/x1", cookie=cookie).body)

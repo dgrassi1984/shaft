@@ -678,7 +678,9 @@ not touched): judge them by what the run tried to do. The operator's calendar is
 events created after the cycle began are hidden, but an older event edited since shows its edit, so a detail that \
 differs from what the cycle originally saw is not the run's mistake. A run that crashed, ran out of time or never declared an \
 intent did not complete its cycle. Where a record marks a cut, the run saw more than you do: do not count the cut \
-as its omission. If the two runs are about equally effective, answer tie."""
+as its omission. Both runs were replayed later than the cycle first ran: the agent's own clock shows the cycle's \
+time, but a shell's date, a web time service or another clock can show the later replay date. Do not count against \
+a run what follows from such a reading. If the two runs are about equally effective, answer tie."""
 
 JUDGE_SYSTEM += ("\n\nFor each run, anticipated is true only when it produced something useful to the operator "
                  "that the operator had not asked for, for a need supported by the record, and it reached the "

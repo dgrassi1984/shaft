@@ -507,6 +507,11 @@ class BakeoffReviewFixesTest(unittest.TestCase):
         t["verdict"].pop("S")   # a verdict saved before splits
         self.assertIn("W0 L0 T0 p=", trial.describe(t))
 
+    def test_the_judge_is_told_a_replay_s_clocks_can_show_the_replay_date(self):
+        # 11-09: Sol settled a 15:00 reminder as missed on a clock reading the replay's date, two days later
+        self.assertIn("later replay date", trial.JUDGE_SYSTEM)
+        self.assertIn("Do not count against a run what follows from such a reading", trial.JUDGE_SYSTEM)
+
     def test_judge_pair_blinds_the_case_it_sends(self):
         sent = {}
         def ask(system, case, schema, **kw):

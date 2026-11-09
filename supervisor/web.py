@@ -586,6 +586,21 @@ def _post(req: Request, dev: str) -> Response:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said),
                      {"X-Feedback-Id": item["id"]} if item else {})
+    if m := re.fullmatch(r"/bakeoffs/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)/judge", req.path):
+        from . import bakeoff
+        b = bakeoff.load(m[1], m[2])
+        if not b:
+            return _not_found(req.path)
+        f = req.form()
+        try:
+            arm = int(f.get("arm", ""))
+            if not 1 <= arm < len(b["arms"]):
+                raise ValueError
+            bakeoff.operator_record(b, int(f.get("state", "")), b["arms"][arm]["label"], f.get("choice", ""),
+                                    f.get("note", ""), (req.headers.get("tailscale-user-login") or "").lower())
+        except (ValueError, bakeoff.BakeoffError) as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e) or "Not a pair of this bake-off."))
+        return _html(200, web_pages.h("<p>Saved.</p>"))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
         from . import web_chat, reply_links
         if m[1] not in _names():
@@ -798,6 +813,21 @@ def _get(req: Request, csrf: str) -> Response | None:
         if path == "/fragment/experiments":
             return _html(200, live)
         return _html(200, v.experiments_page(live, name, names, csrf))
+    if path == "/bakeoffs":
+        from . import bakeoff
+        return _html(200, v.bakeoffs_page(bakeoff.saved(), names, csrf))
+    if m := re.fullmatch(r"/bakeoffs/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)(/judge)?", path):
+        from . import bakeoff
+        b = bakeoff.load(m[1], m[2])
+        if not b:
+            return None
+        if not m[3]:
+            return _html(200, v.bakeoff_page(b, bakeoff.operator_summary(b), names, csrf))
+        raw = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query).get("vs", [])
+        vs = sorted({int(x) for x in raw if x.isdigit() and 1 <= int(x) < len(b["arms"])})
+        todo = bakeoff.operator_queue(b, [b["arms"][k]["label"] for k in vs])
+        case = bakeoff.operator_case(b, *todo[0]) if todo else None
+        return _html(200, v.bakeoff_judge_page(b, case, len(todo), vs, names, csrf))
     if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""

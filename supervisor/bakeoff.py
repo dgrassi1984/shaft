@@ -322,9 +322,9 @@ def _redactor(b: dict):
     return lambda text: pattern.sub("[model]", text)
 
 
-# What a judge is shown changes with trial._run_text: a case written before (2026-11-08: cache tags and seconds
-# still in it) is stale, and so is its verdict.
-CASE_VERSION = 2
+# What a judge is shown changes with trial._run_text and JUDGE_SYSTEM: a case written before (2026-11-08: cache tags
+# and seconds still in it; 2026-11-09: no word on the replay's clock) is stale, and so is its verdict.
+CASE_VERSION = 3
 
 
 def _runs(A: dict, B: dict) -> str:
@@ -560,3 +560,164 @@ def _strata_lines(b: dict) -> list[str]:
                 net += population.get(k, 0) / total * (judged.count("win") - judged.count("loss")) / len(judged)
         lines.append(f"| {label} | " + " | ".join(cells) + f" | {f'{net:+.2f}' if total else '—'} |")
     return lines
+
+
+# -- the operator as judge ------------------------------------------------------------------------------------------
+# The LLM judges grade by a rubric; whether it is the operator's is a question only the operator can answer. Each pair
+# is shown to them blind (the two runs as A and B, sides drawn per pair) with what the cycle started from and what each
+# run would have put in front of them: its messages, its closing account and the files it delivered. Their verdicts
+# are kept apart from the LLM judges' (one record per bake-off) and set beside them in the report.
+OPERATOR_CHOICES = ("A", "B", "tie", "both bad")
+_INTERNAL = ("memory/", "self/", "logs/", ".tmp/", "inbox/")
+
+
+def operator_path(b: dict) -> Path:
+    return DIR / "operator" / f"{b['name']}-{b['id']}.jsonl"
+
+
+def operator_verdicts(b: dict) -> dict[tuple[int, str], dict]:
+    """(state, candidate) -> the operator's last verdict on the pair's current runs."""
+    out, base = {}, b["arms"][0]["label"]
+    p = operator_path(b)
+    for line in p.read_text().splitlines() if p.exists() else []:
+        try:
+            v = json.loads(line)
+        except ValueError:
+            continue
+        st = b["states"][v["state"]] if 0 <= v.get("state", -1) < len(b["states"]) else None
+        if st and base in st["arms"] and v.get("arm") in st["arms"] and \
+                v.get("runs") == _runs(st["arms"][base], st["arms"][v["arm"]]):
+            out[(v["state"], v["arm"])] = v
+    return out
+
+
+def _judgeable(b: dict, i: int, label: str) -> bool:
+    st, base = b["states"][i], b["arms"][0]["label"]
+    return (base in st["arms"] and label in st["arms"] and st["arms"][base]["completed"]
+            and st["arms"][label]["completed"])
+
+
+def _flipped(b: dict, i: int, label: str) -> bool:
+    """Whether the candidate is shown as A: drawn per pair, the same on every visit."""
+    return hashlib.sha256(f"{b['name']}:{b['id']}:{b['created']}:{i}:{label}".encode()).digest()[0] & 1 == 1
+
+
+def operator_queue(b: dict, labels: list[str]) -> list[tuple[int, str]]:
+    """The pairs of these candidates against the baseline the operator has not judged yet, in an order that mixes
+    candidates and cycles (the same order on every visit)."""
+    done = operator_verdicts(b)
+    todo = [(i, label) for i in range(len(b["states"])) for label in labels
+            if _judgeable(b, i, label) and (i, label) not in done]
+    return sorted(todo, key=lambda p: hashlib.sha256(f"{b['id']}:{p[0]}:{p[1]}".encode()).hexdigest())
+
+
+def _facing(rec: dict, redact) -> dict:
+    """What one run would have put in front of the operator: its messages (and whether they were let through), its
+    closing account, the files it delivered with what it added to them, and which internal files it touched."""
+    sent = []
+    for c in rec.get("trace") or []:
+        if c.get("tool") != "send_message":
+            continue
+        try:
+            args = json.loads(c["args"]) if isinstance(c["args"], str) else dict(c["args"] or {})
+        except ValueError:
+            args = {"text": str(c["args"])}
+        held = "not sent" in str(c.get("result", "")) or not c.get("ok", True)
+        sent.append({"to": str(args.get("to", "")), "kind": str(args.get("kind", "")),
+                     "text": redact(str(args.get("text", ""))), "attachments": [str(a) for a in args.get("attachments") or []],
+                     "held": redact(str(c.get("result", ""))[:300]) if held else ""})
+    files, internal = [], []
+    for part in re.split(r"(?m)^(?=--- )", rec.get("diff") or ""):
+        m = re.search(r"(?m)^\+\+\+ b/(.+)$", part) or re.search(r"(?m)^--- a/(.+)$", part)
+        if not m:
+            continue
+        path = m[1].strip()
+        if path.startswith(_INTERNAL):
+            internal.append(path)
+            continue
+        added = "\n".join(l[1:] for l in part.splitlines() if l.startswith("+") and not l.startswith("+++"))
+        files.append({"path": path, "added": redact(added[:6000]), "cut": len(added) > 6000})
+    ep = rec.get("episode") or {}
+    finish = ep.get("finish") or {}
+    account = finish.get("what_happened") if isinstance(finish, dict) else finish
+    return {"goal": redact(str((ep.get("intent") or {}).get("goal", ""))), "sent": sent,
+            "account": redact(str(account or "")), "files": files, "internal": sorted(set(internal)),
+            "turns": ep.get("steps")}
+
+
+def operator_case(b: dict, i: int, label: str, project: Path = PROJECT) -> dict:
+    """One pair as the operator sees it: the cycle's start (goals and inbox, as the judges get it) and the two runs
+    as A and B."""
+    st, base = b["states"][i], b["arms"][0]["label"]
+    redact = _redactor(b)
+    runs = {"baseline": _facing(st["arms"][base], redact), "candidate": _facing(st["arms"][label], redact)}
+    flipped = _flipped(b, i, label)
+    return {"state": i, "arm": label, "ts": st["ts"], "t0": st["t0"], "replayed": b["created"][:10],
+            "kind": st.get("stratum", ""), "context": redact(trial.state_context(project, b["name"], st)),
+            "A": runs["candidate" if flipped else "baseline"], "B": runs["baseline" if flipped else "candidate"]}
+
+
+def operator_record(b: dict, i: int, label: str, choice: str, note: str = "", by: str = "") -> dict:
+    """Keep the operator's verdict on a pair: A, B, tie or both bad, read back as candidate win, loss, tie or both bad."""
+    if choice not in OPERATOR_CHOICES:
+        raise BakeoffError(f"choose one of {', '.join(OPERATOR_CHOICES)}")
+    if not (0 <= i < len(b["states"])) or label not in [a["label"] for a in b["arms"][1:]] or not _judgeable(b, i, label):
+        raise BakeoffError("no such pair to judge")
+    st, base = b["states"][i], b["arms"][0]["label"]
+    flipped = _flipped(b, i, label)
+    outcome = {"tie": "tie", "both bad": "both bad"}.get(choice) or \
+        ("win" if (choice == "A") == flipped else "loss")
+    row = {"at": datetime.now().isoformat(timespec="seconds"), "by": by, "state": i, "arm": label, "choice": choice,
+           "flipped": flipped, "outcome": outcome, "note": note.strip()[:2000],
+           "runs": _runs(st["arms"][base], st["arms"][label])}
+    p = operator_path(b)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def operator_summary(b: dict) -> list[dict]:
+    """Per candidate: the operator's W–L–T and both-bad, and how often the LLM judges' outcome on the same pairs
+    agreed with theirs (a split or an unjudged pair does not count as agreement or disagreement)."""
+    done = operator_verdicts(b)
+    rows = []
+    for arm in b["arms"][1:]:
+        label = arm["label"]
+        mine = {i: v["outcome"] for (i, l), v in done.items() if l == label}
+        llm = {i: _outcome(b, b["states"][i], label) for i in mine}
+        compared = [i for i in mine if llm[i] in ("win", "loss", "tie") and mine[i] in ("win", "loss", "tie")]
+        o = list(mine.values())
+        rows.append({"arm": label, "judged": len(o), "left": sum(_judgeable(b, i, label) for i in range(len(b["states"])))
+                     - len(o), "W": o.count("win"), "L": o.count("loss"), "T": o.count("tie"),
+                     "bad": o.count("both bad"), "p": trial.verdict(o)["p"] if o else None,
+                     "agree": sum(mine[i] == llm[i] for i in compared), "compared": len(compared)})
+    return rows
+
+
+def saved() -> list[dict]:
+    """Every saved bake-off as {name, id, modified}, newest first: from the file names only (records run to 30 MB)."""
+    out = []
+    for p in sorted(DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        name, _, bid = p.stem.partition("-")
+        if name and bid:
+            out.append({"name": name, "id": bid, "modified": datetime.fromtimestamp(p.stat().st_mtime)})
+    return out
+
+
+_LOADED: dict[Path, tuple[float, dict]] = {}
+
+
+def load(name: str, bid: str) -> dict | None:
+    """A saved bake-off, or None; parsed again only when its file changed."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not re.fullmatch(r"[A-Za-z0-9_-]+", bid):
+        return None
+    p = path(name, bid)
+    try:
+        mtime = p.stat().st_mtime
+        if _LOADED.get(p, (None,))[0] != mtime:
+            _LOADED.clear()   # one record held at a time
+            _LOADED[p] = (mtime, json.loads(p.read_text()))
+        return _LOADED[p][1]
+    except (OSError, ValueError):
+        return None

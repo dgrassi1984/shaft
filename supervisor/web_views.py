@@ -1720,3 +1720,86 @@ def calendar_proposals_body(rows: list[dict]) -> Html:
 def calendar_proposals_page(rows: list[dict], names: list[str], csrf: str) -> Html:
     body = h('<section data-poll="/fragment/calendar-proposals">{body}</section>', body=calendar_proposals_body(rows))
     return frame('Action approvals', body, names, csrf, current='/calendar/proposals')
+
+
+# -- bake-offs judged by the operator (supervisor/bakeoff.py § the operator as judge) --------------------------------
+def bakeoffs_page(items: list[dict], names: list[str], csrf: str) -> Html:
+    body = [r for r in items]
+    t = table(["Bake-off", "Instance", "Saved"],
+              [[link(f"/bakeoffs/{q(i['name'])}/{q(i['id'])}", i["id"]), i["name"], i["modified"].strftime("%m-%d %H:%M")]
+               for i in body]) if body else h("<p>No bake-off saved yet (<code>shaft trial models</code>).</p>")
+    return frame("Bake-offs", join([h("<h1>Bake-offs</h1><p>Model bake-offs replay past cycles once per model. "
+                                      "Open one to judge its pairs yourself, blind.</p>"), t]), names, csrf,
+                 current="/bakeoffs")
+
+
+def _short(label: str) -> str:
+    return label.rsplit("/", 1)[-1]
+
+
+def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str) -> Html:
+    base = b["arms"][0]["label"]
+    rows_ = []
+    for r in summary:
+        agree = f"{r['agree']} of {r['compared']}" if r["compared"] else "—"
+        rows_.append([_short(r["arm"]), f"{r['W']}–{r['L']}–{r['T']}" + (f", {r['bad']} both bad" if r["bad"] else ""),
+                      str(r["p"]) if r["p"] is not None else "—", agree, str(r["left"])])
+    pick = join(h('<label><input type="checkbox" name="vs" value="{i}"> {l}</label><br>', i=str(k), l=_short(a["label"]))
+                for k, a in enumerate(b["arms"][1:], 1))
+    body = h('<p><a href="/bakeoffs">← every bake-off</a></p><h1>{id} · {n}</h1>'
+             '<p>Baseline <b>{base}</b>, {s} past cycles, code {rev}. Your verdicts are kept apart from the LLM judges\' '
+             'and only set beside them here.</p>'
+             '<section class="panel"><h2>Your verdicts against the baseline</h2>{t}'
+             '<p class="muted">W–L–T is the candidate against the baseline as you judged it. "Agrees" counts the pairs '
+             'the LLM judges settled (win, loss or tie) where they reached your outcome.</p></section>'
+             '<section class="panel"><h2>Judge pairs</h2><form method="get" action="/bakeoffs/{qn}/{qid}/judge">'
+             '<p>Which candidates? Their pairs come mixed, each side drawn at random: you do not know which run is '
+             'the baseline.</p>{pick}<p><button type="submit">Start</button></p></form></section>',
+             id=b["id"], n=b["name"], base=_short(base), s=str(len(b["states"])), rev=b.get("code_rev", "")[:10],
+             t=table(["Candidate", "You: W–L–T", "p", "Agrees with the LLM judges", "Left to judge"], rows_),
+             qn=q(b["name"]), qid=q(b["id"]), pick=pick)
+    return frame(f"Bake-off {b['id']}", body, names, csrf, current="/bakeoffs")
+
+
+def _run_panel(side: str, run: dict) -> Html:
+    sent = join(h('<div class="panel"><p><b>To {to}</b>{kind}{held}</p><p class="wrap">{t}</p>{att}</div>',
+                  to=m["to"] or "?", kind=f" · {m['kind']}" if m["kind"] else "",
+                  held=Html(" · <span class=\"bad\">held back by the supervisor</span>") if m["held"] else "",
+                  t=m["text"], att=h('<p class="muted">attached: {a}</p>', a=", ".join(m["attachments"]))
+                  if m["attachments"] else "") for m in run["sent"]) or h('<p class="muted">No message.</p>')
+    files = join(h('<details><summary>{p}{cut}</summary><pre class="wrap">{a}</pre></details>', p=f["path"],
+                   cut=" (first 6,000 chars)" if f["cut"] else "", a=f["added"] or "(only removals)")
+                 for f in run["files"]) or h('<p class="muted">No file delivered.</p>')
+    internal = h('<p class="muted">Also changed its own records: {x}</p>', x=", ".join(run["internal"])) \
+        if run["internal"] else ""
+    return h('<section class="panel"><h2>Run {s}</h2><p class="wrap"><b>It set out to:</b> {g}</p>'
+             '<h3>Messages to you</h3>{sent}<h3>Its account at the end</h3><p class="wrap">{acc}</p>'
+             '<h3>Files it delivered</h3>{files}{internal}</section>', s=side, g=run["goal"] or "—", sent=sent,
+             acc=run["account"] or "—", files=files, internal=internal)
+
+
+def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str) -> Html:
+    back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off</a></p>', n=q(b["name"]), id=q(b["id"]))
+    if case is None:
+        return frame("Judge", join([back, h("<h1>Nothing left to judge</h1><p>Every pair of these candidates has your "
+                                            "verdict.</p>")]), names, csrf, current="/bakeoffs")
+    arm = next(k for k, a in enumerate(b["arms"]) if a["label"] == case["arm"])
+    goals, _, inbox = case["context"].partition("## Its inbox at that moment")
+    choices = join(h('<label><input type="radio" name="choice" value="{c}" required> {l}</label> ', c=c, l=l)
+                   for c, l in (("A", "A is better"), ("B", "B is better"), ("tie", "Equal"), ("both bad", "Both bad")))
+    body = h('{back}<h1>Which run would you rather have had?</h1>'
+             '<p class="muted">{left} left. This {kind}cycle ran on {t0}; both runs replayed it on {rep}, from the same '
+             'start. A date later than the cycle\'s in a run comes from the replay\'s clock, not from the run.</p>'
+             '<section class="panel"><h2>What the cycle started from</h2><h3>Its inbox</h3><pre class="wrap">{inbox}</pre>'
+             '<details><summary>Its goals file (the same in most cycles)</summary><pre class="wrap">{goals}</pre>'
+             '</details></section>'
+             '<div class="cards">{a}{b}</div>'
+             '<section class="panel"><form class="act" data-post="/bakeoffs/{n}/{id}/judge" data-after="reload">'
+             '<input type="hidden" name="state" value="{st}"><input type="hidden" name="arm" value="{arm}">'
+             '<p>{choices}</p><p><textarea name="note" rows="2" placeholder="Why (optional)"></textarea></p>'
+             '<p><button type="submit">Save and next</button></p></form></section>',
+             back=back, left=str(left), kind=f"{case['kind']} " if case["kind"] else "", t0=case["t0"].replace("T", " "),
+             rep=case["replayed"], goals=goals.strip() or "(no goals file)", inbox=inbox.strip() or "(empty)",
+             a=_run_panel("A", case["A"]), b=_run_panel("B", case["B"]),
+             n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), arm=str(arm), choices=choices)
+    return frame("Judge a pair", body, names, csrf, current="/bakeoffs")
