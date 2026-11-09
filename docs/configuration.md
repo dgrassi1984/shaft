@@ -140,9 +140,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_IDLE_WAKE_MINUTES` | `30` | minutes an instance may go without a cycle before a timed wake starts one with nothing new for it (no unread message, commitment coming due or job result) | [autonomy.py](../supervisor/autonomy.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOBS_MAX` | `12` | scheduled plugins (jobs) an instance may run; beyond it, the rest by name are not run; positive integer | [jobs.py](../supervisor/jobs.py) |
-| `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
-| `SHAFT_WATCH_WAKE_MIN` | `15` | minutes between two wakes the mail and calendar watch gives one instance; a change sooner waits in its inbox | [watch.py](../supervisor/watch.py) |
-| `SHAFT_WATCH_EVERY_S` | `60` | seconds between two passes of the mail and calendar watch (the scheduler looks every 30 seconds) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH` | `on` | the supervisor's mail, calendar, and Google Chat watch, for instances that opt in with WATCH_MAIL, WATCH_CALENDAR, or WATCH_GCHAT in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_WAKE_MIN` | `15` | minutes between two wakes the mail, calendar, and Google Chat watch gives one instance; a change sooner waits in its inbox | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_EVERY_S` | `60` | seconds between two passes of the mail, calendar, and Google Chat watch (the scheduler looks every 30 seconds) | [watch.py](../supervisor/watch.py) |
 | `SHAFT_JOB_LONG_TIMEOUT_S` | `900` | seconds one run of a long scheduled job (`"long": true` in its schedule) may take before it is stopped (and resumed if it wrote its checkpoint); positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
@@ -343,12 +343,15 @@ A blocked order gets a one-line reply. The conversation write-up lists orders wi
 using the conversation tool results as evidence.
 Sources: template `shaft/config.py`, [autonomy.py](../supervisor/autonomy.py).
 
-### Mail and calendar watches
+### Mail, calendar, and Google Chat watches
 
-`WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
-new mail under the instance's granted labels and changed events on its granted calendars: `inbox` puts one message
-per pass in its inbox, `wake` also wakes it (at most once per `SHAFT_WATCH_WAKE_MIN` minutes); any other value is
-`off`, logged once. Only what the operator granted is watched; see [integrations](integrations.md#mail-shaft-mail-).
+`WATCH_MAIL`, `WATCH_CALENDAR`, and `WATCH_GCHAT` default to `off` when unset. They ask the supervisor's watch to report
+new mail under granted labels, changed events on granted calendars, and new messages on granted Google Chat accounts.
+`inbox` puts one message per kind per pass in the inbox. `wake` also wakes the instance, at most once per
+`SHAFT_WATCH_WAKE_MIN` minutes. Any other value is `off`, logged once. Chat includes message text cut at 500 characters
+and at most 40 message lines per inbox message. The operator's own messages land but do not wake the instance on
+their own. Only what the operator granted is watched; see [mail](integrations.md#mail-shaft-mail-) and
+[Google Chat](integrations.md#the-operators-google-chat-shaft-gchat).
 
 ### Briefing
 

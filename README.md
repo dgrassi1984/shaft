@@ -22,7 +22,7 @@ By Daniele Grassi. [MIT licensed](LICENSE).
 
 > [!WARNING]
 > Agents run code they wrote themselves and can reach the public internet. Anything you let an agent read (a shared
-> folder, mail labels, calendars, Drive files) can leave your Mac, including through instructions hidden in that
+> folder, mail labels, calendars, Drive files, Google Chat messages) can leave your Mac, including through instructions hidden in that
 > material. Cloud calls cost money, and the spending caps are checks made before work starts, not billing limits. Read
 > [SECURITY.md](SECURITY.md) before you grant any access.
 
@@ -177,7 +177,7 @@ This path needs no local model, only cloud API keys.
 
 - **Local and self-hosted models**, and routing through a Codex or Grok plan: [local models](docs/local-model.md).
 - **Access grants**: read-only Gmail labels, calendars (changes that involve other people wait for your approval),
-  Drive; instance-owned Google accounts; scheduled jobs; images; a shared Chromium: [integrations](docs/integrations.md).
+  Drive and Google Chat; instance-owned Google accounts; scheduled jobs; images; a shared Chromium: [integrations](docs/integrations.md).
 - **Evaluation**: trials, the capability battery, model bake-offs and measurement reports:
   [command reference](docs/cli.md).
 
@@ -205,7 +205,7 @@ services, as [moving SHAFT to a new Mac](docs/migration.md) describes, including
 | [Web UI and API](docs/web-and-api.md) | Terminal client, web UI/PWA, chat API, inbox |
 | [App API](docs/app-api.md) | The `/app/v1` contract the native apps use |
 | [Native apps](apps/shaft/README.md) | Building, signing and installing the iOS and macOS apps |
-| [Integrations](docs/integrations.md) | Telegram, Google mail/calendar/Drive, jobs, images, browser |
+| [Integrations](docs/integrations.md) | Telegram, Google mail/calendar/Drive/Chat, jobs, images, browser |
 | [Local models](docs/local-model.md) | Local MLX model, self-hosted servers, Codex and Grok plans |
 | [Moving to a new Mac](docs/migration.md) | Backup and migration |
 | [Deploying a release](docs/deploy.md) | The maintainer's runbook for updating a running setup |

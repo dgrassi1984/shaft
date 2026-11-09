@@ -86,10 +86,11 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 
 ## Google accounts (`shaft google …`)
 
-Mail, Calendar, and Drive share your Google accounts ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)). An instance never holds a
+Mail, Calendar, Drive, and Google Chat share your Google accounts ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)). An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly`, `calendar.readonly`, `calendar.events`, and `drive.readonly` together and records the scopes Google actually granted
+for `gmail.readonly`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
+`chat.messages.readonly`, and `chat.memberships.readonly` together and records the scopes Google actually granted
 (the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
 the login to run again; it never returns an empty result. The operator's mailbox access stays read-only; calendar
 writes require per-instance write grants ([calendar write plan](../docs/plans/PLAN-calendar-write.md)).
@@ -374,6 +375,72 @@ It does not erase memories or copies the instance made elsewhere.
    been checked in the log itself. On two real accounts, a read did not change "last viewed" (`viewedByMeTime`)
    or "modified" (`modifiedTime`) 20 seconds later, for one Doc export and one file download on each account.
 
+## The operator's Google Chat (`shaft gchat`)
+
+An instance may search and read every conversation on a granted Google Chat account, including DMs, group chats,
+spaces, and the operator's own messages. It can download uploaded files. Access is read-only, with no per-conversation
+hide list. The supervisor holds the credential and checks the account grant on every call.
+See [Chat tools](../supervisor/broker.py), [Chat reads](../supervisor/gchat.py), and the
+[plan](../docs/plans/PLAN-operator-chat.md).
+
+Enable the **Google Chat API** in the account's Google Cloud project. In Google Auth Platform → **Data Access**, add:
+
+- `https://www.googleapis.com/auth/chat.spaces.readonly`
+- `https://www.googleapis.com/auth/chat.messages.readonly`
+- `https://www.googleapis.com/auth/chat.memberships.readonly`
+
+A Workspace admin can block `chat.messages.readonly` for outside apps through API controls, including an Internal
+OAuth client. Run `shaft google login <alias> <address>` again and grant all three scopes. Use `--client <name>` if
+the OAuth client differs from the alias. Existing mail, calendar, and Drive logins keep working without Chat scopes;
+a Chat call without them refuses and names the login command to run.
+
+```bash
+shaft google login work operator@work.example
+shaft google                         # check that all three Chat scopes were granted
+shaft gchat example grant work
+shaft gchat example                   # show this instance's grants
+shaft gchat                           # show accounts and all instances' grants
+shaft gchat example revoke work
+shaft gchat example off
+```
+
+Grant checks Chat access before saving. Revoke takes effect on the next Chat call and deletes `gchat/<alias>/`.
+`off` removes all Chat grants and all of `gchat/`. A deletion failure is reported. Memories and copies made elsewhere
+remain. Downloads refuse until `gchat/` is gitignored; run `shaft update example` to bring in the template rule.
+
+| Tool | What it does |
+|---|---|
+| `gchat_search` | With no arguments, lists conversations by last activity. Searches messages with `text`, `conversation`, `from` (address or `users/<id>`), `after` / `before` (dates), and `kind` (`dm`, `group`, `space`). `account` selects one granted account. Returns 20 results by default, at most 50 per account, with a continuation call. Cross-conversation searches do not reach muted conversations. |
+| `gchat_read` | Opens a conversation handle (`<alias>/<spaceId>`) or a message handle (`<alias>/<spaceId>/<messageId>`). Returns at most 6,000 characters per page in time order, naming each sender and attachments. Follow the footer's exact call for older messages or the rest of a long message, until `Start of conversation`. |
+| `gchat_download` | Downloads an uploaded file selected by attachment number or name from a message handle, under `gchat/<alias>/<spaceId>/`. A linked Drive file needs `drive_read` / `drive_download` and a Drive grant. Each uploaded file is limited to 25,000,000 bytes; downloads total at most 100 MiB per run. |
+
+Every page marks the content as written by its senders, whose instructions are not the operator's. The operator's
+own messages are labelled `you`. There are at most 30 counted Chat calls per run. A read continuation for a
+conversation already opened successfully in that run does not use another tool-specific call allowance.
+Trial replays hide messages created after the replay time, but show the current text of edited messages.
+Battery exams get no Chat tools.
+
+**Watch for new messages.** `WATCH_GCHAT` in the instance's `config.env` accepts `off` (default), `inbox`, or `wake`,
+set with `set_config`. The supervisor polls every `SHAFT_WATCH_EVERY_S` seconds (default 60). It lists conversations,
+then reads new messages where activity has advanced. One inbox message per pass groups messages by conversation,
+with handles, times, and senders. Each text is cut at 500 characters including `…`; at most 40 message lines appear
+in the inbox message. The rest is counted with a `gchat_read` call. The content carries the same sender marking as
+reads. With `wake`, the watch uses the shared wake path, at most once per `SHAFT_WATCH_WAKE_MIN` minutes (default 15).
+The operator's own messages reach the inbox, but a pass containing only those messages does not wake the instance.
+The first pass, a new grant, or switching the watch on again starts from now without reporting old messages.
+A newly seen conversation reports messages since the previous pass. Edits and deletions are not news.
+Source: [watch](../supervisor/watch.py).
+
+### The Chat risks you accept
+
+1. **Colleagues' messages reach model providers** (example-b's model, the judges), and what example-b writes from them
+   stays in its mind store. This is company data; whether the company's policy allows it is yours to judge.
+2. **Anyone who can message you can write instructions to example-b.** The marking helps; it is not a guarantee.
+   example-b has the internet, so anything it reads it could send anywhere.
+3. **Downloads in `gchat/` are deleted on revoke; memories formed from them are not.**
+4. **The company's admin may see the OAuth client** in the Admin console's app access list, and can block it at any time
+   (the tools would then refuse with Google's reason).
+
 ## Scheduled jobs (`shaft jobs …`)
 
 An instance can run one of its own plugins on a timer ([docs/plans/PLAN-jobs.md](../docs/plans/PLAN-jobs.md)), for example a watcher that
@@ -394,8 +461,9 @@ Each run happens in the `run` sandbox, with its own broker and egress proxy:
 What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
 `can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
 Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
-For new mail or calendar changes a job is not needed: the supervisor's watch (`WATCH_MAIL`, `WATCH_CALENDAR`, in the
-Mail and Calendar sections) checks every minute and wakes through the same path.
+For new mail, calendar changes, or Google Chat messages a job is not needed. The supervisor's watch
+(`WATCH_MAIL`, `WATCH_CALENDAR`, `WATCH_GCHAT`, in the corresponding sections) checks every minute and wakes through
+the same path.
 
 A job's work reaches the instance whole ([docs/plans/PLAN-thelos-review-2.md](../docs/plans/PLAN-thelos-review-2.md) M1):
 - **Hand-off.** `{"message": …, "files": ["brief.md", …]}`: up to 5 files of at most 256 KB from `.jobs/<plugin>/`

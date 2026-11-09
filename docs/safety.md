@@ -107,6 +107,18 @@ shows no same-domain files under `own` unless they qualify as owned files or fil
 `gdrive/` and reports any deletion failure. Memories remain. See [integrations](integrations.md),
 `supervisor/broker.py`, `Broker.gdrive_grants` and `Broker._drive_read`, `supervisor/gdrive.py`, `visible`, and `supervisor/__main__.py`, `cmd_gdrive`.
 
+### Google Chat grants
+
+`shaft gchat <name> grant <alias>` enables `gchat_search`, `gchat_read`, and `gchat_download`
+([plan](../docs/plans/PLAN-operator-chat.md)). Access covers every conversation on the account, read-only,
+with no hide list. The supervisor holds the credential and checks the grant on every call. Pages and watch
+messages mark content as written by its senders, not as the operator's instructions. This marking cannot prevent
+prompt injection. Revoke deletes the account's downloaded copies under `gchat/` and reports deletion failures;
+memories remain. Content reaches the instance's model and may reach judges. See
+[integrations](integrations.md#the-operators-google-chat-shaft-gchat), `supervisor/broker.py`,
+`Broker.gchat_grants`, `Broker._gchat_read`, `supervisor/gchat.py`, `marking`, and
+`supervisor/__main__.py`, `cmd_gchat`.
+
 ### Calendar grants
 
 `shaft calendar <name> grant <alias> <calendar>` enables `calendar_events` and
@@ -211,7 +223,7 @@ Per-run token, call budget
 ### Tool quotas
 
 `supervisor/broker.py`, `Broker.call`, checks these limits in addition to the total
-broker call budget. Mail and Drive continuation pages do not consume another tool-specific
+broker call budget. Mail, Drive, and Google Chat continuation pages do not consume another tool-specific
 call allowance.
 
 | Resource | Enforced limit |
@@ -219,6 +231,7 @@ call allowance.
 | Messages | 10 per run, plus `SHAFT_OPERATOR_PER_DAY` for operator messages when nonzero. |
 | Mail | 30 calls and 100 MiB of attachments per run. |
 | Drive | 30 calls and 100 MiB of downloads per run. |
+| Google Chat | 30 calls and 100 MiB of downloads per run; 25,000,000 bytes per uploaded file. |
 | Calendar | 30 calls per run; `SHAFT_CALENDAR_WRITES_PER_DAY`, default 20, counts write attempts and proposals per day. |
 | Image descriptions | 10 calls per run; each image file at most 30 MiB. |
 | Coding delegation | 2 tasks per cycle; the daily allowance checks admission, not a running task's final cost. |

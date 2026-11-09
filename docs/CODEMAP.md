@@ -37,6 +37,8 @@ is behind the code, regenerate it.**
 310 modules expose a public class or function. Full list:
 [codemap/python.md](codemap/python.md).
 
+Operator Google reads: `supervisor/gdrive.py` (Drive) and `supervisor/gchat.py` (Google Chat).
+
 ## Tests
 
 | Path | Files |

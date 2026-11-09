@@ -28,7 +28,7 @@ is granting it to the instance and to anyone who can put text in front of it.
 
 - **The public internet is open.** An instance can send anything it has read to any public address, and can act on
   public services with keys you gave it.
-- **Prompt injection.** Mail, calendar events, Drive files and web pages can carry instructions. An instance acting on
+- **Prompt injection.** Mail, calendar events, Drive files, Google Chat messages and web pages can carry instructions. An instance acting on
   them uses the authority you granted.
 - **Spending.** Per-instance daily checks exist for the cloud model (`SHAFT_CLOUD_DAILY_USD`), coding hand-offs
   (`SHAFT_CODER_DAILY_USD`), consultations and the instance's own trials. Each is compared with recorded spending
@@ -50,6 +50,11 @@ All Google credentials stay with the supervisor; the broker checks the grant on 
   the account owns, its Shared Drives, and same-domain files only when Drive reports that the account can create
   Shared Drives. `--all` adds external shares. Content an instance reads goes to whichever model serves that call;
   with a cloud model, it leaves your Mac.
+- **Operator Google Chat:** read-only per account, covering every conversation with no hide list. Every call checks
+  the grant; messages and watch deliveries name their senders and mark their instructions as not the operator's.
+  Colleagues' messages reach model providers and can carry injected instructions. Revoke deletes downloaded copies
+  under `gchat/`, but memories remain. A Workspace admin can see and block the OAuth client. See the
+  [four accepted risks](docs/integrations.md#the-chat-risks-you-accept).
 - **Instance-owned Google accounts:** an account you create for the instance. Its Gmail access can read, send, label
   and trash mail; its Drive access covers the account's files and files shared with it, including sharing, trashing
   and permanent deletion. This is far broader than the operator grants. The broker refuses a key for an account

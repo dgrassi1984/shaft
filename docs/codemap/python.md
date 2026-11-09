@@ -54,6 +54,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut`, `Output` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `warm`, `budget`, `instance_part_failures`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
 | `supervisor/gate_held.py` | — | `save`, `pending`, `waiting`, `applies`, `apply`, `retried`, `drop`, `withdrawal`, `withdraw`, `log_run`, `rows`, `describe` |
 | `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `run_part`, `times`, `main` |
+| `supervisor/gchat.py` | `NotVisible`, `Gone`, `Refused` | `marking`, `attachment`, `is_handle`, `parse_handle`, `spaces`, `get_space`, `me`, `conversation_name`, `search`, `get_message`, `time_key`, `newer`, `page`, `render` |
 | `supervisor/gdrive.py` | `Refused`, `NotVisible` | `member_drives`, `workspace_domain`, `visible`, `get_file`, `search`, `check_servable`, `text_of`, `fetch`, `render` |
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `missing_scope_message`, `migrate`, `client_keys`, `refresh`, `operator_addresses`, `login`, `instance_key_login`, `consent` |
 | `supervisor/grokcli.py` | `Channel` | `serves`, `models`, `child_env` |

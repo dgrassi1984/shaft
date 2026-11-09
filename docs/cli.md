@@ -142,6 +142,10 @@ shaft gdrive <name> grant <alias> [--all]
 shaft gdrive <name> revoke <alias>
 shaft gdrive <name> off
 shaft gdrive [name]
+shaft gchat <name> grant <alias>
+shaft gchat <name> revoke <alias>
+shaft gchat <name> off
+shaft gchat [name]
 shaft share <name> [<folder>|off]
 shaft secret <name> set <key> --hosts <host> [--header H] [--scheme S]
 shaft secret <name> list|delete [<key>]
@@ -158,6 +162,11 @@ grant selection.
 
 Drive grants use the account's own reach by default. `--all` includes external shares. Revoking an account
 deletes its local `gdrive/<alias>/` copies. `off` revokes all Drive grants and deletes their copies.
+
+Google Chat grants cover every conversation on the account, read-only. Grant checks Chat access before saving.
+Revoking an account deletes its local `gchat/<alias>/` downloads; `off` revokes all Chat grants and deletes `gchat/`.
+Both take effect on the next Chat call and report deletion failures. Memories remain.
+See [operator Google Chat access](integrations.md#the-operators-google-chat-shaft-gchat) for setup, tools, watch, and risks.
 
 `shaft share` shows, grants, or revokes a read-only shared folder. `shaft secret set` prompts for a host-bound
 key. Its default header is `Authorization: Bearer <value>`; an empty `--scheme` sends the raw value. `list`

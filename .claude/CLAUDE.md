@@ -14,6 +14,7 @@
   supervisor checks the granted label on every thread it returns, reads or downloads from (docs/plans/PLAN-mail.md).
 - An instance reads the operator's Drive only through the broker's Drive tools: it never holds a Drive credential on
   the operator's account, and the supervisor checks the grant and reach on every file (docs/plans/PLAN-operator-drive.md).
+- An instance reads the operator's Google Chat only through the broker's Chat tools: it never holds a Chat credential on the operator's account, and the supervisor checks the grant on every call and marks every message as written by its sender (docs/plans/PLAN-operator-chat.md).
 - Model choice for an instance (bake-offs, `shaft trial models`): read docs/bakeoffs/README.md first. Reuse its
   results, cycle sets, candidate screen and subagent-judging path; re-run a settled model only when its version, the
   instance's loop or the budget changed. Every new bake-off adds its report and ledger row there.
