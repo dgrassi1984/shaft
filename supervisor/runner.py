@@ -939,6 +939,9 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                 _end_run(proc, root)   # nothing the run started outlives it, however it ended (B9): settled next
                 for r in readers:
                     r.join(timeout=5)
+                for pipe in (proc.stderr, proc.stdout):   # read to their end above: closed, never left to the GC
+                    if pipe is not None and not any(r.is_alive() for r in readers):
+                        pipe.close()
             if output is not None:
                 output.append("".join(out_all))
     except subprocess.TimeoutExpired:

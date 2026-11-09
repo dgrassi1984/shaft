@@ -33,15 +33,29 @@ def request(messages: list[dict]) -> dict:
             "messages": [{"role": "system", "content": "Only your last message reaches the operator."}, *messages]}
 
 
-def two_turns(held: dict | None) -> tuple[list[dict], list[dict]]:
-    """Two spoken turns of one conversation, with a cycle's journal entry and an inbox message landing in the pause
-    between them. Returns (the model request bodies, the talk episodes). held=None: two one-reply processes, as cold."""
+def cycle_in_the_pause(root: Path, state: State) -> None:
+    """What a cycle leaves that each message brings: a journal entry and an inbox message."""
+    state.append_journal("Cycle: watered the orchard", "The north row needed twice the water: ORCHARD-NOTE.")
+    (root / "inbox" / "20261109-101500-from-wren.md").write_text("From: wren\n\nThe weather API is back.\n")
+
+
+def two_turns(held: dict | None, pause=cycle_in_the_pause, orders: list[str] | None = None
+              ) -> tuple[list[dict], list[dict]]:
+    """Two spoken turns of one conversation, with `pause` changing the instance between them (by default a cycle's
+    journal entry and an inbox message). Returns (the model request bodies, the talk episodes). held=None: two one-reply
+    processes, as cold. `orders`: the standing orders the supervisor's record_order tool shows (a fake broker)."""
     with contextlib.ExitStack() as stack:
         root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="shaft-warm-")))
         for folder in ("self", "memory", "inbox"):
             (root / folder).mkdir()
         cfg = config.load(root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake"})
         stack.enter_context(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(root)}, clear=True))
+        if orders is not None:                     # the broker's tool list, read again by each reply's Toolbox
+            from shaft import broker
+            from shaft.tools import _spec
+            stack.enter_context(mock.patch.object(broker, "available", return_value=True))
+            stack.enter_context(mock.patch.object(broker, "tools", side_effect=lambda: [_spec(
+                "record_order", "Record a standing order. Orders in force: " + "; ".join(orders), {})]))
         stack.enter_context(mock.patch("sys.stderr", new_callable=io.StringIO))
         stack.enter_context(mock.patch("sys.stdout", new_callable=io.StringIO))
         state = State(root)
@@ -50,9 +64,7 @@ def two_turns(held: dict | None) -> tuple[list[dict], list[dict]]:
         stack.callback(fake.close)
         client = Client(fake.url, "m", "", 30, root / "usage.jsonl")
         talk.answer(cfg, state, client, request(ASKED), held)
-        # the pause: a cycle runs (the instance is free between turns) and a message arrives
-        state.append_journal("Cycle: watered the orchard", "The north row needed twice the water: ORCHARD-NOTE.")
-        (root / "inbox" / "20261109-101500-from-wren.md").write_text("From: wren\n\nThe weather API is back.\n")
+        pause(root, state)                         # the instance is free between turns: a cycle, the operator
         talk.answer(cfg, state, client, request(AGAIN), held)
         episodes = [json.loads(line) for p in sorted(state.episodes_dir.glob("*.jsonl"))
                     for line in p.read_text().splitlines()]
@@ -94,6 +106,70 @@ class WarmPromptTest(unittest.TestCase):
         self.assertIn("ORCHARD-NOTE", system[1])
         self.assertNotIn("It is now", bodies[1]["messages"][-1]["content"])
         self.assertEqual(bodies[1]["messages"][-1]["content"].split("\n\n")[0], "And tomorrow?")
+
+
+class KeptPromptFreshnessTest(unittest.TestCase):
+    """What the kept prompt shows must not go stale while the voice conversation lasts (coordinator's follow-up)."""
+
+    @staticmethod
+    def systems(bodies) -> list[str]:
+        return [b["messages"][0]["content"] for b in bodies]
+
+    def test_goals_changed_in_the_pause_are_in_the_next_turns_prompt(self):
+        """Bug guarded: the kept system prompt keyed only on the app, its rules, voice and the tool names, so goals a
+        cycle (or the operator) rewrote in a pause were never shown until the session restarted — the instance
+        answered by voice with its old goals."""
+        def new_goals(root, state):
+            (root / "self" / "goals.md").write_text("# Goals\n\n## Now\n\n- GOAL-MARKER: finish the orchard map\n")
+        bodies, _ = two_turns({}, new_goals)
+        first, second = self.systems(bodies)
+        self.assertNotIn("GOAL-MARKER", first)
+        self.assertIn("GOAL-MARKER", second)
+
+    def test_facts_and_corrections_changed_in_the_pause_are_in_the_next_turns_prompt(self):
+        """Bug guarded: as above, for the other files the prompt shows (prompts.sources), facts and drive.md here."""
+        def change(root, state):
+            (root / "memory" / "facts.md").write_text("- FACT-MARKER: the orchard has 40 trees\n")
+            (root / "drive.md").write_text("DRIVE-MARKER: keep the orchard alive.\n")
+        _, second = self.systems(two_turns({}, change)[0])
+        self.assertIn("FACT-MARKER", second)
+        self.assertIn("DRIVE-MARKER", second)
+
+    def test_a_standing_order_given_in_the_pause_reaches_the_next_turn(self):
+        """Bug guarded: an order recorded in a pause (shaft orders, or record_order in another conversation) missing
+        from the next spoken turn. The orders in force are shown in record_order's description (broker), so the
+        next turn's tools must carry it — and the kept prompt is written again with them (its key holds the specs)."""
+        orders = ["reply in Italian"]
+
+        def order(root, state):
+            orders.append("ORDER-MARKER: never book before 9am")
+        bodies, _ = two_turns({}, order, orders)
+        described = [json.dumps(b["tools"]) for b in bodies]
+        self.assertNotIn("ORDER-MARKER", described[0])
+        self.assertIn("ORDER-MARKER", described[1])
+
+    def test_a_journal_entry_or_new_stats_alone_keep_the_prompt(self):
+        """Bug guarded the other way: a prompt written again for what each message already brings (a journal entry)
+        or for the supervisor's per-cycle stats, which would restart the Codex session after nearly every pause."""
+        def cycle(root, state):
+            state.append_journal("Cycle: watered the orchard", "ORCHARD-NOTE.")
+            (root / "self" / "stats.md").write_text("STATS-MARKER: 12 cycles, 9 useful\n")
+        bodies, _ = two_turns({}, cycle)
+        first, second = self.systems(bodies)
+        self.assertEqual(first, second)
+        self.assertIn("ORCHARD-NOTE", bodies[1]["messages"][-1]["content"])
+
+    def test_a_kept_prompt_tells_its_own_time_from_the_turns(self):
+        """Bug guarded: the kept prompt's "Now" section still stating the session's start as the current time while
+        each message said "It is now …": two different nows in one prompt."""
+        from shaft import prompts
+        bodies, _ = two_turns({})
+        now = self.systems(bodies)[0].split("## Now\n\n", 1)[1]
+        self.assertIn(prompts.KEPT_NOW, now)
+        self.assertIn("when this prompt was written", now)
+        self.assertIn("It is now", bodies[1]["messages"][-1]["content"])
+        cold = self.systems(two_turns(None)[0])[0].split("## Now\n\n", 1)[1]
+        self.assertNotIn(prompts.KEPT_NOW, cold)                   # one reply: its Now is the reply's, as before
 
 
 class WarmCodexSessionTest(unittest.TestCase):

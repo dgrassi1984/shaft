@@ -95,8 +95,12 @@ warm process: the instance's agent (`answer --loop`) is started at the conversat
 between turns, so its broker, its model session (Codex: one session for the conversation, not one per turn) and its
 memory index stay warm — about 6 s saved per turn in M0. It holds the instance only while a turn runs, exactly as a
 reply in a process of its own does: the run lock, the cycle paused for it, and the reply's checks and commit at its end;
-between turns cycles run. Its system prompt is built once for the conversation; the time, new journal entries, inbox
-messages and unwritten conversations come with each message instead. Before a turn, a process started from code or a
+between turns cycles run. Its system prompt is kept from turn to turn, so the model session is kept too; it is written
+again (and the model session starts again) only when something it shows changed — goals, facts, digests, self-model,
+personality, skills, drive, improvement plan, last sleep, projects, corrections, open surprises, commitments — or the
+tools and their descriptions (the standing orders are in `record_order`'s). It is written as of its own time and says
+so in its "Now" section. The current time, new journal entries, inbox messages and unwritten conversations come with
+each message instead; `self/stats.md`, rewritten after every cycle, does not count as a change. Before a turn, a process started from code or a
 `config.env` that is no longer the instance's (a cycle in the pause kept a code change, `shaft update`, a changed
 setting) is ended and a new one answers. The session ends after `SHAFT_VOICE_SESSION_IDLE_S` (300) without a turn,
 when its conversation ends (`/v1/chat/end`, or the idle write-up), when the instance is paused (a kill pauses it first),
