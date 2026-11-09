@@ -72,7 +72,8 @@ class GoogleAccessTest(ActionsTest):
         self.assertEqual(saved["client"], "corp:web")
         self.assertEqual(google.login_command("work", saved), f"shaft google login work {ME.upper()} --client corp")
         self.assertEqual(self.logs, [f"Google account work logged in as {ME.upper()} (client corp:web, granted "
-                                     "gmail.readonly, calendar.readonly, calendar.events, drive.readonly) by the operator"])
+                                     "gmail.readonly, calendar.readonly, calendar.events, drive.readonly, "
+                                     "chat.spaces.readonly, chat.messages.readonly, chat.memberships.readonly) by the operator"])
         with mock.patch.object(web_config, "access", return_value=ACCESS):
             page = self.req(r.headers["Location"], cookie=self.cookie)
         self.assertEqual(page.status, 200)

@@ -1,6 +1,6 @@
 """The operator's Google accounts, shared by every Google service an instance may be granted (docs/plans/PLAN-calendar.md).
 
-One login (`shaft google login`) covers Gmail reads and Calendar reads/writes (docs/plans/PLAN-calendar-write.md).
+One login (`shaft google login`) covers Gmail, Drive and Chat reads and Calendar reads/writes (docs/plans/PLAN-calendar-write.md).
 The supervisor keeps each account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
@@ -42,11 +42,16 @@ SHEETS = "https://www.googleapis.com/auth/spreadsheets"
 DOCS = "https://www.googleapis.com/auth/documents"
 SLIDES = "https://www.googleapis.com/auth/presentations"
 CALENDAR_EVENTS = "https://www.googleapis.com/auth/calendar.events"
+CHAT_SPACES = "https://www.googleapis.com/auth/chat.spaces.readonly"
+CHAT_MESSAGES = "https://www.googleapis.com/auth/chat.messages.readonly"
+CHAT_MEMBERS = "https://www.googleapis.com/auth/chat.memberships.readonly"
 # Operator consent; per-calendar write grants stay separate.
-SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY)
+SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY, CHAT_SPACES, CHAT_MESSAGES, CHAT_MEMBERS)
 SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
                GMAIL_MODIFY: "gmail.modify", DRIVE_READONLY: "drive.readonly", DRIVE: "drive",
-               SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
+               SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations",
+               CHAT_SPACES: "chat.spaces.readonly", CHAT_MESSAGES: "chat.messages.readonly",
+               CHAT_MEMBERS: "chat.memberships.readonly"}
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.

@@ -609,7 +609,7 @@ def cmd_share(name: str, folder: str | None) -> int:
 
 
 def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "") -> int:
-    """The operator's Google accounts, shared by mail, calendar and Drive: log one in (read-only scopes, one
+    """The operator's Google accounts, shared by mail, calendar, Drive and Chat: log one in (one
     consent), list them with their clients and granted scopes, or move the account files of docs/plans/PLAN-mail's folder."""
     from . import google
     from .core import secrets_env
@@ -627,7 +627,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
         got = google.scope_text(saved)
         log(f"Google account {alias} logged in as {saved['address']} (client {saved['client']}, granted {got}) by the "
             "operator")
-        print(f"logged in: Google account {alias} is {saved['address']} (read-only, client {saved['client']}). "
+        print(f"logged in: Google account {alias} is {saved['address']} (mail, calendar, Drive and Chat; client {saved['client']}). "
               f"Granted: {got}.")
         missing = [google.SCOPE_NAMES[s] for s in google.SCOPES if s not in google.scopes(saved)]
         if missing:
