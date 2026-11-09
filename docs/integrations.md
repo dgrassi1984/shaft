@@ -498,3 +498,21 @@ Implementation sources by feature:
 | Image validation | [supervisor/vision.py](../supervisor/vision.py) |
 | Chromium installation and profile cleanup | [supervisor/browser.py](../supervisor/browser.py) |
 | Browser and job sandboxes | [supervisor/sandbox.py](../supervisor/sandbox.py) |
+
+## Speaking voices
+
+The supervisor holds the installed voices reported by the operator's iOS and macOS devices. Instances cannot
+reach those devices. `supervisor/voices.py` stores one assignment per instance and language, English (`en`) or
+Italian (`it`). Two instances cannot hold the same identifier for the same language.
+
+- `list_voices(language?)` returns the last reported list per platform. `language` filters by prefix, so `it`
+  includes `it-IT` and `it-CH`. Each row has `current` for this instance's assignment and `taken_by` for another
+  instance holding that voice for the language, or null when no other instance holds it.
+- `propose_voice(language, identifier, why)` asks the operator to confirm a voice in Settings. The identifier must
+  appear in a reported list and must not be held by another instance for that language. A new proposal replaces
+  the instance's open proposal for the same language. Acceptance assigns the voice; rejection keeps the previous
+  assignment. Both decisions reach the instance's inbox, including the operator's rejection reason.
+
+Both tools use the normal broker call budget and tool switches. `shaft tools <name> off list_voices` and
+`shaft tools <name> off propose_voice` hide and refuse them from the next run or conversation; use `on` to restore
+one. Trial proposals are simulated and recorded without changing the store.

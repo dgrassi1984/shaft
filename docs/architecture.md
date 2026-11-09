@@ -684,3 +684,12 @@ Sources: [instance creation](../supervisor/__main__.py),
 The `template/` worktree is gitignored and materialized by `setup`; it is a branch,
 not a directory shipped on `main` ([setup](../supervisor/__main__.py)).
 See [enforced rules](safety.md) and [design milestones](../docs/plans/PLAN.md).
+
+### Device voices
+
+`supervisor/voices.py` holds device-reported voice lists, per-language assignments and proposals in
+`.supervisor/voices.json`. Each write locks the store through `core.config_lock` and replaces the whole JSON file
+atomically, following `core._update_tool_settings`. Reports replace only the reporting platform's list and stamp
+its report time. Assignment and proposal acceptance check voice ownership under the same lock. Decisions use
+`messages.deliver_background` after releasing the lock, as calendar proposal outcomes do. A delivery failure is
+logged and does not undo the saved decision. See [speaking voices](integrations.md#speaking-voices) for broker tools.
