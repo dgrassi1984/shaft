@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, list_beneath, log, safe_read, safe_write, safe_write_bytes
+from .core import jsonl_lines, INSTANCES, PROJECT, SUP_DIR, instance_root, list_beneath, log, safe_read, safe_write, safe_write_bytes
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
 LOG_NAME = "messages.jsonl"
@@ -145,7 +145,7 @@ def history() -> list[dict]:
     key = (st.st_mtime_ns, st.st_size)
     if _cache["key"] != key:
         rows = []
-        for line in path.read_text(errors="replace").splitlines():
+        for line in jsonl_lines(path.read_text(errors="replace")):
             try:
                 rows.append(json.loads(line))
             except ValueError:

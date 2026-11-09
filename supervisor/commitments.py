@@ -10,7 +10,7 @@ import re
 from datetime import datetime, timedelta
 
 from . import metrics
-from .core import INSTANCES, SUP_DIR, safe_read
+from .core import jsonl_lines, INSTANCES, SUP_DIR, safe_read
 
 FILE = "memory/commitments.jsonl"
 STATUSES = ("kept", "broken", "superseded", "void")
@@ -50,7 +50,7 @@ def _entry(value) -> dict | None:
 
 def _rows(text: str) -> list[dict]:
     rows = []
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         try:
             rec = json.loads(line)
         except ValueError:

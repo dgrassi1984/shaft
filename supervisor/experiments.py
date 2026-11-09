@@ -38,7 +38,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import trial
-from .core import PROJECT, SUP_DIR, UnsafePath, log, safe_read, safe_write
+from .core import jsonl_lines, PROJECT, SUP_DIR, UnsafePath, log, safe_read, safe_write
 
 ALPHA = 0.1   # the trials' one-sided sign test (PLAN-trials decision D5)
 KNOBS = {"cards": [("OUTCOME_CARDS", "off")],
@@ -56,7 +56,7 @@ def _path(name: str) -> Path:
 
 def _rows(name: str) -> list[dict]:
     p = _path(name)
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()] if p.exists() else []
+    return [json.loads(line) for line in jsonl_lines(p.read_text()) if line.strip()] if p.exists() else []
 
 
 def _append(name: str, row: dict) -> None:
@@ -591,7 +591,7 @@ def workspace_path(name: str) -> Path:
 
 def workspace_rows(name: str) -> list[dict]:
     p = workspace_path(name)
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()] if p.exists() else []
+    return [json.loads(line) for line in jsonl_lines(p.read_text()) if line.strip()] if p.exists() else []
 
 
 def _per_replay_usd(name: str, model: str, code: dict[str, bytes]) -> tuple[float | None, str]:
@@ -603,7 +603,7 @@ def _per_replay_usd(name: str, model: str, code: dict[str, bytes]) -> tuple[floa
     real = trial.model_of(code)["model"] if model == "local" else model
     rows = []
     if trial.LEDGER.exists():
-        for line in trial.LEDGER.read_text().splitlines():
+        for line in jsonl_lines(trial.LEDGER.read_text()):
             try:
                 row = json.loads(line)
             except ValueError:

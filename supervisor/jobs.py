@@ -49,7 +49,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import (HOME, INSTANCES, PYTHON, SUP_DIR, TooBig, UnsafePath, _tool_settings, _update_tool_settings,
+from .core import (jsonl_lines, HOME, INSTANCES, PYTHON, SUP_DIR, TooBig, UnsafePath, _tool_settings, _update_tool_settings,
                    dir_beneath, instance_root, knob, list_beneath, positive_int, log, safe_mkdir, safe_read,
                    safe_read_bytes, safe_write, whole)
 
@@ -826,7 +826,7 @@ def _known(row: dict) -> str:
 def _rows(name: str, limit: int, before: datetime | None = None) -> list[dict]:
     """The job run log, oldest first: its last `limit` rows, or (`before`) every run whose outcome was known by then."""
     path = _dir() / f"{name}.jsonl"
-    lines = path.read_text().splitlines() if path.is_file() else []
+    lines = jsonl_lines(path.read_text()) if path.is_file() else []
     if before is None:
         return _parsed(lines[-limit:])
     cut = before.isoformat(timespec="seconds")

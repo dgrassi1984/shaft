@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import feedback, judge
-from .core import PROJECT, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
+from .core import jsonl_lines, PROJECT, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
 from .evolution import PROBES
 from . import metrics
 
@@ -48,7 +48,7 @@ def _episodes(root: Path) -> list[dict]:
     instance's own model."""
     out = []
     for fname in (n for n in list_beneath(root, "memory/episodes") if n.endswith(".jsonl")):
-        for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
+        for line in jsonl_lines(safe_read(root, f"memory/episodes/{fname}", "", errors="replace")):
             try:
                 out.append(json.loads(line))
             except ValueError:

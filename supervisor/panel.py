@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import browser, core, corrections, egress, planchannel, pyenv
-from .core import (SUP_DIR, calendar_grants, gdrive_grants, gchat_grants, disabled_tools, dollars, git, instance_config, instance_names,
+from .core import (jsonl_lines, SUP_DIR, calendar_grants, gdrive_grants, gchat_grants, disabled_tools, dollars, git, instance_config, instance_names,
                    instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
 
@@ -67,7 +67,7 @@ def jsonl(path: Path) -> list[dict]:
     def read():
         rows = []
         try:
-            lines = path.read_text(errors="replace").splitlines()
+            lines = jsonl_lines(path.read_text(errors="replace"))
         except OSError:
             return rows
         for line in lines:
@@ -568,7 +568,7 @@ def transcripts(name: str) -> list[dict]:
     def read():
         out, talks = [], {}
         for f in files:
-            lines = _episode_text(f).splitlines()
+            lines = jsonl_lines(_episode_text(f))
             for n, line in enumerate(lines, 1):
                 try:
                     r = json.loads(line)

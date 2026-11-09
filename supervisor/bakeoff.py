@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import trial
-from .core import INSTANCES, PROJECT, SUP_DIR, cloud_model, instance_model, log
+from .core import jsonl_lines, INSTANCES, PROJECT, SUP_DIR, cloud_model, instance_model, log
 
 DIR = SUP_DIR / "bakeoffs"
 DEFAULT_JUDGE = "claude-sonnet-5-5"   # not a candidate's: Haiku shares its family (said in the report)
@@ -601,7 +601,7 @@ def operator_verdicts(b: dict) -> dict[tuple[int, tuple[str, str]], dict]:
     read as the same pairs."""
     out, base = {}, b["arms"][0]["label"]
     p = operator_path(b)
-    for line in p.read_text().splitlines() if p.exists() else []:
+    for line in jsonl_lines(p.read_text()) if p.exists() else []:
         try:
             v = json.loads(line)
             i = v["state"]
@@ -648,7 +648,7 @@ def _history(bs: list[dict]) -> list[tuple[str, int, tuple[str, str]]]:
     rows = []
     for b in bs:
         p = operator_path(b)
-        for line in p.read_text().splitlines() if p.exists() else []:
+        for line in jsonl_lines(p.read_text()) if p.exists() else []:
             try:
                 v = json.loads(line)
                 pair = _pair(*v["pair"]) if "pair" in v else _pair(b["arms"][0]["label"], v["arm"])
@@ -785,7 +785,7 @@ def _pending(b: dict, st: dict, redact, project: Path = PROJECT) -> dict:
               "late": bool(x.get("due_at")) and str(x["due_at"])[:16] <= t0, "task": redact(str(x.get("task", ""))[:400])}
              for x in live[:20]]
     made, settled = {}, set()
-    for line in (mind.show(b["name"], rev, "memory/commitments.jsonl", project) or "").splitlines():
+    for line in jsonl_lines(mind.show(b["name"], rev, "memory/commitments.jsonl", project) or ""):
         try:
             e = json.loads(line)
         except ValueError:

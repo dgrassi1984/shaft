@@ -18,7 +18,7 @@ from statistics import NormalDist, mean
 
 from . import battery, trial
 from .broker import ReplayBroker
-from .core import CYCLE_TIMEOUT_S, MIND_PATHS, PROJECT, SUP_DIR, log, secrets_env
+from .core import jsonl_lines, CYCLE_TIMEOUT_S, MIND_PATHS, PROJECT, SUP_DIR, log, secrets_env
 
 QUESTIONS = ("origin", "first_tool", "delegate", "met", "surprise")
 PREDICT = ('Predict the next autonomous live cycle, before running it. Return only JSON with origin '
@@ -58,7 +58,7 @@ def _path(name: str, item: str) -> Path:
 
 def rows(name: str, item: str) -> list[dict]:
     path = _path(name, item)
-    return [json.loads(s) for s in path.read_text().splitlines() if s.strip()] if path.exists() else []
+    return [json.loads(s) for s in jsonl_lines(path.read_text()) if s.strip()] if path.exists() else []
 
 
 def _append(name: str, item: str, row: dict) -> None:
@@ -203,7 +203,7 @@ def _exam(root, broker, state, model, prompt, stop):
             out.seek(0)
             text = out.read().decode(errors="replace")
             try:
-                result = json.loads(text.splitlines()[-1])
+                result = json.loads(jsonl_lines(text)[-1])
             except (ValueError, IndexError):
                 raise Unanswered(f"prediction exam failed: {text[-800:]}") from None
             return {**result, "exit": proc.returncode}

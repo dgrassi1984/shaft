@@ -15,6 +15,8 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
+from .jsonl import jsonl_lines  # noqa: F401  (re-exported)
+
 PROJECT = Path(__file__).resolve().parent.parent
 # What a network call can raise when the far end is unreachable, resets, or stops mid-answer: http.client's
 # IncompleteRead and RemoteDisconnected are HTTPExceptions, not OSErrors, so a retry on (URLError, OSError) let a

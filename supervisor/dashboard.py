@@ -14,7 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import messages
-from .core import (SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, list_beneath, paused,
+from .core import (jsonl_lines, SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, list_beneath, paused,
                    safe_read)
 
 SERVICES = ("model", "embed", "api", "scheduler", "telegram", "web")
@@ -62,7 +62,7 @@ def _today_usage(root: Path) -> tuple[int, int]:
     """(model calls, completion tokens) today, from the instance's own usage log."""
     calls = tokens = 0
     today = date.today().isoformat()
-    lines = safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines()
+    lines = jsonl_lines(safe_read(root, "logs/llm_usage.jsonl", "", errors="replace"))
     for line in reversed(lines):
         try:
             r = json.loads(line)

@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge
-from .core import (INSTANCES, SUP_DIR, UnsafePath, config_values, dir_beneath, git_wt, journal_note, knob, list_beneath,
+from .core import (jsonl_lines, INSTANCES, SUP_DIR, UnsafePath, config_values, dir_beneath, git_wt, journal_note, knob, list_beneath,
                    positive_int, log, safe_read, safe_write)
 
 PROBATION_CYCLES, _ = knob(
@@ -434,7 +434,7 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     `sup`: the supervisor directory to read (the broker and the panel pass the one they use)."""
     sup = sup or SUP_DIR
     p = sup / "judgments" / f"{name}.jsonl"
-    rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    rows = [json.loads(l) for l in jsonl_lines(p.read_text()) if l.strip()] if p.exists() else []
     # A row judged before the supervisor copied a field takes it from its episode: confidence_of (rows from before
     # A4), and the v3 fields on a v3 row — the supervisor on main writes confidence_of but none of them.
     missing = [r for r in rows if r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE and (
@@ -450,7 +450,7 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     sp = sup / "judgments" / f"{name}-second.jsonl"
     if rows and sp.exists():
         seconds = {}
-        for l in sp.read_text().splitlines():
+        for l in jsonl_lines(sp.read_text()):
             if l.strip():
                 r = json.loads(l)
                 seconds[r.pop("episode_ts")] = r
@@ -520,7 +520,7 @@ def _parsed_episodes(root: Path) -> list[dict]:
         hit = previous.get(fname)
         if hit is None or hit[0] != stamp:
             rows = []
-            for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
+            for line in jsonl_lines(safe_read(root, f"memory/episodes/{fname}", "", errors="replace")):
                 try:
                     rec = json.loads(line)
                 except ValueError:
@@ -710,7 +710,7 @@ def cycle_model(name: str, ep: dict) -> str | None:
         return None
     start -= timedelta(minutes=2)       # the calls before declare_intent belong to the cycle too
     counts: dict[str, int] = {}
-    for line in _instance_text(name, "logs/llm_usage.jsonl").splitlines():
+    for line in jsonl_lines(_instance_text(name, "logs/llm_usage.jsonl")):
         try:
             rec = json.loads(line)
         except ValueError:
@@ -765,7 +765,7 @@ def unsampled_rows(name: str, sup: Path | None = None) -> list[dict]:
     apart from the judgments, so no reader of those counts them; kept at all so the choice is made once — a later
     SHAFT_JUDGE_EVERY=1 judges the runs from then on, not every run ever left out (#45)."""
     p = _unsampled_path(name, sup)
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return [json.loads(l) for l in jsonl_lines(p.read_text()) if l.strip()] if p.exists() else []
 
 
 def unsampled(name: str) -> set[str]:
@@ -1071,7 +1071,7 @@ def value_regrade(name: str, min_value: int = 0, value_for: str = "own_capabilit
 
 def _surprise_baseline_rows(name: str) -> list[dict]:
     path = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    return [json.loads(line) for line in jsonl_lines(path.read_text()) if line.strip()] if path.exists() else []
 
 
 def _same_judge(row: dict, stored: dict | None) -> bool:
@@ -1105,7 +1105,7 @@ def _judgment_cost() -> tuple[float, str]:
     from .cloudllm import usd
     path = SUP_DIR / "judge_usage.jsonl"
     costs = []
-    for line in path.read_text().splitlines() if path.exists() else []:
+    for line in jsonl_lines(path.read_text()) if path.exists() else []:
         if not line.strip():
             continue
         row = json.loads(line)
@@ -1217,7 +1217,7 @@ _MET_RANK = {"no": 0, "partial": 1, "yes": 2}
 
 def _surprise_control_rows(name: str) -> list[dict]:
     path = SUP_DIR / "judgments" / f"{name}-surprise-control.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    return [json.loads(line) for line in jsonl_lines(path.read_text()) if line.strip()] if path.exists() else []
 
 
 def surprise_control(name: str, dry_run: bool = False) -> dict:
@@ -1345,7 +1345,7 @@ def _merge_ratings(name: str, rated: dict[str, dict]) -> None:
     if not rated:
         return
     path = _judgments_path(name)
-    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    lines = [l for l in jsonl_lines(path.read_text()) if l.strip()]
     out = []
     for line in lines:
         j = json.loads(line)
@@ -1353,7 +1353,7 @@ def _merge_ratings(name: str, rated: dict[str, dict]) -> None:
                               ensure_ascii=False))
     tmp = path.with_suffix(".jsonl.tmp")
     tmp.write_text("\n".join(out) + "\n")
-    if len([l for l in path.read_text().splitlines() if l.strip()]) != len(lines):
+    if len([l for l in jsonl_lines(path.read_text()) if l.strip()]) != len(lines):
         tmp.unlink()
         return _merge_ratings(name, rated)   # a judgment was appended while merging: start again
     tmp.replace(path)
@@ -1496,7 +1496,7 @@ def _code_section(name: str) -> list[str]:
     path = SUP_DIR / "code_changes" / f"{name}.jsonl"
     if not path.exists():
         return []
-    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    rows = [json.loads(l) for l in jsonl_lines(path.read_text()) if l.strip()]
     files = sum(len(r["files"]) for r in rows)
     delegated = sum(len(r["delegated_files"]) for r in rows)
     return ["", "## Changes to my own code",

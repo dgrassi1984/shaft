@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+from .jsonl import jsonl_lines
+
 PACK = Path(__file__).resolve().parent.parent / ".models" / "bonsai2-27b-mlx"
 MAX_TRAIN_TOKENS = 384   # training-mode gated-delta keeps every step's state: 1024 tokens peaked at 61 GB
 
@@ -181,7 +183,7 @@ def spike(example_path: str | None = None) -> int:
 
     # 3. it trains: loss on one real conversation must fall
     if example_path:
-        rec = json.loads(Path(example_path).read_text().splitlines()[0])
+        rec = json.loads(jsonl_lines(Path(example_path).read_text())[0])
         text = render(rec["messages"], False)
     else:
         text = render([{"role": "user", "content": "Who are you?"},
@@ -241,7 +243,7 @@ def train(data_dir: str, out_dir: str, iters: int, lr: float = 2e-5, rank: int =
         grad_checkpoint(next(l for l in model.layers if type(l) is layer_type))
 
     def read(name):
-        rows = [json.loads(l) for l in (Path(data_dir) / name).read_text().splitlines() if l.strip()]
+        rows = [json.loads(l) for l in jsonl_lines((Path(data_dir) / name).read_text()) if l.strip()]
         return [t for t in (_example_tokens(r["messages"], encode) for r in rows) if sum(t[1]) > 0]
     train_set, valid_set = read("train.jsonl"), read("valid.jsonl")
     print(f"{len(train_set)} training / {len(valid_set)} validation examples", flush=True)

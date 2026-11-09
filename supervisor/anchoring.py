@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import judge, metacog, metrics
-from .core import SUP_DIR, log
+from .core import jsonl_lines, SUP_DIR, log
 
 ARMS = ("sighted", "reask", "blind", "bare")
 WITHHELD = "withheld for this grading"
@@ -83,7 +83,7 @@ def path(name: str) -> Path:
 def rows(name: str) -> list[dict]:
     """The paid answers so far; a line that is not one (a run killed mid-write) is skipped, never fatal."""
     out = []
-    for line in path(name).read_text().splitlines() if path(name).exists() else []:
+    for line in jsonl_lines(path(name).read_text()) if path(name).exists() else []:
         try:
             row = json.loads(line)
         except ValueError:

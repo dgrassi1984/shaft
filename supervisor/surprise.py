@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import metrics
-from .core import INSTANCES, SUP_DIR, list_beneath, safe_read
+from .core import jsonl_lines, INSTANCES, SUP_DIR, list_beneath, safe_read
 
 BASELINE = SUP_DIR / "evals" / "surprise-baseline.json"
 
@@ -91,7 +91,7 @@ def episodes(name: str, root: Path | None = None) -> list[dict]:
     for fname in list_beneath(root, "memory/episodes"):   # no link followed: what they hold reaches the panel
         if not fname.endswith(".jsonl"):
             continue
-        for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
+        for line in jsonl_lines(safe_read(root, f"memory/episodes/{fname}", "", errors="replace")):
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -131,7 +131,7 @@ def recurrence(evts: list[dict]) -> dict:
 
 def _usage(name: str, root: Path | None = None) -> list[dict]:
     rows = []
-    for line in safe_read(root or INSTANCES / name, "logs/llm_usage.jsonl", "", errors="replace").splitlines():
+    for line in jsonl_lines(safe_read(root or INSTANCES / name, "logs/llm_usage.jsonl", "", errors="replace")):
         try:
             rows.append(json.loads(line))
         except ValueError:
@@ -611,7 +611,7 @@ def m5_report(name, since: datetime, until: datetime | None = None,
     base_repeat = _ratio(base_rec["recurred"], base_rec["classes"])
     unreported, unsupported = _honesty(js)
     historical = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
-    old = [json.loads(line) for line in historical.read_text().splitlines() if line.strip()] if historical.exists() else []
+    old = [json.loads(line) for line in jsonl_lines(historical.read_text()) if line.strip()] if historical.exists() else []
     old = [j for j in old if model and j.get("model") == model]
     old_honesty = _honesty(old)
     by_ts = {e["ts"]: e for e in window_eps if e.get("kind") == "live"}

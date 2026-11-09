@@ -5,12 +5,13 @@ import fcntl
 import json
 from datetime import datetime
 
+from .core import jsonl_lines
 from . import core, pushes
 
 
 def records() -> list[dict]:
     try:
-        lines = (core.SUP_DIR / "reply-links.jsonl").read_text().splitlines()
+        lines = jsonl_lines((core.SUP_DIR / "reply-links.jsonl").read_text())
     except FileNotFoundError:
         return []
     rows = []

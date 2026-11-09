@@ -14,6 +14,7 @@ import re
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 
+from .core import jsonl_lines
 from . import core, doc_comments, feedback, pushes, reply_links
 
 OUTCOME_WINDOW_H = 48
@@ -23,7 +24,7 @@ KINDS = ("followed_up", "edited", "sent", "no_link", "open")
 def _ratings(name: str) -> list[dict]:
     # A cleared/replaced thumb still records that the operator acted on this item.
     try:
-        lines = feedback.FILE.read_text().splitlines()
+        lines = jsonl_lines(feedback.FILE.read_text())
     except FileNotFoundError:
         return []
     rows = []

@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .core import jsonl_lines
 from . import core, panel
 
 FILTERS = ("", "yours", "short", "delivered")
@@ -38,7 +39,7 @@ def _lines(name: str, date: str) -> tuple[list[tuple[int, dict]], int]:
     path = _day_path(name, date)
     out: list[tuple[int, dict]] = []
     skipped = 0
-    for n, line in enumerate(panel._episode_text(path).splitlines(), 1):
+    for n, line in enumerate(jsonl_lines(panel._episode_text(path)), 1):
         if not line.strip():
             continue
         try:

@@ -10,6 +10,7 @@ from bisect import bisect_left
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .core import jsonl_lines
 from . import core
 
 PUSH_BUDGET, _ = core.knob(
@@ -147,7 +148,7 @@ def _time(text: str) -> datetime | None:
 def records(sup_dir: Path) -> list[dict]:
     """The supervisor's message rows, without history()'s instance-controlled inbox read state."""
     try:
-        lines = (sup_dir / "messages.jsonl").read_text(errors="replace").splitlines()
+        lines = jsonl_lines((sup_dir / "messages.jsonl").read_text(errors="replace"))
     except FileNotFoundError:
         return []
     rows = []

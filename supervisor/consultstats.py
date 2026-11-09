@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta
 
 from . import metrics
-from .core import SUP_DIR
+from .core import jsonl_lines, SUP_DIR
 
 LEDGER = "consult_usage.jsonl"
 WINDOW_DAYS = 7
@@ -51,7 +51,7 @@ def rows(name: str, since=None, until=None) -> list[dict]:
     since = _ts(since)
     until = _ts(until)
     out = []
-    for line in path.read_text().splitlines() if path.exists() else []:
+    for line in jsonl_lines(path.read_text()) if path.exists() else []:
         try:
             rec = json.loads(line)
         except ValueError:

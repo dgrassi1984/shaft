@@ -40,7 +40,7 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MEMORY_CACHES, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
+from .core import (jsonl_lines, CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MEMORY_CACHES, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
                    TreeTooBig, UnsafePath,
                    cloud_model, instance_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
                    read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
@@ -190,7 +190,7 @@ def usage_today(name: str, until: datetime | None = None) -> dict:
     today = (until or datetime.now()).date().isoformat()
     usd, local = 0.0, 0
     if LEDGER.exists():
-        for line in LEDGER.read_text().splitlines():
+        for line in jsonl_lines(LEDGER.read_text()):
             r = json.loads(line)
             if r.get("instance") == name and r["ts"].startswith(today) and r.get("by") != "operator" \
                     and (until is None or datetime.fromisoformat(r["ts"]) < until):
@@ -253,7 +253,7 @@ def _episode_files(root: Path):
     replayed code writes), oldest file first, read without following a link (core.safe_read): they go to judges."""
     for fname in list_beneath(root, "memory/episodes"):
         if fname.endswith(".jsonl"):
-            yield safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines()
+            yield jsonl_lines(safe_read(root, f"memory/episodes/{fname}", "", errors="replace"))
 
 
 def live_episodes(root: Path) -> list[dict]:
@@ -628,7 +628,7 @@ def _new_episodes(root: Path, seen: set[str]) -> list[dict]:
 
 def _last_call_failed(root: Path) -> bool:
     """Whether the replay's last model call logged an error (a run that recovered from one did not die of it)."""
-    lines = safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines()
+    lines = jsonl_lines(safe_read(root, "logs/llm_usage.jsonl", "", errors="replace"))
     try:
         return bool(lines and json.loads(lines[-1]).get("error"))
     except ValueError:
@@ -637,7 +637,7 @@ def _last_call_failed(root: Path) -> bool:
 
 def _llm_usage(root: Path) -> dict:
     tot = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "model_seconds": 0.0, "errors": 0}
-    for line in safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines():   # the replay wrote it
+    for line in jsonl_lines(safe_read(root, "logs/llm_usage.jsonl", "", errors="replace")):   # the replay wrote it
         try:
             r = json.loads(line)
         except ValueError:
@@ -654,7 +654,7 @@ def _llm_usage(root: Path) -> dict:
 def _cloud_usd(billed: str) -> float:
     from .cloudllm import USAGE
     total = 0.0
-    for line in USAGE.read_text().splitlines() if USAGE.exists() else []:
+    for line in jsonl_lines(USAGE.read_text()) if USAGE.exists() else []:
         r = json.loads(line)
         if r.get("instance") == billed:
             total += r.get("usd") or 0.0
@@ -790,7 +790,7 @@ def _judge_usd(purpose: str) -> float:
     from .cloudllm import usd as priced
     path = SUP_DIR / "judge_usage.jsonl"
     usd = 0.0
-    for line in path.read_text().splitlines() if path.exists() else []:
+    for line in jsonl_lines(path.read_text()) if path.exists() else []:
         r = json.loads(line)
         if r.get("purpose") == purpose:
             if r.get("usd") is not None:
@@ -1359,7 +1359,7 @@ def conclude(project: Path, t: dict) -> None:
             s.update(status="not run", why=f"still waiting after {STALE_H} h")
     outcomes = [s["outcome"] for s in t["states"] if s["status"] in ("done", "unjudged")]
     v = verdict(outcomes)
-    rows = [json.loads(l) for l in LEDGER.read_text().splitlines()] if LEDGER.exists() else []
+    rows = [json.loads(l) for l in jsonl_lines(LEDGER.read_text())] if LEDGER.exists() else []
     v["usd"] = round(sum(r.get("usd") or 0 for r in rows
                          if r.get("trial") == t["id"] and r.get("instance") == t["instance"]), 4)
     v["models"] = sorted({s["model"] for s in t["states"] if s.get("model")})

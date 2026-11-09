@@ -18,6 +18,8 @@ import threading
 from contextvars import ContextVar
 from pathlib import Path
 
+from .jsonl import jsonl_lines
+
 # Each broker request carries its run's charge collector, including streaming model calls (#106).
 charges = ContextVar("shaft_run_charges", default=None)
 
@@ -50,7 +52,7 @@ def spend(path: Path, instance: str) -> list[tuple]:
             data = f.read(st.st_size - c["offset"])
             done = data.rfind(b"\n") + 1                   # whole lines: the rest is a line still being written
             new = {}
-            for line in data[:done].decode().splitlines():
+            for line in jsonl_lines(data[:done].decode()):
                 r = json.loads(line)
                 new.setdefault(r["instance"], []).append((r.get("ts"), r.get("usd")))
             for who, rows in new.items():                  # all parsed: a malformed line leaves the cache as it was
@@ -58,7 +60,7 @@ def spend(path: Path, instance: str) -> list[tuple]:
             c.update(offset=c["offset"] + done, size=st.st_size, mtime=st.st_mtime_ns)
             _cache[str(path)] = c
             rows = list(c["rows"].get(instance, ()))
-            for line in data[done:].decode().splitlines():
+            for line in jsonl_lines(data[done:].decode()):
                 r = json.loads(line)
                 if r["instance"] == instance:
                     rows.append((r.get("ts"), r.get("usd")))

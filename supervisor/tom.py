@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 from . import judge, mind
-from .core import INSTANCES, SUP_DIR, instance_config, list_beneath, log, safe_read
+from .core import jsonl_lines, INSTANCES, SUP_DIR, instance_config, list_beneath, log, safe_read
 
 MATCH_SCHEMA = {"type": "object", "properties": {
     "match": {"type": "string", "enum": ["yes", "partial", "no"]}, "reason": {"type": "string"}},
@@ -26,7 +26,7 @@ stopped: dict[str, str] = {}   # instance -> why its last score() or baselines()
 def _rows(name, suffix=""):
     path = SUP_DIR / "expectations" / f"{name}{suffix}.jsonl"
     try:
-        lines = path.read_text().splitlines()
+        lines = jsonl_lines(path.read_text())
     except FileNotFoundError:
         return []
     rows = []

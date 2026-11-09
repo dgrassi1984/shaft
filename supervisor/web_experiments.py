@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 from . import experiments, privileged, battery, trial
-from .core import SUP_DIR
+from .core import jsonl_lines, SUP_DIR
 
 ITEMS = (
     ("cards", "Cards", "Do reminders of past outcomes prevent repeated mistakes compared with no reminders?"),
@@ -25,7 +25,7 @@ ITEMS = (
 
 
 def _read(path):
-    return [json.loads(s) for s in path.read_text().splitlines() if s.strip()] if path.exists() else []
+    return [json.loads(s) for s in jsonl_lines(path.read_text()) if s.strip()] if path.exists() else []
 
 
 def has_results(name: str) -> bool:

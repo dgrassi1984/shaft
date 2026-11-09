@@ -5,6 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
+from .core import jsonl_lines
 from . import core, metrics
 
 FILE = "memory/corrections.jsonl"
@@ -25,7 +26,7 @@ def _at(value) -> datetime | None:
 
 def _fold(text: str) -> dict[str, dict]:
     items = {}
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         rec = json.loads(line)
         if not isinstance(rec, dict):
             raise ValueError("correction event must be an object")

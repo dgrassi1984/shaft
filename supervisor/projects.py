@@ -6,6 +6,7 @@ import math
 import re
 from datetime import datetime
 
+from .core import jsonl_lines
 from . import core, metrics
 
 FILE = "memory/projects.jsonl"
@@ -29,7 +30,7 @@ def _budget(value, integer=False):
 
 def _fold(text: str) -> dict[str, dict]:
     items = {}
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         rec = json.loads(line)
         if not isinstance(rec, dict):
             raise ValueError("project event must be an object")

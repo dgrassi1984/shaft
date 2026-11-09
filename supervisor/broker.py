@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import judge
-from .core import NETWORK_ERRORS, cloud_model, knob, whole
+from .core import NETWORK_ERRORS, cloud_model, jsonl_lines, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
@@ -253,8 +253,9 @@ def _in_folder(root: Path, rel: str) -> Path | None:
 
 
 def _tail_lines(path: Path, limit: int, keep=None) -> list[str]:
+    split = jsonl_lines if path.suffix == ".jsonl" else str.splitlines
     try:
-        lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+        lines = [l for l in split(path.read_text(errors="replace")) if l.strip()]
     except OSError:
         return []
     return [l for l in lines if keep is None or keep(l)][-limit:]

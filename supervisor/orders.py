@@ -25,6 +25,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .core import jsonl_lines
 from . import core
 
 CORRECTION_PASSES, _ = core.knob(
@@ -78,7 +79,7 @@ def _lines(p: Path) -> list[dict]:
     except FileNotFoundError:
         return []
     out = []
-    for line in text.splitlines():
+    for line in jsonl_lines(text):
         try:
             row = json.loads(line)
         except ValueError:

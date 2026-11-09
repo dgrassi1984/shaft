@@ -6,6 +6,7 @@ import fcntl
 import json
 from datetime import datetime, timedelta
 
+from .core import jsonl_lines
 from . import judge, metrics
 
 CATCH_LIMIT = 3
@@ -19,7 +20,7 @@ def _path(name: str):
 def records(name: str) -> list[dict]:
     path = _path(name)
     rows = []
-    for line in path.read_text().splitlines() if path.exists() else []:
+    for line in jsonl_lines(path.read_text()) if path.exists() else []:
         try:
             row = json.loads(line)
             if not isinstance(row, dict):

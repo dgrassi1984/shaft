@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .core import INSTANCES, NAME_RE, PROJECT, SUP_DIR, git, log, set_paused
+from .core import INSTANCES, NAME_RE, PROJECT, SUP_DIR, git, jsonl_lines, log, set_paused
 
 ARCHIVES = "deleted"
 SKIP_IN_FOLDER = {".venv", ".uv", ".tmp", "__pycache__"}   # rebuilt on demand (pyenv.py) or scratch
@@ -113,7 +113,7 @@ class Edit:
 def _jsonl(pred) -> Callable[[str], tuple[str, list]]:
     def purge(text: str) -> tuple[str, list]:
         keep, out = [], []
-        for line in text.splitlines(keepends=True):
+        for line in jsonl_lines(text, keepends=True):
             try:
                 row = json.loads(line)
             except ValueError:

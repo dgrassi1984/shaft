@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .jsonl import jsonl_lines
+
 CONNECT_TIMEOUT_S = 20
 IDLE_TIMEOUT_S = 300     # a tunnel with no traffic either way this long is closed
 CHUNK = 65536
@@ -222,7 +224,7 @@ class Egress:
 def recent(log_path: Path, limit: int = 20, before: str | None = None) -> list[dict]:
     """The last connections logged (optionally only those before an ISO time)."""
     try:
-        lines = log_path.read_text(errors="replace").splitlines()[-20000:]
+        lines = jsonl_lines(log_path.read_text(errors="replace"))[-20000:]
     except OSError:
         return []
     rows = []

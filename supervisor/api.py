@@ -60,7 +60,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import tom
-from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
+from .core import (jsonl_lines, API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
                    paused, port, safe_write, secrets_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, Warm, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
 
@@ -509,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
         from .autonomy import start_wake
         since = datetime.fromtimestamp(time.time() - 3600).isoformat(timespec="seconds")
         try:
-            rows = [json.loads(l) for l in (SUP_DIR / DOORBELL_LOG).read_text().splitlines() if l.strip()]
+            rows = [json.loads(l) for l in jsonl_lines((SUP_DIR / DOORBELL_LOG).read_text()) if l.strip()]
         except (OSError, ValueError):
             rows = []
         woken = sum(1 for r in rows if r["instance"] == name and r["ts"] >= since and r["wake"].startswith("started"))

@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .core import jsonl_lines
 from . import judge, messages, metrics, pushes
 
 OUTCOME_SCHEMA = metrics._schema({
@@ -22,7 +23,7 @@ grade or training score. Dismissals and annoyance are excluded."""
 
 def _rows(path: Path) -> list[dict]:
     try:
-        lines = path.read_text(errors="replace").splitlines()
+        lines = jsonl_lines(path.read_text(errors="replace"))
     except FileNotFoundError:
         return []
     rows = []

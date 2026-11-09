@@ -23,6 +23,8 @@ from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
+from .core import jsonl_lines
+
 HELD = "gate-held"     # under SUP_DIR: <name>/<id>/{meta.json, files/<path>, candidate.patch}
 RUNS = "gate-runs"     # under SUP_DIR: <name>.jsonl
 TRIES = 3              # re-gates that find the baseline red again before a held change is dropped
@@ -201,7 +203,7 @@ def rows(name: str, as_of: datetime | None = None) -> list[dict]:
     path = _sup() / RUNS / f"{name}.jsonl"
     out = []
     try:
-        lines = path.read_text(errors="replace").splitlines()[-ROWS_READ:]
+        lines = jsonl_lines(path.read_text(errors="replace"))[-ROWS_READ:]
     except OSError:
         return []
     cut = as_of.isoformat(timespec="seconds") if as_of else None

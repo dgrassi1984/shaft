@@ -39,7 +39,7 @@ from pathlib import Path
 
 from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, DRIVE_TOOLS, GCHAT_TOOLS, Broker
-from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, MEMORY_CACHES, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
+from .core import (jsonl_lines, BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, MEMORY_CACHES, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
                    TreeTooBig, UnsafePath, config_values, copy_beneath, dir_beneath, instance_config, instance_root,
                    knob, positive_int, whole, model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write,
                    secrets_env, unlink_beneath)
@@ -291,7 +291,7 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
             pass
         proc.wait()
         out, err = _tail(out_f), _tail(err_f)
-    last = out.splitlines()[-1] if out else ""
+    last = jsonl_lines(out)[-1] if out else ""
     try:
         res = json.loads(last)
     except ValueError:
@@ -424,7 +424,7 @@ def truth(name: str, key: str) -> str:
         return f"Last sleep run ended {last[1:17]}; {'it completed (exit 0)' if ok else 'it did not complete: ' + last[22:]}."
     if key == "code_changes":
         path = SUP_DIR / "code_changes" / f"{name}.jsonl"
-        kept = len([l for l in path.read_text().splitlines() if l.strip()]) if path.exists() else 0
+        kept = len([l for l in jsonl_lines(path.read_text()) if l.strip()]) if path.exists() else 0
         failed = len(_log_lines(rf"\] {re.escape(name)}: code change FAILED tests"))
         probation = len(_log_lines(rf"\] {re.escape(name)}: probation \w+ failed .*: reverted"))
         return (f"{kept} code changes kept (passed the tests); {failed} reverted because the tests failed; "
@@ -522,7 +522,7 @@ def _append(name: str, row: dict) -> None:
 
 def results(name: str) -> list[dict]:
     p = results_path(name)
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return [json.loads(l) for l in jsonl_lines(p.read_text()) if l.strip()] if p.exists() else []
 
 
 def era(name: str) -> dict:
@@ -884,4 +884,4 @@ def _usd(r: dict) -> float:
 
 def _judge_usage() -> list[dict]:
     p = SUP_DIR / "judge_usage.jsonl"
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return [json.loads(l) for l in jsonl_lines(p.read_text()) if l.strip()] if p.exists() else []

@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
-from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
+from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_paused, set_update_queued, update_queued)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
@@ -328,7 +328,7 @@ def cmd_status(names: list[str]) -> int:
     for name in names:
         root = INSTANCES / name
         calls = errors = tokens = 0
-        for line in safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines():   # never via a link
+        for line in jsonl_lines(safe_read(root, "logs/llm_usage.jsonl", "", errors="replace")):   # never via a link
             rec = json.loads(line)
             if rec["ts"].startswith(today):
                 calls, errors = calls + 1, errors + bool(rec.get("error"))
