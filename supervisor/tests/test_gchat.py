@@ -1383,6 +1383,8 @@ class TemplatePromptTest(unittest.TestCase):
         self.assertIn('off, inbox or wake', out)
         self.assertIn('new messages arrive in your inbox', out)
         self.assertIn('Tell the operator through send_message only when you can actually help, never to relay chatter.', out)
+        self.assertIn("the operator's chats and their files stay private unless the operator asks otherwise: "
+                      "don't send, share or publish them.", out)
         for grants in (None, '', 'work'):
             for tools in (None, 'built-in: read_file', 'supervisor: gchat_search, gchat_read'):
                 if grants and tools and 'gchat_search' in tools:
