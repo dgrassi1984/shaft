@@ -574,3 +574,50 @@ class OperatorJudgeTest(unittest.TestCase):
         bakeoff.operator_record(b, 1, cand, "tie")
         s = next(r for r in bakeoff.operator_summary(b) if r["arm"] == cand)
         self.assertEqual((s["W"], s["T"], s["agree"], s["compared"]), (1, 1, 1, 1))   # the split is not compared
+
+
+class OperatorJudgeReviewTest(unittest.TestCase):
+    """The Codex review of the operator pages (2026-11-09)."""
+    setUp, create = BakeoffTest.setUp, BakeoffTest.create
+    replayed = OperatorJudgeTest.replayed
+    CAND = "openrouter/deepseek/deepseek-v4.1-flash"
+
+    def test_choices_read_back_as_literal_outcomes_whichever_side_the_candidate_is_on(self):
+        b = self.replayed()
+        for flipped, choice, outcome in ((True, "A", "win"), (True, "B", "loss"), (False, "A", "loss"),
+                                         (False, "B", "win"), (True, "tie", "tie"), (False, "both bad", "both bad")):
+            with self.subTest(flipped=flipped, choice=choice), mock.patch.object(bakeoff, "_flipped", return_value=flipped):
+                case = bakeoff.operator_case(b, 0, self.CAND, project=self.tmp)
+                self.assertEqual(case["A" if flipped else "B"]["account"], "done by [model]")   # the candidate's side
+                self.assertEqual(bakeoff.operator_record(b, 0, self.CAND, choice)["outcome"], outcome)
+
+    def test_the_diff_is_read_by_headers_and_hunk_lengths(self):
+        diff = trial.file_diff({"notes/a.md": b"-- separator\nold\n", "notes/gone.md": b"x\n"},
+                               {"notes/a.md": b"new\n++important\n", "notes/img.png": b"\xff\xfe\x00"}, limit=100000)
+        files = {f["path"]: f for f in bakeoff._diff_files(diff)}
+        self.assertEqual(files["notes/a.md"]["added"], ["new", "++important"])   # was lost to '--- '/'+++' lines
+        self.assertTrue(files["notes/gone.md"]["deleted"])
+        self.assertTrue(files["notes/img.png"]["binary"])
+
+    def test_paths_and_attachments_are_redacted_too(self):
+        rec = {"trace": [{"tool": "send_message", "ok": True, "result": "ok", "args": json.dumps(
+                   {"to": "operator", "text": "t", "attachments": ["notes/deepseek-report.md"]})}],
+               "diff": "--- /dev/null\n+++ b/notes/deepseek-report.md\n@@ -0,0 +1 @@\n+x\n", "episode": {}}
+        shown = json.dumps(bakeoff._facing(rec, bakeoff._redactor({"arms": [{"model": self.CAND}]})))
+        self.assertNotIn("deepseek", shown.lower())
+
+    def test_a_page_left_open_cannot_judge_runs_replayed_since(self):
+        b = self.replayed()
+        shown = bakeoff.operator_case(b, 0, self.CAND, project=self.tmp)["runs"]
+        b["states"][0]["arms"][self.CAND] = {**b["states"][0]["arms"][self.CAND], "usd": 0.5}   # replayed again
+        with self.assertRaises(bakeoff.BakeoffError):
+            bakeoff.operator_record(b, 0, self.CAND, "A", runs=shown)
+
+    def test_a_hyphenated_instance_name_is_listed_whole(self):
+        inst = self.tmp / "instances"
+        (inst / "wren-east").mkdir(parents=True)
+        (inst / "wren").mkdir()
+        (self.tmp / "wren-east-x1.json").write_text("{}")
+        with mock.patch.object(bakeoff, "INSTANCES", inst):
+            got = {(s["name"], s["id"]) for s in bakeoff.saved()}
+        self.assertIn(("wren-east", "x1"), got)

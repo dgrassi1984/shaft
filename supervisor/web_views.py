@@ -1767,8 +1767,9 @@ def _run_panel(side: str, run: dict) -> Html:
                   held=Html(" · <span class=\"bad\">held back by the supervisor</span>") if m["held"] else "",
                   t=m["text"], att=h('<p class="muted">attached: {a}</p>', a=", ".join(m["attachments"]))
                   if m["attachments"] else "") for m in run["sent"]) or h('<p class="muted">No message.</p>')
-    files = join(h('<details><summary>{p}{cut}</summary><pre class="wrap">{a}</pre></details>', p=f["path"],
-                   cut=" (first 6,000 chars)" if f["cut"] else "", a=f["added"] or "(only removals)")
+    files = join(h('<details><summary>{p}{note}{cut}</summary><pre class="wrap">{a}</pre></details>', p=f["path"],
+                   note=f" ({f['note']})" if f["note"] else "", cut=" (cut)" if f["cut"] else "",
+                   a=f["added"] or f["note"] or "—")
                  for f in run["files"]) or h('<p class="muted">No file delivered.</p>')
     internal = h('<p class="muted">Also changed its own records: {x}</p>', x=", ".join(run["internal"])) \
         if run["internal"] else ""
@@ -1796,10 +1797,11 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              '<div class="cards">{a}{b}</div>'
              '<section class="panel"><form class="act" data-post="/bakeoffs/{n}/{id}/judge" data-after="reload">'
              '<input type="hidden" name="state" value="{st}"><input type="hidden" name="arm" value="{arm}">'
+             '<input type="hidden" name="runs" value="{runs}">'
              '<p>{choices}</p><p><textarea name="note" rows="2" placeholder="Why (optional)"></textarea></p>'
              '<p><button type="submit">Save and next</button></p></form></section>',
              back=back, left=str(left), kind=f"{case['kind']} " if case["kind"] else "", t0=case["t0"].replace("T", " "),
              rep=case["replayed"], goals=goals.strip() or "(no goals file)", inbox=inbox.strip() or "(empty)",
              a=_run_panel("A", case["A"]), b=_run_panel("B", case["B"]),
-             n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), arm=str(arm), choices=choices)
+             n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), arm=str(arm), runs=case["runs"], choices=choices)
     return frame("Judge a pair", body, names, csrf, current="/bakeoffs")

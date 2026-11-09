@@ -611,9 +611,51 @@ def operator_queue(b: dict, labels: list[str]) -> list[tuple[int, str]]:
     return sorted(todo, key=lambda p: hashlib.sha256(f"{b['id']}:{p[0]}:{p[1]}".encode()).hexdigest())
 
 
+def _diff_files(diff: str) -> list[dict]:
+    """trial.file_diff's text as one record per file: {path, added, removed, created, deleted, binary, cut}. Parsed by
+    headers and hunk lengths, so a content line that starts with '--- ' or '+++ ' stays content."""
+    files, cur, old_left, new_left = [], None, 0, 0
+    lines = diff.splitlines()
+    k = 0
+    while k < len(lines):
+        line = lines[k]
+        if old_left > 0 or new_left > 0:   # inside a hunk: content until its lengths are used up, or a cut mark
+            if line.startswith("[... this file's diff cut here") or line.startswith("[... diff cut here"):
+                cur["cut"], old_left, new_left = True, 0, 0
+            elif line.startswith("+"):
+                cur["added"].append(line[1:])
+                new_left -= 1
+            elif line.startswith("-"):
+                cur["removed"] += 1
+                old_left -= 1
+            else:
+                old_left, new_left = old_left - 1, new_left - 1
+            k += 1
+            continue
+        m = re.match(r"\(binary file (.+) (created|deleted|changed)\)$", line)
+        if m:
+            files.append({"path": m[1], "added": [], "removed": 0, "created": m[2] == "created",
+                          "deleted": m[2] == "deleted", "binary": True, "cut": False})
+            cur = None
+        elif line.startswith("--- ") and k + 1 < len(lines) and lines[k + 1].startswith("+++ "):
+            old, new = line[4:].strip(), lines[k + 1][4:].strip()
+            cur = {"path": (new if new != "/dev/null" else old).removeprefix("b/").removeprefix("a/"), "added": [],
+                   "removed": 0, "created": old == "/dev/null", "deleted": new == "/dev/null", "binary": False,
+                   "cut": False}
+            files.append(cur)
+            k += 1
+        elif (h := re.match(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)) and cur is not None:
+            old_left, new_left = int(h[1] if h[1] is not None else 1), int(h[2] if h[2] is not None else 1)
+        elif line.startswith("[... this file's diff cut here") and cur is not None:
+            cur["cut"] = True
+        k += 1
+    return files
+
+
 def _facing(rec: dict, redact) -> dict:
     """What one run would have put in front of the operator: its messages (and whether they were let through), its
-    closing account, the files it delivered with what it added to them, and which internal files it touched."""
+    closing account, the files it delivered with what it added to them, and which internal files it touched. Every
+    string shown goes through `redact`: a file or an attachment can carry a model's name too."""
     sent = []
     for c in rec.get("trace") or []:
         if c.get("tool") != "send_message":
@@ -623,20 +665,21 @@ def _facing(rec: dict, redact) -> dict:
         except ValueError:
             args = {"text": str(c["args"])}
         held = "not sent" in str(c.get("result", "")) or not c.get("ok", True)
-        sent.append({"to": str(args.get("to", "")), "kind": str(args.get("kind", "")),
-                     "text": redact(str(args.get("text", ""))), "attachments": [str(a) for a in args.get("attachments") or []],
+        sent.append({"to": redact(str(args.get("to", ""))), "kind": redact(str(args.get("kind", ""))),
+                     "text": redact(str(args.get("text", ""))),
+                     "attachments": [redact(str(a)) for a in args.get("attachments") or []],
                      "held": redact(str(c.get("result", ""))[:300]) if held else ""})
     files, internal = [], []
-    for part in re.split(r"(?m)^(?=--- )", rec.get("diff") or ""):
-        m = re.search(r"(?m)^\+\+\+ b/(.+)$", part) or re.search(r"(?m)^--- a/(.+)$", part)
-        if not m:
+    for f in _diff_files(rec.get("diff") or ""):
+        if f["path"].startswith(_INTERNAL):
+            internal.append(redact(f["path"]))
             continue
-        path = m[1].strip()
-        if path.startswith(_INTERNAL):
-            internal.append(path)
-            continue
-        added = "\n".join(l[1:] for l in part.splitlines() if l.startswith("+") and not l.startswith("+++"))
-        files.append({"path": path, "added": redact(added[:6000]), "cut": len(added) > 6000})
+        added = "\n".join(f["added"])
+        note = ("binary file " + ("created" if f["created"] else "deleted" if f["deleted"] else "changed")
+                if f["binary"] else "deleted" if f["deleted"] else
+                f"only removals ({f['removed']} lines)" if not added else "")
+        files.append({"path": redact(f["path"]), "added": redact(added[:6000]), "note": note,
+                      "cut": f["cut"] or len(added) > 6000})
     ep = rec.get("episode") or {}
     finish = ep.get("finish") or {}
     account = finish.get("what_happened") if isinstance(finish, dict) else finish
@@ -652,18 +695,23 @@ def operator_case(b: dict, i: int, label: str, project: Path = PROJECT) -> dict:
     redact = _redactor(b)
     runs = {"baseline": _facing(st["arms"][base], redact), "candidate": _facing(st["arms"][label], redact)}
     flipped = _flipped(b, i, label)
-    return {"state": i, "arm": label, "ts": st["ts"], "t0": st["t0"], "replayed": b["created"][:10],
+    return {"state": i, "arm": label, "runs": _runs(st["arms"][base], st["arms"][label]), "ts": st["ts"],
+            "t0": st["t0"], "replayed": b["created"][:10],
             "kind": st.get("stratum", ""), "context": redact(trial.state_context(project, b["name"], st)),
             "A": runs["candidate" if flipped else "baseline"], "B": runs["baseline" if flipped else "candidate"]}
 
 
-def operator_record(b: dict, i: int, label: str, choice: str, note: str = "", by: str = "") -> dict:
-    """Keep the operator's verdict on a pair: A, B, tie or both bad, read back as candidate win, loss, tie or both bad."""
+def operator_record(b: dict, i: int, label: str, choice: str, note: str = "", by: str = "", runs: str = "") -> dict:
+    """Keep the operator's verdict on a pair: A, B, tie or both bad, read back as candidate win, loss, tie or both bad.
+    `runs` is the pair the page showed: refused when the pair was replayed since, so a verdict never lands on runs
+    the operator did not see."""
     if choice not in OPERATOR_CHOICES:
         raise BakeoffError(f"choose one of {', '.join(OPERATOR_CHOICES)}")
     if not (0 <= i < len(b["states"])) or label not in [a["label"] for a in b["arms"][1:]] or not _judgeable(b, i, label):
         raise BakeoffError("no such pair to judge")
     st, base = b["states"][i], b["arms"][0]["label"]
+    if runs and runs != _runs(st["arms"][base], st["arms"][label]):
+        raise BakeoffError("this pair was replayed since the page was opened: reload it")
     flipped = _flipped(b, i, label)
     outcome = {"tie": "tie", "both bad": "both bad"}.get(choice) or \
         ("win" if (choice == "A") == flipped else "loss")
@@ -696,28 +744,39 @@ def operator_summary(b: dict) -> list[dict]:
 
 
 def saved() -> list[dict]:
-    """Every saved bake-off as {name, id, modified}, newest first: from the file names only (records run to 30 MB)."""
+    """Every saved bake-off as {name, id, modified}, newest first: from the file names only (records run to 30 MB).
+    An instance name may hold a hyphen: the longest known instance name that prefixes the file name is its owner."""
+    known = sorted((p.name for p in INSTANCES.iterdir() if p.is_dir()), key=len, reverse=True) \
+        if INSTANCES.exists() else []
     out = []
     for p in sorted(DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-        name, _, bid = p.stem.partition("-")
+        name = next((n for n in known if p.stem.startswith(n + "-")), p.stem.partition("-")[0])
+        bid = p.stem[len(name) + 1:]
         if name and bid:
             out.append({"name": name, "id": bid, "modified": datetime.fromtimestamp(p.stat().st_mtime)})
     return out
 
 
 _LOADED: dict[Path, tuple[float, dict]] = {}
+_LOADED_LOCK = threading.Lock()
 
 
 def load(name: str, bid: str) -> dict | None:
-    """A saved bake-off, or None; parsed again only when its file changed."""
+    """A saved bake-off, or None; parsed again only when its file changed. One record is held at a time, under a lock:
+    the web server answers requests on several threads."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not re.fullmatch(r"[A-Za-z0-9_-]+", bid):
         return None
     p = path(name, bid)
     try:
         mtime = p.stat().st_mtime
-        if _LOADED.get(p, (None,))[0] != mtime:
-            _LOADED.clear()   # one record held at a time
-            _LOADED[p] = (mtime, json.loads(p.read_text()))
-        return _LOADED[p][1]
+        with _LOADED_LOCK:
+            held = _LOADED.get(p)
+            if held and held[0] == mtime:
+                return held[1]
+        b = json.loads(p.read_text())
+        with _LOADED_LOCK:
+            _LOADED.clear()
+            _LOADED[p] = (mtime, b)
+        return b
     except (OSError, ValueError):
         return None

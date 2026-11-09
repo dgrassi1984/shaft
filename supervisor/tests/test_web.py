@@ -402,6 +402,8 @@ class BakeoffJudgePagesTest(WebTest):
         self.assertEqual(judge.status, 200)
         self.assertIn(b"Run A", judge.body)
         self.assertNotIn(b"<script>alert", judge.body)          # instance-written text never runs as markup
+        self.assertIn(b"&lt;script&gt;alert(1)&lt;/script&gt;", judge.body)   # ...and is still shown, escaped
+        self.assertEqual(self.req("/bakeoffs/wren/x1/judge?vs=%C2%B2&vs=9999", cookie=cookie).status, 200)
         self.assertNotIn(b"deepseek", judge.body.lower())      # blind: the run's own words name no model
         self.assertIn(b"1 left", judge.body)
         self.assertEqual(self.req("/bakeoffs/wren/nope", cookie=cookie).status, 404)
@@ -413,10 +415,13 @@ class BakeoffJudgePagesTest(WebTest):
             "/bakeoffs/wren/x1/judge", "POST", cookie=cookie, body=body.encode(),
             headers={"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded",
                      **({"x-csrf-token": self.csrf(cookie)} if token else {})})
-        self.assertEqual(post("state=0&arm=1&choice=A", token=False).status, 403)
-        self.assertEqual(post("state=0&arm=1&choice=maybe").status, 409)
-        self.assertEqual(post("state=0&arm=0&choice=A").status, 409)            # the baseline is not a candidate
-        self.assertEqual(post("state=0&arm=1&choice=A&note=crisper").status, 200)
+        runs = self.bakeoff.operator_case(self.bakeoff.load("wren", "x1"), 0, "openrouter/deepseek/deepseek-v4.1-flash")["runs"]
+        self.assertEqual(post(f"state=0&arm=1&choice=A&runs={runs}", token=False).status, 403)
+        self.assertEqual(post("state=0&arm=1&choice=A").status, 409)            # no fingerprint of what was shown
+        self.assertEqual(post("state=0&arm=1&choice=A&runs=stale").status, 409)
+        self.assertEqual(post(f"state=0&arm=1&choice=maybe&runs={runs}").status, 409)
+        self.assertEqual(post(f"state=0&arm=0&choice=A&runs={runs}").status, 409)   # the baseline is not a candidate
+        self.assertEqual(post(f"state=0&arm=1&choice=A&note=crisper&runs={runs}").status, 200)
         b = self.bakeoff.load("wren", "x1")
         v = self.bakeoff.operator_verdicts(b)[(0, "openrouter/deepseek/deepseek-v4.1-flash")]
         self.assertEqual((v["choice"], v["note"], v["by"]), ("A", "crisper", ME))
