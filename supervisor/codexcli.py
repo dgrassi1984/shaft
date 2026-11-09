@@ -329,13 +329,13 @@ class Channel(planchannel.Channel):
             key = params["itemId"]
             delta = params["delta"]
             step.items[key] = step.items.get(key, "") + delta
-            step.text += delta
+            self._append_text(step, delta)
         elif method == "item/completed" and params["item"]["type"] == "agentMessage" and not step.event.is_set():
             item = params["item"]
             previous = step.items.get(item["id"], "")
             if not item["text"].startswith(previous):
                 raise self._failure("Codex agent text disagrees with deltas")
-            step.text += item["text"][len(previous):]
+            self._append_text(step, item["text"][len(previous):])
             step.items[item["id"]] = item["text"]
         elif method == "turn/completed":
             step.turn_ended = True

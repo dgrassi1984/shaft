@@ -68,6 +68,8 @@ class BrokerTest(Case):
         self.channel_class = self.enterContext(mock.patch.object(codexcli, "Channel"))
         self.channel = self.channel_class.return_value
         self.channel.complete.return_value = reply()
+        self.channel.stream.side_effect = lambda body: iter_stream(*cloudllm.as_sse(
+            self.channel.complete.return_value).splitlines(keepends=True))
         def server(addr, handler):
             self.handler = handler
             return mock.Mock(server_address=("127.0.0.1", 1))
@@ -88,6 +90,51 @@ class BrokerTest(Case):
     def cloud(self, instance, body, secrets, remembered):
         cloudllm._record(instance, body["model"], 12, 3, .125, time.monotonic(), "stop", None)
         return reply(body["model"])
+
+    def test_channel_stream_and_nonstream_routes(self):
+        """Guard against buffering a channel stream through _llm_reply."""
+        delivered = []
+        def consume(lines, model):
+            delivered.append((model, b"".join(lines)))
+        with mock.patch.object(self.handler, "_llm_stream", side_effect=consume):
+            self.call(stream=True)
+        self.assertEqual(delivered, [(MODEL, cloudllm.as_sse(reply()))])
+        self.channel.complete.assert_not_called()
+        with mock.patch.object(self.handler, "_llm_reply") as buffered:
+            _, body = self.call()
+            buffered.assert_called_once_with(body, reply())
+
+    def test_channel_stream_initial_failure_fallback_or_502(self):
+        """Guard fallback before streaming headers are sent on channel failure."""
+        for fallback in (False, True):
+            with self.subTest(fallback=fallback):
+                self.b.channel_down = None
+                self.b.local_fallback = fallback
+                self.channel.stream.side_effect = codexcli.CodexFailure("offline")
+                with mock.patch.object(cloudllm, "openrouter_stream",
+                        side_effect=lambda *args: iter_stream(*cloudllm.as_sse(reply(LABEL)).splitlines(keepends=True))):
+                    h, _ = self.call(stream=True)
+                h.send_response.assert_called_once_with(200 if fallback else 502)
+                if fallback:
+                    self.assertEqual(h.wfile.getvalue(), cloudllm.as_sse(reply(LABEL)))
+                else:
+                    self.assertIn("offline", json.loads(h.wfile.getvalue())["error"]["message"])
+
+    def test_channel_midstream_failure_is_error_not_fallback(self):
+        """Guard against accepting partial text or mixing fallback text into a failed answer."""
+        def broken(body):
+            yield b'data: {"choices": [{"delta": {"content": "hello"}}]}\n'
+            yield b'\n'
+            raise codexcli.CodexFailure("Codex agent text disagrees with deltas")
+        self.channel.stream.side_effect = broken
+        with mock.patch.object(cloudllm, "openrouter_stream") as fallback:
+            h, _ = self.call(stream=True)
+        h.send_response.assert_called_once_with(200)
+        data = [json.loads(line[5:]) for line in h.wfile.getvalue().splitlines() if line.startswith(b'data:')]
+        self.assertEqual(data[-1], {"error": {"message": "Codex agent text disagrees with deltas"}})
+        self.assertNotIn(b'[DONE]', h.wfile.getvalue())
+        self.assertEqual(self.b.channel_down, "Codex agent text disagrees with deltas")
+        fallback.assert_not_called()
 
     def test_lazy_one_channel_success_and_close_before_shutdown(self):
         self.assertIsNone(self.b.channel)
@@ -208,9 +255,10 @@ class BrokerTest(Case):
         h.send_response.assert_called_once_with(502)
         self.assertIn("weekly cap", json.loads(h.wfile.getvalue())["error"]["message"])
 
-    def test_replay_buffered_stream_failure_is_http_error_without_fallback(self):
+    def test_replay_stream_failure_is_http_error_without_fallback(self):
+        """Guard replay HTTP errors before a channel emits its first byte."""
         self.b.local_fallback = broker.ReplayBroker.local_fallback
-        self.channel.complete.side_effect = codexcli.CodexFailure("weekly cap")
+        self.channel.stream.side_effect = codexcli.CodexFailure("weekly cap")
         with mock.patch.object(cloudllm, "openrouter_stream") as cloud:
             h, _ = self.call(stream=True)
         cloud.assert_not_called()
@@ -221,6 +269,7 @@ class BrokerTest(Case):
         for streaming in (False, True):
             with self.subTest(stream=streaming):
                 self.channel.complete.side_effect = codexcli.CodexClosed("Codex channel closed")
+                self.channel.stream.side_effect = codexcli.CodexClosed("Codex channel closed")
                 with mock.patch.object(planchannel, "report_failure") as report, \
                         mock.patch.object(planchannel, "report_success") as success, \
                         mock.patch.object(cloudllm, "complete") as cloud, \
@@ -264,24 +313,26 @@ class BrokerTest(Case):
             capped.send_response.assert_called_once_with(429)
             send.assert_called_once()
 
-    def test_buffered_codex_stream_failure_falls_back_before_any_reply_bytes(self):
+    def test_codex_stream_failure_falls_back_before_any_reply_bytes(self):
+        """Guard fallback before any channel stream bytes reach the client."""
         writer = io.BytesIO()
         def fail(body):
             self.assertEqual(writer.getvalue(), b"")
-            raise codexcli.CodexFailure("failed after internal text deltas")
-        self.channel.complete.side_effect = fail
+            raise codexcli.CodexFailure("failed before first delta")
+        self.channel.stream.side_effect = fail
         with mock.patch.object(cloudllm, "openrouter_stream", return_value=iter_stream(b"data: [DONE]\n\n")) as cloud:
             h, body = self.call(stream=True, writer=writer)
-        self.channel.complete.assert_called_once_with(body)
+        self.channel.stream.assert_called_once_with(body)
         self.assertEqual(cloud.call_args.args[1], {**body, "model": FALLBACK})
         h.send_response.assert_called_once_with(200)
         self.assertEqual(h.wfile.getvalue(), b"data: [DONE]\n\n")
-        self.assertEqual(self.b.channel_down, "failed after internal text deltas")
+        self.assertEqual(self.b.channel_down, "failed before first delta")
 
-    def test_codex_stream_is_buffered_as_sse_and_reports_recovery(self):
+    def test_codex_stream_is_relayed_as_sse_and_reports_recovery(self):
+        """Guard recovery reporting after a successful channel stream."""
         with mock.patch.object(planchannel, "report_success") as success:
             h, body = self.call(stream=True)
-        self.channel.complete.assert_called_once_with(body)
+        self.channel.stream.assert_called_once_with(body)
         self.assertEqual(h.wfile.getvalue(), cloudllm.as_sse(reply()))
         success.assert_called_once()
 

@@ -262,6 +262,7 @@ class Step:
     turn_ended: bool = False
     items: dict = field(default_factory=dict)
     recorded: bool = False
+    deltas: list[str] = field(default_factory=list)
 
 
 class Channel:
@@ -529,6 +530,40 @@ class Channel:
                 self._cv.notify_all()
                 return step
 
+    def _append_text(self, step, text):
+        # Retain chunks so repeated/concurrent requests each replay the whole step.
+        step.text += text
+        if text:
+            step.deltas.append(text)
+            self._cv.notify_all()
+
+    def stream(self, body: dict):
+        step = self._select(body)
+        cursor = 0
+        while True:
+            with self._cv:
+                self._cv.wait_for(lambda: self._closed or step.error or
+                                  cursor < len(step.deltas) or step.event.is_set())
+                if self._closed:
+                    raise self.closed_error(f"{self.label} channel closed")
+                if step.error:
+                    raise step.error
+                chunks = step.deltas[cursor:]
+                cursor += len(chunks)
+                done = step.event.is_set()
+                if done:
+                    reply = self._completion(step)
+                    # Backends without deltas still return their text at step end.
+                    if step.deltas:
+                        reply["choices"][0]["message"]["content"] = ""
+            for text in chunks:
+                chunk = {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
+                yield b"data: " + json.dumps(chunk).encode() + b"\n"
+                yield b"\n"
+            if done:
+                yield from cloudllm.as_sse(reply).splitlines(keepends=True)
+                return
+
     def complete(self, body: dict) -> dict:
         step = self._select(body)
         step.event.wait()
@@ -537,12 +572,15 @@ class Channel:
                 raise self.closed_error(f"{self.label} channel closed")
             if step.error:
                 raise step.error
-            message = {"role": "assistant", "content": step.text}
-            if step.calls:
-                message["tool_calls"] = list(step.calls)
-            return {"id": f"{self.prefix}-{id(step)}", "object": "chat.completion", "model": step.model,
-                    "choices": [{"index": 0, "message": message, "finish_reason": step.finish}], "usage": dict(step.usage),
-                    "shaft_same_turn": bool(step.calls and not step.usage_received)}
+            return self._completion(step)
+
+    def _completion(self, step):
+        message = {"role": "assistant", "content": step.text}
+        if step.calls:
+            message["tool_calls"] = list(step.calls)
+        return {"id": f"{self.prefix}-{id(step)}", "object": "chat.completion", "model": step.model,
+                "choices": [{"index": 0, "message": message, "finish_reason": step.finish}], "usage": dict(step.usage),
+                "shaft_same_turn": bool(step.calls and not step.usage_received)}
 
     def _kill(self):
         if self._process:
