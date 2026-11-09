@@ -78,7 +78,8 @@ class JsonlLinesTests(unittest.TestCase):
                 # log_path's pre-existing lazy settings lookup is unrelated to JSONL parsing.
                 if name == "egress" and line == "    from .core import SUP_DIR":
                     continue
-                if any(form in line for form in ("from .core", "from . import core", "supervisor.core")):
+                if (name == "gate_suite" and line.lstrip().startswith("from .")) or any(
+                        form in line for form in ("from .core", "from . import core", "supervisor.core")):
                     violations.append(f"{name}.py:{n}")
         self.assertEqual(violations, [])
 

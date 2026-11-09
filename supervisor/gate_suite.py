@@ -51,7 +51,8 @@ import types
 import unittest
 from pathlib import Path
 
-from .jsonl import jsonl_lines
+# gate_suite is copied alone into test projects, so it imports nothing from the package.
+# Split reports on LF only, as supervisor/jsonl.py explains.
 
 UNDER_TEST = "SHAFT_UNDER_TEST"
 HARNESS = "test_invariants"
@@ -210,7 +211,7 @@ class _Fence(importlib.abc.MetaPathFinder):
 def report(stdout: str, nonce: str | None = None) -> dict | None:
     """The gate's line from a run's stdout: the last GATE_SUITE line, or None when there is none, it is not the
     shape main writes, or `nonce` is given and the line does not carry it."""
-    line = next((l for l in reversed(jsonl_lines(stdout)) if l.startswith(REPORT)), None)
+    line = next((l.removesuffix("\r") for l in reversed(stdout.split("\n")) if l.startswith(REPORT)), None)
     if line is None:
         return None
     try:
@@ -338,7 +339,7 @@ def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str
 
 def times(stderr: str) -> dict | None:
     """The timings the last run printed (run_part), or None."""
-    line = next((l for l in reversed(jsonl_lines(stderr)) if l.startswith(TIMES)), None)
+    line = next((l.removesuffix("\r") for l in reversed(stderr.split("\n")) if l.startswith(TIMES)), None)
     try:
         return json.loads(line[len(TIMES):]) if line else None
     except ValueError:

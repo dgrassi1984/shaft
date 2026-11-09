@@ -43,7 +43,6 @@ class Tree:
         tests.mkdir(parents=True)
         (self.root / "supervisor" / "__init__.py").write_text("")
         shutil.copy(PROJECT / "supervisor" / "gate_suite.py", self.root / "supervisor" / "gate_suite.py")
-        shutil.copy(PROJECT / "supervisor" / "jsonl.py", self.root / "supervisor" / "jsonl.py")
         (tests / "__init__.py").write_text("")
         for name, text in modules.items():
             (tests / name).parent.mkdir(parents=True, exist_ok=True)
