@@ -109,6 +109,19 @@ class ReconstructTest(Fixture):
         self.assertEqual((dest / "shaft" / "live.py").read_bytes(), code["shaft/live.py"])
         self.assertFalse((dest / "logs").exists())
 
+    def test_the_copy_keeps_the_memory_index_in_either_format(self):
+        """Bug (PLAN-voice M1): the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
+        JSON once migrated; the trial copy carried only the JSON, so a replay of an updated instance embedded its whole
+        mind again (~14,000 chunks on Thelos). Both files are carried when present."""
+        (self.root / ".tmp").mkdir(exist_ok=True)
+        (self.root / ".tmp" / "memory-index.bin").write_bytes(b"VECTOR-LOG")
+        (self.root / ".tmp" / "memory-index.json").write_text('{"legacy": 1}')
+        dest = Path(tempfile.mkdtemp(prefix="shaft-recon-")) / NAME
+        self.addCleanup(shutil.rmtree, dest.parent, True)
+        trial.reconstruct(self.project, NAME, self.state(), trial.committed_code(self.project, NAME), dest)
+        self.assertEqual((dest / ".tmp" / "memory-index.bin").read_bytes(), b"VECTOR-LOG")
+        self.assertEqual((dest / ".tmp" / "memory-index.json").read_text(), '{"legacy": 1}')
+
     def test_replay_mind_as_of_cycle(self):
         # The mind laid into the copy is the store's as of the cycle's start (M0), never the current one (M1),
         # and never a mind a pre-cutover branch commit still holds: the store is the one place it is read from.

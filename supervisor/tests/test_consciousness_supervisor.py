@@ -500,6 +500,28 @@ class WorkspaceInstrumentTest(unittest.TestCase):
                 experiments.front(self.dir, "wren", dest, {"t0": "2026-10-26T09:00:00"}, held)
         self.assertEqual(seen, [None, '{"copy": 1}', '{"copy": 2}'])
 
+    def test_the_vector_log_is_handed_on_after_a_copy_migrates(self):
+        """Bug (PLAN-voice M1): the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
+        JSON after migrating; the handoff carried only the JSON, so every later copy started with no vectors and
+        embedded the whole mind again. The next copy gets the log, and no stale JSON."""
+        seen = []
+
+        def verb(cmd, cwd, **kw):
+            tmp = Path(cwd) / ".tmp"
+            seen.append(sorted(p.name for p in tmp.iterdir() if p.name.startswith("memory-index")))
+            (tmp / "memory-index.json").unlink(missing_ok=True)       # the copy's code migrated it
+            (tmp / "memory-index.bin").write_bytes(b"LOG%d" % len(seen))
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"modes": {}}), "")
+
+        held: dict = {"files": {".tmp/memory-index.json": b"{}"}}
+        with mock.patch("subprocess.run", side_effect=verb):
+            for i in range(3):
+                dest = self.dir / f"m{i}" / "wren"
+                dest.mkdir(parents=True)
+                experiments.front(self.dir, "wren", dest, {"t0": "2026-10-26T09:00:00"}, held)
+        self.assertEqual(seen, [["memory-index.json"], ["memory-index.bin"], ["memory-index.bin"]])
+        self.assertEqual(held, {"files": {".tmp/memory-index.bin": b"LOG3"}})
+
 
 @unittest.skipUnless(os.path.exists("/usr/bin/sandbox-exec"), "macOS sandbox")
 class WorkspaceDryRunTest(unittest.TestCase):
