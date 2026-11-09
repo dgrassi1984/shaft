@@ -1747,11 +1747,11 @@ def _elo_cell(e: dict | None, baseline: bool = False) -> str:
 
 def bakeoff_ranking(rank: list[dict]) -> Html:
     body = [[str(k), _short(r["arm"]) + (" · baseline" if r["baseline"] else ""), _elo_cell(r["you"], r["baseline"]),
-             "" if r["baseline"] else str((r["you"] or {}).get("n", 0)), _elo_cell(r["llm"], r["baseline"]),
+             str((r["you"] or {}).get("n", 0)), _elo_cell(r["llm"], r["baseline"]),
              "" if r["baseline"] else str((r["llm"] or {}).get("n", 0))]
             for k, r in enumerate(rank, 1)]
-    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Elo against the baseline (0), from your '
-             'verdicts: a win counts 1, equal and both bad ½, a loss 0. In brackets the 90% range: ranks whose '
+    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Bradley-Terry Elo from all your verdicts, '
+             'any pair, the baseline fixed at 0: a win counts 1, equal and both bad ½, a loss 0. In brackets the 90% range: ranks whose '
              'ranges overlap are not yet told apart. Beside it, the LLM judges\' Elo on every pair they settled '
              '(splits left out). It changes with each verdict you save.</p></section>',
              t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs"], body))
@@ -1762,21 +1762,23 @@ def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str, rank
     rows_ = []
     for r in summary:
         agree = f"{r['agree']} of {r['compared']}" if r["compared"] else "—"
-        rows_.append([_short(r["arm"]), f"{r['W']}–{r['L']}–{r['T']}" + (f", {r['bad']} both bad" if r["bad"] else ""),
-                      str(r["p"]) if r["p"] is not None else "—", agree, str(r["left"])])
-    pick = join(h('<label><input type="checkbox" name="vs" value="{i}"> {l}</label><br>', i=str(k), l=_short(a["label"]))
-                for k, a in enumerate(b["arms"][1:], 1))
+        rows_.append([_short(r["arm"]) + (" · baseline" if r["arm"] == base else ""), str(r["judged"]),
+                      f"{r['W']}–{r['L']}–{r['T']}" + (f", {r['bad']} both bad" if r["bad"] else ""), agree])
+    pick = join(h('<label><input type="checkbox" name="vs" value="{i}" checked> {l}</label><br>', i=str(k),
+                  l=_short(a["label"])) for k, a in enumerate(b["arms"]))
     body = h('<p><a href="/bakeoffs">← every bake-off</a></p><h1>{id} · {n}</h1>'
              '<p>Baseline <b>{base}</b>, {s} past cycles, code {rev}. Your verdicts are kept apart from the LLM judges\' '
              'and only set beside them here.</p>'
-             '{ranking}<section class="panel"><h2>Your verdicts against the baseline</h2>{t}'
-             '<p class="muted">W–L–T is the candidate against the baseline as you judged it. "Agrees" counts the pairs '
-             'the LLM judges settled (win, loss or tie) where they reached your outcome.</p></section>'
+             '{ranking}<section class="panel"><h2>Your verdicts</h2>{t}'
+             '<p class="muted">W–L–T over every pair you judged the model in. "Agrees" counts its pairs with the '
+             'baseline that the LLM judges also settled (win, loss or tie) where they reached your outcome: they '
+             'judged every model against the baseline only.</p></section>'
              '<section class="panel"><h2>Judge pairs</h2><form method="get" action="/bakeoffs/{qn}/{qid}/judge">'
-             '<p>Which candidates? Their pairs come mixed, each side drawn at random: you do not know which run is '
-             'the baseline.</p>{pick}<p><button type="submit">Start</button></p></form></section>',
+             '<p>Each page is a random pair of the models ticked, on one cycle, each side drawn at random: you do '
+             'not know which model ran which side.</p>{pick}<p><button type="submit">Start</button></p></form>'
+             '</section>',
              id=b["id"], n=b["name"], base=_short(base), s=str(len(b["states"])), rev=b.get("code_rev", "")[:10],
-             t=table(["Candidate", "You: W–L–T", "p", "Agrees with the LLM judges", "Left to judge"], rows_),
+             t=table(["Model", "Your pairs", "Its W–L–T", "Agrees with the LLM judges (vs baseline)"], rows_),
              qn=q(b["name"]), qid=q(b["id"]), pick=pick, ranking=bakeoff_ranking(rank) if rank else "")
     return frame(f"Bake-off {b['id']}", body, names, csrf, current="/bakeoffs")
 
@@ -1814,9 +1816,10 @@ def _pending_html(p: dict) -> Html:
 def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str) -> Html:
     back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off and its ranking</a></p>', n=q(b["name"]), id=q(b["id"]))
     if case is None:
-        return frame("Judge", join([back, h("<h1>Nothing left to judge</h1><p>Every pair of these candidates has your "
+        return frame("Judge", join([back, h("<h1>Nothing left to judge</h1><p>Every pair of these models has your "
                                             "verdict.</p>")]), names, csrf, current="/bakeoffs")
-    arm = next(k for k, a in enumerate(b["arms"]) if a["label"] == case["arm"])
+    labels = [a["label"] for a in b["arms"]]
+    x, y = labels.index(case["pair"][0]), labels.index(case["pair"][1])
     goals, _, inbox = case["context"].partition("## Its inbox at that moment")
     choices = join(h('<label><input type="radio" name="choice" value="{c}" required> {l}</label> ', c=c, l=l)
                    for c, l in (("A", "A is better"), ("B", "B is better"), ("tie", "Equal"), ("both bad", "Both bad")))
@@ -1829,7 +1832,8 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              '</details></section>'
              '<div class="cards">{a}{b}</div>'
              '<section class="panel"><form class="act" data-post="/bakeoffs/{n}/{id}/judge" data-after="reload">'
-             '<input type="hidden" name="state" value="{st}"><input type="hidden" name="arm" value="{arm}">'
+             '<input type="hidden" name="state" value="{st}"><input type="hidden" name="x" value="{x}">'
+             '<input type="hidden" name="y" value="{y}">'
              '<input type="hidden" name="runs" value="{runs}">'
              '<p>{choices}</p><p><textarea name="note" rows="2" placeholder="Why (optional)"></textarea></p>'
              '<p><button type="submit">Save and next</button></p></form></section>',
@@ -1837,5 +1841,5 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              rep=case["replayed"], goals=goals.strip() or "(no goals file)", inbox=inbox.strip() or "(empty)",
              pending=_pending_html(case.get("pending") or {}),
              a=_run_panel("A", case["A"]), b=_run_panel("B", case["B"]),
-             n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), arm=str(arm), runs=case["runs"], choices=choices)
+             n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), x=str(x), y=str(y), runs=case["runs"], choices=choices)
     return frame("Judge a pair", body, names, csrf, current="/bakeoffs")

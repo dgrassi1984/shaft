@@ -576,40 +576,60 @@ def operator_path(b: dict) -> Path:
     return DIR / "operator" / f"{b['name']}-{b['id']}.jsonl"
 
 
-def operator_verdicts(b: dict) -> dict[tuple[int, str], dict]:
-    """(state, candidate) -> the operator's last verdict on the pair's current runs."""
+def _pair(x: str, y: str) -> tuple[str, str]:
+    return (x, y) if x <= y else (y, x)
+
+
+def _pair_runs(st: dict, pair: tuple[str, str]) -> str:
+    return _runs(st["arms"][pair[0]], st["arms"][pair[1]])
+
+
+def operator_verdicts(b: dict) -> dict[tuple[int, tuple[str, str]], dict]:
+    """(state, pair of arms) -> the operator's last verdict on that pair's current runs, with `winner` an arm, "tie"
+    or "both bad". Rows from before free pairs (one candidate against the baseline, an `outcome` for the candidate)
+    read as the same pairs."""
     out, base = {}, b["arms"][0]["label"]
     p = operator_path(b)
     for line in p.read_text().splitlines() if p.exists() else []:
         try:
             v = json.loads(line)
-        except ValueError:
+            i = v["state"]
+            st = b["states"][i] if 0 <= i < len(b["states"]) else None
+            if "pair" in v:
+                pair = _pair(*v["pair"])
+                current = st and all(a in st["arms"] for a in pair) and v.get("runs") == _pair_runs(st, pair)
+                winner = v["winner"]
+            else:   # one candidate against the baseline
+                pair, arm = _pair(base, v["arm"]), v["arm"]
+                current = st and base in st["arms"] and arm in st["arms"] and \
+                    v.get("runs") == _runs(st["arms"][base], st["arms"][arm])
+                winner = {"win": arm, "loss": base}.get(v["outcome"], v["outcome"])
+        except (ValueError, KeyError, TypeError):
             continue
-        st = b["states"][v["state"]] if 0 <= v.get("state", -1) < len(b["states"]) else None
-        if st and base in st["arms"] and v.get("arm") in st["arms"] and \
-                v.get("runs") == _runs(st["arms"][base], st["arms"][v["arm"]]):
-            out[(v["state"], v["arm"])] = v
+        if current:
+            out[(i, pair)] = {**v, "pair": list(pair), "winner": winner}
     return out
 
 
-def _judgeable(b: dict, i: int, label: str) -> bool:
-    st, base = b["states"][i], b["arms"][0]["label"]
-    return (base in st["arms"] and label in st["arms"] and st["arms"][base]["completed"]
-            and st["arms"][label]["completed"])
+def _judgeable(b: dict, i: int, pair: tuple[str, str]) -> bool:
+    st = b["states"][i]
+    return pair[0] != pair[1] and all(a in st["arms"] and st["arms"][a]["completed"] for a in pair)
 
 
-def _flipped(b: dict, i: int, label: str) -> bool:
-    """Whether the candidate is shown as A: drawn per pair, the same on every visit."""
-    return hashlib.sha256(f"{b['name']}:{b['id']}:{b['created']}:{i}:{label}".encode()).digest()[0] & 1 == 1
+def _flipped(b: dict, i: int, pair: tuple[str, str]) -> bool:
+    """Whether the pair's second arm (in name order) is shown as A: drawn per pair, the same on every visit."""
+    key = f"{b['name']}:{b['id']}:{b['created']}:{i}:{pair[0]}|{pair[1]}"
+    return hashlib.sha256(key.encode()).digest()[0] & 1 == 1
 
 
-def operator_queue(b: dict, labels: list[str]) -> list[tuple[int, str]]:
-    """The pairs of these candidates against the baseline the operator has not judged yet, in an order that mixes
-    candidates and cycles (the same order on every visit)."""
+def operator_queue(b: dict, labels: list[str]) -> list[tuple[int, tuple[str, str]]]:
+    """Every pair of these arms on every cycle, not judged yet, in an order that looks random and is the same on every
+    visit: each page shows whichever pair comes up, baseline or not."""
     done = operator_verdicts(b)
-    todo = [(i, label) for i in range(len(b["states"])) for label in labels
-            if _judgeable(b, i, label) and (i, label) not in done]
-    return sorted(todo, key=lambda p: hashlib.sha256(f"{b['id']}:{p[0]}:{p[1]}".encode()).hexdigest())
+    labels = sorted(set(labels))
+    todo = [(i, (x, y)) for i in range(len(b["states"])) for k, x in enumerate(labels) for y in labels[k + 1:]
+            if _judgeable(b, i, (x, y)) and (i, (x, y)) not in done]
+    return sorted(todo, key=lambda t: hashlib.sha256(f"{b['id']}:{t[0]}:{t[1][0]}|{t[1][1]}".encode()).hexdigest())
 
 
 def _diff_files(diff: str) -> list[dict]:
@@ -726,37 +746,37 @@ def _pending(b: dict, st: dict, redact, project: Path = PROJECT) -> dict:
             "backlog": sum(1 for x in q if x.get("status") == "backlog"), "more": max(0, len(live) - 20)}
 
 
-def operator_case(b: dict, i: int, label: str, project: Path = PROJECT) -> dict:
-    """One pair as the operator sees it: the cycle's start (goals and inbox, as the judges get it) and the two runs
-    as A and B."""
-    st, base = b["states"][i], b["arms"][0]["label"]
+def operator_case(b: dict, i: int, pair: tuple[str, str], project: Path = PROJECT) -> dict:
+    """One pair as the operator sees it: the cycle's start (inbox, what was waiting, goals) and the two runs as A
+    and B."""
+    st, pair = b["states"][i], _pair(*pair)
     redact = _redactor(b)
-    runs = {"baseline": _facing(st["arms"][base], redact), "candidate": _facing(st["arms"][label], redact)}
-    flipped = _flipped(b, i, label)
-    return {"state": i, "arm": label, "runs": _runs(st["arms"][base], st["arms"][label]), "ts": st["ts"],
-            "t0": st["t0"], "replayed": b["created"][:10],
-            "kind": st.get("stratum", ""), "context": redact(trial.state_context(project, b["name"], st)),
+    a, b_ = (pair[1], pair[0]) if _flipped(b, i, pair) else pair
+    return {"state": i, "pair": list(pair), "runs": _pair_runs(st, pair), "ts": st["ts"], "t0": st["t0"],
+            "replayed": b["created"][:10], "kind": st.get("stratum", ""),
+            "context": redact(trial.state_context(project, b["name"], st)),
             "pending": _pending(b, st, redact, project),
-            "A": runs["candidate" if flipped else "baseline"], "B": runs["baseline" if flipped else "candidate"]}
+            "A": _facing(st["arms"][a], redact), "B": _facing(st["arms"][b_], redact)}
 
 
-def operator_record(b: dict, i: int, label: str, choice: str, note: str = "", by: str = "", runs: str = "") -> dict:
-    """Keep the operator's verdict on a pair: A, B, tie or both bad, read back as candidate win, loss, tie or both bad.
-    `runs` is the pair the page showed: refused when the pair was replayed since, so a verdict never lands on runs
-    the operator did not see."""
+def operator_record(b: dict, i: int, pair: tuple[str, str], choice: str, note: str = "", by: str = "",
+                    runs: str = "") -> dict:
+    """Keep the operator's verdict on a pair: A, B, tie or both bad, read back as the arm shown on that side.
+    `runs` is the pair the page showed: refused when it was replayed since, so a verdict never lands on runs the
+    operator did not see."""
     if choice not in OPERATOR_CHOICES:
         raise BakeoffError(f"choose one of {', '.join(OPERATOR_CHOICES)}")
-    if not (0 <= i < len(b["states"])) or label not in [a["label"] for a in b["arms"][1:]] or not _judgeable(b, i, label):
+    labels = [a["label"] for a in b["arms"]]
+    pair = _pair(*pair)
+    if not (0 <= i < len(b["states"])) or not all(a in labels for a in pair) or not _judgeable(b, i, pair):
         raise BakeoffError("no such pair to judge")
-    st, base = b["states"][i], b["arms"][0]["label"]
-    if runs and runs != _runs(st["arms"][base], st["arms"][label]):
+    st = b["states"][i]
+    if runs != _pair_runs(st, pair):
         raise BakeoffError("this pair was replayed since the page was opened: reload it")
-    flipped = _flipped(b, i, label)
-    outcome = {"tie": "tie", "both bad": "both bad"}.get(choice) or \
-        ("win" if (choice == "A") == flipped else "loss")
-    row = {"at": datetime.now().isoformat(timespec="seconds"), "by": by, "state": i, "arm": label, "choice": choice,
-           "flipped": flipped, "outcome": outcome, "note": note.strip()[:2000],
-           "runs": _runs(st["arms"][base], st["arms"][label])}
+    a, b_ = (pair[1], pair[0]) if _flipped(b, i, pair) else pair
+    winner = {"A": a, "B": b_}.get(choice, choice)
+    row = {"at": datetime.now().isoformat(timespec="seconds"), "by": by, "state": i, "pair": list(pair),
+           "shown_a": a, "choice": choice, "winner": winner, "note": note.strip()[:2000], "runs": runs}
     p = operator_path(b)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as f:
@@ -768,52 +788,114 @@ ELO = 400 / math.log(10)
 
 
 def elo(outcomes: list[str]) -> dict | None:
-    """A candidate's Elo against the baseline (fixed at 0) from its pair outcomes: win 1, tie and both bad ½, loss 0;
-    splits and unjudged pairs left out. Every candidate meets only the baseline, so the Bradley-Terry fit is each
-    one's own log-odds; half a win and half a loss are added so that 5-0 stays finite. 90% range from the normal
-    approximation. None with no pair."""
+    """A candidate's Elo against the baseline (fixed at 0) from its outcomes against it alone: win 1, tie and both
+    bad ½, loss 0; splits and unjudged left out. The log-odds with half a win and half a loss added, so 5-0 stays
+    finite; 90% range from the normal approximation. None with no pair. (The LLM judges met only the baseline.)"""
     w, l = outcomes.count("win"), outcomes.count("loss")
     t = outcomes.count("tie") + outcomes.count("both bad")
-    n = w + l + t
-    if not n:
-        return None
-    share = (w + t / 2 + 0.5) / (n + 1)
-    se = 1 / math.sqrt((n + 1) * share * (1 - share))
-    theta = math.log(share / (1 - share))
-    return {"elo": round(theta * ELO), "lo": round((theta - 1.645 * se) * ELO), "hi": round((theta + 1.645 * se) * ELO),
-            "n": n}
+    return bradley_terry([("x", "base", 1.0)] * w + [("x", "base", 0.0)] * l + [("x", "base", 0.5)] * t,
+                         ["base", "x"], "base").get("x")
+
+
+def bradley_terry(games: list[tuple[str, str, float]], arms: list[str], ref: str) -> dict[str, dict | None]:
+    """Elo of every arm from pairwise games (x, y, x's score: 1, ½ or 0), `ref` fixed at 0. Every other arm also gets
+    half a win and half a loss against `ref`, a weak prior that keeps a sweep finite and an arm met only by others
+    tied to the scale. Newton on the log-likelihood; 90% ranges from the inverse Hessian. An arm with no game: None."""
+    others = [a for a in arms if a != ref]
+    idx = {a: k for k, a in enumerate(others)}
+    played = {a for g in games for a in g[:2]}
+    full = games + [(a, ref, 1.0) for a in others] * 1 + [(a, ref, 0.0) for a in others]
+    weight = [1.0] * len(games) + [0.5] * (2 * len(others))
+    theta = [0.0] * len(others)
+    hess = [[0.0] * len(others) for _ in others]
+    for _ in range(100):
+        grad = [0.0] * len(others)
+        hess = [[0.0] * len(others) for _ in others]
+        for (x, y, sx), wt in zip(full, weight):
+            tx = theta[idx[x]] if x in idx else 0.0
+            ty = theta[idx[y]] if y in idx else 0.0
+            pr = 1 / (1 + math.exp(ty - tx))
+            r, c = wt * (sx - pr), wt * pr * (1 - pr)
+            if x in idx:
+                grad[idx[x]] += r
+                hess[idx[x]][idx[x]] += c
+            if y in idx:
+                grad[idx[y]] -= r
+                hess[idx[y]][idx[y]] += c
+            if x in idx and y in idx:
+                hess[idx[x]][idx[y]] -= c
+                hess[idx[y]][idx[x]] -= c
+        step = _solve(hess, grad)
+        theta = [t + d for t, d in zip(theta, step)]
+        if max((abs(d) for d in step), default=0) < 1e-9:
+            break
+    cov = [_solve(hess, [1.0 if k == j else 0.0 for k in range(len(others))]) for j in range(len(others))]
+    out: dict[str, dict | None] = {ref: {"elo": 0, "lo": 0, "hi": 0, "n": sum(ref in g[:2] for g in games)}}
+    for a in others:
+        if a not in played:
+            out[a] = None
+            continue
+        k, se = idx[a], math.sqrt(max(cov[idx[a]][idx[a]], 0.0))
+        out[a] = {"elo": round(theta[k] * ELO), "lo": round((theta[k] - 1.645 * se) * ELO),
+                  "hi": round((theta[k] + 1.645 * se) * ELO), "n": sum(a in g[:2] for g in games)}
+    return out
+
+
+def _solve(a: list[list[float]], b: list[float]) -> list[float]:
+    """Gaussian elimination with partial pivoting (a few arms: no numpy in the supervisor)."""
+    n = len(b)
+    m = [row[:] + [v] for row, v in zip(a, b)]
+    for j in range(n):
+        piv = max(range(j, n), key=lambda r: abs(m[r][j]))
+        m[j], m[piv] = m[piv], m[j]
+        for r in range(j + 1, n):
+            f = m[r][j] / m[j][j]
+            for c in range(j, n + 1):
+                m[r][c] -= f * m[j][c]
+    x = [0.0] * n
+    for j in range(n - 1, -1, -1):
+        x[j] = (m[j][n] - sum(m[j][c] * x[c] for c in range(j + 1, n))) / m[j][j]
+    return x
+
+
+def _games(b: dict) -> list[tuple[str, str, float]]:
+    return [(v["pair"][0], v["pair"][1], 1.0 if v["winner"] == v["pair"][0] else 0.0 if v["winner"] == v["pair"][1]
+             else 0.5) for v in operator_verdicts(b).values()]
 
 
 def ranking(b: dict) -> list[dict]:
-    """Every arm by the operator's Elo (the baseline at 0), with the LLM judges' Elo on all the pairs they settled
-    beside it. Arms the operator has not judged yet come last."""
-    done = operator_verdicts(b)
-    base = b["arms"][0]["label"]
-    rows = [{"arm": base, "baseline": True, "you": {"elo": 0, "lo": 0, "hi": 0, "n": 0}, "llm": {"elo": 0, "lo": 0,
-                                                                                                "hi": 0, "n": 0}}]
-    for arm in b["arms"][1:]:
-        label = arm["label"]
-        mine = [v["outcome"] for (i, l), v in done.items() if l == label]
-        theirs = [o for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")]
-        rows.append({"arm": label, "baseline": False, "you": elo(mine), "llm": elo(theirs)})
+    """Every arm by the operator's Elo (the baseline fixed at 0) from all their verdicts, any pair, with the LLM
+    judges' Elo beside it (they judged each candidate against the baseline only). Arms not judged yet come last."""
+    base, arms = b["arms"][0]["label"], [a["label"] for a in b["arms"]]
+    mine = bradley_terry(_games(b), arms, base)
+    rows = []
+    for label in arms:
+        theirs = None if label == base else elo(
+            [o for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")])
+        rows.append({"arm": label, "baseline": label == base, "you": mine.get(label),
+                     "llm": {"elo": 0, "lo": 0, "hi": 0, "n": 0} if label == base else theirs})
     return sorted(rows, key=lambda r: (r["you"] is None, -(r["you"] or {"elo": 0})["elo"]))
 
 
 def operator_summary(b: dict) -> list[dict]:
-    """Per candidate: the operator's W–L–T and both-bad, and how often the LLM judges' outcome on the same pairs
-    agreed with theirs (a split or an unjudged pair does not count as agreement or disagreement)."""
+    """Per arm: its W–L–T and both-bad over every pair the operator judged it in, and, on its pairs with the baseline,
+    how often the LLM judges' outcome agreed (a split or an unjudged pair is not compared)."""
     done = operator_verdicts(b)
+    base = b["arms"][0]["label"]
     rows = []
-    for arm in b["arms"][1:]:
+    for arm in b["arms"]:
         label = arm["label"]
-        mine = {i: v["outcome"] for (i, l), v in done.items() if l == label}
-        llm = {i: _outcome(b, b["states"][i], label) for i in mine}
-        compared = [i for i in mine if llm[i] in ("win", "loss", "tie") and mine[i] in ("win", "loss", "tie")]
-        o = list(mine.values())
-        rows.append({"arm": label, "judged": len(o), "left": sum(_judgeable(b, i, label) for i in range(len(b["states"])))
-                     - len(o), "W": o.count("win"), "L": o.count("loss"), "T": o.count("tie"),
-                     "bad": o.count("both bad"), "p": trial.verdict(o)["p"] if o else None,
-                     "agree": sum(mine[i] == llm[i] for i in compared), "compared": len(compared)})
+        mine = [(i, pair, v["winner"]) for (i, pair), v in done.items() if label in pair]
+        res = ["both bad" if w == "both bad" else "tie" if w == "tie" else "win" if w == label else "loss"
+               for _, _, w in mine]
+        agree = compared = 0
+        if label != base:
+            for i, pair, w in mine:
+                if base in pair and (llm := _outcome(b, b["states"][i], label)) in ("win", "loss", "tie"):
+                    compared += 1
+                    agree += llm == {label: "win", base: "loss"}.get(w, w)
+        rows.append({"arm": label, "judged": len(res), "W": res.count("win"), "L": res.count("loss"),
+                     "T": res.count("tie"), "bad": res.count("both bad"), "agree": agree, "compared": compared})
     return rows
 
 
