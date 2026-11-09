@@ -120,7 +120,13 @@ extension APIClient {
             var parser = ServerSentEvents()
             for try await byte in bytes {
                 guard let message = parser.consume(byte), message.event == "message" else { continue }
-                let event: ChatStreamEvent = try Self.decode(Data(message.data.utf8), path: path)
+                let data = Data(message.data.utf8)
+                // An event type this app does not know (a newer server) is skipped, not fatal: the reply goes on.
+                if let kind = try? SHAFTJSON.decoder().decode(EventKind.self, from: data),
+                   ChatStreamEvent.Kind(rawValue: kind.type) == nil {
+                    continue
+                }
+                let event: ChatStreamEvent = try Self.decode(data, path: path)
                 yield(event)
                 if event.type == .end { return }
             }
@@ -133,6 +139,9 @@ extension APIClient {
             throw apiError
         }
     }
+
+    /// Just an event's `type`, read before the whole event.
+    private struct EventKind: Decodable { var type: String }
 
     /// An error status as `perform` maps it (§1.5): the server's JSON error, else the status and the body's start.
     static func statusError(_ status: Int, body: Data) -> APIError {

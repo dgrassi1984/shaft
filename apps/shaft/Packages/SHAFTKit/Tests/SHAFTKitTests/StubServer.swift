@@ -135,10 +135,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         do {
             let response = try server.handle(recorded)
             if response.isStreamed {
-                nonisolated(unsafe) let stub = self
+                nonisolated(unsafe) let stub = self   // needed on iOS, where URLProtocol is not Sendable
                 Task { await stub.stream(response, url: url) }
             } else if let beforeReply = response.beforeReply {
-                nonisolated(unsafe) let stub = self
+                nonisolated(unsafe) let stub = self   // needed on iOS, where URLProtocol is not Sendable
                 Task {
                     await beforeReply()
                     stub.deliver(response, url: url)

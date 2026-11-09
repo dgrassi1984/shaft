@@ -176,7 +176,7 @@ public struct VoiceTurn: Sendable {
 
     private mutating func hear(_ event: TranscriptEvent) {
         guard !muted, state != .ended else { return }
-        let text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let promoted, heard.isEmpty {
             let words = Self.normalized(text)
             if words.isEmpty || words == promoted {
@@ -184,6 +184,11 @@ public struct VoiceTurn: Sendable {
                 return
             }
             self.promoted = nil
+            // The transcriber's late final for a turn already sent, with words the volatile lacked: only those words
+            // are new. Sent whole, the turn would go twice (M2 end-to-end: "…by the" then "…by the door?").
+            if words.hasPrefix(promoted + " ") {
+                text = Self.dropping(promoted.split(separator: " ").count, wordsOf: text)
+            }
         }
         let wasEmpty = heard.isEmpty
         if event.isFinal {
@@ -565,6 +570,17 @@ public struct VoiceTurn: Sendable {
     static func normalized(_ text: String) -> String {
         let mapped = String(text.lowercased().map { $0.isLetter || $0.isNumber ? $0 : " " })
         return mapped.split(separator: " ").joined(separator: " ")
+    }
+
+    /// `text` without its first `count` words as `normalized` counts them ("e.g." is two), keeping the rest as said.
+    static func dropping(_ count: Int, wordsOf text: String) -> String {
+        var left = count
+        var tokens = text.split(whereSeparator: { $0.isWhitespace })[...]
+        while left > 0, let token = tokens.first {
+            left -= wordCount(String(token))
+            tokens = tokens.dropFirst()
+        }
+        return tokens.joined(separator: " ")
     }
 
     static func wordCount(_ text: String) -> Int {

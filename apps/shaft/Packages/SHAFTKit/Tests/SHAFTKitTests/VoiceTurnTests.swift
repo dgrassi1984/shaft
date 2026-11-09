@@ -168,6 +168,26 @@ struct VoiceTurnTests {
         #expect(turn.state == .thinking)
     }
 
+    /// Bug (M2 end-to-end): a stale volatile was sent after endpointS × 3, then the transcriber's late final with the
+    /// missing words was taken as new speech and sent whole — the same sentence twice.
+    @Test func aLateFinalThatExtendsATurnAlreadySentCountsOnlyItsNewWords() {
+        var turn = makeTurn()
+        _ = turn.run(.start(at: 0), vol("wait what about the lantern by the", 1.0), tick(1.9))
+        #expect(turn.handle(tick(3.5)) == [.send(text: "wait what about the lantern by the"), .showTranscript(""),
+                                           .state(.thinking)])
+        // One word more: like any short word while it replies, not a turn.
+        #expect(turn.handle(fin("Wait, what about the lantern by the door?", 4.0)) == [])
+        #expect(turn.handle(tick(5.5)) == [])
+        #expect(turn.state == .thinking)
+
+        var again = makeTurn()
+        _ = again.run(.start(at: 0), vol("wait what about the lantern", 1.0), tick(1.9), tick(3.5))
+        let late = again.handle(fin("Wait, what about the lantern and the gate by the door?", 4.0))
+        #expect(late.contains(.showTranscript("and the gate by the door?")))
+        let sent = again.run(tick(4.9)).compactMap { if case .send(let t) = $0 { t } else { nil } }
+        #expect(sent == ["and the gate by the door?"])
+    }
+
     @Test func blankResultsAreNotSpeechAndDoNotHoldTheEndOfTurn() {
         var turn = makeTurn()
         _ = turn.handle(.start(at: 0))

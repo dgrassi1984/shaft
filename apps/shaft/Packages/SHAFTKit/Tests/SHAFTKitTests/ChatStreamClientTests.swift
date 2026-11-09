@@ -167,6 +167,15 @@ struct ChatStreamClientTests {
         #expect(path == "/app/v1/chat/thelos/stream")
     }
 
+    /// A newer server's event type must not drop the stream on an older app: it is skipped and the reply goes on.
+    @Test func anEventTypeThisAppDoesNotKnowIsSkippedAndTheReplyGoesOn() async throws {
+        let unknown = #"id: 2\#ndata: {"seq": 2, "type": "mood", "reply": "\#(Self.reply)", "text": "calm"}\#n\#n"#
+        let server = StubServer { _ in .events(Self.draft(1, "Fine.") + unknown + Self.end(3)) }
+        let (events, error) = await Self.drain(server.client.replyStream("thelos"))
+        #expect(error == nil)
+        #expect(events.map(\.seq) == [1, 3])
+    }
+
     @Test func aStreamClosedBeforeEndIsADroppedConnectionNotASilentFinish() async throws {
         let server = StubServer { _ in .events(Self.draft(1, "Half") + Self.draft(2, " a sentence")) }
         let (events, error) = await Self.drain(server.client.replyStream("thelos"))
