@@ -453,6 +453,16 @@ class BakeoffReviewFixesTest(unittest.TestCase):
         self.assertEqual(trial.decide({"A": self.OK, "B": timeout}, [None, None])[0], "loss")
         multi = {"completed": False, "exit": 1, "cycles": [{"completed": True, "exit": 0}, cut], "sleeps": []}
         self.assertTrue(trial.infra_failure(multi))
+        # an error the run recovered from (llm.py retries) is not what killed it: the crash is the run's own
+        recovered = {**cut, "last_call_failed": False, "output_tail": "Traceback ...\nKeyError: 'goal'"}
+        self.assertEqual(trial.decide({"A": self.OK, "B": recovered}, [None, None])[0], "loss")
+        self.assertEqual(trial.infra_failure({**recovered, "exit": -9, "ended": "timeout", "last_call_failed": True}), "")
+        # a stream error is raised but never logged as an error (template shaft/llm.py): the output tells
+        stream = {**recovered, "usage": {"calls": 9, "errors": 0},
+                  "output_tail": "shaft.llm.LLMError: stream error: provider overloaded"}
+        self.assertTrue(trial.infra_failure(stream))
+        empty = {**stream, "output_tail": "shaft.llm.LLMError: live: model returned an empty answer twice"}
+        self.assertEqual(trial.infra_failure(empty), "")   # the model's own failure
 
     def test_the_judge_is_not_told_which_run_met_the_world_first_nor_how_long_it_took(self):
         arm = {"exit": 0, "ended": "ok", "seconds": 794.2, "episode": {"intent": {"goal": "g"}, "steps": 3},
@@ -476,6 +486,21 @@ class BakeoffReviewFixesTest(unittest.TestCase):
         self.assertLess(len(text), 2200)
         small = trial.file_diff({"a": b"1\n"}, {"a": b"2\n"})
         self.assertNotIn("cut here", small)
+        many = {f"memory/f{i:04d}.md": b"x\n" * 1000 for i in range(1000)}   # 68,000 chars over 16,000 (review)
+        text = trial.file_diff({}, {**many, "self/goals.md": b"g\n"})
+        self.assertLessEqual(len(text), 16000)
+        self.assertIn("+++ b/self/goals.md", text)   # the smallest change is shown whole
+        self.assertIn("more files changed, not shown: memory/f", text)
+        for n in (3, 30, 300):
+            text = trial.file_diff({}, {f"f{i}": b"y\n" * 3000 for i in range(n)}, limit=16000)
+            self.assertLessEqual(len(text), 16000, n)
+
+    def test_a_trial_summary_shows_its_splits(self):
+        t = {"id": "t", "by": "you", "status": "done", "hypothesis": "h", "files": [], "states": [],
+             "verdict": {"label": "no clear difference", "W": 0, "L": 0, "T": 0, "S": 6, "p": 1.0, "usd": 0}}
+        self.assertIn("W0 L0 T0 S6", trial.describe(t))
+        t["verdict"].pop("S")   # a verdict saved before splits
+        self.assertIn("W0 L0 T0 p=", trial.describe(t))
 
     def test_judge_pair_blinds_the_case_it_sends(self):
         sent = {}

@@ -457,7 +457,8 @@ def trials_live(ts: list[dict], c: dict, only: str, progress, names: list[str]) 
         if status == "done":
             result = join([h('<span class="{c}">{l}</span> ', c={"better": "good", "worse": "bad"}.get(v.get("label"), ""),
                              l=v.get("label", "")),
-                           f"W{v.get('W')} L{v.get('L')} T{v.get('T')} p={v.get('p')} ${v.get('usd', 0):.2f}"])
+                           f"W{v.get('W')} L{v.get('L')} T{v.get('T')}" + (f" S{v['S']}" if v.get("S") else "")
+                           + f" p={v.get('p')} ${v.get('usd', 0):.2f}"])
         else:
             result = f"{progress(t)} replayed"
         body.append([link(f"/trials/{q(t.get('instance', ''))}/{q(t.get('id', ''))}", when(t.get("created", ""))),

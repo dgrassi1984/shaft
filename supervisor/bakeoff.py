@@ -147,13 +147,18 @@ def _paused(name: str) -> list[datetime]:
     return out
 
 
+def _local(stamp: str) -> datetime:
+    """An ISO time as the naive local time episodes are stamped in: an offset is converted, not dropped."""
+    t = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    return t.astimezone().replace(tzinfo=None) if t.tzinfo else t
+
+
 def eligible(name: str, since: str, until: str = "", project: Path = PROJECT) -> list[dict]:
     """The live cycles a replay can start from as they began, ended after `since` (and by `until`): a known start,
     ended by the loop's own control, no pause for a conversation, every inbox message still in the mind store."""
     from . import mind
     starts, pauses = trial._starts(name), _paused(name)
-    lo, hi = datetime.fromisoformat(since).replace(tzinfo=None), datetime.fromisoformat(until).replace(tzinfo=None) \
-        if until else datetime.max
+    lo, hi = _local(since), _local(until) if until else datetime.max
     out = []
     for ep in sorted(trial.live_episodes(INSTANCES / name), key=lambda e: e["ts"]):
         end = datetime.fromisoformat(ep["ts"]).replace(tzinfo=None)
@@ -179,9 +184,12 @@ def _spaced(items: list, k: int) -> list:
 
 
 def draw(name: str, n: int, since: str = "", until: str = "", project: Path = PROJECT) -> dict:
-    """A fresh set of `n` cycles from the eligible ones after `since` (default: the loop's last change): at least
-    MIN_PER_KIND of each kind there is, the rest by each kind's share, evenly spaced in time within a kind.
+    """A fresh set of `n` cycles from the eligible ones after `since` (default: the loop's last change): of each kind
+    there is, MIN_PER_KIND or as many as it has (fewer each when `n` is too small for all kinds), the rest by each
+    kind's share, evenly spaced in time within a kind.
     Returns {since, until, population: {kind: eligible count}, episodes: [ts]}."""
+    if n < 1:
+        raise BakeoffError(f"--draw takes a number of cycles, not {n}")
     since = since or last_loop_change(name, project)
     if not since:
         raise BakeoffError(f"no change to {name}'s loop found: give --since")
@@ -314,9 +322,16 @@ def _redactor(b: dict):
     return lambda text: pattern.sub("[model]", text)
 
 
+# What a judge is shown changes with trial._run_text: a case written before (2026-11-08: cache tags and seconds
+# still in it) is stale, and so is its verdict.
+CASE_VERSION = 2
+
+
 def _runs(A: dict, B: dict) -> str:
-    """The pair's two runs as exported: a case judged on other runs (the state replayed again since) is stale."""
-    return hashlib.sha256(json.dumps([A, B], sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+    """The pair's two runs as exported, and how they were shown: a case judged on other runs (the state replayed
+    again since) or written by an older _run_text is stale."""
+    return hashlib.sha256(json.dumps([A, B], sort_keys=True, ensure_ascii=False).encode()
+                          + (f":v{CASE_VERSION}" if CASE_VERSION > 1 else "").encode()).hexdigest()[:16]
 
 
 def _pair_cases(mapping: dict, b: dict, i: int, label: str, runs: str) -> dict:

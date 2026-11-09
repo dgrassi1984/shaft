@@ -422,11 +422,12 @@ def _files_now(root: Path) -> dict[str, bytes]:
 
 
 def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16000) -> str:
-    parts = []
+    parts, names = [], []
     for rel in sorted(before.keys() | after.keys()):
         a, b = before.get(rel), after.get(rel)
         if a == b:
             continue
+        names.append(rel)
         try:
             old = (a or b"").decode().splitlines(keepends=True)
             new = (b or b"").decode().splitlines(keepends=True)
@@ -439,13 +440,29 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
     if len(text) <= limit:
         return text
     # Over the limit, every changed file keeps a fair share instead of the first files in path order taking it all:
-    # a run that wrote much to memory/ hid its later self/ and shaft/ edits from the judge (review 2026-11-08).
-    share, kept, left = {}, 0, len(parts)
-    for i in sorted(range(len(parts)), key=lambda i: len(parts[i])):
-        share[i] = min(len(parts[i]), (limit - kept) // left)
-        kept, left = kept + share[i], left - 1
-    return "".join(p if share[i] >= len(p) else p[:share[i]] + f"\n[... this file's diff cut here: {len(p)} chars in all]\n"
-                   for i, p in enumerate(parts))
+    # a run that wrote much to memory/ hid its later self/ and shaft/ edits from the judge (review 2026-11-08). The
+    # cut marks count against the limit; when the files are too many for each to get a useful share, the smallest
+    # changes are shown and the rest are named.
+    mark, floor = 60, 400
+    order = sorted(range(len(parts)), key=lambda i: len(parts[i]))
+    shown, rest, budget = order, [], limit
+    if len(parts) * floor > limit:
+        listing = lambda r: f"[... {len(r)} more files changed, not shown: " + ", ".join(names[i] for i in r)  # noqa: E731
+        shown = order[:max(0, limit // floor - 1)]
+        rest = sorted(order[len(shown):])
+        budget = limit - min(len(listing(rest)), floor) - 4
+    share, kept, left = {}, 0, len(shown)
+    for i in shown:
+        room = (budget - kept) // left
+        share[i] = len(parts[i]) if len(parts[i]) <= room else max(0, room - mark)
+        kept, left = kept + min(len(parts[i]), room), left - 1
+    out = "".join(parts[i] if share[i] >= len(parts[i]) else
+                  parts[i][:share[i]] + f"\n[... this file's diff cut here: {len(parts[i])} chars in all]\n"
+                  for i in sorted(shown))
+    if rest:
+        named = listing(rest)
+        out += (named if len(named) <= floor - 4 else named[:floor - 6] + " …") + "]\n"
+    return out
 
 
 # -- one run of one past cycle -----------------------------------------------------------------------------
@@ -589,7 +606,7 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
     record = {"exit": code_, "ended": ended, "seconds": round(time.monotonic() - started, 1), "model": model,
               "episode": episode, "trace": broker.trace, "diff": file_diff(before, _files_now(dest)),
               "usage": usage, "usd": round(_cloud_usd(billed) - usd_before, 6),
-              "output_tail": out_path.read_text(errors="replace")[-1500:]}
+              "output_tail": out_path.read_text(errors="replace")[-1500:], "last_call_failed": _last_call_failed(dest)}
     record["completed"] = (code_ == 0 and ended == "ok" and bool(episode)
                            and (bool(episode.get("intent")) if kind == "live" else episode.get("ended_by") == "answer"))
     return record
@@ -607,6 +624,15 @@ def _new_episodes(root: Path, seen: set[str]) -> list[dict]:
         except ValueError:
             continue
     return sorted(out, key=lambda e: e.get("ts", ""))
+
+
+def _last_call_failed(root: Path) -> bool:
+    """Whether the replay's last model call logged an error (a run that recovered from one did not die of it)."""
+    lines = safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines()
+    try:
+        return bool(lines and json.loads(lines[-1]).get("error"))
+    except ValueError:
+        return False
 
 
 def _llm_usage(root: Path) -> dict:
@@ -772,17 +798,27 @@ def _judge_usd(purpose: str) -> float:
     return usd
 
 
+# How a run that died on its provider ends its output: the model client's HTTP, connection and stream errors (a
+# stream error is raised without being logged as one, template shaft/llm.py).
+_PROVIDER_DEATH = re.compile(r"\b(?:LLMError|Transient)\b[^\n]*?(?:HTTP \d{3}|cannot reach LLM|stream error|LLM call to \S+ "
+                             r"failed after)")
+
+
 def infra_failure(rec: dict) -> str:
     """Why a run failed on its provider rather than on its own work, or ''. Such a run says nothing about the model
-    or the code: a Mercury 3 run cut by HTTP 429 after three retries was scored a loss twice (review 2026-11-08). Only
-    errors the model client logged count, on a run that then died; a refusal the provider returned as an answer is
-    the path's own behaviour and stays a failure of the run (it recurs on the same cycle)."""
+    or the code: a Mercury 3 run cut by HTTP 429 after three retries was scored a loss twice (review 2026-11-08).
+    The run must have died of it: its last model call failed, or its output ends on the client's provider error.
+    An error it recovered from, a timeout, or a refusal the provider returned as an answer (it recurs on the same
+    cycle) are the run's own. Records from before `last_call_failed` was kept fall back to any logged error."""
     if str(rec.get("ended") or "").startswith("not replayed"):
         return str(rec["ended"])
     for r in [*(rec.get("cycles") or []), *(rec.get("sleeps") or [])] or [rec]:
+        if r.get("completed") or r.get("exit") in (0, None) or r.get("ended") == "timeout":
+            continue
         usage = r.get("usage") or {}
-        if not r.get("completed") and r.get("exit") not in (0, None) and (usage.get("errors") or 0) > 0:
-            return f"its model calls failed on the provider ({usage['errors']} of {usage.get('calls')} calls)"
+        last = r.get("last_call_failed", (usage.get("errors") or 0) > 0)
+        if last or _PROVIDER_DEATH.search(str(r.get("output_tail") or "")):
+            return f"its model calls failed on the provider ({usage.get('errors') or 0} of {usage.get('calls')} calls)"
     return ""
 
 
@@ -1509,7 +1545,8 @@ def describe(t: dict) -> str:
     done = sum(1 for s in t["states"] if s["status"] != "pending")
     head = f"- {t['id']} ({t['by']}) · {t['status']}"
     if t["status"] == "done":
-        head += f" · **{v.get('label')}** W{v.get('W')} L{v.get('L')} T{v.get('T')} p={v.get('p')} · ${v.get('usd', 0):.2f}"
+        head += (f" · **{v.get('label')}** W{v.get('W')} L{v.get('L')} T{v.get('T')}"
+                 + (f" S{v['S']}" if v.get("S") else "") + f" p={v.get('p')} · ${v.get('usd', 0):.2f}")
     elif t["status"] == "queued":
         head += f" · {done}/{len(t['states'])} past cycles replayed"
     files = ", ".join(f"{f['path']} ({(f['sha256'] or 'deleted')[:12]})" for f in t["files"])

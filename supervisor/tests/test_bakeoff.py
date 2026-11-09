@@ -396,10 +396,11 @@ class ReviewFixesTest(unittest.TestCase):
                 rec.update(completed=False, exit=1, usage={"calls": 17, "errors": 3})   # HTTP 429 (Mercury, 11-05)
             return rec
         b = self.create(arms=("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/deepseek/deepseek-v4.1-flash"))
-        with mock.patch.object(trial, "replay_arm", side_effect=replay):
-            bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)
-            self.assertEqual({bakeoff._outcome(b, s, "openrouter/deepseek/deepseek-v4.1-flash") for s in b["states"]
-                              if s["outcomes"]} | {"unjudged"}, {"unjudged"})
+        with mock.patch.object(trial, "replay_arm", side_effect=replay), \
+                mock.patch.object(trial, "judge_pair", side_effect=AssertionError("judged")):
+            bakeoff.run(b, parallel=1, project=self.tmp)   # judged: decide() settles it, unjudged, no judge called
+            self.assertEqual([s["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"] for s in b["states"]],
+                             ["unjudged", "unjudged"])   # was a loss each (Mercury 3, 11-05)
             bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)   # the resume replays both states in full
         self.assertEqual(len(calls), 8)
         self.assertTrue(all(r["completed"] for s in b["states"] for r in s["arms"].values()))
@@ -476,3 +477,31 @@ class DrawTest(unittest.TestCase):
             d = bakeoff.draw("thelos", 24, since="x")
         kinds = [bakeoff.stratum(next(e for e in pool if e["ts"] == ts)) for ts in d["episodes"]]
         self.assertEqual((kinds.count("check"), kinds.count("writes")), (17, 7))   # 70/30 of 24, at least 4 each
+
+
+class ReviewFixesFollowUpTest(unittest.TestCase):
+    """The Codex review of the 2026-11-08 fixes."""
+    setUp, create = BakeoffTest.setUp, BakeoffTest.create
+    replayed, write = SubagentJudgeTest.replayed, SubagentJudgeTest.write
+
+    def test_a_case_written_by_an_older_run_text_is_exported_again(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        first = bakeoff.export_cases(b, out)
+        self.write(out, bakeoff._mapping(out))
+        self.assertEqual(bakeoff.export_cases(b, out), [])
+        with mock.patch.object(bakeoff, "CASE_VERSION", bakeoff.CASE_VERSION + 1):   # what a judge sees changed
+            again = bakeoff.export_cases(b, out)
+            self.assertEqual(len(again), 4)
+            self.assertFalse(set(again) & set(first))
+            bakeoff.import_verdicts(b, out)   # the old verdicts are on the old text: none counts
+        self.assertEqual({o["outcome"] for s in b["states"] for o in s["outcomes"].values()}, {"unjudged"})
+
+    def test_an_offset_is_converted_not_dropped(self):
+        local = datetime(2026, 11, 8, 9, 0)
+        utc = (local - local.astimezone().utcoffset()).strftime("%Y-%m-%dT%H:%M:%SZ")   # the same instant
+        self.assertEqual(bakeoff._local(utc), local)
+        self.assertEqual(bakeoff._local("2026-11-08T09:00:00"), local)
+
+    def test_draw_refuses_a_size_below_one(self):
+        with self.assertRaises(bakeoff.BakeoffError):
+            bakeoff.draw("thelos", 0, since="2026-11-07T00:00:00")
