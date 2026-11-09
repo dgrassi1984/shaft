@@ -73,8 +73,8 @@ OpenAI chat fields. It does not promise the full OpenAI API contract.
 | Route | Request | Success |
 |---|---|---|
 | `GET /v1/models` | Chat bearer key and allowed tailnet login | `200`, `{"object":"list","data":[{"id":"example","object":"model","created":0,"owned_by":"shaft"}]}` |
-| `POST /v1/chat/completions` | JSON `model` equal to an instance name; `messages` ending in a user message; optional `stream`, default false | `200` JSON completion, or SSE when streaming |
-| `POST /v1/chat/interject` | Same model and conversation identity; `messages` ending in a nonempty user message | `202`, `{"interjected":true,"talk_id":"…"}`; `409 conflict` if no reply is outstanding |
+| `POST /v1/chat/completions` | JSON `model` equal to an instance name; `messages` ending in a user message; optional `stream`, default false; optional `voice` | `200` JSON completion, or SSE when streaming |
+| `POST /v1/chat/interject` | Same model and conversation identity; `messages` ending in a nonempty user message; optional `voice` | `202`, `{"interjected":true,"talk_id":"…"}`; `409 conflict` if no reply is outstanding |
 | `POST /v1/chat/end` | JSON `model`; identify the conversation with `X-Shaft-Conversation` or `messages` | `202`, `{"ended":"…"}`; write-up requested in the background |
 | `POST /v1/inbox/<instance>` | Inbox bearer key alone, or chat key and allowed login; text or JSON body | `202`, `{"delivered":"…","instance":"example","source":"ci","wake":"…"}` |
 
@@ -83,6 +83,12 @@ or OpenAI content parts. Interject extracts only text parts from its last messag
 Client system messages precede SHAFT's delivery instruction; the instance's own
 identity and memory still apply. Fields such as `temperature`, `max_tokens`, and
 client tool definitions are not forwarded from the top-level request.
+
+`"voice": true` (a JSON `true`; anything else is a typed turn) says the last user message was spoken and the reply
+will be read aloud. The instance's request carries it: the instance adds one note to its prompt (`prompts.VOICE_NOTE`),
+uses `VOICE_REASONING_EFFORT` for the reply's model calls when that is set ([configuration](configuration.md)), and
+marks both talk episodes `voice`. On an interjection it marks that message's episode. A judge shown a spoken turn is
+told its text is transcribed speech and may contain recognition errors.
 
 | Header | Meaning |
 |---|---|
@@ -109,6 +115,37 @@ The final chunk has an empty delta, `finish_reason:"stop"`, and
 `reply_error:{message: str,tools_ran: bool}`. If no answer content exists, a
 preceding content delta contains `[error: …]`. The stream ends with
 `data: [DONE]`. After streaming starts, errors stay in the HTTP 200 stream.
+
+Only the reply's last step is its `content`: text written before a tool call is narration and arrives as
+`reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. A `voice`
+request's stream is the same stream with extra chunks in between: each has an empty delta and a top-level
+`shaft_event` (a typed request never gets one).
+
+| `shaft_event.type` | Fields | Sent |
+|---|---|---|
+| `draft` | `text` | each piece of text the model writes, as it arrives, before the step is known to be the answer |
+| `step_end` | `answer` (bool) | after a step's drafts: `true` when that text is the answer (its whole text then comes as `content`), `false` when the step went on to call a tool (narration) |
+| `status` | `phase`, `detail` | each status of the reply, the wait for a running cycle included |
+| `tool_start` | `name` | a tool call started |
+| `tool_end` | `name`, `ok` (bool) | it finished |
+
+For a reply that checks the weather and answers:
+
+```
+{"role":"assistant","content":""}                      delta
+{"type":"status","phase":"waiting for the model","detail":""}   (after its reasoning_content line)
+{"type":"draft","text":"Let me check "}
+{"type":"draft","text":"the weather."}
+{"type":"step_end","answer":false}
+reasoning_content "Let me check the weather.\n", then "⚙ get_weather …\n"
+{"type":"tool_start","name":"get_weather"}
+reasoning_content "✓ get_weather\n", then {"type":"tool_end","name":"get_weather","ok":true}
+reasoning_content "waiting for the model\n", then its status event
+{"type":"draft","text":"It is "}  {"type":"draft","text":"sunny."}
+{"type":"step_end","answer":true}
+content "It is sunny."
+the final chunk (finish_reason "stop"), then data: [DONE]
+```
 
 End returns `400` without a conversation identity, `404 not_found` when none is
 open, and `409 conflict` while a reply is outstanding. Interject returns `400`

@@ -227,6 +227,8 @@ creating an instance with `git show template:shaft/config.py` and
 | `TALK_REPLY_MAX_CALLS` | `20` | uses built-in default |
 | `TALK_REPLY_MAX_S` | `300` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
+| `VOICE_MODE` | `'off'` | `off` |
+| `VOICE_REASONING_EFFORT` | `''` | empty |
 | `LOOP_GUARD` | `'on'` | `on` |
 | `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
@@ -275,6 +277,15 @@ call finishes normally. Set either knob to 0 to disable that budget.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length, the limit and how many characters to cut, asking for the deliverable's check rather than ritual
 clauses, and ends with the draft so the instance can trim it in one retry (review I8; never trimmed silently).
+
+### Voice turns
+
+`VOICE_MODE` (`on`/`off`, default `off`) offers voice mode for the instance: the app shows its Talk button only when it
+is `on`. `VOICE_REASONING_EFFORT` is the reasoning effort of spoken turns only: empty (the default) means
+`LLM_REASONING_EFFORT`, otherwise one of the values `LLM_REASONING_EFFORT` accepts; any other value is refused with a
+warning and stays empty. A spoken turn is a chat request with `"voice": true`
+([API](web-and-api.md#v1-wire-contract)): the instance adds `prompts.VOICE_NOTE` to that reply's prompt, makes every
+model call of the reply with this effort, and marks the turn's talk episodes `voice`. Typed turns are unchanged.
 
 ### Sleep feedback
 
