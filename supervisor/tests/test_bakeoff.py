@@ -763,3 +763,24 @@ class InstanceRankingTest(unittest.TestCase):
         alone = bakeoff.ranking(None, "thelos")                    # the list page: the instance on its own
         self.assertEqual([r["arm"] for r in alone], [r["arm"] for r in r1])
         self.assertEqual(bakeoff.judged_instances(), ["thelos"])
+
+
+class RankingCostTest(InstanceRankingTest):
+    """$/cycle on the ranking (operator, 2026-11-09): billed dollars, or a plan arm's tokens at list price."""
+
+    def test_cost_per_cycle_billed_or_at_list_price_for_a_plan_arm(self):
+        usage = self.tmp / "cloud_usage.jsonl"
+        rows = [{"instance": "thelos@bakeoff:n24:s0:codex/gpt-6.1-sol", "input_tokens": 200_000,
+                 "cached_input_tokens": 150_000, "output_tokens": 1000},
+                {"instance": "thelos@bakeoff:other:s0:codex/gpt-6.1-sol", "input_tokens": 9_000_000}]   # another bake-off
+        usage.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        b = self.record("n24", ["codex/gpt-6.1-sol", "ds"], [("codex/gpt-6.1-sol", "ds", "ds")])
+        b["states"][0]["arms"]["ds"]["usd"] = 0.04
+        (self.tmp / "thelos-n24.json").write_text(json.dumps(b))
+        bakeoff._COSTS.clear()
+        with mock.patch("supervisor.cloudllm.USAGE", usage):
+            cost = {r["arm"]: r["cost"] for r in bakeoff.ranking(b)}
+        self.assertEqual(cost["ds"], {"usd": 0.04, "plan": False})
+        self.assertTrue(cost["codex/gpt-6.1-sol"]["plan"])
+        # 50K uncached at $2/M + 150K cached at $0.10/M + 1K out at $10/M
+        self.assertAlmostEqual(cost["codex/gpt-6.1-sol"]["usd"], 0.1 + 0.015 + 0.01)

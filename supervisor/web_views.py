@@ -1742,20 +1742,29 @@ def _elo_cell(e: dict) -> str:
     return f"{e['elo']} [{e['lo']}, {e['hi']}]" if e["n"] else f"{e['elo']} (no pair yet)"
 
 
+def _cost_cell(c: dict) -> str:
+    if c.get("usd") is None:
+        return "plan" if c.get("plan") else "—"
+    return f"plan (≈ ${c['usd']:.3f} at list price)" if c.get("plan") else f"${c['usd']:.3f}"
+
+
 def bakeoff_ranking(rank: list[dict], instance: str = "", here: bool = True) -> Html:
     body = [[str(k), _short(r["arm"]) + (" · baseline" if r.get("baseline") else "")
              + ("" if r.get("in_this", True) else " · not in this bake-off"),
              _elo_cell(r["you"]), f"{r['you']['n']}" + (f" ({r.get('here', 0)} here)" if here else ""),
-             _elo_cell(r["llm"]), str(r["llm"]["n"])] for k, r in enumerate(rank, 1)]
+             _elo_cell(r["llm"]), str(r["llm"]["n"]), _cost_cell(r.get("cost") or {})] for k, r in enumerate(rank, 1)]
     return h('<section class="panel"><h2>Ranking{of}</h2>{t}<p class="muted">One ranking for the instance: Elo from '
              'all your verdicts in all its bake-offs, any pair; every model starts at 1000 and moves with each pair '
              'it is in (a win counts 1, equal and both bad ½, a loss 0; a Bradley-Terry fit, with a weak pull toward '
              '1000 so a few pairs cannot run away). In brackets the 90% range: models whose ranges overlap are not yet '
              'told apart. Beside it, the LLM judges\' Elo on the same scale from the same bake-offs (each model '
-             'against that bake-off\'s baseline only). It changes with each verdict you save. Bake-offs replay '
+             'against that bake-off\'s baseline only). $/cycle is the average cost of one replayed cycle in the same bake-offs: '
+             'billed dollars, or for a model on the Codex plan (which bills nothing per call) what its tokens would cost '
+             'at OpenRouter\'s list price, cached input at the cached rate. It changes with each verdict you save. Bake-offs replay '
              'different cycles and code: pooling them assumes a model is as good in one as in another.</p></section>',
              of=f" of {instance}" if instance else "",
-             t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs"], body))
+             t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs", "$/cycle"],
+                     body))
 
 
 def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str, rank: list[dict] | None = None) -> Html:

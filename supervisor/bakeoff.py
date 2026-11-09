@@ -882,6 +882,65 @@ def _llm_games(b: dict) -> list[tuple[str, str, float]]:
             for o in (_outcome(b, s, a["label"]) for s in b["states"]) if o in ("win", "loss", "tie")]
 
 
+# OpenRouter's list prices ($ per million tokens: input, output, cached input) of the models a plan serves, to show
+# what a plan arm's replays would have cost (the plan bills nothing per call). openrouter.ai/api/v1/models, 2026-11-09.
+PLAN_LIST_PRICES = {"codex/gpt-6.1-sol": (2.0, 10.0, 0.10), "codex/gpt-6-astra": (10.0, 50.0, 1.0)}
+
+
+def _plan_estimates(name: str, bid: str) -> dict[str, float]:
+    """A plan arm's replays at list price ($ in all), from the cloud usage log: its own input, cached input and output
+    tokens, billed under "<name>@bakeoff:<id>:s<i>:<arm>"."""
+    from .cloudllm import USAGE
+    prefix, sums = f"{name}@bakeoff:{bid}:", {}
+    if not USAGE.exists():
+        return {}
+    with USAGE.open(errors="replace") as f:
+        for line in f:
+            if prefix not in line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            arm = str(r.get("instance", "")).split(":", 3)[-1]
+            if arm not in PLAN_LIST_PRICES or not str(r.get("instance", "")).startswith(prefix):
+                continue
+            pin, pout, pcache = PLAN_LIST_PRICES[arm]
+            cached = r.get("cached_input_tokens") or 0
+            sums[arm] = sums.get(arm, 0.0) + ((r.get("input_tokens") or 0) - cached) * pin / 1e6 \
+                + cached * pcache / 1e6 + (r.get("output_tokens") or 0) * pout / 1e6
+    return sums
+
+
+_COSTS: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+def _costs(b: dict) -> dict[str, dict]:
+    """Per arm: the dollars its replays were billed, how many replays, and for a plan arm the list-price estimate.
+    Kept until the record changes: verdicts do not change it, and the usage log runs to tens of MB."""
+    try:
+        mtime = path(b["name"], b["id"]).stat().st_mtime
+    except OSError:
+        mtime = None
+    hit = _COSTS.get((b["name"], b["id"]))
+    if mtime is not None and hit and hit[0] == mtime:
+        return hit[1]
+    got = _costs_now(b)
+    if mtime is not None:
+        _COSTS[(b["name"], b["id"])] = (mtime, got)
+    return got
+
+
+def _costs_now(b: dict) -> dict[str, dict]:
+    est = _plan_estimates(b["name"], b["id"]) if any(a["label"] in PLAN_LIST_PRICES for a in b["arms"]) else {}
+    out = {}
+    for a in b["arms"]:
+        recs = [s["arms"][a["label"]] for s in b["states"] if a["label"] in s["arms"]]
+        out[a["label"]] = {"usd": sum(r.get("usd") or 0 for r in recs), "n": len(recs),
+                           "est": est.get(a["label"]) if a["label"] in PLAN_LIST_PRICES else None}
+    return out
+
+
 _POOLED: dict[tuple[str, str], tuple[tuple, dict]] = {}
 _POOLED_LOCK = threading.Lock()
 
@@ -894,7 +953,7 @@ def _pooled(name: str, bid: str, b: dict | None = None) -> dict | None:
         stamp = (rec.stat().st_mtime, op.stat().st_mtime if op.exists() else 0.0)
     except OSError:   # no record on disk: only the one in hand, not kept
         if b is not None and b.get("id") == bid:
-            return {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b)}
+            return {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b), "costs": _costs(b)}
         return None
     with _POOLED_LOCK:
         hit = _POOLED.get((name, bid))
@@ -903,10 +962,22 @@ def _pooled(name: str, bid: str, b: dict | None = None) -> dict | None:
     b = b if b is not None and b.get("id") == bid else load(name, bid)
     if not b:
         return None
-    got = {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b)}
+    got = {"arms": [a["label"] for a in b["arms"]], "games": _games(b), "llm": _llm_games(b), "costs": _costs(b)}
     with _POOLED_LOCK:
         _POOLED[(name, bid)] = (stamp, got)
     return got
+
+
+def _cost_per_cycle(parts: list[dict], arm: str) -> dict:
+    """An arm's average replay cost per cycle over the pooled bake-offs: billed dollars, or for a plan arm its
+    list-price estimate (`plan` true)."""
+    n = sum(p["costs"].get(arm, {}).get("n", 0) for p in parts)
+    if not n:
+        return {"usd": None, "plan": False}
+    if arm in PLAN_LIST_PRICES:
+        est = [p["costs"][arm]["est"] for p in parts if arm in p["costs"] and p["costs"][arm]["est"] is not None]
+        return {"usd": sum(est) / n if est else None, "plan": True}
+    return {"usd": sum(p["costs"].get(arm, {}).get("usd", 0) for p in parts) / n, "plan": False}
 
 
 def judged_instances() -> list[str]:
@@ -928,7 +999,7 @@ def ranking(b: dict | None, name: str = "") -> list[dict]:
     mine, theirs = bradley_terry(games, arms), bradley_terry(llm, arms)
     here = _games(b) if b else []
     base = b["arms"][0]["label"] if b else ""
-    rows = [{"arm": a, "baseline": a == base, "you": mine[a], "llm": theirs[a],
+    rows = [{"arm": a, "baseline": a == base, "you": mine[a], "llm": theirs[a], "cost": _cost_per_cycle(parts, a),
              "here": sum(a in g[:2] for g in here), "in_this": not b or a in [x["label"] for x in b["arms"]]}
             for a in arms]
     return sorted(rows, key=lambda r: -r["you"]["elo"])
