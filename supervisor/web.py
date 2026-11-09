@@ -593,11 +593,12 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         f = req.form()
         try:
-            arm = int(f.get("arm", ""))
-            if not 1 <= arm < len(b["arms"]):
+            x, y = int(f.get("x", "")), int(f.get("y", ""))
+            if not (0 <= x < len(b["arms"]) and 0 <= y < len(b["arms"])) or x == y:
                 raise ValueError
-            bakeoff.operator_record(b, int(f.get("state", "")), b["arms"][arm]["label"], f.get("choice", ""),
-                                    f.get("note", ""), (req.headers.get("tailscale-user-login") or "").lower(),
+            bakeoff.operator_record(b, int(f.get("state", "")), (b["arms"][x]["label"], b["arms"][y]["label"]),
+                                    f.get("choice", ""), f.get("note", ""),
+                                    (req.headers.get("tailscale-user-login") or "").lower(),
                                     runs=f.get("runs", "") or "missing")
         except (ValueError, bakeoff.BakeoffError) as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e) or "Not a pair of this bake-off."))
@@ -816,19 +817,34 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _html(200, v.experiments_page(live, name, names, csrf))
     if path == "/bakeoffs":
         from . import bakeoff
-        return _html(200, v.bakeoffs_page(bakeoff.saved(), names, csrf))
+        return _html(200, v.bakeoffs_page(bakeoff.saved(), names, csrf,
+                                          {n: bakeoff.ranking(None, n) for n in bakeoff.judged_instances()}))
+    if m := re.fullmatch(r"/bakeoffs/([A-Za-z0-9_-]+)/judge-all", path):   # every bake-off of it already judged
+        from . import bakeoff
+        mine = [s for s in bakeoff.saved() if s["name"] == m[1]]
+        if not mine:
+            return None
+        bs = [b for s in mine if bakeoff.operator_path(s).exists() and (b := bakeoff.load(m[1], s["id"]))]
+        nxt = bakeoff.operator_next(bs)
+        if not nxt:
+            return _html(200, v.bakeoff_judge_page(bs[0] if bs else {"name": m[1], "id": ""}, None, 0, [], names, csrf,
+                                                   back="/bakeoffs"))
+        b, i, pair, left = nxt
+        return _html(200, v.bakeoff_judge_page(b, bakeoff.operator_case(b, i, pair), left, [], names, csrf,
+                                               back="/bakeoffs"))
     if m := re.fullmatch(r"/bakeoffs/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)(/judge)?", path):
         from . import bakeoff
         b = bakeoff.load(m[1], m[2])
         if not b:
             return None
         if not m[3]:
-            return _html(200, v.bakeoff_page(b, bakeoff.operator_summary(b), names, csrf))
+            return _html(200, v.bakeoff_page(b, bakeoff.operator_summary(b), names, csrf, bakeoff.ranking(b)))
         raw = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query).get("vs", [])
-        vs = sorted({int(x) for x in raw if re.fullmatch(r"[0-9]{1,3}", x) and 1 <= int(x) < len(b["arms"])})
-        todo = bakeoff.operator_queue(b, [b["arms"][k]["label"] for k in vs])
-        case = bakeoff.operator_case(b, *todo[0]) if todo else None
-        return _html(200, v.bakeoff_judge_page(b, case, len(todo), vs, names, csrf))
+        vs = sorted({int(x) for x in raw if re.fullmatch(r"[0-9]{1,3}", x) and 0 <= int(x) < len(b["arms"])}) \
+            or list(range(len(b["arms"])))   # none ticked: every model
+        nxt = bakeoff.operator_next([b], lambda _: [b["arms"][k]["label"] for k in vs])
+        case = bakeoff.operator_case(b, nxt[1], nxt[2]) if nxt else None
+        return _html(200, v.bakeoff_judge_page(b, case, nxt[3] if nxt else 0, vs, names, csrf))
     if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""

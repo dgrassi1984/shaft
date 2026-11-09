@@ -3,6 +3,7 @@ browser), forged requests refused, instance-written text never running as markup
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -398,7 +399,7 @@ class BakeoffJudgePagesTest(WebTest):
         page = self.req("/bakeoffs/wren/x1", cookie=cookie)
         self.assertEqual(page.status, 200)
         self.assertIn(b"Judge pairs", page.body)
-        judge = self.req("/bakeoffs/wren/x1/judge?vs=1", cookie=cookie)
+        judge = self.req("/bakeoffs/wren/x1/judge", cookie=cookie)   # nothing ticked: every model
         self.assertEqual(judge.status, 200)
         self.assertIn(b"Run A", judge.body)
         self.assertNotIn(b"<script>alert", judge.body)          # instance-written text never runs as markup
@@ -415,16 +416,38 @@ class BakeoffJudgePagesTest(WebTest):
             "/bakeoffs/wren/x1/judge", "POST", cookie=cookie, body=body.encode(),
             headers={"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded",
                      **({"x-csrf-token": self.csrf(cookie)} if token else {})})
-        runs = self.bakeoff.operator_case(self.bakeoff.load("wren", "x1"), 0, "openrouter/deepseek/deepseek-v4.1-flash")["runs"]
-        self.assertEqual(post(f"state=0&arm=1&choice=A&runs={runs}", token=False).status, 403)
-        self.assertEqual(post("state=0&arm=1&choice=A").status, 409)            # no fingerprint of what was shown
-        self.assertEqual(post("state=0&arm=1&choice=A&runs=stale").status, 409)
-        self.assertEqual(post(f"state=0&arm=1&choice=maybe&runs={runs}").status, 409)
-        self.assertEqual(post(f"state=0&arm=0&choice=A&runs={runs}").status, 409)   # the baseline is not a candidate
-        self.assertEqual(post(f"state=0&arm=1&choice=A&note=crisper&runs={runs}").status, 200)
+        pair = ("codex/gpt-6.1-sol", "openrouter/deepseek/deepseek-v4.1-flash")
+        runs = self.bakeoff.operator_case(self.bakeoff.load("wren", "x1"), 0, pair)["runs"]
+        self.assertEqual(post(f"state=0&x=0&y=1&choice=A&runs={runs}", token=False).status, 403)
+        self.assertEqual(post("state=0&x=0&y=1&choice=A").status, 409)            # no fingerprint of what was shown
+        self.assertEqual(post("state=0&x=0&y=1&choice=A&runs=stale").status, 409)
+        self.assertEqual(post(f"state=0&x=0&y=1&choice=maybe&runs={runs}").status, 409)
+        self.assertEqual(post(f"state=0&x=1&y=1&choice=A&runs={runs}").status, 409)   # a model against itself
+        self.assertEqual(post(f"state=0&x=1&y=0&choice=A&note=crisper&runs={runs}").status, 200)
         b = self.bakeoff.load("wren", "x1")
-        v = self.bakeoff.operator_verdicts(b)[(0, "openrouter/deepseek/deepseek-v4.1-flash")]
+        v = self.bakeoff.operator_verdicts(b)[(0, pair)]
         self.assertEqual((v["choice"], v["note"], v["by"]), ("A", "crisper", ME))
-        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/x1/judge?vs=1", cookie=cookie).body)
-        flipped = self.bakeoff._flipped(b, 0, "openrouter/deepseek/deepseek-v4.1-flash")   # A was the candidate
-        self.assertIn(("1–0–0" if flipped else "0–1–0").encode(), self.req("/bakeoffs/wren/x1", cookie=cookie).body)
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/x1/judge", cookie=cookie).body)
+        ds_won = self.bakeoff._flipped(b, 0, pair)   # A was the second of the pair in name order: deepseek
+        self.assertEqual(v["winner"], pair[1] if ds_won else pair[0])
+        page = self.req("/bakeoffs/wren/x1", cookie=cookie).body.decode()
+        self.assertIn('deepseek-v4.1-flash</td><td data-label="Your pairs">1</td><td data-label="Its W–L–T">'
+                      + ("1–0–0" if ds_won else "0–1–0"), page)
+        self.assertIn("<h2>Ranking of wren</h2>", page)             # the instance's ranking, updated by this verdict
+        ds = re.search(r"deepseek-v4.1-flash</td><td data-label=\"Your Elo \[90%\]\">(\d+) \[", page)
+        self.assertTrue(ds and (int(ds[1]) > 1000) == ds_won, page[-3000:])   # moved from 1000 by the verdict
+
+    def test_judging_across_all_bake_offs_of_the_instance(self):
+        cookie = self.paired()
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/judge-all", cookie=cookie).body)   # none started
+        b = self.bakeoff.load("wren", "x1")
+        pair = ("codex/gpt-6.1-sol", "openrouter/deepseek/deepseek-v4.1-flash")
+        self.bakeoff.operator_path(b).parent.mkdir(parents=True, exist_ok=True)
+        self.bakeoff.operator_path(b).write_text("")   # judging started on it
+        page = self.req("/bakeoffs/wren/judge-all", cookie=cookie)
+        self.assertEqual(page.status, 200)
+        self.assertIn(b"Run A", page.body)
+        self.assertIn(b'data-post="/bakeoffs/wren/x1/judge"', page.body)   # the verdict goes to the pair's bake-off
+        self.assertIn(b"/bakeoffs/wren/judge-all", self.req("/bakeoffs", cookie=cookie).body)
+        self.assertEqual(self.req("/bakeoffs/nobody/judge-all", cookie=cookie).status, 404)
+

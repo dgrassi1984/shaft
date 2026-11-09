@@ -509,11 +509,12 @@ class ReviewFixesFollowUpTest(unittest.TestCase):
 
 
 class OperatorJudgeTest(unittest.TestCase):
-    """The operator as judge: pairs shown blind as A and B with what each run would have put in front of them, their
-    verdicts kept apart and set beside the LLM judges' (review 2026-11-09: the rubric was not the operator's)."""
+    """The operator as judge: any two models on one cycle, shown blind as A and B with what each run would have put
+    in front of them; verdicts kept apart and set beside the LLM judges' (operator, 2026-11-09)."""
     setUp, create = BakeoffTest.setUp, BakeoffTest.create
+    ARMS = ("openrouter/xiaomi/mimo-v2.6-pro", "claude-haiku-5-5", "openrouter/deepseek/deepseek-v4.1-flash")
 
-    def replayed(self):
+    def replayed(self, arms=ARMS):
         def replay(project, name, st, code, *, model, cache, cache_lock, billed, env):
             rec = _rec(model)
             rec["trace"] = [{"tool": "send_message", "args": json.dumps({"to": "operator", "text": f"hello from {model}"}),
@@ -522,74 +523,81 @@ class OperatorJudgeTest(unittest.TestCase):
                            "--- a/memory/journal.md\n+++ b/memory/journal.md\n@@ -1 +1,2 @@\n x\n+y\n")
             rec["episode"] = {"intent": {"goal": "check the inbox"}, "finish": {"what_happened": f"done by {model}"}}
             return rec
-        b = self.create(arms=("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/deepseek/deepseek-v4.1-flash"))
+        b = self.create(arms=arms)
         with mock.patch.object(trial, "replay_arm", side_effect=replay):
             bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)
         return b
 
-    def test_a_pair_is_shown_blind_and_a_choice_reads_back_as_the_candidate_s_outcome(self):
-        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
-        todo = bakeoff.operator_queue(b, [cand])
-        self.assertEqual(sorted(todo), [(0, cand), (1, cand)])
-        for i, label in todo:
-            case = bakeoff.operator_case(b, i, label, project=self.tmp)
-            text = json.dumps(case).lower()
-            self.assertNotIn("deepseek", text.replace(cand.lower(), ""))   # only in the pair's key, never in what is shown
-            self.assertNotIn("mimo", text)
-            self.assertEqual([f["path"] for f in case["A"]["files"]], ["notes/brief.md"])
-            self.assertEqual(case["A"]["internal"], ["memory/journal.md"])
-            self.assertEqual(case["context"], "ctx")
-            flipped = bakeoff._flipped(b, i, label)
-            shown_a = "candidate" if flipped else "baseline"
-            row = bakeoff.operator_record(b, i, label, "A", "clearer")
-            self.assertEqual(row["outcome"], "win" if shown_a == "candidate" else "loss")
-        self.assertEqual(bakeoff.operator_queue(b, [cand]), [])
-        s = next(r for r in bakeoff.operator_summary(b) if r["arm"] == cand)
-        self.assertEqual((s["judged"], s["left"], s["W"] + s["L"]), (2, 0, 2))
+    def test_the_queue_holds_every_pair_of_the_models_ticked_on_every_cycle(self):
+        b = self.replayed()
+        todo = bakeoff.operator_queue(b, list(self.ARMS))
+        self.assertEqual(len(todo), 2 * 3)   # 2 cycles x 3 pairs, baseline or not
+        self.assertIn((0, bakeoff._pair("claude-haiku-5-5", "openrouter/deepseek/deepseek-v4.1-flash")), todo)
+        self.assertEqual(len(bakeoff.operator_queue(b, list(self.ARMS[1:]))), 2)   # the two candidates only
+
+    def test_a_choice_reads_back_as_the_model_shown_on_that_side(self):
+        b = self.replayed()
+        pair = bakeoff._pair("claude-haiku-5-5", "openrouter/deepseek/deepseek-v4.1-flash")
+        for flipped, choice, winner in ((False, "A", pair[0]), (False, "B", pair[1]), (True, "A", pair[1]),
+                                        (True, "B", pair[0]), (True, "tie", "tie"), (False, "both bad", "both bad")):
+            with self.subTest(flipped=flipped, choice=choice), mock.patch.object(bakeoff, "_flipped", return_value=flipped):
+                case = bakeoff.operator_case(b, 0, pair, project=self.tmp)
+                self.assertEqual(case["A"]["account"], "done by [model]")
+                self.assertNotIn("deepseek", json.dumps({k: case[k] for k in ("A", "B", "context")}).lower())
+                row = bakeoff.operator_record(b, 0, pair, choice, runs=case["runs"])
+                self.assertEqual(row["winner"], winner)
+                self.assertEqual(bakeoff.operator_verdicts(b)[(0, pair)]["winner"], winner)
         with self.assertRaises(bakeoff.BakeoffError):
-            bakeoff.operator_record(b, 0, cand, "first")
+            bakeoff.operator_record(b, 0, pair, "first", runs=case["runs"])
         with self.assertRaises(bakeoff.BakeoffError):
-            bakeoff.operator_record(b, 5, cand, "A")
+            bakeoff.operator_record(b, 0, (pair[0], pair[0]), "A", runs=case["runs"])
+
+    def test_verdicts_from_before_free_pairs_still_count(self):
+        b = self.replayed()
+        base, cand = self.ARMS[0], self.ARMS[2]
+        st = b["states"][1]
+        row = {"state": 1, "arm": cand, "outcome": "win", "runs": bakeoff._runs(st["arms"][base], st["arms"][cand])}
+        bakeoff.operator_path(b).parent.mkdir(parents=True, exist_ok=True)
+        bakeoff.operator_path(b).write_text(json.dumps(row) + "\n")
+        v = bakeoff.operator_verdicts(b)[(1, bakeoff._pair(base, cand))]
+        self.assertEqual(v["winner"], cand)
+        self.assertNotIn((1, bakeoff._pair(base, cand)), bakeoff.operator_queue(b, list(self.ARMS)))
 
     def test_sides_are_drawn_per_pair(self):
         b = self.replayed()
-        sides = {bakeoff._flipped(b, i, f"arm{k}") for i in range(20) for k in range(3)}
-        self.assertEqual(sides, {True, False})   # not one fixed side the operator could learn
+        self.assertEqual({bakeoff._flipped(b, i, ("a", f"m{k}")) for i in range(20) for k in range(3)}, {True, False})
 
-    def test_a_verdict_on_runs_replayed_since_no_longer_counts(self):
-        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
-        bakeoff.operator_record(b, 0, cand, "tie")
-        b["states"][0]["arms"][cand] = {**b["states"][0]["arms"][cand], "usd": 0.09}   # replayed again
-        self.assertNotIn((0, cand), bakeoff.operator_verdicts(b))
-        self.assertIn((0, cand), bakeoff.operator_queue(b, [cand]))
+    def test_a_verdict_on_runs_replayed_since_no_longer_counts_nor_lands(self):
+        b = self.replayed()
+        pair = bakeoff._pair(*self.ARMS[:2])
+        shown = bakeoff.operator_case(b, 0, pair, project=self.tmp)["runs"]
+        bakeoff.operator_record(b, 0, pair, "tie", runs=shown)
+        b["states"][0]["arms"][self.ARMS[1]] = {**b["states"][0]["arms"][self.ARMS[1]], "usd": 0.09}   # replayed
+        self.assertNotIn((0, pair), bakeoff.operator_verdicts(b))
+        with self.assertRaises(bakeoff.BakeoffError):
+            bakeoff.operator_record(b, 0, pair, "A", runs=shown)
 
-    def test_agreement_with_the_llm_judges_counts_only_pairs_they_settled(self):
-        b, cand = self.replayed(), "openrouter/deepseek/deepseek-v4.1-flash"
+    def test_summary_counts_every_pair_and_compares_with_the_llm_judges_only_against_the_baseline(self):
+        b = self.replayed()
+        base, haiku, ds = self.ARMS
         win = {**VERDICT, "winner": "second"}
-        b["states"][0]["outcomes"][cand] = {"outcome": "win", "why": "", "judgments": [win, {**win, "winner": "first"}],
-                                            "judge_usd": 0}
-        b["states"][1]["outcomes"][cand] = {"outcome": "split", "why": "", "judgments": [win, win], "judge_usd": 0}
-        flipped = bakeoff._flipped(b, 0, cand)
-        bakeoff.operator_record(b, 0, cand, "A" if flipped else "B")   # the candidate, as the LLM judges said
-        bakeoff.operator_record(b, 1, cand, "tie")
-        s = next(r for r in bakeoff.operator_summary(b) if r["arm"] == cand)
-        self.assertEqual((s["W"], s["T"], s["agree"], s["compared"]), (1, 1, 1, 1))   # the split is not compared
+        b["states"][0]["outcomes"][ds] = {"outcome": "win", "why": "", "judgments": [win, {**win, "winner": "first"}],
+                                          "judge_usd": 0}
+        for pair, winner_side in (((base, ds), ds), ((haiku, ds), haiku)):
+            pair = bakeoff._pair(*pair)
+            case = bakeoff.operator_case(b, 0, pair, project=self.tmp)
+            a_is = pair[1] if bakeoff._flipped(b, 0, pair) else pair[0]
+            bakeoff.operator_record(b, 0, pair, "A" if a_is == winner_side else "B", runs=case["runs"])
+        rows = {r["arm"]: r for r in bakeoff.operator_summary(b)}
+        self.assertEqual((rows[ds]["W"], rows[ds]["L"], rows[ds]["judged"]), (1, 1, 2))
+        self.assertEqual((rows[ds]["agree"], rows[ds]["compared"]), (1, 1))   # only the pair with the baseline
+        self.assertEqual((rows[haiku]["W"], rows[base]["L"]), (1, 1))
 
 
 class OperatorJudgeReviewTest(unittest.TestCase):
     """The Codex review of the operator pages (2026-11-09)."""
     setUp, create = BakeoffTest.setUp, BakeoffTest.create
-    replayed = OperatorJudgeTest.replayed
     CAND = "openrouter/deepseek/deepseek-v4.1-flash"
-
-    def test_choices_read_back_as_literal_outcomes_whichever_side_the_candidate_is_on(self):
-        b = self.replayed()
-        for flipped, choice, outcome in ((True, "A", "win"), (True, "B", "loss"), (False, "A", "loss"),
-                                         (False, "B", "win"), (True, "tie", "tie"), (False, "both bad", "both bad")):
-            with self.subTest(flipped=flipped, choice=choice), mock.patch.object(bakeoff, "_flipped", return_value=flipped):
-                case = bakeoff.operator_case(b, 0, self.CAND, project=self.tmp)
-                self.assertEqual(case["A" if flipped else "B"]["account"], "done by [model]")   # the candidate's side
-                self.assertEqual(bakeoff.operator_record(b, 0, self.CAND, choice)["outcome"], outcome)
 
     def test_the_diff_is_read_by_headers_and_hunk_lengths(self):
         diff = trial.file_diff({"notes/a.md": b"-- separator\nold\n", "notes/gone.md": b"x\n"},
@@ -606,13 +614,6 @@ class OperatorJudgeReviewTest(unittest.TestCase):
         shown = json.dumps(bakeoff._facing(rec, bakeoff._redactor({"arms": [{"model": self.CAND}]})))
         self.assertNotIn("deepseek", shown.lower())
 
-    def test_a_page_left_open_cannot_judge_runs_replayed_since(self):
-        b = self.replayed()
-        shown = bakeoff.operator_case(b, 0, self.CAND, project=self.tmp)["runs"]
-        b["states"][0]["arms"][self.CAND] = {**b["states"][0]["arms"][self.CAND], "usd": 0.5}   # replayed again
-        with self.assertRaises(bakeoff.BakeoffError):
-            bakeoff.operator_record(b, 0, self.CAND, "A", runs=shown)
-
     def test_a_hyphenated_instance_name_is_listed_whole(self):
         inst = self.tmp / "instances"
         (inst / "wren-east").mkdir(parents=True)
@@ -621,3 +622,196 @@ class OperatorJudgeReviewTest(unittest.TestCase):
         with mock.patch.object(bakeoff, "INSTANCES", inst):
             got = {(s["name"], s["id"]) for s in bakeoff.saved()}
         self.assertIn(("wren-east", "x1"), got)
+
+
+class OperatorEloTest(unittest.TestCase):
+    """The ranking on the bake-off page: every model starts at 1000 and moves with the operator's verdicts on any
+    pair (operator, 2026-11-09: 'start everyone at 1000')."""
+
+    def test_with_no_verdict_everyone_is_at_1000(self):
+        r = bakeoff.bradley_terry([], ["a", "b", "c"])
+        self.assertEqual({v["elo"] for v in r.values()}, {1000})
+        self.assertEqual({v["n"] for v in r.values()}, {0})
+
+    def test_a_win_moves_both_models_the_same_distance_from_1000(self):
+        r = bakeoff.bradley_terry([("a", "b", 1.0)], ["a", "b", "c"])
+        self.assertGreater(r["a"]["elo"], 1000)
+        self.assertEqual(r["a"]["elo"] - 1000, 1000 - r["b"]["elo"])
+        self.assertEqual(r["c"]["elo"], 1000)   # not in the pair: where it started
+        tie = bakeoff.bradley_terry([("a", "b", 0.5)], ["a", "b"])
+        self.assertEqual((tie["a"]["elo"], tie["b"]["elo"]), (1000, 1000))
+
+    def test_a_sweep_stays_finite_and_more_pairs_narrow_the_range(self):
+        sweep = bakeoff.bradley_terry([("a", "b", 1.0)] * 8, ["a", "b"])
+        self.assertTrue(1000 < sweep["a"]["elo"] < 2000)
+        one = bakeoff.bradley_terry([("a", "b", 1.0), ("a", "b", 0.0)], ["a", "b"])["a"]
+        many = bakeoff.bradley_terry([("a", "b", 1.0), ("a", "b", 0.0)] * 20, ["a", "b"])["a"]
+        self.assertGreater(one["hi"] - one["lo"], many["hi"] - many["lo"])
+
+    def test_models_that_never_met_are_ordered_through_the_others(self):
+        games = [("a", "base", 1.0)] * 6 + [("a", "base", 0.0)] * 2 + [("b", "a", 1.0)] * 6 + [("b", "a", 0.0)] * 2
+        r = bakeoff.bradley_terry(games, ["base", "a", "b"])
+        self.assertGreater(r["b"]["elo"], r["a"]["elo"])
+        self.assertGreater(r["a"]["elo"], r["base"]["elo"])
+        self.assertEqual((r["a"]["n"], r["b"]["n"]), (16, 8))
+
+    def test_ranking_orders_by_the_operator_s_elo_and_sets_the_judges_beside_it(self):
+        b = {"name": "wren", "id": "x", "created": "c", "arms": [{"label": "base"}, {"label": "c1"}, {"label": "c2"},
+                                                                {"label": "c3"}], "states": []}
+        verdicts = {(0, ("base", "c1")): {"pair": ["base", "c1"], "winner": "base"},
+                    (1, ("base", "c1")): {"pair": ["base", "c1"], "winner": "base"},
+                    (0, ("base", "c2")): {"pair": ["base", "c2"], "winner": "c2"}}
+        with mock.patch.object(bakeoff, "operator_verdicts", return_value=verdicts):
+            rank = bakeoff.ranking(b)
+        self.assertEqual(rank[0]["arm"], "c2")
+        self.assertEqual(rank[-1]["arm"], "c1")
+        self.assertEqual(next(r for r in rank if r["arm"] == "c3")["you"]["elo"], 1000)
+        self.assertEqual({r["llm"]["elo"] for r in rank}, {1000})   # no LLM verdict in this record
+
+
+class OperatorPendingTest(unittest.TestCase):
+    """An empty-inbox cycle is judged by what was waiting: the queue and the open promises at its start (operator,
+    2026-11-09: 'hard to judge when the inbox is empty')."""
+
+    def test_open_tasks_and_unkept_promises_as_of_the_cycle_s_start(self):
+        queue = [{"id": 1, "status": "done", "task": "old", "due_at": "2026-11-01T09:00"},
+                 {"id": 2, "status": "open", "task": "weekly re-arm", "due_at": "2026-11-07T18:00"},
+                 {"id": 3, "status": "waiting", "task": "reply from Luigi", "due_at": "2026-11-07T09:00"},
+                 {"id": 4, "status": "backlog", "task": "someday"}]
+        promises = "\n".join(json.dumps(e) for e in (
+            {"event": "made", "id": "c1", "promise": "remind at 15:00", "due": "2026-11-07T15:00:00", "made_to": "operator"},
+            {"event": "made", "id": "c2", "promise": "kept already", "due": "2026-11-06T10:00:00"},
+            {"event": "settled", "id": "c2", "status": "kept"}))
+        files = {"notes/queue.json": json.dumps(queue), "memory/commitments.jsonl": promises}
+        st = {"t0": "2026-11-07T14:13:21"}
+        with mock.patch.object(trial, "mind_rev", return_value="r"), \
+                mock.patch("supervisor.mind.show", side_effect=lambda n, r, path, p: files.get(path)):
+            got = bakeoff._pending({"name": "thelos"}, st, lambda t: t)
+        self.assertEqual([(x["id"], x["late"]) for x in got["queue"]], [(3, True), (2, False)])
+        self.assertEqual([(c["promise"], c["late"]) for c in got["commitments"]], [("remind at 15:00", False)])
+        self.assertEqual(got["backlog"], 1)
+        with mock.patch.object(trial, "mind_rev", side_effect=trial.TrialError("no mind")):
+            self.assertEqual(bakeoff._pending({"name": "x"}, st, lambda t: t)["queue"], [])
+
+
+class OperatorSetTest(unittest.TestCase):
+    """A set of the cycles that set out to do what the operator asked, shown with the operator's own last chat
+    before them (operator, 2026-11-09: 'the others are too hard to judge')."""
+
+    def test_draw_of_one_kind_only(self):
+        pool = [{"ts": f"t{i:02d}", "intent": {"origin": "operator" if i % 3 == 0 else "self"}, "tools": []}
+                for i in range(60)]
+        with mock.patch.object(bakeoff, "eligible", return_value=pool):
+            d = bakeoff.draw("thelos", 8, since="x", kind="operator")
+            self.assertEqual(len(d["episodes"]), 8)
+            self.assertTrue(all(int(ts[1:]) % 3 == 0 for ts in d["episodes"]))
+            self.assertEqual((d["kind"], d["population"]["operator"]), ("operator", 20))
+            with self.assertRaises(bakeoff.BakeoffError):
+                bakeoff.draw("thelos", 21, since="x", kind="operator")
+            with self.assertRaises(bakeoff.BakeoffError):
+                bakeoff.draw("thelos", 3, since="x", kind="nonsense")
+
+    def test_the_operator_s_last_chat_before_the_cycle(self):
+        chats = [{"instance": "thelos", "turns": [
+                     {"role": "user", "ts": "2026-11-05T10:41:00", "content": "Prepara la risposta a Concordia\n\n"
+                      "[Web chat: a Markdown file you write under notes/docs/ ...]"},
+                     {"role": "assistant", "ts": "2026-11-05T10:42:00", "content": "Lo faccio nel prossimo ciclo"},
+                     {"role": "user", "ts": "2026-11-05T13:00:00", "content": "after the cycle began"}]},
+                 {"instance": "thelos", "turns": [{"role": "user", "ts": "2026-11-03T09:00:00", "content": "too old"}]}]
+        with mock.patch("supervisor.web_chat.chats", return_value=chats):
+            got = bakeoff._asked("thelos", "2026-11-05T12:33:26", lambda t: t)
+        self.assertEqual([(t["role"], t["text"]) for t in got],
+                         [("you", "Prepara la risposta a Concordia"), ("the instance", "Lo faccio nel prossimo ciclo")])
+        with mock.patch("supervisor.web_chat.chats", return_value=chats[1:]):
+            self.assertEqual(bakeoff._asked("thelos", "2026-11-05T12:33:26", lambda t: t), [])
+
+
+class InstanceRankingTest(unittest.TestCase):
+    """One ranking per instance across its bake-offs (operator, 2026-11-09: 'the ranking must carry over from one
+    bake-off to the next')."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-rank-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for p in (mock.patch.object(bakeoff, "DIR", self.tmp), mock.patch.object(bakeoff, "INSTANCES", self.tmp / "i")):
+            p.start()
+            self.addCleanup(p.stop)
+        bakeoff._POOLED.clear()
+        bakeoff._LOADED.clear()
+
+    def record(self, bid, arms, verdicts):
+        rec = {"exit": 0, "ended": "ok", "completed": True, "usd": 0, "seconds": 1, "usage": {}, "trace": [], "diff": ""}
+        b = {"id": bid, "name": "thelos", "created": "c", "arms": [{"label": a} for a in arms],
+             "states": [{"ts": "t", "t0": "t", "arms": {a: dict(rec, model=a) for a in arms}, "outcomes": {}}]}
+        (self.tmp / f"thelos-{bid}.json").write_text(json.dumps(b))
+        (self.tmp / "operator").mkdir(exist_ok=True)
+        rows = [{"state": 0, "pair": list(bakeoff._pair(x, y)), "winner": w,
+                 "runs": bakeoff._pair_runs(b["states"][0], bakeoff._pair(x, y))} for x, y, w in verdicts]
+        (self.tmp / "operator" / f"thelos-{bid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return b
+
+    def test_verdicts_from_every_bake_off_of_the_instance_make_one_ranking(self):
+        b1 = self.record("n24", ["sol", "ds", "argon"], [("sol", "ds", "ds"), ("sol", "argon", "sol")])
+        b2 = self.record("op24", ["sol", "ds", "hy4"], [("ds", "hy4", "ds")])
+        r1, r2 = bakeoff.ranking(b1), bakeoff.ranking(b2)
+        self.assertEqual([(r["arm"], r["you"]["elo"]) for r in r1], [(r["arm"], r["you"]["elo"]) for r in r2])
+        self.assertEqual(r1[0]["arm"], "ds")                       # 2 wins across the two bake-offs
+        self.assertEqual({r["arm"] for r in r1}, {"sol", "ds", "argon", "hy4"})
+        here = {r["arm"]: r["here"] for r in r2}
+        self.assertEqual((here["ds"], here["sol"]), (1, 0))       # pairs judged in this bake-off
+        self.assertFalse(next(r for r in r2 if r["arm"] == "argon")["in_this"])
+        alone = bakeoff.ranking(None, "thelos")                    # the list page: the instance on its own
+        self.assertEqual([r["arm"] for r in alone], [r["arm"] for r in r1])
+        self.assertEqual(bakeoff.judged_instances(), ["thelos"])
+
+
+class RankingCostTest(InstanceRankingTest):
+    """$/cycle on the ranking (operator, 2026-11-09): billed dollars, or a plan arm's tokens at list price."""
+
+    def test_cost_per_cycle_billed_or_at_list_price_for_a_plan_arm(self):
+        usage = self.tmp / "cloud_usage.jsonl"
+        rows = [{"instance": "thelos@bakeoff:n24:s0:codex/gpt-6.1-sol", "input_tokens": 200_000,
+                 "cached_input_tokens": 150_000, "output_tokens": 1000},
+                {"instance": "thelos@bakeoff:other:s0:codex/gpt-6.1-sol", "input_tokens": 9_000_000}]   # another bake-off
+        usage.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        b = self.record("n24", ["codex/gpt-6.1-sol", "ds"], [("codex/gpt-6.1-sol", "ds", "ds")])
+        b["states"][0]["arms"]["ds"]["usd"] = 0.04
+        (self.tmp / "thelos-n24.json").write_text(json.dumps(b))
+        bakeoff._COSTS.clear()
+        with mock.patch("supervisor.cloudllm.USAGE", usage):
+            cost = {r["arm"]: r["cost"] for r in bakeoff.ranking(b)}
+        self.assertEqual(cost["ds"], {"usd": 0.04, "plan": False})
+        self.assertTrue(cost["codex/gpt-6.1-sol"]["plan"])
+        # 50K uncached at $2/M + 150K cached at $0.10/M + 1K out at $10/M
+        self.assertAlmostEqual(cost["codex/gpt-6.1-sol"]["usd"], 0.1 + 0.015 + 0.01)
+
+
+class OperatorNextTest(InstanceRankingTest):
+    """The next pair shown: a balanced random draw, not a fixed order (operator, 2026-11-09: 'randomize better')."""
+
+    def test_avoids_the_last_cycles_and_pairs_and_favours_the_models_judged_least(self):
+        import random
+        arms = ["a", "b", "c", "d"]
+        b = self.record("x", arms, [("a", "b", "a")])
+        b["states"] += [json.loads(json.dumps(b["states"][0])) for _ in range(3)]   # four cycles
+        (self.tmp / "thelos-x.json").write_text(json.dumps(b))
+        seen, pairs = set(), []
+        for k in range(300):
+            got = bakeoff.operator_next([b], rng=random.Random(k))
+            b_, i, pair, left = got
+            self.assertNotEqual(i, 0)                                # cycle 0 was just judged
+            self.assertNotEqual(set(pair), {"a", "b"})               # nor the two models judged together
+            seen.add(i)
+            pairs.append(pair)
+        self.assertEqual(seen, {1, 2, 3})                            # drawn, not one fixed cycle
+        self.assertEqual(len(set(pairs)), 5)                         # every other pair comes up...
+        self.assertGreater(pairs.count(("c", "d")), pairs.count(("a", "c")))   # ...the never-judged models more often
+        self.assertEqual(left, 4 * 6 - 1)
+
+    def test_draws_across_bake_offs_and_returns_none_when_all_are_judged(self):
+        import random
+        b1 = self.record("n24", ["a", "b"], [("a", "b", "a")])
+        b2 = self.record("op24", ["a", "b"], [])
+        nxt = bakeoff.operator_next([b1, b2], rng=random.Random(1))
+        self.assertEqual((nxt[0]["id"], nxt[3]), ("op24", 1))       # the only pair left is in the other bake-off
+        self.assertIsNone(bakeoff.operator_next([b1]))
