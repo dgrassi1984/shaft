@@ -302,6 +302,28 @@ def get_message(acct: google.Account, space_id: str, message_id: str, as_of: dat
     return msg
 
 
+def when(stamp) -> datetime:
+    """An RFC 3339 time of Google's, compared as a time: a string comparison puts `…00Z` after `…00.5Z`."""
+    return datetime.fromisoformat(str(stamp).replace('Z', '+00:00'))
+
+
+def newer(acct: google.Account, space_id: str, after: str = '') -> list[dict]:
+    """The messages created after `after` (an RFC 3339 time; every message when empty), oldest first: the watch's
+    read. Listed newest first, following every page, up to the first message at or before `after`; a createTime
+    filter on messages.list is not relied on (M0 ruling R16). An edit leaves createTime as it was: it is not new."""
+    sid, bound = _id(space_id), when(after) if after else None
+    rows, token = [], ''
+    while True:
+        found = _get(acct, f'{API}/spaces/{sid}/messages', pageSize=100, pageToken=token, orderBy='createTime DESC')
+        for msg in found.get('messages') or []:
+            if bound is not None and when(msg['createTime']) <= bound:
+                return list(reversed(rows))
+            rows.append(msg)
+        token = found.get('nextPageToken') or ''
+        if not token:
+            return list(reversed(rows))
+
+
 def page(acct: google.Account, space_id: str, *, upto_message: str = '', before: str = '',
          as_of: datetime | None = None, me_id: str = '') -> tuple[list[dict], str]:
     """Newest page, oldest first; keep equal-time groups whole for the exclusive cursor."""
