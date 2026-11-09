@@ -94,13 +94,15 @@ class Client:
                on_retry: Callable[[int, int], None] | None = None,
                tools: list[dict] | None = None,
                on_progress: Callable[[int, int], None] | None = None, think: bool = True,
-               on_tool_text: Callable[[str, int], None] | None = None) -> Reply:
+               on_tool_text: Callable[[str, int], None] | None = None, reasoning_effort: str = "") -> Reply:
         """on_progress(processed, total) reports prompt reading, where the server supports it;
-        on_tool_text(name, chars) a tool call the model is still writing (SHAFT's server)."""
+        on_tool_text(name, chars) a tool call the model is still writing (SHAFT's server);
+        reasoning_effort: this call's effort in place of the client's own (a spoken reply's VOICE_REASONING_EFFORT);
+        "" keeps the client's (LLM_REASONING_EFFORT)."""
         return self._with_retry(messages, max_tokens, purpose, stream=True, tools=tools,
                                 on_content=on_content, on_reasoning=on_reasoning,
                                 on_retry=on_retry, on_progress=on_progress, think=think,
-                                on_tool_text=on_tool_text)
+                                on_tool_text=on_tool_text, reasoning_effort=reasoning_effort)
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
@@ -150,7 +152,8 @@ class Client:
         raise AssertionError("unreachable")
 
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
-              on_content=None, on_reasoning=None, on_progress=None, think=True, on_tool_text=None) -> Reply:
+              on_content=None, on_reasoning=None, on_progress=None, think=True, on_tool_text=None,
+              reasoning_effort="") -> Reply:
         body = {"model": self.model, "messages": images.for_model(messages), "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
@@ -161,10 +164,10 @@ class Client:
         kwargs = {"preserve_thinking": False}
         if not think:   # Qwen-style templates: answer directly, no hidden reasoning
             kwargs["enable_thinking"] = False
-        elif self.reasoning_effort:
+        elif reasoning_effort or self.reasoning_effort:
             # Bonsai's template defaults to xhigh, which thinks until the server's budget cuts it off on
             # anything non-trivial (4,096 tokens, ~4 min); medium thinks as much as the request needs.
-            kwargs["reasoning_effort"] = self.reasoning_effort
+            kwargs["reasoning_effort"] = reasoning_effort or self.reasoning_effort
         if think and self.think_followup and messages and messages[-1].get("role") == "tool":
             # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
             # forces </think> after this many reasoning tokens (its own budget stays the ceiling; llama.cpp ignores it).
