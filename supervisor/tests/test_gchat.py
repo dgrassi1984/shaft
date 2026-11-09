@@ -691,6 +691,19 @@ class ChatGrantsTest(unittest.TestCase):
         self.assertFalse((self.root / 'gchat').exists())
         self.assertEqual(self.cli('wren', 'off')[0], 0)
 
+    def test_off_refuses_account_without_changes(self):
+        grants = [{'account': 'work'}, {'account': 'home'}]
+        self.core.set_gchat_grants('wren', grants)
+        copies = [self.copies(alias) for alias in ('work', 'home')]
+        code, out = self.cli('wren', 'off', 'work')
+        self.assertNotEqual(code, 0)
+        self.assertIn('off takes no account', out)
+        self.assertIn('revoke <alias>', out)
+        self.assertEqual(self.core.gchat_grants('wren'), grants)
+        for path in copies:
+            self.assertEqual((path / 'copy.txt').read_text(), 'copy')
+        self.cli_module.log.assert_not_called()
+
     def test_revoke_removes_only_that_alias(self):
         self.core.set_gchat_grants('wren', [{'account': 'work'}, {'account': 'home'}])
         work, home = self.copies('work'), self.copies('home')
@@ -744,8 +757,26 @@ class ChatGrantsTest(unittest.TestCase):
         self.assertEqual(web_actions.CHECK['gchat'], 'Access')
         with mock.patch.object(web_config, '_ran', return_value=(200, 'ok')) as ran:
             for op in ('grant', 'revoke', 'off'):
-                web_config.run('gchat', 'wren', {'op': op, 'alias': 'work', 'all': '1'})
+                form = {'op': op, 'name': 'wren'}
+                if op != 'off':
+                    form['alias'] = 'work'
+                web_config.run('gchat', 'wren', form)
                 ran.assert_called_with(['gchat', 'wren', op] + ([] if op == 'off' else ['work']))
+
+    def test_web_action_refuses_extra_fields_without_changes(self):
+        from supervisor import web_config, web_actions
+        grants = [{'account': 'work'}]
+        self.core.set_gchat_grants('wren', grants)
+        copies = self.copies('work')
+        with mock.patch.object(web_config, '_ran') as ran:
+            for op in ('grant', 'revoke', 'off'):
+                for field in ('all', 'reach', 'unexpected'):
+                    with self.subTest(op=op, field=field):
+                        with self.assertRaisesRegex(web_actions.Refused, field):
+                            web_config.run('gchat', 'wren', {'op': op, 'alias': 'work', field: '1'})
+                        ran.assert_not_called()
+                        self.assertEqual(self.core.gchat_grants('wren'), grants)
+                        self.assertEqual((copies / 'copy.txt').read_text(), 'copy')
 
     def test_web_form_confirms_every_conversation_and_revoke_deletion(self):
         from supervisor import web_config

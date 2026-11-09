@@ -96,6 +96,9 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         return _ran(["gdrive", name, op, alias] +
                     (["--all"] if op == "grant" and form.get("all") == "1" else []))
     if verb == "gchat":
+        for field in form:
+            if field not in ("op", "alias", "name"):
+                raise Refused(f"gchat does not accept field {field!r}")
         op, alias = form.get("op", ""), form.get("alias", "").strip()
         if op == "off":
             return _ran(["gchat", name, "off"])

@@ -817,6 +817,9 @@ def cmd_gchat(target: str | None, action: str | None, alias: str | None) -> int:
     if action not in ("grant", "revoke", "off") or (action != "off" and not alias):
         print(f"usage: shaft gchat {target} grant <alias> | revoke <alias> | off", file=sys.stderr)
         return 2
+    if action == "off" and alias is not None:
+        print("gchat off takes no account; use revoke <alias>", file=sys.stderr)
+        return 2
     if alias and not google.ALIAS_RE.fullmatch(alias):
         print(f"invalid Google account alias {alias!r}", file=sys.stderr)
         return 2

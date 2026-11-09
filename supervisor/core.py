@@ -694,16 +694,20 @@ def gchat_lock(name: str):
     return _grant_lock(name, "gchat")
 
 
-def remove_gdrive_copies(name: str, alias: str = "") -> None:
+def _remove_google_copies(name: str, folder: str, alias: str) -> None:
     from . import google
     if alias and not google.ALIAS_RE.fullmatch(alias):
         raise ValueError("invalid Google account alias")
-    path = contained(instance_root(name), "gdrive", *([alias] if alias else []))
+    path = contained(instance_root(name), folder, *([alias] if alias else []))
     try:
         shutil.rmtree(path)
     except FileNotFoundError:
         if path.exists():
             raise
+
+
+def remove_gdrive_copies(name: str, alias: str = "") -> None:
+    _remove_google_copies(name, "gdrive", alias)
 
 
 # -- the operator's read-only Google Chat grants ---------------------------------------------------------------
@@ -727,15 +731,7 @@ def set_gchat_grants(name: str, grants: list[dict]) -> list[dict]:
 
 
 def remove_gchat_copies(name: str, alias: str = "") -> None:
-    from . import google
-    if alias and not google.ALIAS_RE.fullmatch(alias):
-        raise ValueError("invalid Google account alias")
-    path = contained(instance_root(name), "gchat", *([alias] if alias else []))
-    try:
-        shutil.rmtree(path)
-    except FileNotFoundError:
-        if path.exists():
-            raise
+    _remove_google_copies(name, "gchat", alias)
 
 
 # -- the operator's calendars an instance may read (docs/plans/PLAN-calendar.md) ----------------------------------------------
