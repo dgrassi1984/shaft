@@ -368,7 +368,7 @@ class SearchTest(unittest.TestCase):
             {'filter': '\"hi\\\\\\" OR sender.name = \\"users/evil\" AND sender.name = '
                        '\"users/a\\\"\\\\b\" AND space.space_type = \"DIRECT_MESSAGE\" AND '
                        'createTime >= \"2026-11-01T00:00:00Z\" AND createTime < \"2026-11-03T00:00:00Z\"',
-             'pageSize': 20, 'pageToken': ''})
+             'pageSize': 20, 'pageToken': '', 'orderBy': 'createTime desc'})
         for kw in ({'kind': 'dm" OR x'}, {'after': '2026-11-01" OR x'},
                    {'before': '2026-02-30'}, {'sender': 'Some Person'}):
             with self.subTest(kw=kw), self.assertRaises(ValueError):
@@ -387,15 +387,14 @@ class SearchTest(unittest.TestCase):
         own = dict(message('own', 2), sender={'name': 'users/me'})
         self.acct.get.side_effect = [
             {'name': 'spaces/room', 'displayName': 'Example', 'spaceType': 'SPACE'},
-            {'messages': [message('other', 3)], 'nextPageToken': 'more'},
-            {'messages': [own]}]
-        rows, token, note = self.chat.search(self.acct, conversation='work/room', sender='users/me',
+            {'messages': [own], 'nextPageToken': 'more'}]
+        rows, token, note = self.chat.search(self.acct, conversation='work/room',
                                             me_id='users/me', limit=1)
         self.assertEqual(rows, [{'handle': 'work/room/own', 'conversation': 'Example', 'sender': 'you',
                                  'time': '2026-11-01T00:02:00Z', 'preview': 'own'}])
-        self.assertEqual((token, note), ('', ''))
+        self.assertEqual((token, note), ('more', ''))
         self.acct.post.assert_not_called()
-        self.assertEqual(self.acct.get.call_args.kwargs['pageToken'], 'more')
+        self.assertEqual(self.acct.get.call_args.kwargs['pageToken'], '')
         for handle in ('other/room', 'work/room/message', 'work/../room'):
             with self.subTest(handle=handle), self.assertRaises(self.chat.NotVisible):
                 self.chat.search(self.acct, conversation=handle)
@@ -429,7 +428,7 @@ class SearchTest(unittest.TestCase):
                 self.assertIn('createTime < "2026-11-01T00:02:00.000000Z"', params['filter'])
 
     def test_no_messages_said_explicitly(self):
-        for kw in ({}, {'text': 'example'}, {'conversation': 'work/room'}):
+        for kw in ({'text': 'example'}, {'conversation': 'work/room'}):
             self.acct.get.return_value = {'name': 'spaces/room', 'displayName': 'Example'}
             rows, token, note = self.chat.search(self.acct, **kw)
             self.assertEqual((rows, token), ([], ''))
@@ -457,7 +456,7 @@ class SearchTest(unittest.TestCase):
     def test_conversation_with_text_uses_search_and_quotes_space(self):
         self.chat.search(self.acct, conversation='work/room', text='example', limit=200)
         self.assertEqual(self.acct.post.call_args.args[1], {
-            'filter': '"example" AND space.name = "spaces/room"', 'pageSize': 50, 'pageToken': ''})
+            'filter': '"example" AND space.name = "spaces/room"', 'pageSize': 50, 'pageToken': '', 'orderBy': 'createTime desc'})
 
 
     def test_search_posts_json_through_account(self):
@@ -466,9 +465,9 @@ class SearchTest(unittest.TestCase):
             self.assertEqual(req.get_method(), 'POST')
             self.assertEqual(req.full_url, 'https://chat.googleapis.com/v1/spaces/-/messages:search')
             self.assertEqual(json.loads(req.data), {
-                'filter': 'sender.name = "users/123"', 'pageSize': 20, 'pageToken': ''})
+                'filter': 'sender.name = "users/123"', 'pageSize': 20, 'pageToken': '', 'orderBy': 'createTime desc'})
             return answer({'results': [{'message': dict(message('one'),
-                           space={'name': 'spaces/room', 'displayName': 'Example'})}]})
+                           space={'name': 'spaces/room', 'displayName': 'Example', 'spaceType': 'SPACE'})}]})
         with mock.patch.object(google, 'urlopen', side_effect=respond), \
                 mock.patch.object(acct, 'token', return_value='fake'):
             rows, token, note = self.chat.search(acct, sender='users/123')
@@ -509,3 +508,34 @@ class SearchTest(unittest.TestCase):
             {'name': 'spaces/new', 'displayName': 'New', 'lastActiveTime': '2026-11-01T00:00:00.1Z'}]}
         rows, _, _ = self.chat.search(self.acct)
         self.assertEqual([r['handle'] for r in rows], ['work/new', 'work/old'])
+
+    def test_conversation_with_email_sender_uses_one_search(self):
+        self.chat.search(self.acct, conversation='work/room', sender='example@work.example')
+        self.acct.post.assert_called_once_with(
+            'https://chat.googleapis.com/v1/spaces/-/messages:search',
+            {'filter': 'space.name = "spaces/room" AND sender.name = "users/example@work.example"',
+             'pageSize': 20, 'pageToken': '', 'orderBy': 'createTime desc'})
+        self.acct.get.assert_not_called()
+
+    def test_partial_spaces_are_fetched_once_before_naming(self):
+        self.acct.post.return_value = {'results': [
+            {'message': dict(message('one'), space={'name': 'spaces/room'})},
+            {'message': dict(message('two'), space={'name': 'spaces/room'})},
+            {'message': dict(message('three'), name='spaces/named/messages/three',
+                             space={'name': 'spaces/named'})}]}
+        self.acct.get.side_effect = [
+            {'name': 'spaces/room', 'spaceType': 'DIRECT_MESSAGE'},
+            {'memberships': [
+                {'member': {'name': 'users/me', 'displayName': 'Operator'}},
+                {'member': {'name': 'users/other', 'displayName': 'Other Person'}}]},
+            {'name': 'spaces/named', 'spaceType': 'SPACE', 'displayName': 'Example space'}]
+        rows, _, _ = self.chat.search(self.acct, text='example', me_id='users/me')
+        self.assertEqual([r['conversation'] for r in rows],
+                         ['DM with Other Person', 'DM with Other Person', 'Example space'])
+        self.assertEqual(self.acct.get.call_args_list, [
+            mock.call('https://chat.googleapis.com/v1/spaces/room'),
+            mock.call('https://chat.googleapis.com/v1/spaces/room/members', pageSize=1000, pageToken=''),
+            mock.call('https://chat.googleapis.com/v1/spaces/named')])
+
+    def test_empty_conversation_listing_says_no_conversations(self):
+        self.assertEqual(self.chat.search(self.acct), ([], '', 'no conversations'))

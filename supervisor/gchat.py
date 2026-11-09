@@ -166,30 +166,32 @@ def search(acct: google.Account, *, text: str = '', conversation: str = '', send
                          'conversation': conversation_name(acct, space, cache, me_id),
                          'time': space.get('lastActiveTime', '')})
         token = str(offset + limit) if offset + limit < len(found) else ''
-        return rows, token, '' if rows else 'no messages'
+        return rows, token, '' if rows else 'no conversations'
     note, token = '', page
-    if sid and not text:
+    if sid and not (text or sender):
         space = _get(acct, f'{API}/spaces/{sid}')
         if kind and space.get('spaceType') != KINDS[kind]:
             return [], '', 'no messages'
-        messages = []
-        while True:
-            found = _get(acct, f'{API}/spaces/{sid}/messages', pageSize=limit - len(messages),
-                         pageToken=token, orderBy='createTime DESC', filter=' AND '.join(dates))
-            messages.extend(m for m in found.get('messages') or []
-                            if not sender or (m.get('sender') or {}).get('name') == sender)
-            token = found.get('nextPageToken') or ''
-            if len(messages) >= limit or not token:
-                break
+        found = _get(acct, f'{API}/spaces/{sid}/messages', pageSize=limit,
+                     pageToken=token, orderBy='createTime DESC', filter=' AND '.join(dates))
+        messages = found.get('messages') or []
+        token = found.get('nextPageToken') or ''
     else:
         found = acct.post(f'{API}/spaces/-/messages:search',
-                          {'filter': ' AND '.join(filters + dates), 'pageSize': limit, 'pageToken': page})
+                          {'filter': ' AND '.join(filters + dates), 'pageSize': limit, 'pageToken': page,
+                           'orderBy': 'createTime desc'})
         messages = [r['message'] for r in found.get('results') or []]
         token = found.get('nextPageToken') or ''
         note = 'muted conversations not searched'
+    space_cache = {}
     for msg in messages:
-        message_space = space if sid and not text else (
+        message_space = space if sid and not (text or sender) else (
             msg.get('space') or {'name': msg['name'].split('/messages/')[0]})
+        name = message_space['name']
+        if name not in space_cache:
+            space_cache[name] = (message_space if message_space.get('spaceType') else
+                                 _get(acct, f'{API}/spaces/{_id(name.removeprefix("spaces/"))}'))
+        message_space = space_cache[name]
         who = msg.get('sender') or {}
         rows.append({'handle': f'{acct.alias}/{_id(msg["name"].split("/")[1])}/'
                                f'{_id(msg["name"].rsplit("/", 1)[1], message=True)}',
