@@ -621,3 +621,29 @@ class OperatorJudgeReviewTest(unittest.TestCase):
         with mock.patch.object(bakeoff, "INSTANCES", inst):
             got = {(s["name"], s["id"]) for s in bakeoff.saved()}
         self.assertIn(("wren-east", "x1"), got)
+
+
+class OperatorEloTest(unittest.TestCase):
+    """The ranking on the bake-off page: Elo against the baseline from the operator's verdicts (2026-11-09)."""
+
+    def test_elo_is_the_candidate_s_log_odds_with_half_a_win_and_half_a_loss_added(self):
+        self.assertIsNone(bakeoff.elo([]))
+        self.assertEqual(bakeoff.elo(["win"] * 14 + ["loss"] * 2)["elo"], 305)   # N24 DeepSeek (parity_score n24: 307, its prior)
+        self.assertEqual(bakeoff.elo(["win"] * 3 + ["loss"] * 7)["elo"], -bakeoff.elo(["win"] * 7 + ["loss"] * 3)["elo"])
+        self.assertEqual(bakeoff.elo(["tie"] * 4)["elo"], 0)
+        self.assertEqual(bakeoff.elo(["both bad"] * 2 + ["win"])["elo"], bakeoff.elo(["tie"] * 2 + ["win"])["elo"])
+        sweep = bakeoff.elo(["win"] * 5)
+        self.assertTrue(0 < sweep["elo"] < 1000 and sweep["lo"] < sweep["elo"] < sweep["hi"])   # 5-0 stays finite
+        self.assertEqual(bakeoff.elo(["split", "unjudged", "win"])["n"], 1)
+        wide, narrow = bakeoff.elo(["win", "loss"]), bakeoff.elo(["win", "loss"] * 20)
+        self.assertGreater(wide["hi"] - wide["lo"], narrow["hi"] - narrow["lo"])
+
+    def test_ranking_orders_by_the_operator_s_elo_and_sets_the_judges_beside_it(self):
+        b = {"name": "wren", "id": "x", "created": "c", "arms": [{"label": "base"}, {"label": "c1"}, {"label": "c2"},
+                                                                {"label": "c3"}], "states": []}
+        verdicts = {(0, "c1"): {"outcome": "loss"}, (1, "c1"): {"outcome": "loss"}, (0, "c2"): {"outcome": "win"}}
+        with mock.patch.object(bakeoff, "operator_verdicts", return_value=verdicts):
+            rank = bakeoff.ranking(b)
+        self.assertEqual([r["arm"] for r in rank], ["c2", "base", "c1", "c3"])   # unjudged c3 last
+        self.assertTrue(rank[1]["baseline"])
+        self.assertIsNone(rank[3]["you"])

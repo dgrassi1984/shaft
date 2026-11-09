@@ -427,4 +427,7 @@ class BakeoffJudgePagesTest(WebTest):
         self.assertEqual((v["choice"], v["note"], v["by"]), ("A", "crisper", ME))
         self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/x1/judge?vs=1", cookie=cookie).body)
         flipped = self.bakeoff._flipped(b, 0, "openrouter/deepseek/deepseek-v4.1-flash")   # A was the candidate
-        self.assertIn(("1–0–0" if flipped else "0–1–0").encode(), self.req("/bakeoffs/wren/x1", cookie=cookie).body)
+        page = self.req("/bakeoffs/wren/x1", cookie=cookie).body
+        self.assertIn(("1–0–0" if flipped else "0–1–0").encode(), page)
+        self.assertIn(b"<h2>Ranking</h2>", page)                    # updated by the verdict just saved
+        self.assertIn(b"+191 [" if flipped else b"-191 [", page)   # one pair: log-odds of 1.5 to 0.5

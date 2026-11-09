@@ -823,7 +823,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         if not b:
             return None
         if not m[3]:
-            return _html(200, v.bakeoff_page(b, bakeoff.operator_summary(b), names, csrf))
+            return _html(200, v.bakeoff_page(b, bakeoff.operator_summary(b), names, csrf, bakeoff.ranking(b)))
         raw = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query).get("vs", [])
         vs = sorted({int(x) for x in raw if re.fullmatch(r"[0-9]{1,3}", x) and 1 <= int(x) < len(b["arms"])})
         todo = bakeoff.operator_queue(b, [b["arms"][k]["label"] for k in vs])

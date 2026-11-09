@@ -1737,7 +1737,27 @@ def _short(label: str) -> str:
     return label.rsplit("/", 1)[-1]
 
 
-def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str) -> Html:
+def _elo_cell(e: dict | None, baseline: bool = False) -> str:
+    if baseline:
+        return "0 (reference)"
+    if not e:
+        return "—"
+    return f"{e['elo']:+d} [{e['lo']:+d}, {e['hi']:+d}]"
+
+
+def bakeoff_ranking(rank: list[dict]) -> Html:
+    body = [[str(k), _short(r["arm"]) + (" · baseline" if r["baseline"] else ""), _elo_cell(r["you"], r["baseline"]),
+             "" if r["baseline"] else str((r["you"] or {}).get("n", 0)), _elo_cell(r["llm"], r["baseline"]),
+             "" if r["baseline"] else str((r["llm"] or {}).get("n", 0))]
+            for k, r in enumerate(rank, 1)]
+    return h('<section class="panel"><h2>Ranking</h2>{t}<p class="muted">Elo against the baseline (0), from your '
+             'verdicts: a win counts 1, equal and both bad ½, a loss 0. In brackets the 90% range: ranks whose '
+             'ranges overlap are not yet told apart. Beside it, the LLM judges\' Elo on every pair they settled '
+             '(splits left out). It changes with each verdict you save.</p></section>',
+             t=table(["#", "Model", "Your Elo [90%]", "Your pairs", "LLM judges' Elo [90%]", "Their pairs"], body))
+
+
+def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str, rank: list[dict] | None = None) -> Html:
     base = b["arms"][0]["label"]
     rows_ = []
     for r in summary:
@@ -1749,7 +1769,7 @@ def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str) -> H
     body = h('<p><a href="/bakeoffs">← every bake-off</a></p><h1>{id} · {n}</h1>'
              '<p>Baseline <b>{base}</b>, {s} past cycles, code {rev}. Your verdicts are kept apart from the LLM judges\' '
              'and only set beside them here.</p>'
-             '<section class="panel"><h2>Your verdicts against the baseline</h2>{t}'
+             '{ranking}<section class="panel"><h2>Your verdicts against the baseline</h2>{t}'
              '<p class="muted">W–L–T is the candidate against the baseline as you judged it. "Agrees" counts the pairs '
              'the LLM judges settled (win, loss or tie) where they reached your outcome.</p></section>'
              '<section class="panel"><h2>Judge pairs</h2><form method="get" action="/bakeoffs/{qn}/{qid}/judge">'
@@ -1757,7 +1777,7 @@ def bakeoff_page(b: dict, summary: list[dict], names: list[str], csrf: str) -> H
              'the baseline.</p>{pick}<p><button type="submit">Start</button></p></form></section>',
              id=b["id"], n=b["name"], base=_short(base), s=str(len(b["states"])), rev=b.get("code_rev", "")[:10],
              t=table(["Candidate", "You: W–L–T", "p", "Agrees with the LLM judges", "Left to judge"], rows_),
-             qn=q(b["name"]), qid=q(b["id"]), pick=pick)
+             qn=q(b["name"]), qid=q(b["id"]), pick=pick, ranking=bakeoff_ranking(rank) if rank else "")
     return frame(f"Bake-off {b['id']}", body, names, csrf, current="/bakeoffs")
 
 
@@ -1780,7 +1800,7 @@ def _run_panel(side: str, run: dict) -> Html:
 
 
 def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str) -> Html:
-    back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off</a></p>', n=q(b["name"]), id=q(b["id"]))
+    back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off and its ranking</a></p>', n=q(b["name"]), id=q(b["id"]))
     if case is None:
         return frame("Judge", join([back, h("<h1>Nothing left to judge</h1><p>Every pair of these candidates has your "
                                             "verdict.</p>")]), names, csrf, current="/bakeoffs")

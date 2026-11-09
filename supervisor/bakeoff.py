@@ -25,6 +25,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import random
 import re
 import threading
@@ -723,6 +724,41 @@ def operator_record(b: dict, i: int, label: str, choice: str, note: str = "", by
     with p.open("a") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return row
+
+
+ELO = 400 / math.log(10)
+
+
+def elo(outcomes: list[str]) -> dict | None:
+    """A candidate's Elo against the baseline (fixed at 0) from its pair outcomes: win 1, tie and both bad ½, loss 0;
+    splits and unjudged pairs left out. Every candidate meets only the baseline, so the Bradley-Terry fit is each
+    one's own log-odds; half a win and half a loss are added so that 5-0 stays finite. 90% range from the normal
+    approximation. None with no pair."""
+    w, l = outcomes.count("win"), outcomes.count("loss")
+    t = outcomes.count("tie") + outcomes.count("both bad")
+    n = w + l + t
+    if not n:
+        return None
+    share = (w + t / 2 + 0.5) / (n + 1)
+    se = 1 / math.sqrt((n + 1) * share * (1 - share))
+    theta = math.log(share / (1 - share))
+    return {"elo": round(theta * ELO), "lo": round((theta - 1.645 * se) * ELO), "hi": round((theta + 1.645 * se) * ELO),
+            "n": n}
+
+
+def ranking(b: dict) -> list[dict]:
+    """Every arm by the operator's Elo (the baseline at 0), with the LLM judges' Elo on all the pairs they settled
+    beside it. Arms the operator has not judged yet come last."""
+    done = operator_verdicts(b)
+    base = b["arms"][0]["label"]
+    rows = [{"arm": base, "baseline": True, "you": {"elo": 0, "lo": 0, "hi": 0, "n": 0}, "llm": {"elo": 0, "lo": 0,
+                                                                                                "hi": 0, "n": 0}}]
+    for arm in b["arms"][1:]:
+        label = arm["label"]
+        mine = [v["outcome"] for (i, l), v in done.items() if l == label]
+        theirs = [o for o in (_outcome(b, s, label) for s in b["states"]) if o in ("win", "loss", "tie")]
+        rows.append({"arm": label, "baseline": False, "you": elo(mine), "llm": elo(theirs)})
+    return sorted(rows, key=lambda r: (r["you"] is None, -(r["you"] or {"elo": 0})["elo"]))
 
 
 def operator_summary(b: dict) -> list[dict]:
