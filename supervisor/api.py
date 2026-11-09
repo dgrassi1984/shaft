@@ -23,6 +23,10 @@ A message sent to /v1/chat/interject while that conversation's reply runs is app
 them in `interjections_heard` (in the order sent): the client answers any others with its next request
 (docs/plans/PLAN-interject.md).
 
+`"voice": true` in a chat or interject body: the operator spoke it. The agent's request (or the interjection's line)
+carries it, and a voice request's stream also carries `shaft_event` chunks: the step's text as it is written (`draft`),
+whether it was the answer (`step_end`), status and tool events (_chat; docs/web-and-api.md). Typed: unchanged.
+
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
 header (set by `tailscale serve`) in SHAFT_API_LOGINS.
@@ -232,7 +236,7 @@ class Live:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.replies: dict[str, dict] = {}       # talk id -> {"requests": [entry, ...], "held": [text, ...]}
+        self.replies: dict[str, dict] = {}       # talk id -> {"requests": [entry, ...], "held": [line, ...]}
 
     @staticmethod
     def _rel(talk_id: str) -> str:
@@ -257,9 +261,9 @@ class Live:
             self.replies[talk_id]["requests"].append(entry)
         return entry
 
-    def _write(self, entry: dict, text: str) -> None:
+    def _write(self, entry: dict, line: dict) -> None:
         safe_write(instance_root(entry["model"]), self._rel(entry["talk_id"]),
-                   json.dumps({"text": text}, ensure_ascii=False) + "\n", append=True)
+                   json.dumps(line, ensure_ascii=False) + "\n", append=True)
 
     def started(self, entry: dict) -> None:
         with self.lock:
@@ -267,19 +271,21 @@ class Live:
             self._drop(entry["model"], entry["talk_id"])   # an earlier agent's, unheard: its client sends it again
             entry["started"] = True
             held, talk["held"] = talk["held"], []
-            for text in held:
-                self._write(entry, text)
+            for line in held:
+                self._write(entry, line)
 
-    def interject(self, talk_id: str, text: str) -> bool:
+    def interject(self, talk_id: str, text: str, voice: bool = False) -> bool:
+        """`voice`: the operator spoke it (C1 of PLAN-voice M1); the agent records it on the interjection's episode."""
+        line = {"text": text, **({"voice": True} if voice else {})}
         with self.lock:
             talk = self.replies.get(talk_id)
             if talk is None:
                 return False
             running = [e for e in talk["requests"] if e["started"]]
             if running:
-                self._write(running[-1], text)
+                self._write(running[-1], line)
             else:
-                talk["held"].append(text)
+                talk["held"].append(line)
             return True
 
     def end(self, entry: dict) -> None:
@@ -443,13 +449,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._end(model, messages, cid)
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
+        voice = body.get("voice") is True        # the last user message was spoken (PLAN-voice C1); anything else: typed
         if route == "/v1/chat/interject":
-            return self._interject(model, messages, cid, channel)
+            return self._interject(model, messages, cid, channel, voice)
         rid = self.headers.get("X-Shaft-Request-Id") or None
         if rid is not None and not CONVERSATION_ID.match(rid):
             return self._error(400, "X-Shaft-Request-Id is 1-64 letters, digits, - or _")
         self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel,
-                   rid)
+                   rid, voice)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
         """POST /v1/chat/end: the conversation is over. The write-up is scheduled now (202) and finishes in the
@@ -466,20 +473,21 @@ class Handler(BaseHTTPRequestHandler):
         log(f"api: conversation {talk_id} with {model} ended by its client")
         self._json(202, {"ended": talk_id})
 
-    def _interject(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api") -> None:
+    def _interject(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api",
+                   voice: bool = False) -> None:
         """The last user message joins the reply running in this conversation (same first user message)."""
         text = _last_text(messages)
         if not text:
             return self._error(400, "the message to add is empty")
         talk_id = self.conversations.current(model, messages, cid)
         try:
-            ok = bool(talk_id) and self.live.interject(talk_id, text)
+            ok = bool(talk_id) and self.live.interject(talk_id, text, voice)
         except (OSError, UnsafePath) as e:
             return self._error(500, f"could not pass it to {model}: {e}", "server_error")
         if not ok:
             return self._error(409, f"{model} is not replying in this conversation now: send it as a new message",
                                "conflict")
-        tom.heard(model, text, channel)
+        tom.heard(model, text, channel, voice)
         log(f"api: a message for {model}'s running reply ({talk_id})")
         self._json(202, {"interjected": True, "talk_id": talk_id})
 
@@ -492,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
 
     def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None,
-              channel: str = "api", rid: str | None = None) -> None:
+              channel: str = "api", rid: str | None = None, voice: bool = False) -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
         if rid and not stream:
@@ -502,13 +510,13 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
         if text := _last_text(messages):
-            tom.heard(model, text, channel)         # what the operator said, for scoring reply predictions (tom.py)
+            tom.heard(model, text, channel, voice)   # what the operator said, for scoring reply predictions (tom.py)
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": [*(m for m in messages if m.get("role") == "system"),
                                 {"role": "system", "content": LAST_STEP_NOTE},
                                 *(m for m in messages if m.get("role") != "system")],
-                   "talk_id": talk_id, "client": app.split()[0][:40]}
+                   "talk_id": talk_id, "client": app.split()[0][:40], **({"voice": True} if voice else {})}
 
         def driver(proc):
             procs.append(proc)
@@ -581,6 +589,16 @@ class Handler(BaseHTTPRequestHandler):
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
         tools_ran = False
+        spoken = stream and voice
+
+        def event(**shaft_event) -> None:
+            """A voice reply's own event (PLAN-voice C3), in a chunk of its own with an empty delta: OpenAI clients
+            see nothing new, and a typed request never gets one. A step's text goes out at once as `draft` pieces
+            (the app speaks them) and is still held in `step` as above; `step_end` then says whether it was the
+            answer (its whole text also comes as `content`) or narration before a tool call (only reasoning)."""
+            if spoken:
+                self.wfile.write(_chunk(cid, model, {}, shaft_event=shaft_event))
+
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -611,10 +629,17 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 if t == "content":
                     step.append(ev["text"])
+                    if spoken:
+                        event(type="draft", text=ev["text"])
+                        self.wfile.flush()
                     continue
                 if t in ("tool_start", "tool_end"):
                     tools_ran = True
+                if t == "retry" and step:       # a call cut off at max_tokens is discarded and asked again (llm._answer):
+                    event(type="step_end", answer=False)   # its text was never the answer, nor in the agent's record
+                    step = []
                 if t == "tool_start" and step:           # that step called tools: its text was narration
+                    event(type="step_end", answer=False)
                     said = "".join(step).strip()
                     step = []
                     if said:
@@ -623,6 +648,8 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.write(_chunk(cid, model, {"reasoning_content": f"{said}\n"}))
                 if t == "turn_end":
                     ended = ev
+                    if step:
+                        event(type="step_end", answer=True)
                     content, step = step, []
                     if stream and content:
                         self.wfile.write(_chunk(cid, model, {"content": "".join(content)}))
@@ -635,9 +662,16 @@ class Handler(BaseHTTPRequestHandler):
                     notes.append(n)
                     if stream:
                         self.wfile.write(_chunk(cid, model, {"reasoning_content": n}))
+                if t == "status":
+                    event(type="status", phase=ev.get("phase", ""), detail=ev.get("detail") or "")
+                elif t == "tool_start":
+                    event(type="tool_start", name=ev["name"])
+                elif t == "tool_end":
+                    event(type="tool_end", name=ev["name"], ok=bool(ev["ok"]))
                 if stream:
                     self.wfile.flush()
             if not content and step:                     # interrupted before a turn_end: the text so far
+                event(type="step_end", answer=True)
                 content = step
                 if stream:
                     self.wfile.write(_chunk(cid, model, {"content": "".join(step)}))
