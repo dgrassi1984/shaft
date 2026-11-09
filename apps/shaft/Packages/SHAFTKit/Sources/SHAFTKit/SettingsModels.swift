@@ -9,6 +9,8 @@ public struct InstanceSettings: Codable, Sendable, Equatable {
     public var cloudCap: CloudCap
     public var channel: Channel
     public var operatorName: OperatorName
+    public var voiceMode: VoiceMode
+    public var voiceEffort: VoiceEffort
 
     public struct Model: Codable, Sendable, Equatable {
         public var value: String
@@ -39,6 +41,16 @@ public struct InstanceSettings: Codable, Sendable, Equatable {
     public struct Channel: Codable, Sendable, Equatable {
         public var value: String
         public var choices: [String]
+    }
+
+    public struct VoiceMode: Codable, Sendable, Equatable {
+        public var value: String
+        public var choices: [String]
+    }
+
+    public struct VoiceEffort: Codable, Sendable, Equatable {
+        public var value: String
+        public var choices: [String]?
     }
 
     public struct OperatorName: Codable, Sendable, Equatable {

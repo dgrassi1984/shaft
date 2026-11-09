@@ -43,8 +43,8 @@ struct FeedPollTests {
               case .failed(let failure, let retryIn) = events[3] else {
             Issue.record("unexpected events: \(events)"); return
         }
-        #expect(idle.version == "109fd56053bf7c4d")
-        #expect(live.version == "b713d0c3dc0ad5b4")
+        #expect(idle.version == "4749b203e1101494")
+        #expect(live.version == "2d764345726b89c0")
         #expect(merged.partial == false)
         #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.content == live.content)
@@ -58,14 +58,14 @@ struct FeedPollTests {
         #expect(requests.count == 6)
         #expect(requests[0].query("since") == nil)
         #expect(requests[0].query("wait") == "0")
-        #expect(requests[1].query("since") == "109fd56053bf7c4d")
+        #expect(requests[1].query("since") == "4749b203e1101494")
         #expect(requests[1].query("live") == "")
         #expect(requests[1].query("wait") == "25")
-        #expect(requests[2].query("since") == "109fd56053bf7c4d")
-        #expect(requests[3].query("since") == "b713d0c3dc0ad5b4")
+        #expect(requests[2].query("since") == "4749b203e1101494")
+        #expect(requests[3].query("since") == "2d764345726b89c0")
         #expect(requests[3].query("live") == "cc72a715f5f61774")
         // After a failure the loop asks again with what it held.
-        #expect(requests[5].query("since") == "b713d0c3dc0ad5b4")
+        #expect(requests[5].query("since") == "2d764345726b89c0")
         #expect(requests[5].query("live") == "fb7597261efc6cb5")
         for request in requests {
             #expect(request.path == "/app/v1/chat/thelos")

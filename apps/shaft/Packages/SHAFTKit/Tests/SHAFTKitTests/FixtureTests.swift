@@ -48,7 +48,7 @@ struct FixtureTests {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                     "send", "feedback-response", "retried", "plan", "cycles", "cycle"] {
+                     "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
     }
@@ -152,6 +152,7 @@ enum FixtureShape {
     static func decoder(for keys: Set<String>) -> Decode? {
         func has(_ wanted: String...) -> Bool { wanted.allSatisfy(keys.contains) }
         if has("instance", "partial", "version", "live") { return roundTrip(Feed.self) }
+        if has("seq", "type", "reply") { return roundTrip(ChatStreamEvent.self) }
         if has("instances", "badge") { return roundTrip(InstancesResponse.self) }
         if has("now", "check", "queue") { return roundTrip(CyclePlan.self) }
         if has("days", "next", "judge_error") { return roundTrip(CycleDaysResponse.self) }
@@ -172,7 +173,7 @@ enum FixtureShape {
                     "bad_request": 400, "unpaired": 401,
                     "login": 403, "host": 403, "pair_expired": 403,
                     "not_found": 404, "method": 405,
-                    "refused": 409, "stale": 409, "too_big": 409, "stale_version": 409,
+                    "refused": 409, "not_replying": 409, "stale": 409, "too_big": 409, "stale_version": 409,
                     "too_large": 413, "internal": 500, "push_off": 503,
                 ]
                 let expected = try #require(statuses[decoded.error.code], "\(name): undocumented error code")
@@ -284,7 +285,7 @@ struct DecodingTests {
         #expect(partial.partial)
         #expect(partial.content == nil)
         let merged = full.merging(partial)
-        #expect(merged.version == "b713d0c3dc0ad5b4")
+        #expect(merged.version == "2d764345726b89c0")
         #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(merged.content == full.content)

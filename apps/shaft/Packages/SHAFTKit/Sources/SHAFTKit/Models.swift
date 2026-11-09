@@ -44,6 +44,7 @@ public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {
     public var replying: Bool
     public var unread: Bool
     public var nextCycle: String
+    public var voiceMode: String
 
     public var id: String { name }
 }
@@ -285,6 +286,7 @@ public struct UserItem: Codable, Sendable, Equatable {
     public var text: String
     public var mid: String?
     public var interjected: Bool
+    public var via: String?
     public var attachments: [Attachment]
     public var edits: [String]
     public var deleted: [String]

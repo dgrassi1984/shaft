@@ -9,7 +9,9 @@ private let settingsExample = #"""
  "wake_interval":{"value":5,"floor":10,"effective":10},
  "cloud_cap":{"value":null,"spent_today":0.25},
  "channel":{"value":"auto","choices":["auto","web","telegram"]},
- "operator_name":{"value":"the operator"}}
+ "operator_name":{"value":"the operator"},
+ "voice_mode":{"value":"on","choices":["on","off"]},
+ "voice_effort":{"value":"","choices":["","medium","xhigh","low"]}}
 """#
 
 private func serviceExample(pid: Int = 123, running: Bool = true, drain: String = "null") -> String {
@@ -57,6 +59,20 @@ struct SettingsTests {
         #expect(settings.channel.value == "auto")
         #expect(settings.channel.choices == ["auto", "web", "telegram"])
         #expect(settings.operatorName.value == "the operator")
+        #expect(settings.voiceMode.value == "on")
+        #expect(settings.voiceMode.choices == ["on", "off"])
+        #expect(settings.voiceEffort.value == "")
+        #expect(settings.voiceEffort.choices == ["", "medium", "xhigh", "low"])
+        let unavailableVoiceEffort = settingsExample.replacingOccurrences(
+            of: #""choices":["","medium","xhigh","low"]"#, with: #""choices":null"#)
+        let unavailable = try SHAFTJSON.decoder().decode(
+            InstanceSettings.self, from: Data(unavailableVoiceEffort.utf8))
+        #expect(unavailable.voiceEffort.choices == nil)
+        #expect(unavailable.voiceEffort.value == "")
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: SHAFTJSON.encoder().encode(settings)) as? [String: Any])
+        #expect((encoded["voice_mode"] as? [String: Any])?["value"] as? String == "on")
+        #expect((encoded["voice_effort"] as? [String: Any])?["value"] as? String == "")
         let nullable = settingsExample.replacingOccurrences(of: #""value":"medium","choices":["medium","xhigh","low"]"#,
                                                            with: #""value":null,"choices":null"#)
             .replacingOccurrences(of: #""floor":10"#, with: #""floor":null"#)
