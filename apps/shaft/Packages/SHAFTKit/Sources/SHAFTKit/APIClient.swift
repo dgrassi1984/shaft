@@ -58,15 +58,34 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
     public var retryOf: Int?
     public var inReplyTo: String? { quotes.last(where: { $0.inReplyTo != nil })?.inReplyTo }
     public var files: [OutgoingFile]
+    /// Spoken in voice mode and transcribed on the device: sent as `voice=1` (§6). False for a typed message.
+    public var voice: Bool
 
     public init(mid: String = OutgoingMessage.newMid(), text: String, mode: SendMode = .now, quotes: [Quote] = [],
-                retryOf: Int? = nil, files: [OutgoingFile] = []) {
+                retryOf: Int? = nil, files: [OutgoingFile] = [], voice: Bool = false) {
         self.mid = mid
         self.text = text
         self.mode = mode
         self.quotes = quotes
         self.retryOf = retryOf
         self.files = files
+        self.voice = voice
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mid, text, mode, quotes, retryOf, files, voice
+    }
+
+    /// A message stored before `voice` existed has no such key: it was typed.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mid = try container.decode(String.self, forKey: .mid)
+        text = try container.decode(String.self, forKey: .text)
+        mode = try container.decode(SendMode.self, forKey: .mode)
+        quotes = try container.decode([Quote].self, forKey: .quotes)
+        retryOf = try container.decodeIfPresent(Int.self, forKey: .retryOf)
+        files = try container.decode([OutgoingFile].self, forKey: .files)
+        voice = try container.decodeIfPresent(Bool.self, forKey: .voice) ?? false
     }
 
     /// A new message id: a lowercase UUID (§1.3).
@@ -155,6 +174,7 @@ public final class APIClient: Sendable {
         }
         if let target = message.inReplyTo { form.addField("in_reply_to", target) }
         if let retryOf = message.retryOf { form.addField("retry_of", String(retryOf)) }
+        if message.voice { form.addField("voice", "1") }
         for file in message.files {
             let data: Data
             do {
