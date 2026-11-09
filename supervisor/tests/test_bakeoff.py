@@ -692,3 +692,35 @@ class OperatorPendingTest(unittest.TestCase):
         self.assertEqual(got["backlog"], 1)
         with mock.patch.object(trial, "mind_rev", side_effect=trial.TrialError("no mind")):
             self.assertEqual(bakeoff._pending({"name": "x"}, st, lambda t: t)["queue"], [])
+
+
+class OperatorSetTest(unittest.TestCase):
+    """A set of the cycles that set out to do what the operator asked, shown with the operator's own last chat
+    before them (operator, 2026-11-09: 'the others are too hard to judge')."""
+
+    def test_draw_of_one_kind_only(self):
+        pool = [{"ts": f"t{i:02d}", "intent": {"origin": "operator" if i % 3 == 0 else "self"}, "tools": []}
+                for i in range(60)]
+        with mock.patch.object(bakeoff, "eligible", return_value=pool):
+            d = bakeoff.draw("thelos", 8, since="x", kind="operator")
+            self.assertEqual(len(d["episodes"]), 8)
+            self.assertTrue(all(int(ts[1:]) % 3 == 0 for ts in d["episodes"]))
+            self.assertEqual((d["kind"], d["population"]["operator"]), ("operator", 20))
+            with self.assertRaises(bakeoff.BakeoffError):
+                bakeoff.draw("thelos", 21, since="x", kind="operator")
+            with self.assertRaises(bakeoff.BakeoffError):
+                bakeoff.draw("thelos", 3, since="x", kind="nonsense")
+
+    def test_the_operator_s_last_chat_before_the_cycle(self):
+        chats = [{"instance": "thelos", "turns": [
+                     {"role": "user", "ts": "2026-11-05T10:41:00", "content": "Prepara la risposta a Concordia\n\n"
+                      "[Web chat: a Markdown file you write under notes/docs/ ...]"},
+                     {"role": "assistant", "ts": "2026-11-05T10:42:00", "content": "Lo faccio nel prossimo ciclo"},
+                     {"role": "user", "ts": "2026-11-05T13:00:00", "content": "after the cycle began"}]},
+                 {"instance": "thelos", "turns": [{"role": "user", "ts": "2026-11-03T09:00:00", "content": "too old"}]}]
+        with mock.patch("supervisor.web_chat.chats", return_value=chats):
+            got = bakeoff._asked("thelos", "2026-11-05T12:33:26", lambda t: t)
+        self.assertEqual([(t["role"], t["text"]) for t in got],
+                         [("you", "Prepara la risposta a Concordia"), ("the instance", "Lo faccio nel prossimo ciclo")])
+        with mock.patch("supervisor.web_chat.chats", return_value=chats[1:]):
+            self.assertEqual(bakeoff._asked("thelos", "2026-11-05T12:33:26", lambda t: t), [])

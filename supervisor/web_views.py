@@ -1797,6 +1797,15 @@ def _run_panel(side: str, run: dict) -> Html:
              acc=run["account"] or "—", files=files, internal=internal)
 
 
+def _asked_html(turns: list[dict]) -> Html:
+    if not turns:
+        return Html("")
+    return h('<section class="panel"><h2>What you asked before this cycle</h2><p class="muted">Your last chat with it '
+             'before the cycle began: the cycle set out to do what you asked.</p>{t}</section>',
+             t=join(h('<p class="wrap"><b>{who}</b> <span class="muted">{ts}</span><br>{text}</p>', who=t["role"],
+                      ts=t["ts"].replace("T", " "), text=t["text"]) for t in turns))
+
+
 def _pending_html(p: dict) -> Html:
     late = h('<span class="bad">past due</span> ')
     queue = join(h('<li>{l}#{id} · {st} · due {due}: {t}</li>', l=late if x["late"] else "", id=str(x["id"]),
@@ -1822,7 +1831,7 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
     body = h('{back}<h1>Which run would you rather have had?</h1>'
              '<p class="muted">{left} left. This {kind}cycle ran on {t0}; both runs replayed it on {rep}, from the same '
              'start. A date later than the cycle\'s in a run comes from the replay\'s clock, not from the run.</p>'
-             '<section class="panel"><h2>What the cycle started from</h2><h3>Its inbox</h3><pre class="wrap">{inbox}</pre>'
+             '{asked}<section class="panel"><h2>What the cycle started from</h2><h3>Its inbox</h3><pre class="wrap">{inbox}</pre>'
              '{pending}'
              '<details><summary>Its goals file (the same in most cycles)</summary><pre class="wrap">{goals}</pre>'
              '</details></section>'
@@ -1835,7 +1844,7 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              '<p><button type="submit">Save and next</button></p></form></section>',
              back=back, left=str(left), kind=f"{case['kind']} " if case["kind"] else "", t0=case["t0"].replace("T", " "),
              rep=case["replayed"], goals=goals.strip() or "(no goals file)", inbox=inbox.strip() or "(empty)",
-             pending=_pending_html(case.get("pending") or {}),
+             pending=_pending_html(case.get("pending") or {}), asked=_asked_html(case.get("asked") or []),
              a=_run_panel("A", case["A"]), b=_run_panel("B", case["B"]),
              n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), x=str(x), y=str(y), runs=case["runs"], choices=choices)
     return frame("Judge a pair", body, names, csrf, current="/bakeoffs")

@@ -30,7 +30,7 @@ import random
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import trial
@@ -184,17 +184,28 @@ def _spaced(items: list, k: int) -> list:
     return [items[round(j * (len(items) - 1) / (k - 1))] for j in range(k)]
 
 
-def draw(name: str, n: int, since: str = "", until: str = "", project: Path = PROJECT) -> dict:
+def draw(name: str, n: int, since: str = "", until: str = "", project: Path = PROJECT, kind: str = "") -> dict:
     """A fresh set of `n` cycles from the eligible ones after `since` (default: the loop's last change): of each kind
     there is, MIN_PER_KIND or as many as it has (fewer each when `n` is too small for all kinds), the rest by each
-    kind's share, evenly spaced in time within a kind.
-    Returns {since, until, population: {kind: eligible count}, episodes: [ts]}."""
+    kind's share, evenly spaced in time within a kind. With `kind`, that kind only (operator: the cycles that set out
+    to do what the operator asked, the easiest for the operator to judge).
+    Returns {since, until, population: {kind: eligible count}, episodes: [ts]} (and kind)."""
     if n < 1:
         raise BakeoffError(f"--draw takes a number of cycles, not {n}")
+    if kind and kind not in STRATA:
+        raise BakeoffError(f"--kind is one of {', '.join(STRATA)}, not {kind!r}")
     since = since or last_loop_change(name, project)
     if not since:
         raise BakeoffError(f"no change to {name}'s loop found: give --since")
     pool = eligible(name, since, until, project)
+    if kind:
+        everyone = {k: sum(stratum(e) == k for e in pool) for k in STRATA}
+        pool = [e for e in pool if stratum(e) == kind]
+        if len(pool) < n:
+            raise BakeoffError(f"{len(pool)} eligible {kind} cycles of {name} after {since}, fewer than {n}: give an "
+                               f"earlier --since or a smaller --draw")
+        return {"since": since, "until": until or pool[-1]["ts"], "population": everyone, "kind": kind,
+                "episodes": sorted(e["ts"] for e in _spaced(pool, n))}
     by = {k: [e for e in pool if stratum(e) == k] for k in STRATA}
     if len(pool) < n:
         raise BakeoffError(f"{len(pool)} eligible live cycles of {name} after {since}, fewer than {n}: give an "
@@ -746,6 +757,26 @@ def _pending(b: dict, st: dict, redact, project: Path = PROJECT) -> dict:
             "backlog": sum(1 for x in q if x.get("status") == "backlog"), "more": max(0, len(live) - 20)}
 
 
+def _asked(name: str, t0: str, redact, hours: int = 24) -> list[dict]:
+    """The operator's last chat with the instance before the cycle began (within `hours`): its turns up to then, the
+    operator's words first-hand. A cycle that set out to do what they asked is judged against this."""
+    from . import web_chat
+    start = datetime.fromisoformat(t0)
+    lo = (start - timedelta(hours=hours)).isoformat(timespec="seconds")
+    best, best_ts = None, ""
+    for c in web_chat.chats(name):
+        mine = [t for t in c.get("turns") or [] if lo <= str(t.get("ts", "")) <= t0]
+        last_user = max((str(t["ts"]) for t in mine if t.get("role") == "user"), default="")
+        if last_user > best_ts:
+            best, best_ts = mine, last_user
+    out = []
+    for t in (best or [])[-8:]:
+        text = str(t.get("content") or "").split("\n\n[Web chat:")[0]
+        out.append({"role": "you" if t.get("role") == "user" else "the instance", "ts": str(t.get("ts", ""))[:16],
+                    "text": redact(text[:3000]) + (" …" if len(text) > 3000 else "")})
+    return out
+
+
 def operator_case(b: dict, i: int, pair: tuple[str, str], project: Path = PROJECT) -> dict:
     """One pair as the operator sees it: the cycle's start (inbox, what was waiting, goals) and the two runs as A
     and B."""
@@ -756,6 +787,7 @@ def operator_case(b: dict, i: int, pair: tuple[str, str], project: Path = PROJEC
             "replayed": b["created"][:10], "kind": st.get("stratum", ""),
             "context": redact(trial.state_context(project, b["name"], st)),
             "pending": _pending(b, st, redact, project),
+            "asked": _asked(b["name"], st["t0"], redact) if st.get("stratum") == "operator" else [],
             "A": _facing(st["arms"][a], redact), "B": _facing(st["arms"][b_], redact)}
 
 

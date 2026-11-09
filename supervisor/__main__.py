@@ -1012,7 +1012,7 @@ def cmd_trial(args) -> int:
         from . import bakeoff
         instance_root(args.name)
         try:
-            drawn = bakeoff.draw(args.name, args.draw, args.since, args.until) if args.draw else None
+            drawn = bakeoff.draw(args.name, args.draw, args.since, args.until, kind=args.kind) if args.draw else None
             if drawn and not args.arm:   # the set only: to look at before spending
                 print(f"{len(drawn['episodes'])} cycles of {args.name} ended after {drawn['since']} and by "
                       f"{drawn['until']}; eligible by kind: "
@@ -1559,6 +1559,8 @@ def main(argv: list[str]) -> int:
     q.add_argument("--since", default="", help="with --draw: cycles that ended after this time (default: the "
                                                "instance's loop or configuration last changed)")
     q.add_argument("--until", default="", help="with --draw: cycles that ended by this time (default: now)")
+    q.add_argument("--kind", default="", choices=["", "operator", "writes", "check"],
+                   help="with --draw: that kind of cycle only (operator: those that set out to do what you asked)")
     q.add_argument("--judge", default="claude-sonnet-5-5")
     q.add_argument("--id", default="", help="a bake-off's id: resume it (its arms and cycles are kept)")
     q.add_argument("--parallel", type=int, default=3, help="past cycles replayed at once")
