@@ -376,7 +376,10 @@ class WorkspaceInstrumentTest(unittest.TestCase):
         (dest / "memory" / "journal.md").write_text("## long\n\n" + "a line of the cycle's journal\n" * 1000)
         (dest / "notes" / "probes.md").write_text(f"probe {probe['nonce']}\n")
         diff = trial.file_diff(before, trial._files_now(dest))
-        self.assertNotIn("+++ b/notes/probes.md", diff)   # what the old endpoint (`_wrote` on the diff) read: cut off
+        # The diff cut in path order once hid this file from judges and from the old endpoint (`_wrote` on the diff);
+        # since 2026-11-08 each file keeps a share, but it is still capped: the endpoint reads the files themselves.
+        self.assertIn("+++ b/notes/probes.md", diff)
+        self.assertIn("this file's diff cut here", diff)
         self.assertTrue(experiments.acts(dest, planted["items"], planted["before"])[probe["nonce"]]["acted"])
 
     def test_talking_about_it_is_not_doing_it_but_is_recorded(self):
