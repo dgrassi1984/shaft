@@ -410,8 +410,8 @@ remain. Downloads refuse until `gchat/` is gitignored; run `shaft update example
 
 | Tool | What it does |
 |---|---|
-| `gchat_search` | With no arguments, lists conversations by last activity. Searches messages with `text`, `conversation`, `from` (address or `users/<id>`), `after` / `before` (dates), and `kind` (`dm`, `group`, `space`). `account` selects one granted account. Returns 20 results by default, at most 50 per account, with a continuation call. Cross-conversation searches do not reach muted conversations. |
-| `gchat_read` | Opens a conversation handle (`<alias>/<spaceId>`) or a message handle (`<alias>/<spaceId>/<messageId>`). Returns at most 6,000 characters per page in time order, naming each sender and attachments. Follow the footer's exact call for older messages or the rest of a long message, until `Start of conversation`. |
+| `gchat_search` | With no arguments, lists conversations by last activity. Searches messages with `text`, `conversation`, `from` (address or `users/<id>`), `after` / `before` (dates), and `kind` (`dm`, `group`, `space`). `account` selects one granted account. Returns 20 results by default, at most 50 per account, with a continuation call. A listing is at most 6,000 characters: rows that do not fit are counted, with a hint to narrow the search or lower `max`. Every search but one within a `conversation` with neither `text` nor `from` goes through Google's search, which does not reach muted conversations; the result says so. |
+| `gchat_read` | Opens a conversation handle (`<alias>/<spaceId>`) or a message handle (`<alias>/<spaceId>/<messageId>`). Returns at most 6,000 characters per page in time order, naming each sender and attachments. Follow the footer's exact call for older messages, or for the rest of a page too long for one result (`More of this page`, with `offset`), until `Start of conversation`. |
 | `gchat_download` | Downloads an uploaded file selected by attachment number or name from a message handle, under `gchat/<alias>/<spaceId>/`. A linked Drive file needs `drive_read` / `drive_download` and a Drive grant. Each uploaded file is limited to 25,000,000 bytes; downloads total at most 100 MiB per run. |
 
 Every page marks the content as written by its senders, whose instructions are not the operator's. The operator's
@@ -434,7 +434,9 @@ Source: [watch](../supervisor/watch.py).
 ### The Chat risks you accept
 
 1. **Colleagues' messages reach model providers** (example-b's model, the judges), and what example-b writes from them
-   stays in its mind store. This is company data; whether the company's policy allows it is yours to judge.
+   stays in its mind store. Its own conversation episodes and tool logs also hold what it read, as with mail. The
+   rule that no log holds Chat content covers the supervisor's logs (`broker.log`, the watch's log lines), not the
+   instance's own records. This is company data; whether the company's policy allows it is yours to judge.
 2. **Anyone who can message you can write instructions to example-b.** The marking helps; it is not a guarantee.
    example-b has the internet, so anything it reads it could send anywhere.
 3. **Downloads in `gchat/` are deleted on revoke; memories formed from them are not.**

@@ -127,12 +127,12 @@ you and an app); the exact shape of meeting conversations in `spaces.list`.
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `gchat_search` | `text` (keywords, optional), `conversation` (a handle, optional), `from` (a name or address, optional), `after` / `before` (dates, optional), `kind` (`dm`, `group`, `space`, optional), `max` (default 20, at most 50), `page` | One row per message, newest first: message handle, conversation name, sender, time, first 200 characters. A search across conversations (any of `text`, `from`, `kind` without `conversation`) uses `messages.search` and says that muted conversations are not searched. Within one `conversation` and without `text`, it uses `messages.list`. With no arguments it lists conversations by `lastActiveTime`. Says "no messages" explicitly. The instance never writes a raw Google filter: arguments are quoted into one. |
-| `gchat_read` | `id` (conversation or message handle), `before` (message handle, optional, to page back) | At most 6,000 characters: messages in time order, each `<date time> <sender>: <text>`, with thread replies indented under their thread and attachments named. The footer gives the exact call for the older page, or says `Start of conversation`. |
+| `gchat_search` | `text` (keywords, optional), `conversation` (a handle, optional), `from` (`users/<id>` or an email address, optional; a display name is refused, as Google's filter matches only resource names), `after` / `before` (dates, optional), `kind` (`dm`, `group`, `space`, optional), `account` (one granted account, optional: default all), `max` (default 20, at most 50 per account), `page` | One row per message, newest first: message handle, conversation name, sender, time, first 200 characters. Whenever `text` or `from` is set, or there is no `conversation`, it uses `messages.search` (restricted to the `conversation` when one is given) and says that muted conversations are not searched. Within one `conversation` and with neither `text` nor `from`, it uses `messages.list`. With no arguments it lists conversations by `lastActiveTime`. Says "no messages" explicitly. The instance never writes a raw Google filter: arguments are quoted into one. A listing is at most 6,000 characters with its marking line and continuation call: rows are shown newest first while the next fits, and the rest of that page's rows are counted (`<n> more row(s) on this page not shown: narrow the search or lower max`) with the same next-page call. |
+| `gchat_read` | `id` (conversation or message handle), `before` (message handle, optional, to page back), `offset` (optional, to continue a page) | At most 6,000 characters: messages in time order, each `<date time> <sender>: <text>`, with thread replies indented under their thread and attachments named. The footer gives the exact call for the older page, or says `Start of conversation`. A page that cannot fit (one long message, or messages sharing one `createTime`, which the exclusive `before` cursor keeps on one page) is cut at the budget and ends `More of this page: gchat_read(id=…, before=…, offset=<n>)`: the same page made again, continued from character n, its marking line first. That footer always names a page that cannot move: after a conversation read with no `before` (the newest page, which a new message would change) it names the page's newest message, and a message handle reads the page ending at that message's `createTime`, every message of that time included. No result passes 6,000 characters, so the instance's own tool runner never saves one to a file read back without the marking. |
 | `gchat_download` | `id` (message handle), `attachment` (index or name) | The path under `gchat/<alias>/<spaceId>/`, size and type. Uploaded files only; a Drive file in a message points to `drive_read` / `drive_download` if Drive is granted, else says it isn't. Caps: 25 MB per file, 100 MB per run, as mail. |
 
-Limits as mail and Drive: 30 counted calls per run; a continuation page of a conversation opened by a counted call
-this run is not counted. One access token per broker run.
+Limits as mail and Drive: 30 counted calls per run; a continuation of a conversation opened by a counted call this
+run (`before` or `offset`) is not counted. One access token per broker run.
 
 ## The watch
 
@@ -141,12 +141,15 @@ Added to `supervisor/watch.py` as a third kind beside `mail` and `calendar` (`KI
 
 Each pass, per granted account:
 1. `spaces.list` (every page). Skip spaces whose `lastActiveTime` is not after the space's stored watermark.
-2. For each remaining space, `messages.list` with `createTime > watermark`, ascending, every page.
+2. For each remaining space, `messages.list` newest first, following pages only until the first message at or before
+   the watermark (`gchat.newer`); no `createTime` filter is relied on. The new messages are then delivered oldest
+   first.
 3. Deliver per D8, then save the new watermarks (after delivery, as the existing `commits` do).
 
 First pass, a new grant, or the watch switched on again: store watermarks as of now, report nothing, one log line
-(as mail's expired history ID does). A space seen for the first time later on (a new DM) is reported from its first
-message. Edits and deletions are not news.
+(as mail's expired history ID does). A conversation seen for the first time later on (a new DM, or a space you joined
+with years of history) is read back only to the previous pass: a new DM's first message, sent since, is still
+reported. Edits and deletions are not news.
 
 ## Trial replays and exams
 
@@ -166,7 +169,9 @@ message. Edits and deletions are not news.
   `createTime`) and no keywords — if not, `gchat_search` requires `text` for cross-conversation search and says so.
   Record whether private messages and meeting conversations appear. If the admin blocks the scope, stop: you ask the company's admin, or we
   drop the plan.
-- **M1: `google.py`.** The three scopes in `SCOPES` / `SCOPE_NAMES`, `_signed_in_as` accepts a Chat-only check.
+- **M1: `google.py`.** The three scopes in `SCOPES` / `SCOPE_NAMES`. The login asks every scope at once, and still
+  checks the signed-in address with Gmail, Calendar or Drive: a consent with all but the Chat scopes unticked is
+  refused with the existing message (`Google granted no Gmail, Calendar or Drive scope: nothing saved`).
 - **M2: `gchat.py`.** List, search, read pages, names, marking, download. Tests against a fake Chat behind
   `google.urlopen`.
 - **M3: grants and CLI.** `core.gchat_grants`, `set_gchat_grants`, `gchat_lock`, `shaft gchat …`, and rows in
@@ -200,7 +205,9 @@ and deploy only when you say so.
 ## What you are accepting
 
 1. **Colleagues' messages reach model providers** (example-b's model, the judges), and what example-b writes from them
-   stays in its mind store. This is company data; whether the company's policy allows it is yours to judge.
+   stays in its mind store. Its own conversation episodes and tool logs also hold what it read, as with mail. The
+   rule that no log holds Chat content covers the supervisor's logs (`broker.log`, the watch's log lines), not the
+   instance's own records. This is company data; whether the company's policy allows it is yours to judge.
 2. **Anyone who can message you can write instructions to example-b.** The marking helps; it is not a guarantee.
    example-b has the internet, so anything it reads it could send anywhere.
 3. **Downloads in `gchat/` are deleted on revoke; memories formed from them are not.**

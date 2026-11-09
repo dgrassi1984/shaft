@@ -602,7 +602,8 @@ SPECS["gchat_read"] = _spec(
     "Follow the footer's exact next call until Start of conversation. Every page checks the grant again.",
     {"id": {"type": "string", "description": "account/conversation or account/conversation/message"},
      "before": {"type": "string", "description": "a message handle in the same conversation: the page before it"},
-     "offset": {"type": "integer", "description": "with a message handle: continue that message from this character"}},
+     "offset": {"type": "integer", "description": "continue a page too long for one result from this character, "
+                "as its More of this page footer says"}},
     ["id"])
 SPECS["gchat_download"] = _spec(
     "gchat_download", _GCHAT_DESCRIPTION + "Download a file uploaded in a message under gchat/ (never committed); read "
@@ -1236,7 +1237,8 @@ class Broker:
         if drive_page:
             self.counts["drive_read"] -= 1
             self.counts["drive_read_pages"] = self.counts.get("drive_read_pages", 0) + 1
-        # Chat pages back (before) or on through a long message (offset) in a conversation a counted read opened.
+        # Chat pages back (before) or on through a page too long for one result (offset) in a conversation a counted
+        # read opened.
         conversation = "/".join(thread.split("/")[:2])
         gchat_page = (tool == "gchat_read" and conversation in self.gchat_opened
                       and (bool(str(args.get("before") or "").strip()) or (_integer(args.get("offset", 0)) or 0) > 0))
@@ -2775,25 +2777,49 @@ class Broker:
         return dict(args=args, rows=rows, searched=searched, failed=failed, notes=notes, remaining=remaining)
 
     def _gchat_listing(self, found: dict) -> str:
+        """The marked listing, at most gchat.PAGE_CHARS (ruling R19): rows are shown, newest first, while the next
+        still fits with the marking line and the footer; the rest of this page's rows are counted, not dropped
+        silently, and the next-page cursor stays the same. A result past PAGE_CHARS would be saved by the template and
+        read back with read_file, without the marking."""
         from . import gchat
         args, rows = found["args"], found["rows"]
         listing = not any(args[k] for k in ("text", "conversation", "from", "after", "before", "kind"))
         what = "conversation" if listing else "message"
-        out = [f"searched {', '.join(found['searched'])}: " + (f"{len(rows)} {what}(s)" if rows else f"no {what}s")]
-        # Logged here, for every call, a trial's shared answer too: what was shown, by handle and conversation name.
-        self._log(f"{self.name} gchat_search {', '.join(found['searched'])}: "
-                  + ("; ".join(f"{r['handle']} {r['conversation']}" for r in rows) or f"no {what}s"))
-        out += [f"{alias}: {note}" for alias, note in found["notes"].items()]
-        out += [f"not searched: {f}" for f in found["failed"]]
-        for r in rows:
-            out.append(f"{r['handle']} · {r['conversation']} · last active {r['time']}" if listing else
-                       f"{r['handle']} · {r['conversation']} · {r['sender']} · {r['time']} · {' '.join(r['preview'].split())}")
+        # Previews and conversation names are written by others too: the listing is marked like a page.
+        head = [gchat.marking(", ".join(found["searched"]), self._operator())
+                + f"searched {', '.join(found['searched'])}: " + (f"{len(rows)} {what}(s)" if rows else f"no {what}s")]
+        head += [f"{alias}: {note}" for alias, note in found["notes"].items()]
+        head += [f"not searched: {f}" for f in found["failed"]]
+        lines = [f"{r['handle']} · {r['conversation']} · last active {r['time']}" if listing else
+                 f"{r['handle']} · {r['conversation']} · {r['sender']} · {r['time']} · {' '.join(r['preview'].split())}"
+                 for r in rows]
+        foot = []
         if found["remaining"]:
             call = {k: v for k, v in args.items() if k != "accounts"}
             call["page"] = json.dumps({"args": args, "remaining": found["remaining"]}, separators=(",", ":"))
-            out.append("more: yes — gchat_search(" + ", ".join(f"{k}={json.dumps(v)}" for k, v in call.items()) + ")")
-        # Previews and conversation names are written by others too: the listing is marked like a page.
-        return gchat.marking(", ".join(found["searched"]), self._operator()) + "\n".join(out)
+            foot.append("more: yes — gchat_search(" + ", ".join(f"{k}={json.dumps(v)}" for k, v in call.items()) + ")")
+
+        def shown(n: int) -> str:
+            hidden = [f"{len(lines) - n} more row(s) on this page not shown: narrow the search or lower max"
+                      if n < len(lines) else ""]
+            return "\n".join(head + lines[:n] + [h for h in hidden if h] + foot)
+
+        # Each row adds more than its count's digits can save, so the length grows with n: stop at the first misfit.
+        n = len(lines)
+        if len(shown(n)) > gchat.PAGE_CHARS:
+            n = 0
+            while n + 1 < len(lines) and len(shown(n + 1)) <= gchat.PAGE_CHARS:
+                n += 1
+        out = shown(n)
+        if len(out) > gchat.PAGE_CHARS:   # no row at all fits beside the header and the continuation call
+            raise ValueError(f"this search is too long to list: its header and continuation call take {len(out)} of "
+                             f"{gchat.PAGE_CHARS} characters; shorten text")
+        # Logged here, for every call, a trial's shared answer too: what was shown, by handle and conversation name.
+        self._log(f"{self.name} gchat_search {', '.join(found['searched'])}: "
+                  + ("; ".join(f"{r['handle']} {r['conversation']}" for r in rows[:n])
+                     or ("none shown" if rows else f"no {what}s"))
+                  + (f" (+{len(rows) - n} not shown)" if n < len(rows) else ""))
+        return out
 
     def _gchat_read(self, id: str, before: str = "", offset: int = 0) -> str:   # noqa: A002
         _, page, logged = self._gchat_reader(id, before, offset)
@@ -2810,8 +2836,6 @@ class Broker:
         offset = _integer(offset)
         if offset is None or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
-        if offset and not mid:
-            raise ValueError("offset goes with a message handle (account/conversation/message)")
         before_mid = ""
         if str(before or "").strip():
             if mid:
@@ -2825,13 +2849,11 @@ class Broker:
 
         def page() -> str:
             msgs, older = gchat.page(acct, sid, upto_message=mid, before=before_mid, as_of=self.as_of, me_id=me_id)
-            target = [m for m in msgs if m["name"].rsplit("/", 1)[1] == mid]
-            if mid and not target:   # created after the replayed cycle began
+            if mid and not any(m["name"].rsplit("/", 1)[1] == mid for m in msgs):   # created after the replayed cycle began
                 raise gchat.Gone(gchat.GONE)
-            if offset:   # the rest of one long message; its footer goes on to the messages before it
-                return gchat.render(handle, conversation, target, me_id, operator,
-                                    mid if len(msgs) > 1 or older else "", offset)
-            return gchat.render(handle, conversation, msgs, me_id, operator, older)
+            # A page too big for one result is cut; `offset` goes on through the same page (ruling R20).
+            return gchat.render(handle, conversation, msgs, me_id, operator, older, offset,
+                                f"{alias}/{sid}/{before_mid}" if before_mid else "")
         return [handle, before_mid, offset], page, f"{self.name} gchat_read {handle} {conversation}"
 
     def _gchat_fetcher(self, id, attachment):   # noqa: A002
