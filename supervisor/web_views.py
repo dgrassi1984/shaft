@@ -1799,6 +1799,18 @@ def _run_panel(side: str, run: dict) -> Html:
              acc=run["account"] or "—", files=files, internal=internal)
 
 
+def _pending_html(p: dict) -> Html:
+    late = h('<span class="bad">past due</span> ')
+    queue = join(h('<li>{l}#{id} · {st} · due {due}: {t}</li>', l=late if x["late"] else "", id=str(x["id"]),
+                   st=x["status"], due=x["due"].replace("T", " ") or "—", t=x["task"]) for x in p.get("queue", []))
+    prom = join(h('<li>{l}due {due} · to {to}: {t}</li>', l=late if c["late"] else "", due=c["due"].replace("T", " ")
+                  or "—", to=c["to"] or "?", t=c["promise"]) for c in p.get("commitments", []))
+    more = f" (+{p['more']} more)" if p.get("more") else ""
+    return h('<h3>Waiting at that moment</h3><p class="muted">Its task queue: open and waiting items{more}, and '
+             '{bl} more in the backlog.</p><ul>{q}</ul><p class="muted">Promises made and not yet kept:</p><ul>{c}</ul>',
+             more=more, bl=str(p.get("backlog", 0)), q=queue or h("<li>none</li>"), c=prom or h("<li>none</li>"))
+
+
 def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], names: list[str], csrf: str) -> Html:
     back = h('<p><a href="/bakeoffs/{n}/{id}">← the bake-off and its ranking</a></p>', n=q(b["name"]), id=q(b["id"]))
     if case is None:
@@ -1812,6 +1824,7 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              '<p class="muted">{left} left. This {kind}cycle ran on {t0}; both runs replayed it on {rep}, from the same '
              'start. A date later than the cycle\'s in a run comes from the replay\'s clock, not from the run.</p>'
              '<section class="panel"><h2>What the cycle started from</h2><h3>Its inbox</h3><pre class="wrap">{inbox}</pre>'
+             '{pending}'
              '<details><summary>Its goals file (the same in most cycles)</summary><pre class="wrap">{goals}</pre>'
              '</details></section>'
              '<div class="cards">{a}{b}</div>'
@@ -1822,6 +1835,7 @@ def bakeoff_judge_page(b: dict, case: dict | None, left: int, vs: list[int], nam
              '<p><button type="submit">Save and next</button></p></form></section>',
              back=back, left=str(left), kind=f"{case['kind']} " if case["kind"] else "", t0=case["t0"].replace("T", " "),
              rep=case["replayed"], goals=goals.strip() or "(no goals file)", inbox=inbox.strip() or "(empty)",
+             pending=_pending_html(case.get("pending") or {}),
              a=_run_panel("A", case["A"]), b=_run_panel("B", case["B"]),
              n=q(b["name"]), id=q(b["id"]), st=str(case["state"]), arm=str(arm), runs=case["runs"], choices=choices)
     return frame("Judge a pair", body, names, csrf, current="/bakeoffs")

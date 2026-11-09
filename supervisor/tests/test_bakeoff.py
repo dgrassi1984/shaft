@@ -647,3 +647,28 @@ class OperatorEloTest(unittest.TestCase):
         self.assertEqual([r["arm"] for r in rank], ["c2", "base", "c1", "c3"])   # unjudged c3 last
         self.assertTrue(rank[1]["baseline"])
         self.assertIsNone(rank[3]["you"])
+
+
+class OperatorPendingTest(unittest.TestCase):
+    """An empty-inbox cycle is judged by what was waiting: the queue and the open promises at its start (operator,
+    2026-11-09: 'hard to judge when the inbox is empty')."""
+
+    def test_open_tasks_and_unkept_promises_as_of_the_cycle_s_start(self):
+        queue = [{"id": 1, "status": "done", "task": "old", "due_at": "2026-11-01T09:00"},
+                 {"id": 2, "status": "open", "task": "weekly re-arm", "due_at": "2026-11-07T18:00"},
+                 {"id": 3, "status": "waiting", "task": "reply from Luigi", "due_at": "2026-11-07T09:00"},
+                 {"id": 4, "status": "backlog", "task": "someday"}]
+        promises = "\n".join(json.dumps(e) for e in (
+            {"event": "made", "id": "c1", "promise": "remind at 15:00", "due": "2026-11-07T15:00:00", "made_to": "operator"},
+            {"event": "made", "id": "c2", "promise": "kept already", "due": "2026-11-06T10:00:00"},
+            {"event": "settled", "id": "c2", "status": "kept"}))
+        files = {"notes/queue.json": json.dumps(queue), "memory/commitments.jsonl": promises}
+        st = {"t0": "2026-11-07T14:13:21"}
+        with mock.patch.object(trial, "mind_rev", return_value="r"), \
+                mock.patch("supervisor.mind.show", side_effect=lambda n, r, path, p: files.get(path)):
+            got = bakeoff._pending({"name": "thelos"}, st, lambda t: t)
+        self.assertEqual([(x["id"], x["late"]) for x in got["queue"]], [(3, True), (2, False)])
+        self.assertEqual([(c["promise"], c["late"]) for c in got["commitments"]], [("remind at 15:00", False)])
+        self.assertEqual(got["backlog"], 1)
+        with mock.patch.object(trial, "mind_rev", side_effect=trial.TrialError("no mind")):
+            self.assertEqual(bakeoff._pending({"name": "x"}, st, lambda t: t)["queue"], [])

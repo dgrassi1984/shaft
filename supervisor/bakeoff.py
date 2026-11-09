@@ -689,6 +689,43 @@ def _facing(rec: dict, redact) -> dict:
             "turns": ep.get("steps")}
 
 
+def _pending(b: dict, st: dict, redact, project: Path = PROJECT) -> dict:
+    """What was waiting when the cycle began, from the mind as of its start: the queue's open and waiting tasks and the
+    promises made and not yet settled, each with its due time and whether it was already past. A cycle with an empty
+    inbox is judged by these: was there something to do, and did the run do it (operator, 2026-11-09)."""
+    from . import mind
+    try:
+        rev = trial.mind_rev(project, b["name"], st)
+    except trial.TrialError:
+        return {"queue": [], "commitments": [], "backlog": 0}
+    t0 = st["t0"][:16]
+    try:
+        q = json.loads(mind.show(b["name"], rev, "notes/queue.json", project) or "[]")
+    except ValueError:
+        q = []
+    q = [x for x in q if isinstance(x, dict)]
+    live = sorted((x for x in q if x.get("status") in ("open", "waiting")), key=lambda x: x.get("due_at") or "9")
+    queue = [{"id": x.get("id"), "status": x.get("status", ""), "due": str(x.get("due_at") or ""),
+              "late": bool(x.get("due_at")) and str(x["due_at"])[:16] <= t0, "task": redact(str(x.get("task", ""))[:400])}
+             for x in live[:20]]
+    made, settled = {}, set()
+    for line in (mind.show(b["name"], rev, "memory/commitments.jsonl", project) or "").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "made":
+            made[e.get("id")] = e
+        elif e.get("event") == "settled":
+            settled.add(e.get("id"))
+    open_ = sorted((e for k, e in made.items() if k not in settled), key=lambda e: e.get("due") or "9")
+    commitments = [{"due": str(e.get("due") or ""), "late": bool(e.get("due")) and str(e["due"])[:16] <= t0,
+                    "to": str(e.get("made_to", "")), "promise": redact(str(e.get("promise", ""))[:400])}
+                   for e in open_[:15]]
+    return {"queue": queue, "commitments": commitments,
+            "backlog": sum(1 for x in q if x.get("status") == "backlog"), "more": max(0, len(live) - 20)}
+
+
 def operator_case(b: dict, i: int, label: str, project: Path = PROJECT) -> dict:
     """One pair as the operator sees it: the cycle's start (goals and inbox, as the judges get it) and the two runs
     as A and B."""
@@ -699,6 +736,7 @@ def operator_case(b: dict, i: int, label: str, project: Path = PROJECT) -> dict:
     return {"state": i, "arm": label, "runs": _runs(st["arms"][base], st["arms"][label]), "ts": st["ts"],
             "t0": st["t0"], "replayed": b["created"][:10],
             "kind": st.get("stratum", ""), "context": redact(trial.state_context(project, b["name"], st)),
+            "pending": _pending(b, st, redact, project),
             "A": runs["candidate" if flipped else "baseline"], "B": runs["baseline" if flipped else "candidate"]}
 
 
