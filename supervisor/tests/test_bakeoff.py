@@ -404,6 +404,7 @@ class ReviewFixesTest(unittest.TestCase):
             bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)   # the resume replays both states in full
         self.assertEqual(len(calls), 8)
         self.assertTrue(all(r["completed"] for s in b["states"] for r in s["arms"].values()))
+        self.assertIn("last_call_failed", b["states"][0]["arms"]["openrouter/deepseek/deepseek-v4.1-flash"])
 
     def test_the_api_judge_sees_no_model_name(self):
         b = self.replayed()

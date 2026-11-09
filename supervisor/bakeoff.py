@@ -210,7 +210,7 @@ def draw(name: str, n: int, since: str = "", until: str = "", project: Path = PR
 def _arm_record(rec: dict) -> dict:
     """What the report and the judge need of a replay (its text is rebuilt from the same fields)."""
     return {k: rec.get(k) for k in ("exit", "ended", "seconds", "model", "episode", "trace", "diff", "usage", "usd",
-                                    "completed", "output_tail")}
+                                    "completed", "output_tail", "last_call_failed")}
 
 
 def _replay_state(project: Path, b: dict, i: int, lock: threading.Lock, arm_parallel: int = 1) -> None:

@@ -461,6 +461,11 @@ class BakeoffReviewFixesTest(unittest.TestCase):
         stream = {**recovered, "usage": {"calls": 9, "errors": 0},
                   "output_tail": "shaft.llm.LLMError: stream error: provider overloaded"}
         self.assertTrue(trial.infra_failure(stream))
+        rejected = {**cut, "last_call_failed": True,   # Hy4, 11-09: Tencent answered 400 "request invalid"
+                    "output_tail": 'shaft.llm.LLMError: HTTP 400 from https://openrouter.ai: {"error": "invalid"}'}
+        self.assertEqual(trial.decide({"A": self.OK, "B": rejected}, [None, None])[0], "loss")
+        for code in (429, 502, 403):
+            self.assertTrue(trial.infra_failure({**rejected, "output_tail": f"LLMError: HTTP {code} from x"}), code)
         empty = {**stream, "output_tail": "shaft.llm.LLMError: live: model returned an empty answer twice"}
         self.assertEqual(trial.infra_failure(empty), "")   # the model's own failure
 

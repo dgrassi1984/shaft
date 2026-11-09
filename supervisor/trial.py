@@ -804,21 +804,32 @@ _PROVIDER_DEATH = re.compile(r"\b(?:LLMError|Transient)\b[^\n]*?(?:HTTP \d{3}|ca
                              r"failed after)")
 
 
+# A provider that rejects the request itself (malformed for it, too large) does so every time: Tencent's API answered
+# HTTP 400 to two Hy4 replays on 11-09. That is the path's failure, not an outage.
+_REJECTED = {400, 413, 422}
+
+
 def infra_failure(rec: dict) -> str:
     """Why a run failed on its provider rather than on its own work, or ''. Such a run says nothing about the model
     or the code: a Mercury 3 run cut by HTTP 429 after three retries was scored a loss twice (review 2026-11-08).
     The run must have died of it: its last model call failed, or its output ends on the client's provider error.
-    An error it recovered from, a timeout, or a refusal the provider returned as an answer (it recurs on the same
-    cycle) are the run's own. Records from before `last_call_failed` was kept fall back to any logged error."""
+    An error it recovered from, a timeout, a request the provider rejects as invalid (HTTP 400, 413, 422), or a
+    refusal it returned as an answer (it recurs on the same cycle) are the run's own. Records from before `last_call_failed` was kept fall back to any logged error."""
     if str(rec.get("ended") or "").startswith("not replayed"):
         return str(rec["ended"])
     for r in [*(rec.get("cycles") or []), *(rec.get("sleeps") or [])] or [rec]:
         if r.get("completed") or r.get("exit") in (0, None) or r.get("ended") == "timeout":
             continue
-        usage = r.get("usage") or {}
-        last = r.get("last_call_failed", (usage.get("errors") or 0) > 0)
-        if last or _PROVIDER_DEATH.search(str(r.get("output_tail") or "")):
-            return f"its model calls failed on the provider ({usage.get('errors') or 0} of {usage.get('calls')} calls)"
+        usage, tail = r.get("usage") or {}, str(r.get("output_tail") or "")
+        last = r.get("last_call_failed")
+        if last is None:
+            last = (usage.get("errors") or 0) > 0
+        if not (last or _PROVIDER_DEATH.search(tail)):
+            continue
+        codes = [int(c) for c in re.findall(r"HTTP (\d{3})", tail)]
+        if codes and codes[-1] in _REJECTED:   # the provider refuses this request: it would in production too
+            continue
+        return f"its model calls failed on the provider ({usage.get('errors') or 0} of {usage.get('calls')} calls)"
     return ""
 
 
