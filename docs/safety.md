@@ -8,7 +8,7 @@ The classification table lives in `supervisor/actions.py`.
 
 | Class | Existing tools and arguments | Initial behavior |
 |---|---|---|
-| reversible | Calendar creates without supplied attendees; moves whose current event tells nobody | Direct |
+| reversible | Calendar creates without supplied attendees; moves whose current event tells nobody; `mail_draft` and `mail_draft_update` (a draft in your mailbox, never sent) | Direct |
 | staged | Calendar creates/moves with supplied attendees; moves with another attendee or organiser, or an incomplete attendee list; every `calendar_respond` | Proposal |
 | irreversible | Sending as the operator or deleting. No existing operator broker tool does either | Always a proposal |
 
@@ -16,7 +16,8 @@ Mail and calendar reads keep their current grant checks and do not change class 
 `send_message` is outside the class model for every recipient. It sends as the instance, never as the operator,
 and class demotions do not change message delivery.
 Instance-owned keys and API calls are outside this operator-account model. There are no operator
-mail-send, Notion-write, or Docs-write broker tools today. Local notes and drafts stay in the instance's sandbox.
+mail-send, Notion-write, or Docs-write broker tools today. Operator mail drafts are written to your mailbox and
+never sent; you send them from Gmail.
 Supplied attendees require a proposal even if the only supplied address is the operator's, preserving the
 existing calendar rule. A move's classification uses the current Google event, never just the caller's arguments.
 
@@ -94,6 +95,8 @@ refused, and battery exams never get it.
 `shaft mail <name> grant <alias> <label>` enables `mail_search`, `mail_read`, and
 `mail_attachment` for a label. The credential and the grant stay with
 the supervisor, which enforces the label on every call (see [integrations](integrations.md)).
+`shaft mail <name> grant-draft <alias> <label>` adds `mail_draft` and `mail_draft_update`: the instance picks which
+drafted account a draft is written from, and replies in a thread only on a label with the draft flag. Nothing is sent.
 
 ### Drive grants
 
@@ -228,7 +231,7 @@ call allowance.
 | Resource | Enforced limit |
 |---|---|
 | Messages | 10 per run, plus `SHAFT_OPERATOR_PER_DAY` for operator messages when nonzero. |
-| Mail | 30 calls and 100 MiB of attachments per run. |
+| Mail | 30 calls and 100 MiB of attachments per run; at most 5 of the calls are drafts. |
 | Drive | 30 calls and 100 MiB of downloads per run. |
 | Google Chat | 30 calls and 100 MiB of downloads per run; 25,000,000 bytes per uploaded file. |
 | Calendar | 30 calls per run; `SHAFT_CALENDAR_WRITES_PER_DAY`, default 20, counts write attempts and proposals per day. |

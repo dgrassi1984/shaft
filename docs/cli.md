@@ -131,6 +131,7 @@ weekly pool is unavailable.
 shaft google login <alias> <address> [--client <name>]
 shaft google [migrate]
 shaft mail <name> grant|revoke <alias> <label>
+shaft mail <name> grant-draft|revoke-draft <alias> <label>
 shaft mail [name]
 shaft mail <name> off
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>
@@ -152,10 +153,12 @@ shaft secret <name> list|delete [<key>]
 shaft secret <name> google <key> <address> --client <client> [--scope gmail.modify|drive]
 ```
 
-`shaft google login` authorizes an account for Gmail read, Calendar read and write, and Drive read. `shaft
+`shaft google login` authorizes an account for Gmail read and drafts, Calendar read and write, and Drive read. `shaft
 google` lists accounts, clients, and scopes. `migrate` moves older mail-account files.
 
-Mail grants select labels whose threads an instance may read. `shaft mail <name> off` revokes all mail grants.
+Mail grants select labels whose threads an instance may read. `grant-draft` also permits drafts, never sending.
+It checks that the label exists and the login includes `gmail.compose`. It adds read access if missing.
+`revoke-draft` keeps read access. A plain `grant` keeps existing draft access. `shaft mail <name> off` revokes all mail grants.
 Calendar grants select readable calendars. `grant-write` also grants read access, while `revoke-write` retains
 read access. `shaft calendar <name> off` revokes calendar grants. `calendars <alias>` lists calendars for
 grant selection.

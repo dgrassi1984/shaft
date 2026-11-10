@@ -1,6 +1,6 @@
 """The operator's Google accounts, shared by every Google service an instance may be granted.
 
-One login (`shaft google login`) covers Gmail, Drive and Chat reads and Calendar reads/writes.
+One login (`shaft google login`) covers Gmail, Drive and Chat reads, Gmail drafts and Calendar reads/writes.
 The supervisor keeps each account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
@@ -36,6 +36,9 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR = "https://www.googleapis.com/auth/calendar.readonly"
 GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+# Drafts in the operator's mailbox (mail.py). Gmail has no drafts-only scope: compose can also send, and no SHAFT
+# code ever does (tests/test_mail_draft.py fails on any send URL).
+GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
 DRIVE = "https://www.googleapis.com/auth/drive"
 DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS = "https://www.googleapis.com/auth/spreadsheets"
@@ -46,8 +49,8 @@ CHAT_SPACES = "https://www.googleapis.com/auth/chat.spaces.readonly"
 CHAT_MESSAGES = "https://www.googleapis.com/auth/chat.messages.readonly"
 CHAT_MEMBERS = "https://www.googleapis.com/auth/chat.memberships.readonly"
 # Operator consent; per-calendar write grants stay separate.
-SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY, CHAT_SPACES, CHAT_MESSAGES, CHAT_MEMBERS)
-SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
+SCOPES = (GMAIL, GMAIL_COMPOSE, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY, CHAT_SPACES, CHAT_MESSAGES, CHAT_MEMBERS)
+SCOPE_NAMES = {GMAIL: "gmail.readonly", GMAIL_COMPOSE: "gmail.compose", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
                GMAIL_MODIFY: "gmail.modify", DRIVE_READONLY: "drive.readonly", DRIVE: "drive",
                SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations",
                CHAT_SPACES: "chat.spaces.readonly", CHAT_MESSAGES: "chat.messages.readonly",
@@ -318,6 +321,13 @@ class Account:
     def post(self, url: str, body: dict, **params) -> dict:
         return self._request("POST", url, body, **params)
 
+    def upload(self, method: str, url: str, body: bytes, content_type: str, **params) -> dict:
+        """POST or PUT raw upload bytes through the normal authentication and retry path."""
+        if method not in ("POST", "PUT"):
+            raise ValueError("uploads require POST or PUT")
+        return self._response(method, url, body, json.load, 30,
+                              headers={"Content-Type": content_type}, **params)
+
     def patch(self, url: str, body: dict, *, etag: str = "", **params) -> dict:
         return self._request("PATCH", url, body, headers={"If-Match": etag} if etag else {}, **params)
 
@@ -345,7 +355,8 @@ class Account:
         refreshed, waited, attempt = False, 0.0, 0
         while True:
             req = urllib.request.Request(url + (f"?{query}" if query else ""),
-                                         data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         data=body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None,
+                                         method=method,
                                          headers={"Authorization": f"Bearer {self.token()}",
                                                   "Content-Type": "application/json", **(headers or {})})
             try:

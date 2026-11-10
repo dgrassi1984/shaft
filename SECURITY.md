@@ -40,8 +40,13 @@ is granting it to the instance and to anyone who can put text in front of it.
 
 All Google credentials stay with the supervisor; the broker checks the grant on every call.
 
-- **Operator Gmail:** read-only, limited to threads carrying a label you granted. The OAuth scope itself is not
-  label-limited; the supervisor checks the label on every thread it returns, reads or downloads from.
+- **Operator Gmail:** reads are limited to threads carrying a label you granted. The OAuth scope itself is not
+  label-limited; the supervisor checks the label on every thread it returns, reads or downloads from. A draft grant
+  on a label also lets an instance leave drafts in that account (a reply in a thread it can read, or a new message),
+  never send them: you open Gmail's Drafts and press Send. Gmail has no drafts-only scope, so the `gmail.compose`
+  token the supervisor holds could send; no broker tool calls a send endpoint, and a test fails if one ever does. An
+  instance can update only a draft it created and you have not edited since; it has no delete. A draft can carry
+  what a hostile email asked for: read its recipients and attachments before you send it.
 - **Operator calendars:** read access per calendar. Write grants let an instance create and move events. A change that
   involves other attendees, and every reply to an invitation, becomes a proposal that waits for your approval. For
   instances listed in `SHAFT_ACTION_INSTANCES`, an action you mark as over-reach also demotes that class of action to

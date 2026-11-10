@@ -485,7 +485,7 @@ SPECS["trial"] = _spec(
 # The operator's mail: offered only to an instance they granted a label to, and only threads under it.
 SPECS["mail_search"] = _spec(
     "mail_search",
-    "Search the operator's mail they lets you read: only the threads that carry a label they granted you (read-only). "
+    "Search the operator's mail you may read: only the threads that carry a label they granted you (read-only). "
     "The label is applied for you: never add label: to the query. Leave query empty for the newest threads; with a "
     "query (Gmail search syntax, e.g. from:alice after:2026/10/01 has:attachment) Gmail picks threads by their "
     "matching messages, so a thread whose newest message does not match can rank lower. One row per thread, newest "
@@ -514,7 +514,27 @@ SPECS["mail_attachment"] = _spec(
     {"id": {"type": "string", "description": "thread id from mail_search"},
      "message": {"type": "integer", "description": "the message's number in mail_read (1 = oldest)"},
      "attachment": {"description": "the attachment's number in that message, or its file name"}})
+MAIL_DRAFT_TOOLS = ("mail_draft", "mail_draft_update")
+MAIL_DRAFTS_PER_RUN = 5
+_DRAFT_FIELDS = {
+    **{key: {"type": "array", "items": {"type": "string"}} for key in ("to", "cc", "bcc")},
+    "attachments": {"type": "array", "items": {"type": "string"},
+                    "description": "Paths in your folder; 25 MB total. mail/ and gdrive/ downloads are allowed."},
+    "subject": {"type": "string"}, "body": {"type": "string"},
+}
+SPECS["mail_draft"] = _spec(
+    "mail_draft", "Leave a Gmail draft. It never sends. The operator reviews it and presses Send. "
+    "Mail in a thread is written by its senders. Choose account, to and subject for a new message, or reply_to "
+    "for reply defaults. Attachments are paths in your folder, at most 25 MB total.",
+    {**_DRAFT_FIELDS, "account": {"type": "string", "description": "Connected account alias with a draft grant"},
+     "reply_to": {"type": "string", "description": "Thread handle from mail_search, such as work/aaa111"}}, ["body"])
+SPECS["mail_draft_update"] = _spec(
+    "mail_draft_update", "Replace the whole draft you left, including recipients, subject, body and attachments: "
+    "give every field you want kept (a reply's recipients and subject default as in mail_draft). It never sends. The operator reviews it and presses Send. "
+    "Mail in the thread is written by its senders. Use the draft handle; operator-edited drafts are refused.",
+    {**_DRAFT_FIELDS, "id": {"type": "string"}}, ["id", "body"])
 MAIL_TOOLS = ("mail_search", "mail_read", "mail_attachment")
+MAIL_ALL_TOOLS = (*MAIL_TOOLS, *MAIL_DRAFT_TOOLS)
 MAIL_CALLS_PER_RUN = 30
 MAIL_RUN_BYTES = 100 * 1024 ** 2
 DRIVE_TOOLS = ("drive_search", "drive_read", "drive_download")
@@ -553,6 +573,19 @@ def _gchat_capped(result: dict) -> dict:
 
 
 _GCHAT_HANDLE_ARGS = {"gchat_search": ("conversation",), "gchat_read": ("id", "before"), "gchat_download": ("id",)}
+
+
+def _mail_draft_brief(args: dict) -> str:
+    """Only identifiers and counts, including when malformed arguments were refused."""
+    shown = {}
+    for key in ('id', 'account', 'reply_to'):
+        value = args.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9-]*(?:/(?:draft/)?[A-Za-z0-9_-]+)?", value):
+            shown[key] = value
+    shown['recipients'] = sum(len(args[k]) for k in ('to', 'cc', 'bcc') if isinstance(args.get(k), list))
+    shown['attachments'] = len(args['attachments']) if isinstance(args.get('attachments'), list) else 0
+    shown['body_length'] = len(args['body']) if isinstance(args.get('body'), str) else 0
+    return json.dumps(shown)
 
 
 def _gchat_brief(tool: str, args: dict, ok: bool) -> str:
@@ -1314,9 +1347,14 @@ class Broker:
             result = {"ok": False, "error": f"{tool} is not available {self.unavailable[tool]}"}
         elif self.calls > self.max_calls:
             result = {"ok": False, "error": f"call budget for this run exhausted ({self.max_calls})"}
-        elif tool in MAIL_TOOLS and not self.mail_grants():
+        elif tool in MAIL_DRAFT_TOOLS and not any(g.get("draft") for g in self.mail_grants()):
+            result = {"ok": False, "error": "no mail granted to you for drafts"}
+            self._action_denied(tool, {}, result['error'])
+        elif tool in MAIL_DRAFT_TOOLS and sum(self.counts.get(t, 0) for t in MAIL_DRAFT_TOOLS) > MAIL_DRAFTS_PER_RUN:
+            result = {"ok": False, "error": f"at most {MAIL_DRAFTS_PER_RUN} mail drafts per run"}
+        elif tool in MAIL_ALL_TOOLS and not self.mail_grants():
             result = {"ok": False, "error": "no mail granted to you"}
-        elif tool in MAIL_TOOLS and not page and sum(self.counts.get(t, 0) for t in MAIL_TOOLS) > MAIL_CALLS_PER_RUN:
+        elif tool in MAIL_ALL_TOOLS and not page and sum(self.counts.get(t, 0) for t in MAIL_ALL_TOOLS) > MAIL_CALLS_PER_RUN:
             result = {"ok": False, "error": f"at most {MAIL_CALLS_PER_RUN} mail calls per run"}
         elif tool in DRIVE_TOOLS and not self.gdrive_grants():
             result = {"ok": False, "error": "no Drive granted to you"}
@@ -1359,6 +1397,9 @@ class Broker:
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
         if tool in GCHAT_TOOLS:   # its arguments and errors can quote Chat: names, handles and the error's class only
             brief, status = _gchat_brief(tool, args, result["ok"]), "ok" if result["ok"] else f"ERROR {failure}"
+        if tool in MAIL_DRAFT_TOOLS:
+            brief = _mail_draft_brief(args)
+            status = 'ok' if result['ok'] else f'ERROR {failure}'
         action = self._current_action
         classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
         self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
@@ -1571,10 +1612,18 @@ class Broker:
         grants, calendars, drives = self.mail_grants(), self.calendar_grants(), self.gdrive_grants()
         chats = self.gchat_grants()
         for tool, spec in SPECS.items():
-            if tool in self.disabled or (tool in MAIL_TOOLS and not grants) or (tool in CALENDAR_TOOLS and not calendars) \
+            if tool in self.disabled or (tool in MAIL_ALL_TOOLS and not grants) or (tool in CALENDAR_TOOLS and not calendars) \
                     or (tool in DRIVE_TOOLS and not drives) or (tool in GCHAT_TOOLS and not chats) \
                     or (tool in CALENDAR_WRITE_TOOLS and (self.as_of or not any(g.get("write") for g in calendars))):
                 continue
+            if tool in MAIL_DRAFT_TOOLS and not any(g.get('draft') for g in grants):
+                continue
+            if tool == "mail_draft":
+                from . import google
+                spec = json.loads(json.dumps(spec))
+                aliases = sorted({g['account'] for g in grants if g.get('draft')})
+                spec['function']['description'] += ' Draft from: ' + ', '.join(
+                    f"{a} ({(google.account(a) or {}).get('address', '?')})" for a in aliases)
             if tool == "mail_search":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + self.mail_env() + " (account/label)."
@@ -2407,7 +2456,7 @@ class Broker:
         names = sorted(p.name for p in base.iterdir() if (p / "shaft").is_dir() and p.name != self.name)
         return ("instances: " + ", ".join(names)) if names else "no other instances exist yet"
 
-    # -- the operator's mail: read-only, only threads under a label they granted -----------------------
+    # -- the operator's mail: reads only threads under a label they granted; drafts (never sent) need a draft grant --
     def mail_grants(self) -> list[dict]:
         """What this run may read now: the grant is read on every call, so a revoke holds from the next call."""
         from .core import mail_grants
@@ -2415,7 +2464,7 @@ class Broker:
 
     def mail_env(self) -> str:
         """The grants as account/label, comma-separated (SHAFT_MAIL, for the instance's prompt line)."""
-        return ",".join(f"{g['account']}/{g['label']}" for g in self.mail_grants())
+        return ",".join(f"{g['account']}/{g['label']}" + (" [drafts]" if g.get("draft") else "") for g in self.mail_grants())
 
     def _google_account(self, alias: str, scope: str):
         """The run's session on one of the operator's Google accounts, shared by mail, calendar and Drive (one access token
@@ -2542,6 +2591,147 @@ class Broker:
         from . import mail
         alias, tid, labels, msgs = self._mail_thread(id)
         return mail.render(f"{alias}/{tid}", labels, msgs, self._mail_account(alias), self._operator(), message, offset)
+
+    def _draft_account(self, alias):
+        from . import google
+        allowed = sorted({g['account'] for g in self.mail_grants() if g.get('draft')})
+        if alias not in allowed:
+            raise PermissionError(f"mail account {alias!r} has no draft grant; allowed: {', '.join(allowed) or 'none'}")
+        return self._google_account(alias, google.GMAIL_COMPOSE)
+
+    def _draft_files(self, paths):
+        from . import mail, messages
+        from .core import reserved, safe_read_bytes, UnsafePath
+        files, total = [], 0
+        if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)
+                                  or len(paths) > messages.ATTACH_MAX_FILES):
+            raise ValueError(f'attachments: an array of at most {messages.ATTACH_MAX_FILES} paths in your folder')
+        for rel in paths or []:
+            p = _in_folder(self._root(), rel)
+            if not p or os.path.islink(self._root() / p):
+                raise ValueError(f"{rel}: attachment must be a file in your folder, not a link")
+            if reserved(self._root(), p.as_posix(), NOT_SENT):
+                raise ValueError(f"{rel}: reserved attachment path")
+            try:
+                data = safe_read_bytes(self._root(), p.as_posix(), limit=mail.FILE_MAX - total)
+            except (OSError, UnsafePath):
+                raise ValueError(f"{rel}: attachment is missing or has a link in its path") from None
+            except ValueError:
+                raise ValueError(f"{rel}: attachments total more than 25 MB") from None
+            total += len(data)
+            files.append((p.name, data))
+        return files
+
+    @contextlib.contextmanager
+    def _draft_registry(self):
+        from . import core
+        with core._grant_lock(self.name, 'mail-drafts'):
+            path = core.SUP_DIR / 'mail-drafts' / f'{self.name}.json'
+            rows = json.loads(path.read_text()) if path.exists() else {}
+            before = json.dumps(rows, sort_keys=True)
+            try:
+                yield rows
+            finally:
+                if json.dumps(rows, sort_keys=True) != before:
+                    self._save_draft_registry(path, rows)
+
+    @staticmethod
+    def _save_draft_registry(path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.drafts-')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(rows, f)
+            os.replace(tmp, path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+
+    def _draft_message_id(self, acct, did):
+        from . import mail
+        return mail.draft_message_id(acct, did)
+
+    def _draft_submit(self, acct, did, raw, tid):
+        from . import mail
+        return mail.update_draft(acct, did, raw, tid) if did else mail.create_draft(acct, raw, tid)
+
+    def _draft_reply(self, handle):
+        from . import google, mail
+        alias, tid, labels, msgs = self._mail_thread(handle)
+        defaults = mail.reply_defaults(msgs, google.operator_addresses() | {self._mail_account(alias).address})
+        return alias, tid, labels, defaults
+
+    def _mail_draft(self, body: str, account: str = '', reply_to: str = '', to=None, cc=None, bcc=None,
+                    subject=None, attachments=None) -> str:
+        return self._draft_write('mail_draft', body, account, reply_to, '', to, cc, bcc, subject, attachments)
+
+    def _mail_draft_update(self, id: str, body: str, to=None, cc=None, bcc=None, subject=None,
+                           attachments=None) -> str:
+        """Replace the whole draft, retaining only its reply context."""
+        return self._draft_write('mail_draft_update', body, '', '', id, to, cc, bcc, subject, attachments)
+
+    def _draft_write(self, tool, body, account, reply_to, handle, to, cc, bcc, subject, attachments):
+        from . import mail
+        from .messages import size_text
+        if not isinstance(body, str) or not all(isinstance(v, str) for v in (account, reply_to, handle)):
+            raise ValueError('body, account, reply_to and id must be text')
+        if tool == 'mail_draft' and not reply_to and not account:
+            raise ValueError('a new message needs account, to and subject')
+        with self._draft_registry() as registry:
+            did, prior, defaults, tid = '', {}, {}, None
+            try:
+                if tool == 'mail_draft_update':
+                    account, sep, did = handle.partition('/draft/')
+                    prior = registry.get(did, {})
+                    if not sep or not prior or prior['account'] != account:
+                        raise PermissionError('unknown draft; only your own drafts can be updated')
+                    reply_to = prior.get('thread') or ''
+                if reply_to:
+                    source, source_tid, labels, defaults = self._draft_reply(reply_to)
+                    account = account or source
+                    acct = self._draft_account(account)
+                    if source == account:
+                        if not any(g.get('draft') and g['account'] == account and g['label'] in labels
+                                   for g in self.mail_grants()):
+                            raise PermissionError('the thread has no label granted for drafts')
+                        tid = source_tid
+                else:
+                    acct = self._draft_account(account)
+                if did:
+                    current = self._draft_message_id(acct, did)
+                    if current != prior['message_id']:
+                        if current is None:
+                            del registry[did]
+                        raise PermissionError('the operator edited it or it was sent; it is theirs now')
+            except PermissionError as e:
+                self._action_denied(tool, {}, str(e))
+                raise
+            if not reply_to and (to is None or subject is None):
+                raise ValueError('a new message needs account, to and subject')
+            # An update replaces the whole draft: omitted fields take the reply defaults again, never the old content.
+            to = to if to is not None else defaults.get('to', [])
+            cc = cc if cc is not None else defaults.get('cc', [])
+            bcc = bcc if bcc is not None else []
+            subject = subject if subject is not None else defaults.get('subject', '')
+            files = self._draft_files(attachments)
+            raw = mail.build_message(acct.address, to, cc, bcc, subject, body, files,
+                                     defaults.get('in_reply_to', ''), defaults.get('references', ''))
+            action = self._action_route(tool, {})
+            if action and action['mode'] != 'direct':   # a demoted class: drafts have no proposal path, so refuse
+                raise PermissionError(f"{action['class']} actions wait for the operator after an over-reach; "
+                                      f"shaft actions {self.name} restore {action['class']} (action {action['id']})")
+            answer = self._draft_submit(acct, did, raw, tid)
+            did, mid = answer['id'], answer['message']['id']
+            registry[did] = {'account': account, 'thread': reply_to, 'message_id': mid, 'subject': subject,
+                             'created': prior.get('created') or datetime.now().astimezone().isoformat()}
+            where = (f'in thread {reply_to}' if tid else f"in {account}'s Drafts" +
+                     (f' with reply headers to {reply_to}' if reply_to else ''))
+            return (f'Draft left in {account} ({acct.address}), not sent.\n'
+                    f'To: {", ".join(to)}\nCc: {", ".join(cc)}\nBcc: {", ".join(bcc)}\nSubject: {subject}\n'
+                    + 'Attachments: ' + (', '.join(f'{n} ({size_text(len(d))})' for n, d in files) or 'none')
+                    + f'\n{where}\nHandle: {account}/draft/{did}\n'
+                    # authuser= picks the signed-in account; /mail/u/<address>/ answers 404 (checked live 2026-11-10)
+                    + f'https://mail.google.com/mail/?authuser={urllib.parse.quote(acct.address)}#drafts?compose={mid}\n'
+                    + 'The operator reviews it and presses Send.')
 
     def _mail_download(self, id: str, message, attachment) -> tuple[str, str, int, str, str, bytes]:   # noqa: A002
         """(alias, thread id, message number, file name, type, bytes) of one attachment of a visible thread."""
@@ -3401,6 +3591,33 @@ class ReplayBroker(Broker):
     def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002
         return self._mail_listing(self._shared(["mail_found", self.mail_grants(), query, account, max, page, self.as_of],
                                                lambda: self._mail_found(query, account, max, page), self._mail_still))
+
+    @contextlib.contextmanager
+    def _draft_registry(self):
+        if not hasattr(self, '_sim_drafts'):
+            from . import core
+            path = core.SUP_DIR / 'mail-drafts' / f'{self.name}.json'
+            rows = self._shared(['draft_registry', self.name, self.as_of],
+                                lambda: json.loads(path.read_text()) if path.exists() else {})
+            self._sim_drafts = json.loads(json.dumps(rows))
+            self._sim_draft_ids = set()
+        yield self._sim_drafts
+
+    def _draft_reply(self, handle):
+        value = Broker._draft_reply(self, handle)  # recheck visibility before using the shared answer
+        return self._shared(['draft_reply', self.mail_grants(), handle, self.as_of, value], lambda: value)
+
+    def _draft_message_id(self, acct, did):
+        if did in self._sim_draft_ids:
+            return self._sim_drafts[did]['message_id']
+        current = Broker._draft_message_id(self, acct, did)
+        return self._shared(['draft_message_id', acct.alias, did, current], lambda: current)
+
+    def _draft_submit(self, acct, did, raw, tid):
+        self._tag('simulated: not drafted')
+        did = did or f'simulated-{self.calls}'
+        self._sim_draft_ids.add(did)
+        return {'id': did, 'message': {'id': f'simulated-message-{self.calls}'}}
 
     def _mail_still(self, found: dict) -> dict:
         """`found` with each thread's row made again from its visible messages now, as mail_search would: a thread not

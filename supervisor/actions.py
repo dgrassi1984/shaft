@@ -39,12 +39,13 @@ ACTION_INSTANCES, _ = core.knob(
     "SHAFT_ACTION_INSTANCES", "", _names, 'instances using the conservative action classes (#142)',
     group='Runs and conversations', services=('runs', 'api', 'web', 'scheduler'))
 CLASSES = ('reversible', 'staged', 'irreversible')
-# #142: the complete operator-tool table. Reads retain their existing per-call grants. There are no operator
-# mail writes, Notion writes, Docs writes or delete tools today. http_request uses instance-owned keys, not
+# #142: the complete operator-tool table. Reads retain their existing per-call grants. Mail writes only leave
+# drafts. There are no operator Notion writes, Docs writes or delete tools today. http_request uses instance-owned keys, not
 # operator credentials. New operator write tools must be added here before being offered by the broker.
 OPERATOR_TOOLS = {
     'drive_search': 'read', 'drive_read': 'read', 'drive_download': 'read',
     'gchat_search': 'read', 'gchat_read': 'read', 'gchat_download': 'read',
+    'mail_draft': 'reversible', 'mail_draft_update': 'reversible',
     'mail_search': 'read', 'mail_read': 'read', 'mail_attachment': 'read',
     'calendar_events': 'read', 'calendar_event': 'read',
     'calendar_create': 'calendar', 'calendar_move': 'calendar', 'calendar_respond': 'staged',

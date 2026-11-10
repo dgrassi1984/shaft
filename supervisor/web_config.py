@@ -111,7 +111,8 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if op == "off":
             return _ran([verb, name, "off"])
         alias, what = form.get("alias", "").strip(), form.get("what", "").strip()
-        allowed = ("grant", "revoke", "grant-write", "revoke-write") if verb == "calendar" else ("grant", "revoke")
+        allowed = (("grant", "revoke", "grant-write", "revoke-write") if verb == "calendar"
+                   else ("grant", "revoke", "grant-draft", "revoke-draft"))
         if op not in allowed or not alias or not what:
             raise Refused(f"{verb} {op} needs an account and a {'label' if verb == 'mail' else 'calendar'}")
         if verb == "calendar" and op == "grant" and form.get("writable"):
@@ -260,7 +261,8 @@ def google_accounts(name: str, accounts: dict) -> Html:
     env = core.secrets_env() if accounts else {}
     for alias, data in accounts.items():
         client = (data.get("client") or alias).removesuffix(":web")
-        missing = [google.missing_scope_message(alias, data, scope) for scope in google.SCOPES
+        missing = [("Drafting needs Log in again. " if scope == google.GMAIL_COMPOSE else "")
+                   + google.missing_scope_message(alias, data, scope) for scope in google.SCOPES
                    if scope not in google.scopes(data)]
         keys = google.client_keys(client + ":web")
         login = (h('<form method="get" action="/google/login"{a}><input type="hidden" name="alias" value="{alias}">'
@@ -329,7 +331,14 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                                    else f"Allow {n} to write to {g['account']}/{g['name']}? ") + WRITE_CONFIRM,
                                   {"name": n, "op": "revoke-write" if g.get("write") else "grant-write",
                                                   "alias": g["account"], "what": g["calendar"]}, cls="small")])
-                     if kind == "calendar" else Html("")),
+                     if kind == "calendar" else join([
+                         h('<span>{s}</span>', s="drafts" if g.get("draft") else "read only"),
+                         button("mail", "Read only" if g.get("draft") else "Allow drafts",
+                                (f"Make {n}'s mail {g['account']}/{g['label']} read only?"
+                                 if g.get("draft") else
+                                 f"Allow {n} to leave drafts for {g['account']}/{g['label']}? This never allows sending."),
+                                {"name": n, "op": "revoke-draft" if g.get("draft") else "grant-draft",
+                                 "alias": g["account"], "what": g["label"]}, cls="small")])),
                   b=button(kind, "Revoke", f"revoke {n}'s {kind} grant {g['account']}/{g[what_label]}? From its next "
                            f"{kind} call.", {"name": n, "op": "revoke", "alias": g["account"], "what": g[what_key]},
                            cls="small")) for g in items]

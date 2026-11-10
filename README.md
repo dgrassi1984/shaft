@@ -175,7 +175,7 @@ This path needs no local model, only cloud API keys.
 ## Optional features
 
 - **Local and self-hosted models**, and routing through a Codex or Grok plan: [local models](docs/local-model.md).
-- **Access grants**: read-only Gmail labels, calendars (changes that involve other people wait for your approval),
+- **Access grants**: Gmail labels (read, and optionally drafts you review and send yourself), calendars (changes that involve other people wait for your approval),
   Drive and Google Chat; instance-owned Google accounts; scheduled jobs; images; a shared Chromium: [integrations](docs/integrations.md).
 - **Evaluation**: trials, the capability battery, model bake-offs and measurement reports:
   [command reference](docs/cli.md).

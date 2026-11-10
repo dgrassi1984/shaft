@@ -647,20 +647,24 @@ def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
 # an instance they pick reads the Gmail threads carrying a label they pick. No Gmail credential can
 # be limited to a label, so the grant and the credential stay here and supervisor/mail.py enforces the label.
 def mail_grants(name: str) -> list[dict]:
-    """The labels this instance may read (`shaft mail <name> grant <alias> <label>`): [{account, label}]."""
+    """The labels this instance may read (`shaft mail <name> grant <alias> <label>`): [{account, label, draft?}].
+    `draft` (`shaft mail <name> grant-draft <alias> <label>`) also lets it leave drafts — never send — from that
+    account, in that label's threads; drafting implies reading, and removing it keeps the read."""
     raw = _tool_settings(name).get("mail")
-    return [{"account": g["account"], "label": g["label"]} for g in raw if isinstance(g, dict)
+    return [{"account": g["account"], "label": g["label"], **({"draft": True} if g.get("draft") is True else {})}
+            for g in raw if isinstance(g, dict)
             and isinstance(g.get("account"), str) and isinstance(g.get("label"), str)] if isinstance(raw, list) else []
 
 
 def set_mail_grants(name: str, grants: list[dict]) -> list[dict]:
-    keep: list[dict] = []
+    """One row per account/label: a later row for the same label replaces the earlier one (its draft flag with it)."""
+    keep: dict[tuple[str, str], dict] = {}
     for g in grants:
-        g = {"account": g["account"], "label": g["label"]}
-        if g not in keep:
-            keep.append(g)
-    _update_tool_settings(name, mail=keep or None)
-    return keep
+        keep[(g["account"], g["label"])] = {"account": g["account"], "label": g["label"],
+                                            **({"draft": True} if g.get("draft") is True else {})}
+    result = list(keep.values())
+    _update_tool_settings(name, mail=result or None)
+    return result
 
 
 # -- the operator's read-only Drive grants -----------------------------------------------------------------------
