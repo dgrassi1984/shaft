@@ -2600,11 +2600,12 @@ class Broker:
         return self._google_account(alias, google.GMAIL_COMPOSE)
 
     def _draft_files(self, paths):
-        from . import mail
+        from . import mail, messages
         from .core import reserved, safe_read_bytes, UnsafePath
         files, total = [], 0
-        if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)):
-            raise ValueError('attachments must be an array of paths')
+        if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)
+                                  or len(paths) > messages.ATTACH_MAX_FILES):
+            raise ValueError(f'attachments: an array of at most {messages.ATTACH_MAX_FILES} paths in your folder')
         for rel in paths or []:
             p = _in_folder(self._root(), rel)
             if not p or os.path.islink(self._root() / p):
@@ -2671,6 +2672,10 @@ class Broker:
     def _draft_write(self, tool, body, account, reply_to, handle, to, cc, bcc, subject, attachments):
         from . import mail
         from .messages import size_text
+        if not isinstance(body, str) or not all(isinstance(v, str) for v in (account, reply_to, handle)):
+            raise ValueError('body, account, reply_to and id must be text')
+        if tool == 'mail_draft' and not reply_to and not account:
+            raise ValueError('a new message needs account, to and subject')
         with self._draft_registry() as registry:
             did, prior, defaults, tid = '', {}, {}, None
             try:

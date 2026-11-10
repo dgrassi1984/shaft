@@ -23,7 +23,7 @@ from datetime import datetime
 from email.header import decode_header, make_header
 from email.message import Message, EmailMessage
 from email.policy import SMTP
-from email.utils import getaddresses
+from email.utils import formataddr, getaddresses
 
 from . import google
 
@@ -345,17 +345,25 @@ def attachment_bytes(acct: google.Account, msg: dict, att: dict) -> bytes:
 
 
 # -- drafts: never sent ----------------------------------------------------------
+def _addresses(msg: dict, name: str) -> list[str]:
+    """One entry per address of a header, its display name decoded and re-quoted. Parsed from the raw header: a name
+    decoded first ("Doe, Jane" from an encoded word) would split at its comma into two broken addresses."""
+    raw = next((str(h.get("value", "")) for h in (msg.get("payload") or {}).get("headers") or []
+                if str(h.get("name", "")).lower() == name), "")
+    return [formataddr((_clean(n), a)) for n, a in getaddresses([raw]) if "@" in a]
+
+
 def reply_defaults(msgs: list[dict], operator_addresses: set[str]) -> dict:
     """Reply headers from visible messages only. An operator follow-up keeps its recipients."""
     last = msgs[-1]
     own = {a.casefold() for a in operator_addresses}
-    if any(a.casefold() in own for _, a in getaddresses([header(last, "from")])):
-        to, cc = header(last, "to"), header(last, "cc")
+    if any(a.casefold() in own for _, a in getaddresses(_addresses(last, "from"))):
+        to, cc = _addresses(last, "to"), _addresses(last, "cc")
     else:
-        to, cc = header(last, "reply-to") or header(last, "from"), ""
+        to, cc = _addresses(last, "reply-to") or _addresses(last, "from"), []
     subject = header(msgs[0], "subject")
     mid = header(last, "message-id")
-    return {"to": [to] if to else [], "cc": [cc] if cc else [],
+    return {"to": to, "cc": cc,
             "subject": subject if subject.lower().startswith("re:") else "Re: " + subject,
             "in_reply_to": mid, "references": " ".join(filter(None, [header(last, "references"), mid]))}
 
@@ -371,9 +379,14 @@ def build_message(address: str, to: list[str], cc: list[str], bcc: list[str], su
     values.extend(name for name, _ in attachments)
     if any(not isinstance(v, str) or "\r" in v or "\n" in v for v in values):
         raise ValueError("header values must be strings without CR or LF")
-    recipients = getaddresses(to + cc + bcc)
-    if not recipients or any("@" not in a for _, a in recipients):
-        raise ValueError("at least one recipient is required; each recipient needs an @")
+    if not isinstance(body, str):
+        raise ValueError("body must be text")
+    for entry in to + cc + bcc:   # each entry checked alone: getaddresses skips an empty one silently
+        parsed = getaddresses([entry])
+        if not entry.strip() or not parsed or any("@" not in a for _, a in parsed):
+            raise ValueError(f"{entry!r} is not an email address")
+    if not to + cc + bcc:
+        raise ValueError("at least one recipient is required")
     msg = EmailMessage(policy=SMTP)
     msg["From"], msg["Subject"] = address, subject
     for key, addresses in (("To", to), ("Cc", cc), ("Bcc", bcc)):

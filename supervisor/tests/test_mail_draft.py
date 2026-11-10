@@ -142,6 +142,37 @@ class DraftTest(read.MailCase):
         self.assertEqual([p.get_content_type() for p in parts], ['text/plain', 'text/plain'])
         self.assertEqual([p.get_payload(decode=True) for p in parts], [b'text', b'text'])
 
+    def test_reply_to_a_sender_whose_encoded_name_holds_a_comma(self):
+        # bug (Gemini review): the decoded name "Doe, Jane" split at its comma, and the default reply was refused
+        headers = self.gmail.threads['aaa111'][-1]['payload']['headers']
+        headers[:] = [h for h in headers if h['name'] != 'Reply-To']
+        headers.append({'name': 'Reply-To', 'value': '=?utf-8?Q?Doe=2C_Jane?= <jane@example.com>'})
+        self.draft(reply_to='work/aaa111', body='reply')
+        to = self.gmail.uploads[-1][2]['To']
+        self.assertEqual([(a.display_name, a.addr_spec) for a in to.addresses], [('Doe, Jane', 'jane@example.com')])
+
+    def test_empty_recipient_entry_and_bad_argument_types_refused(self):
+        # bug (Gemini review): getaddresses skipped "" silently, leaving a malformed To header
+        for to in ([''], ['a@example.com', ''], ['  ']):
+            self.assertIn('is not an email address', self.refused(self.broker(), 'mail_draft', {**self.args, 'to': to}))
+        self.assertIn('must be text', self.refused(self.broker(), 'mail_draft', {**self.args, 'body': 123}))
+        self.assertIn('must be text', self.refused(self.broker(), 'mail_draft_update', {'id': 123, 'body': 'x'}))
+        self.assertEqual(self.gmail.uploads, [])
+
+    def test_attachment_count_capped(self):
+        # bug (Gemini review): only bytes were capped, so thousands of empty files built one huge message
+        (self.root / 'empty.txt').write_text('')
+        self.assertIn('at most 10', self.refused(self.broker(), 'mail_draft',
+                                                 {**self.args, 'attachments': ['empty.txt'] * 11}))
+        self.assertEqual(self.gmail.uploads, [])
+
+    def test_new_message_without_account_is_an_input_error_not_a_refused_action(self):
+        b = self.broker()
+        with mock.patch.object(broker.Broker, '_action_denied') as denied:
+            error = self.refused(b, 'mail_draft', {'to': ['a@example.com'], 'subject': 'S', 'body': 'x'})
+        self.assertIn('needs account, to and subject', error)
+        denied.assert_not_called()
+
     def test_header_injection_and_recipient_validation(self):
         for patch in ({'subject': 'hello\r\nBcc: intruder@example.com'}, {'to': ['a@example.com\nBcc: b@example.com']},
                       {'cc': ['missing-at']}, {'to': []}, {'bcc': ['bad\raddress@example.com']}):
