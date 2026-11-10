@@ -233,6 +233,26 @@ class FieldsTest(OpConfigTest):
                 for value in ("off", "inbox", "wake"):
                     self.assertIn(value, f["help"])
 
+    def test_an_operator_note_alone_keeps_the_known_help_and_is_shown_after_it_20261110(self):
+        for key, value, help_text in (("WATCH_GCHAT", "wake", opconfig.WATCH_HELP["WATCH_GCHAT"]),
+                                      ("VOICE_MODE", "on", opconfig.VOICE_HELP["VOICE_MODE"]),
+                                      ("WAKE_INTERVAL_MINUTES", "120", "How often I wake.")):
+            with self.subTest(key=key):
+                (self.root / "config.env").write_text(
+                    CONFIG + f'\n\n{key}="{value}"   # Daniele, 2026-11-10\n')
+                fs = {f["key"]: f for f in opconfig.fields("wren")}
+                self.assertEqual(fs[key]["help"], help_text + " (Daniele, 2026-11-10)")
+
+    def test_an_own_comment_block_still_wins_20261110(self):
+        (self.root / "config.env").write_text('# my words\nWATCH_GCHAT="wake"  # Daniele\n')
+        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        self.assertEqual(fs["WATCH_GCHAT"]["help"], "my words (Daniele)")
+
+    def test_a_parenthesised_comment_block_still_wins_20261110(self):
+        (self.root / "config.env").write_text('# (my words)\nWATCH_MAIL="off"\n')
+        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        self.assertEqual(fs["WATCH_MAIL"]["help"], "(my words)")
+
     def test_a_set_watch_key_shows_its_value_and_an_unknown_one_stays_visible_20261110(self):
         from supervisor.web_config import _field_form
         (self.root / "config.env").write_text(

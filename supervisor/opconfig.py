@@ -49,6 +49,11 @@ def _key(line: str) -> str | None:
 def _comments(text: str) -> dict[str, str]:
     """Each key's help: the comment block right above its line (or above the run of keys it belongs to), plus the
     line's own inline comment."""
+    return {key: help_text for key, (help_text, _) in _comments_with_blocks(text).items()}
+
+
+def _comments_with_blocks(text: str) -> dict[str, tuple[str, bool]]:
+    """Each key's help and whether it has a comment block above it."""
     out, block, after_key = {}, [], False
     for line in text.splitlines():
         s = line.strip()
@@ -65,7 +70,7 @@ def _comments(text: str) -> dict[str, str]:
             inline = line.partition("=")[2]
             inline = inline.split('"', 2)[2] if inline.strip().startswith('"') else inline
             inline = inline.partition("#")[2].strip()
-            out[key] = " ".join(block + ([f"({inline})"] if inline else []))
+            out[key] = (" ".join(block + ([f"({inline})"] if inline else [])), bool(block))
             # the block stays for the next keys in the same run (one comment over several lines of keys)
     return out
 
@@ -128,7 +133,7 @@ def fields(name: str) -> list[dict]:
     tmpl = _template_text()
     values = config_values(text)
     defaults = {**dict.fromkeys(WATCH_KEYS.values(), "off"), **VOICE_DEFAULTS, **config_values(tmpl)}
-    helps, tmpl_helps = _comments(text), _comments(tmpl)
+    helps, tmpl_helps = _comments_with_blocks(text), _comments(tmpl)
     order = list(dict.fromkeys([k for l in text.splitlines() if (k := _key(l))] +
                                [k for l in tmpl.splitlines() if (k := _key(l))] + list(VOICE_DEFAULTS) +
                                list(WATCH_KEYS.values())))
@@ -136,8 +141,13 @@ def fields(name: str) -> list[dict]:
     out = []
     for key in order:
         secret = bool(SECRET_KEY.search(key))
+        own_help, has_block = helps.get(key, ("", False))
+        known_help = tmpl_helps.get(key) or VOICE_HELP.get(key) or WATCH_HELP.get(key) or ""
+        help_text = own_help or known_help
+        if own_help and not has_block and known_help:
+            help_text = f"{known_help} {own_help}"
         f = {"key": key, "set": key in values, "value": values.get(key, ""), "default": defaults.get(key),
-             "help": helps.get(key) or tmpl_helps.get(key, ""), "secret": secret, "choices": None,
+             "help": help_text, "secret": secret, "choices": None,
              "numeric": bool(re.fullmatch(r"\d+", defaults.get(key, "") or values.get(key, "") or "x"))}
         if secret:
             f["value"] = "(set, hidden)" if values.get(key) else "(empty)"
@@ -151,7 +161,6 @@ def fields(name: str) -> list[dict]:
             f["choices"] = [""] + list(efforts)
         elif key in WATCH_KEYS.values():
             f["choices"] = list(WATCH_MODES)
-        f["help"] = f["help"] or VOICE_HELP.get(key, "") or WATCH_HELP.get(key, "")
         out.append(f)
     return out
 
