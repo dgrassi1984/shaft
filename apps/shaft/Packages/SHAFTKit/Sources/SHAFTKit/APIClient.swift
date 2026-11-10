@@ -60,9 +60,9 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
     public var files: [OutgoingFile]
     /// Spoken in voice mode and transcribed on the device: sent as `voice=1` (§6). False for a typed message.
     public var voice: Bool
-    /// The conversation it was written in (`ChatRef.draftKey`): a thread's id, sent as `cid` with `now` and `queue`;
-    /// `"from"` for the From feed (a Next-cycle message, sent without one); nil for the current chat (a server before
-    /// threads, or a send that lets the server pick the most recently active thread).
+    /// The conversation it was written in (`ChatRef.draftKey`): a thread's id, sent as `cid` in every mode; `"from"`
+    /// for the From feed (a Next-cycle message, sent without one); nil for the current chat (a server before threads, or
+    /// a send that lets the server pick the most recently active thread).
     public var cid: String?
 
     public init(mid: String = OutgoingMessage.newMid(), text: String, mode: SendMode = .now, quotes: [Quote] = [],
@@ -81,10 +81,12 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
         case mid, text, mode, quotes, retryOf, files, voice, cid
     }
 
-    /// The `cid` the send carries (§6): a thread's id for `now` and `queue`. A Next-cycle message goes to the inbox,
-    /// whatever thread it was written in, and the From feed is no thread.
+    /// The `cid` the send carries (§6): the thread it was written in. With `now` and `queue` the reply comes there;
+    /// with `background` the Next-cycle note shows there and its answer, written later in a cycle, comes there (a
+    /// thread that has ended by then sends it to From). The From feed is no thread: none, and the note stays in From.
+    /// A server before thread replies ignores `cid` with `background`.
     public var sentCid: String? {
-        guard mode != .background, let cid, !cid.isEmpty, cid != ChatRef.fromID else { return nil }
+        guard let cid, !cid.isEmpty, cid != ChatRef.fromID else { return nil }
         return cid
     }
 

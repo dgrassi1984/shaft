@@ -81,7 +81,8 @@ Building requires git and a reachable release tag; missing tags fail the build.
 
 `DevServer/fixture_server.py` runs the web service's own `/app/v1` (app_api, web_chat, documents, comments,
 feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances (`INSTANCES` in the fixture), a chat with every item
-kind, an earlier chat, documents with comment threads. It fakes only what lies outside the web service: the tailnet
+kind (tundra's thread holds its cycle's answer, "⏾ from its cycle"), an earlier chat (its From feed holds an answer
+for it, "re: «title»"), documents with comment threads. It fakes only what lies outside the web service: the tailnet
 login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute, "wide" exercises wide tables and code),
 APNs (each push is written to `<dir>/pushes/` with apns.py's payload, and handed to a simulator with `--simctl`) and
 the instances' live state. It refuses the real `.supervisor/` and the ports of the running services.

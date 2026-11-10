@@ -9,8 +9,8 @@ import UniformTypeIdentifiers
 /// instance (`chat.ref`): a thread, its From feed, its one chat on a server before threads, or an earlier chat.
 struct ChatScreen: View {
     let chat: ChatStore
-    /// Open an earlier chat (§5).
-    var openArchived: (ChatSummary) -> Void = { _ in }
+    /// Open an earlier chat (§5) by its id: from Earlier chats, or a message's "re: «title»".
+    var openArchived: (String) -> Void = { _ in }
     /// Back to the current chat from an earlier one.
     var backToCurrent: (() -> Void)?
     /// Show another conversation of the instance (a thread just started).
@@ -40,13 +40,13 @@ struct ChatScreen: View {
     @State private var columnWidth: CGFloat = 700
     #endif
 
-    init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil,
+    init(chat: ChatStore, openArchived: @escaping (String) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil,
          openThread: @escaping (ChatRef) -> Void = { _ in }) {
         self.chat = chat
         self.openArchived = openArchived
         self.backToCurrent = backToCurrent
         self.openThread = openThread
-        _screen = State(initialValue: ChatScreenModel(chat: chat))
+        _screen = State(initialValue: ChatScreenModel(chat: chat, openEarlier: chat.isEarlier ? nil : openArchived))
     }
 
     private var watched: Bool {

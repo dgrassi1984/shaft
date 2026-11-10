@@ -87,10 +87,13 @@ struct ThreadsTests {
         let event = #"{"title": "t replied", "body": "b", "url": "/i/t/chat?id=web-a", "tag": "t", "instance": "t", "cid": "web-a"}"#
         #expect(try SHAFTJSON.decoder().decode(PushEvent.self, from: Data(event.utf8)).cid == "web-a")
 
-        let rows = fixtureText(try DecodingTests.fixture("instances"))
-        #expect(try SHAFTJSON.decoder().decode(InstancesResponse.self, from: Data(rows.utf8)).instances[0].threads == nil)
+        // The server's fixture is a server with threads; one before them sends no `threads` on a row.
         var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("instances")) as? [String: Any])
         var list = try #require(object["instances"] as? [[String: Any]])
+        list[0].removeValue(forKey: "threads")
+        object["instances"] = list
+        #expect(try SHAFTJSON.decoder().decode(InstancesResponse.self,
+                                               from: JSONSerialization.data(withJSONObject: object)).instances[0].threads == nil)
         list[0]["threads"] = 2
         object["instances"] = list
         let withThreads = try SHAFTJSON.decoder().decode(InstancesResponse.self,
@@ -163,23 +166,29 @@ struct ThreadsTests {
         #expect(requests[14].query("cid") == nil)
     }
 
-    /// A message goes to the thread it was written in: `cid` with `now` and `queue`, none for the next cycle (the inbox
-    /// is the instance's) nor from the From feed, none for the current chat.
-    @Test func aSendCarriesItsThreadForNowAndQueueOnly() async throws {
+    /// A message goes to the thread it was written in, in every mode: `cid` with `now` and `queue`, and with the next
+    /// cycle too, so the note shows in that thread and the cycle's answer comes there. None from the From feed, none
+    /// for the current chat.
+    /// Regression: a Next-cycle note went without `cid`, so it and its answer landed in From, away from the thread.
+    @Test func aSendCarriesItsThreadInEveryModeButNotFromFrom() async throws {
         let server = StubServer { _ in .json(200, #"{"said": "sent", "chat": "web-a", "file": null}"#) }
         let cases: [(OutgoingMessage, String?)] = [
             (OutgoingMessage(text: "a", mode: .now, cid: "web-a"), "web-a"),
             (OutgoingMessage(text: "b", mode: .queue, cid: "web-a"), "web-a"),
-            (OutgoingMessage(text: "c", mode: .background, cid: "web-a"), nil),
+            (OutgoingMessage(text: "c", mode: .background, cid: "web-a"), "web-a"),
             (OutgoingMessage(text: "d", mode: .background, cid: "from"), nil),
             (OutgoingMessage(text: "e", mode: .now), nil),
+            (OutgoingMessage(text: "f", mode: .background), nil),
+            (OutgoingMessage(text: "g", mode: .background, cid: ""), nil),
         ]
         for (message, _) in cases { _ = try await server.client.send("tundra", message) }
         let forms = try server.requests.map {
             try ParsedMultipart(body: $0.body, contentType: #require($0.header("Content-Type")))
         }
         #expect(forms.map { $0.field("cid") } == cases.map(\.1))
-        #expect(forms.map { $0.field("text") } == ["a", "b", "c", "d", "e"])
+        #expect(forms.map { $0.field("mode") } == ["now", "queue", "background", "background", "now", "background",
+                                                   "background"])
+        #expect(forms.map { $0.field("text") } == ["a", "b", "c", "d", "e", "f", "g"])
 
         // The thread survives the outbox's storage; a message stored before threads has none.
         let restored = try SHAFTJSON.decoder().decode(OutgoingMessage.self,
@@ -282,6 +291,23 @@ struct ThreadsTests {
         #expect(sender.sent.first?.message.sentCid == nil)
         #expect(from.unsent.map(\.text) == ["Check the nightly totals"])
         #expect(store.chat("wisp", .thread(Self.threadA)).unsent.isEmpty)
+    }
+
+    /// Next cycle from a thread goes `background` with that thread's id: the note shows in the thread, and the cycle's
+    /// answer comes there. It stays the thread's while it is not sent.
+    @Test func aNextCycleNoteFromAThreadCarriesItsThread() async throws {
+        let folder = try temporaryFolder("thread-later")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try makeStore(try threadsServer(), folder: folder)
+        let sender = RecordingSender(down: true)
+        store.outbox.sender = sender
+        let a = store.chat("wisp", .thread(Self.threadA))
+        a.draft.text = "Check March when you can"
+        _ = await a.send(mode: .background)
+        #expect(sender.sent.first?.message.mode == .background)
+        #expect(sender.sent.first?.message.sentCid == Self.threadA)
+        #expect(a.unsent.map(\.text) == ["Check March when you can"])
+        #expect(store.chat("wisp", .from).unsent.isEmpty)
     }
 
     // MARK: Threads in the store

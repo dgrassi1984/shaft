@@ -199,8 +199,8 @@ struct MacChats: View {
             InstancesLoadFailure(error: error, settings: { openSettings() })
         } else if let selection = state.selection {
             let chat = store.chat(selection)
-            ChatScreen(chat: chat, openArchived: { summary in
-                state.path.append(ArchivedRoute(instance: selection.instance, cid: summary.id))
+            ChatScreen(chat: chat, openArchived: { cid in
+                state.path.append(ArchivedRoute(instance: selection.instance, cid: cid))
             }, openThread: { ref in state.open(ChatSelection(selection.instance, ref)) })
             .id(ChatSelection(selection.instance, chat.ref))
             .toolbar(removing: .title)           // the header's own title is the name with its state

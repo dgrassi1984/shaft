@@ -68,9 +68,14 @@ final class ChatScreenModel {
     /// replaces this screen, which ends it.
     var showVoice = false
 
-    init(chat: ChatStore) {
+    /// Open an earlier chat of this instance by its id (a sent message's "re: «title»"); nil where none can open (an
+    /// earlier chat on screen).
+    let openEarlier: ((String) -> Void)?
+
+    init(chat: ChatStore, openEarlier: ((String) -> Void)? = nil) {
         self.chat = chat
         instance = chat.instance
+        self.openEarlier = openEarlier
     }
 
     var composerCovered = false
