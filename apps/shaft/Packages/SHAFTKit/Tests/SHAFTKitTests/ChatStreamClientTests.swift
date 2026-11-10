@@ -68,17 +68,20 @@ struct ChatStreamClientTests {
         sse(seq, "end", reply: reply, "\"failure\": null")
     }
 
-    static func collect(_ stream: AsyncThrowingStream<ChatStreamEvent, Error>) async throws -> [ChatStreamEvent] {
+    /// `seenBy`: the server that drops a connection once the test has the events sent before the drop.
+    static func collect(_ stream: AsyncThrowingStream<ChatStreamEvent, Error>,
+                        seenBy server: StubServer? = nil) async throws -> [ChatStreamEvent] {
         var events = [ChatStreamEvent]()
-        for try await event in stream { events.append(event) }
+        for try await event in stream { events.append(event); server?.saw(event.seq) }
         return events
     }
 
     /// Run `stream` to its end; what it yielded and the error it ended with, if any.
-    static func drain(_ stream: AsyncThrowingStream<ChatStreamEvent, Error>) async -> ([ChatStreamEvent], APIError?) {
+    static func drain(_ stream: AsyncThrowingStream<ChatStreamEvent, Error>,
+                      seenBy server: StubServer? = nil) async -> ([ChatStreamEvent], APIError?) {
         var events = [ChatStreamEvent]()
         do {
-            for try await event in stream { events.append(event) }
+            for try await event in stream { events.append(event); server?.saw(event.seq) }
             return (events, nil)
         } catch {
             return (events, error as? APIError ?? .decoding(path: "test", message: "not an APIError: \(error)"))
@@ -187,7 +190,7 @@ struct ChatStreamClientTests {
 
     @Test func aDroppedConnectionIsATransportError() async throws {
         let server = StubServer { _ in .events(Self.draft(1, "Half"), pieces: [Self.draft(2, " more")], dropsAtEnd: true) }
-        let (events, error) = await Self.drain(server.client.replyStream("thelos"))
+        let (events, error) = await Self.drain(server.client.replyStream("thelos"), seenBy: server)
         #expect(events.map(\.seq) == [1, 2])
         guard case .transport = error else { Issue.record("not a transport error: \(String(describing: error))"); return }
     }
@@ -248,7 +251,7 @@ struct ChatStreamClientTests {
             }
         }
         let started = ContinuousClock.now
-        let events = try await Self.collect(server.client.followReply("thelos"))
+        let events = try await Self.collect(server.client.followReply("thelos"), seenBy: server)
         let waited = ContinuousClock.now - started
         #expect(events.map(\.seq) == [1, 2, 3, 4, 5])
         #expect(events.map(\.text) == ["One.", " Two.", " Three.", " Four.", nil])
@@ -282,7 +285,7 @@ struct ChatStreamClientTests {
                 : .events(": reply \(newer)\n\n" + Self.draft(1, "New one.", reply: newer) + Self.end(2, reply: newer))
         }
         let events = try await Self.collect(server.client.followReply("thelos", after: 0, reply: nil, reconnects: 3,
-                                                                      delay: .milliseconds(10)))
+                                                                      delay: .milliseconds(10)), seenBy: server)
         #expect(events.map(\.reply) == [Self.reply, Self.reply, newer, newer])
         #expect(events.map(\.seq) == [1, 2, 1, 2])
         #expect(server.requests.last?.query("reply") == Self.reply)
@@ -304,7 +307,7 @@ struct ChatStreamClientTests {
                 : .json(409, #"{"error": {"code": "not_replying", "message": "thelos is not replying: nothing to stream."}}"#)
         }
         let events = try await Self.collect(server.client.followReply("thelos", after: 0, reply: nil, reconnects: 3,
-                                                                      delay: .milliseconds(10)))
+                                                                      delay: .milliseconds(10)), seenBy: server)
         #expect(events.map(\.seq) == [1])
         #expect(server.requests.count == 2)
     }
@@ -329,7 +332,7 @@ struct ChatStreamClientTests {
             }
         }
         let events = try await Self.collect(server.client.followReply("thelos", after: 0, reply: nil, reconnects: 1,
-                                                                      delay: .milliseconds(10)))
+                                                                      delay: .milliseconds(10)), seenBy: server)
         #expect(events.map(\.seq) == [1, 2, 3, 4])
         #expect(server.requests.count == 3)
     }

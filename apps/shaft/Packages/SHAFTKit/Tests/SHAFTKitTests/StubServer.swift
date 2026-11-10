@@ -36,8 +36,10 @@ final class StubServer: @unchecked Sendable {
         var pieces: [Data] = []
         var beforePiece: (@Sendable (Int) async -> Void)?
         /// After the body and its pieces, the connection drops (`URLError.networkConnectionLost`) instead of closing,
-        /// 150 ms later: as a network drop comes, after the bytes before it were read. (A failure right after the last
-        /// read makes URLSession drop the bytes it had not handed over yet.)
+        /// once the test has seen the last event sent before it (`saw`, as the `collect`/`drain` helpers report each
+        /// event; 5 s at most): as a network drop comes, after the bytes before it were read. A drop after a fixed delay
+        /// raced URLSession, which drops the bytes it had not handed over yet when a failure follows them, and the test
+        /// flaked under load (M3).
         var dropsAtEnd = false
 
         var isStreamed: Bool { !pieces.isEmpty || dropsAtEnd }
@@ -97,6 +99,18 @@ final class StubServer: @unchecked Sendable {
     var client: APIClient { APIClient(credential: credential, session: session) }
 
     var requests: [Request] { lock.withLock { log } }
+
+    /// The stream events the test has received, by `seq` (a dropped connection waits for its last one).
+    private var seen: Set<Int> = []
+
+    func saw(_ seq: Int) { lock.withLock { _ = seen.insert(seq) } }
+
+    func waitUntilSeen(_ seq: Int, atMost limit: Duration = .seconds(5)) async {
+        let deadline = ContinuousClock.now + limit
+        while !lock.withLock({ seen.contains(seq) }), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
 
     func setAnswer(_ answer: @escaping @Sendable (Request) throws -> Response) {
         lock.withLock { self.answer = answer }
@@ -172,7 +186,9 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: piece)
         }
         if response.dropsAtEnd {
-            try? await Task.sleep(for: .milliseconds(150))
+            let sent = ([response.body] + response.pieces).map { String(decoding: $0, as: UTF8.self) }.joined()
+            let last = sent.split(separator: "\n").compactMap { $0.hasPrefix("id: ") ? Int($0.dropFirst(4)) : nil }.last
+            if let last, let server = StubServer.server(for: url.host) { await server.waitUntilSeen(last) }
             client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
         } else {
             client?.urlProtocolDidFinishLoading(self)
