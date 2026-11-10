@@ -2,7 +2,9 @@
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
-//                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
+//                            the operator types that word instead of clicking OK), data-after="home" goes to / after,
+//                            ="open-thread" opens the thread its answer names (data-cid), ="close" shuts its menu,
+//                            ="thread-ended" / "thread-cleared" leave a thread's own page that can no longer write; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
 //                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
 //                            data-check names the page a lost answer tells you to look at. The composer (its
@@ -517,7 +519,8 @@
     if (queue && ev.submitter?.dataset.queue !== undefined) queue.value = ev.submitter.dataset.queue;
     // Next cycle: to its inbox, read in its next cycle — only from its button; Enter and Cmd-Enter never send so
     const background = form.querySelector("input[name=background]");
-    if (background) background.value = ev.submitter?.dataset.background || "";
+    // From <instance>'s composer only ever sends for the next cycle (data-always)
+    if (background) background.value = ev.submitter?.dataset.background || background.dataset.always || "";
     if (form.dataset.draft) takeQuote(form);
     buttons.forEach(b => { b.disabled = true; });
     form.dataset.busy = "1";
@@ -527,6 +530,8 @@
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
     const payload = new FormData(form);
+    // A document saved, deleted or commented on beside a thread goes to that thread's next message, not the current one
+    if (/^\/docs\//.test(form.dataset.post) && pageCid() && !payload.has("cid")) payload.set("cid", pageCid());
     const replyIdentity = form.querySelector("input[name=in_reply_to]");
     if (replyIdentity) replyIdentity.remove();
     if (queue) queue.value = "";              // the next send chooses its own mode
@@ -624,6 +629,14 @@
       if (r.ok && form.dataset.diff) hideDiff(form);   // saved: back to the text, which is kept
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
       if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
+      if (r.ok && form.dataset.after === "open-thread") openThread(body);
+      // a thread's own page cannot write to it once it ended: it shows it as the earlier chat it is (End), or goes to
+      // the instance's current thread (Clear). The plain chat page follows the current thread by itself.
+      if (r.ok && form.dataset.after === "thread-ended" && pageCid()) setTimeout(() => location.reload(), 300);
+      if (r.ok && form.dataset.after === "thread-cleared" && pageCid()) {
+        location.href = form.dataset.post.replace(/^\/chat\/([^/]+)\/clear$/, "/i/$1/chat");
+      }
+      if (r.ok && form.dataset.after === "close") { const d = form.closest("details"); if (d) d.open = false; }
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened
       if (shown) { shown.remove(); unsent(); }
@@ -636,9 +649,22 @@
     }
   });
 
+  // The thread this page is on (a thread's own page: its composer names it), else "" (the plain chat page follows the
+  // current thread; the server picks it).
+  function pageCid() {
+    const field = document.querySelector("form.composer input[name=cid]");
+    return field ? field.value : "";
+  }
+  // New thread (POST /chat/<n>/new) answers a link to it: go there.
+  function openThread(body) {
+    const a = new DOMParser().parseFromString(body, "text/html").querySelector("[data-cid] a[href]");
+    if (a) location.href = a.getAttribute("href");
+  }
+
   // A composer (form[data-files]): files picked, pasted or dropped — anywhere on its page — go with the message, each
-  // shown as a chip (a thumbnail for an image) that × takes out again; Enter sends. Its draft is kept per instance in
-  // this browser (data-draft), so a reload or a closed tab does not lose it; the server's chat is the record.
+  // shown as a chip (a thumbnail for an image) that × takes out again; Enter sends. Its draft is kept per instance, per
+  // thread on a thread's own page, in this browser (data-draft), so a reload or a closed tab does not lose it; the
+  // server's chat is the record.
   const composer = () => document.querySelector("form[data-files]");
 
   function touchOnly() {                         // a phone or tablet: its primary pointer is a finger (iPadOS says so
@@ -1085,8 +1111,9 @@
       return;
     }
     if (ev.altKey && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
-      const chats = [...document.querySelectorAll("nav .rail a[data-inst]")];
-      const at = chats.findIndex(a => a.classList.contains("on"));
+      // the instances and, under the one viewed, its threads: from the innermost lit one (its thread)
+      const chats = [...document.querySelectorAll("nav .rail a[data-inst], nav .rail a[data-seen-key]")];
+      const at = chats.map(a => a.classList.contains("on")).lastIndexOf(true);
       const to = chats[at + (ev.key === "ArrowUp" ? -1 : 1)];
       if (at >= 0 && to) { ev.preventDefault(); location.href = to.href; }
     }
@@ -1667,8 +1694,21 @@
     quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
-  // The rail: an instance whose last answer this browser has not seen is marked unread. What was
-  // seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more).
+  // The rail: a thread (or From) whose last answer or message this browser has not seen is marked unread, and so is its
+  // instance. What was seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more):
+  // shaft.seen is {instance: {thread id | "from": time}}. A time alone (before threads) is that instance's mark for
+  // every thread ("*"), until each is seen again.
+  function seenAt(seen, inst, key) {
+    const v = seen[inst];
+    if (typeof v === "string") return v;
+    if (!v || typeof v !== "object") return "";
+    const own = v[key] || "", all = v["*"] || "";
+    return own > all ? own : all;
+  }
+  function seenMark(seen, inst, key, last) {
+    if (typeof seen[inst] !== "object" || !seen[inst]) seen[inst] = typeof seen[inst] === "string" ? { "*": seen[inst] } : {};
+    seen[inst][key] = last;
+  }
   function seenGet() {
     try { return JSON.parse(localStorage.getItem("shaft.seen") || "{}"); } catch (e) { return {}; }
   }
@@ -1690,9 +1730,10 @@
     const seen = seenGet();
     let changed = false;
     document.querySelectorAll(".feed [data-seen-reply], .feed [data-sent-at]").forEach(item => {
-      const inst = item.dataset.seenInst, last = item.dataset.seenReply || item.dataset.sentAt;
-      if (inst && last && (seen[inst] || "") < last && onScreen(item)) {
-        seen[inst] = last;
+      const inst = item.dataset.seenInst, key = item.dataset.seenKey, last = item.dataset.seenReply || item.dataset.sentAt;
+      // no key: a page with no thread shown (cleared): its old messages light no thread
+      if (inst && key && last && seenAt(seen, inst, key) < last && onScreen(item)) {
+        seenMark(seen, inst, key, last);
         changed = true;
       }
     });
@@ -1700,11 +1741,18 @@
   }
   function markRail(rail) {
     const seen = seenGet();
-    rail.querySelectorAll("a[data-inst]").forEach(a => {
+    rail.querySelectorAll("a[data-seen-key]").forEach(a => {
       const last = a.dataset.last || "";
-      a.classList.toggle("unread", !!last && (seen[a.dataset.inst] || "") < last);
+      a.classList.toggle("unread", !!last && seenAt(seen, a.dataset.threadOf, a.dataset.seenKey) < last);
     });
-    const unread = rail.querySelectorAll("a.unread").length;
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      let lasts = null;
+      try { lasts = a.dataset.lasts ? JSON.parse(a.dataset.lasts) : null; } catch (e) { /* none: the first render */ }
+      const inst = a.dataset.inst;
+      a.classList.toggle("unread", lasts ? Object.entries(lasts).some(([k, last]) => !!last && seenAt(seen, inst, k) < last)
+        : !!a.dataset.last && seenAt(seen, inst, "*") < a.dataset.last);
+    });
+    const unread = rail.querySelectorAll("a[data-inst].unread").length;   // instances: the app badge counts them
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
       (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
@@ -1860,7 +1908,7 @@
   // keepalive, not sendBeacon: a beacon is a POST, and a POST needs the page's token in a header it cannot carry.
   function away(ev) {
     const feed = document.querySelector(".feed[data-follow][data-poll]");
-    if (!feed || /[?&]id=/.test(feed.dataset.poll)) return;
+    if (!feed) return;                                // a thread's page (?id=) and From say which feed (W9, threads)
     if (ev && ev.type === "visibilitychange" && document.visibilityState !== "hidden") return;
     const url = feed.dataset.poll + (feed.dataset.poll.includes("?") ? "&" : "?") + `away=1&at=${Date.now()}`;
     try { fetch(url, { credentials: "same-origin", cache: "no-store", keepalive: true }).catch(() => {}); }
@@ -2082,7 +2130,7 @@
     if (panel._tick) panel._tick();
   }
   // The separate comment composer shares the page's request and feedback conventions.
-  window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain };
+  window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain, cid: pageCid };
 
   function docSaved(form, doc, typed, sha) {
     const panel = document.getElementById("docs");

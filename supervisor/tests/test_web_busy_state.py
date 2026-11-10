@@ -43,8 +43,9 @@ class BusyStateHeaderTest(unittest.TestCase):
                 body = str(web_views.chat_header("tundra", {"name": "tundra", "model": "m", "state": state},
                                                  {"id": "c1", "state": "idle"}, []))
                 self.assertNotIn('<p class="warn">', body)
+                self.assertIn('<h1>tundra</h1>', body)     # the thread's title beside it, then the state under them
                 self.assertIn(
-                    f'<h1>tundra</h1><div class="sub"><details class="menu busystate" data-key="busy-state">'
+                    f'</div><div class="sub"><details class="menu busystate" data-key="busy-state">'
                     f'<summary data-focus="busy" aria-label="tundra is {state}">{svg(name, 14)}<span>{state}</span>'
                     f'</summary><div class="menubody">', body)
                 self.assertIn(words or fallback, body)

@@ -1,4 +1,5 @@
-"""Issues #14 and #28: unread state follows rendered replies, not the selected instance."""
+"""Issues #14 and #28: unread state follows rendered replies, not the selected instance. With topic threads the marks
+are per thread (and From): the rail lights the thread not on screen, and its instance."""
 import json
 import shutil
 import subprocess
@@ -30,7 +31,12 @@ const classes = (...initial) => {
   return { contains: k => s.has(k), add: k => s.add(k), remove: k => s.delete(k),
     toggle(k, on) { if (on) s.add(k); else s.delete(k); } };
 };
-const link = {dataset: {inst: "wisp", last: latest}, classList: classes("inst", "on")};
+// the instance (its data-lasts: each open thread's newest, and From's) and, under it, its threads
+const lasts = input.lasts || {current: latest};
+const link = {dataset: {inst: "wisp", last: latest, lasts: JSON.stringify(lasts)}, classList: classes("inst", "on")};
+const rows = Object.entries(lasts).map(([k, last]) =>
+  ({dataset: {threadOf: "wisp", seenKey: k, last}, classList: classes("thread")}));
+if (input.stored !== undefined) stored = JSON.stringify(input.stored);
 const button = {classList: classes()};
 let replies = [];
 const panel = {dataset: {poll: "/fragment/chat/wisp", every: "1500"}, isConnected: true,
@@ -38,10 +44,11 @@ const panel = {dataset: {poll: "/fragment/chat/wisp", every: "1500"}, isConnecte
   querySelector: () => null, querySelectorAll: () => [], closest: () => null,
   get innerHTML() { return this.html; }, set innerHTML(html) {
     this.html = html;
-    replies = [...html.matchAll(/<div class="turn it"([^>]*)>/g)].flatMap(m => {
+    replies = [...html.matchAll(/<div class="turn (?:it|sent)"([^>]*)>/g)].flatMap(m => {
       const attrs = Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]));
       // on screen: inside the feed's scroll box (W8: rendered below the fold is not seen)
-      return attrs["seen-reply"] ? [{dataset: {seenInst: attrs["seen-inst"], seenReply: attrs["seen-reply"]},
+      return attrs["seen-reply"] || attrs["sent-at"] ? [{dataset: {seenInst: attrs["seen-inst"], seenKey: attrs["seen-key"],
+        seenReply: attrs["seen-reply"], sentAt: attrs["sent-at"]},
         getClientRects: () => [1], getBoundingClientRect: () => ({top: 10, bottom: 60}),
         closest: q => q === "[data-scroll]" ? {getBoundingClientRect: () => ({top: 0, bottom: 600})} : null}] : [];
     });
@@ -49,7 +56,9 @@ const panel = {dataset: {poll: "/fragment/chat/wisp", every: "1500"}, isConnecte
 };
 panel.innerHTML = input.html;
 const rail = {classList: classes("rail"), querySelector: () => null, querySelectorAll: q => q === "a[data-inst]" ? [link] :
-  q === "a.unread" && link.classList.contains("unread") ? [link] : []};
+  q === "a[data-seen-key]" ? rows : q === "a[data-inst].unread" && link.classList.contains("unread") ? [link] : []};
+const row = k => rows.find(r => r.dataset.seenKey === k);
+const mark = (w, k) => typeof w === "string" ? w : [w[k] || "", w["*"] || ""].sort()[1];
 const emit = (type, e = {}) => { for (const f of handlers[type] || []) f(e); };
 const document = {readyState: "loading", visibilityState: "visible", title: "Config · SHAFT",
   body: {scrollHeight: 0, classList: classes(), appendChild() {}},
@@ -77,14 +86,24 @@ const check = unread => {
 };
 (async () => {
   emit("DOMContentLoaded");
-  if (input.mode === "current") assert.equal(JSON.parse(stored).wisp, latest, "initial loaded reply is seen");
+  const key = input.key || "current";
+  if (input.mode === "current") assert.equal(mark(JSON.parse(stored).wisp, key), latest, "initial loaded reply is seen");
   emit("shaft:swapped", {target: rail});
   if (input.mode === "current") {
-    assert.equal(JSON.parse(stored).wisp, latest, "initial loaded reply is seen");
+    assert.equal(mark(JSON.parse(stored).wisp, key), latest, "initial loaded reply is seen");
     check(false);
+  } else if (input.mode === "threads") {
+    // thread A on screen and seen; B, not on screen, has a newer answer: B and its instance are unread, A is not
+    assert.equal(mark(JSON.parse(stored).wisp, "current"), latest);
+    assert.equal(row("current").classList.contains("unread"), false, "the thread on screen is seen");
+    assert.equal(row("web-b").classList.contains("unread"), true, "the thread not on screen is unread");
+    assert.equal(row("from").classList.contains("unread"), input.fromUnread, "From");
+    check(true);
+    assert.equal(JSON.parse(stored).wisp["web-b"], undefined, "B was never on screen");
   } else {
     check(true);
-    assert.equal(JSON.parse(stored).wisp, old, "unseen reply must not be consumed");
+    assert.equal(mark(JSON.parse(stored).wisp, "current"), old, "unseen reply must not be consumed");
+    assert.equal(row("current").classList.contains("unread"), true, "its thread too");
   }
   if (input.mode === "failure") {
     await panel._tick();
@@ -96,10 +115,10 @@ const check = unread => {
     await panel._tick();
     assert.equal(panel.innerHTML, input.newHtml, "the fetched reply was swapped");
     check(false);
-    assert.equal(JSON.parse(stored).wisp, latest, "successful feed swap clears unread");
+    assert.equal(mark(JSON.parse(stored).wisp, "current"), latest, "successful feed swap clears unread");
   }
   if (input.mode === "tabs") {
-    stored = JSON.stringify({wisp: latest});
+    stored = JSON.stringify({wisp: {current: latest}});
     for (const f of winHandlers.storage || []) f({key: "shaft.seen"});
     check(false);
     emit("shaft:swapped", {target: rail});
@@ -111,9 +130,9 @@ const check = unread => {
 
 @unittest.skipUnless(NODE, "node is not installed")
 class UnreadTest(unittest.TestCase):
-    def run_page(self, mode, html=""):
+    def run_page(self, mode, html="", **extra):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
-            "mode": mode, "html": html, "newHtml": feed(),
+            "mode": mode, "html": html, "newHtml": feed(), **extra,
         })], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -136,3 +155,22 @@ class UnreadTest(unittest.TestCase):
     def test_issue_14_seen_state_updates_across_tabs(self):
         """Reverting #14 loses cross-tab updates and lets an older feed overwrite seen state."""
         self.run_page("tabs", feed(ts="2026-10-20T10:00:00"))
+
+    def test_threads_the_one_not_on_screen_is_unread_and_lights_its_instance(self):
+        """Topic threads: seeing thread A must not consume thread B's newer answer (one mark per instance did), and the
+        instance stays marked while B is unread. A mark from before threads ("*") still counts for From."""
+        later = "2026-10-20T12:30:00"
+        self.run_page("threads", feed(), lasts={"current": "2026-10-20T11:59:00", "web-b": later,
+                                                "from": "2026-10-20T09:00:00"}, fromUnread=False)
+        self.run_page("threads", feed(), lasts={"current": "2026-10-20T11:59:00", "web-b": later, "from": later},
+                      fromUnread=True)
+
+    def test_threads_from_feed_items_are_seen_under_from(self):
+        """A message the instance sent outside any thread, on screen in From, clears From's mark only."""
+        html = str(web_views.feed_html({"instance": "wisp", "chat": None, "archived": False, "earlier": 0,
+                                        "items": [{"key": "sm.md", "type": "sent", "ts": "2026-10-20T11:59:00",
+                                                   "file": "m.md", "text": "From a cycle", "kind": "note",
+                                                   "read": False, "attachments": [], "rating": None}]},
+                                       from_feed=True))
+        self.assertIn('data-seen-key="from"', html)
+        self.run_page("current", html, lasts={"from": "2026-10-20T11:59:00"}, key="from")

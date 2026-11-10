@@ -984,3 +984,54 @@ main { container: page / inline-size; }
     position: static; width: auto; height: auto; overflow: visible; clip-path: none;
   }
 }
+
+/* Topic threads. In the rail, under the instance being viewed: its open threads (a dot: idle, replying, waiting for
+   its turn), From <instance> and + New thread. A title too long for the rail ends in … */
+.railthreads { display: flex; flex-direction: column; gap: 1px; margin: 0 0 .3rem 1.1rem; padding-left: .35rem;
+               border-left: 1px solid var(--line); }
+nav a.thread { display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .22rem .45rem; font-size: .86rem;
+               color: var(--text); }
+nav a.thread .ttl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav a.thread.on { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
+nav a.thread.from .ttl { color: var(--dim); }
+nav a.thread.unread .ttl { font-weight: 600; color: var(--text); }
+nav a.thread.unread::after { content: "●"; color: var(--accent); font-size: .7rem; flex: none; }
+.tdot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; border: 1.5px solid var(--dim); }
+.tdot.t-replying { background: var(--talk); border-color: var(--talk); animation: tpulse 1.4s ease-in-out infinite; }
+.tdot.t-waiting { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 35%, transparent); }
+.tdot.t-from { border-style: dashed; }
+@keyframes tpulse { 50% { opacity: .35; } }
+.rail form.railnew { display: block; }
+.rail form.railnew button { border: 0; background: none; color: var(--accent); font-size: .84rem; padding: .22rem .45rem;
+                            text-align: left; width: 100%; border-radius: 6px; }
+.rail form.railnew button:hover { background: var(--panel); }
+@media (pointer: coarse) {
+  nav a.thread, .rail form.railnew button { min-height: 44px; }
+}
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  body.navopen nav a.thread { display: flex; border: 0; white-space: normal; }
+}
+
+/* The thread's title beside the instance's name; Rename behind it */
+.chathead .titleline { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
+.chathead .titleline h1 { flex: 0 1 auto; }
+.chathead .threadtitle { min-width: 0; color: var(--dim); font-size: .92rem; overflow: hidden; text-overflow: ellipsis;
+                         white-space: nowrap; }
+.chathead details.renamemenu { min-width: 0; flex: 0 1 auto; }
+/* compact as the busy notice's: a 44 px target here would make the header two lines taller on a touch screen */
+.chathead details.renamemenu > summary.threadtitle { display: flex; align-items: center; gap: .3rem; border: 0;
+    background: none; padding: 0 .2rem; font-size: .92rem; line-height: 1.25; border-radius: 5px; min-height: 0;
+    min-width: 0; }
+.chathead details.renamemenu > summary .ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chathead details.renamemenu > summary .i { flex: none; opacity: .55; }
+.chathead details.renamemenu > summary:hover, .chathead details.renamemenu[open] > summary { background: var(--hover);
+    color: var(--text); }
+.renameform label { display: block; font-size: .85rem; color: var(--dim); }
+.renameform input[name=title] { display: block; width: 100%; margin: .25rem 0 .5rem; font-size: 1rem; }
+.chathead form.newthread { display: inline-flex; }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .chathead .titleline h1 { flex: 0 0 auto; max-width: 45%; }
+}
+
+/* A reply waiting for the instance while another thread's reply holds it */
+.waitline { margin: .1rem 0 .3rem; font-size: .85rem; color: var(--warn); }
