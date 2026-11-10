@@ -499,6 +499,30 @@ struct VoiceTurnTests {
                                                      .speak(id: 2, text: "Two.", isStatus: false)])
     }
 
+    /// Bug: a stopped reply kept its wait, so the next turn's waiting sound started at once, with no wait of its own.
+    @Test func aStoppedReplysWaitDoesNotStartTheNextTurnsSound() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.waitingSound(true)])
+        #expect(turn.handle(fin("Stop.", 3.0)) == [.stopSpeaking, .stopReply, .state(.listening), .waitingSound(false)])
+        _ = turn.handle(fin("Try again.", 3.2))
+        #expect(turn.handle(tick(4.1)) == [.send(text: "Try again."), .showTranscript(""), .state(.thinking)])
+        #expect(turn.handle(tick(7.0)) == [])
+        #expect(turn.handle(tick(7.2)) == [.waitingSound(true)])               // fillerS after this turn
+    }
+
+    /// Bug: a word of yours below `bargeWords` did not keep the waiting sound off, so a cycle wait ticked over it.
+    @Test func noWaitingSoundWhileAWordOfYoursIsBeingHeard() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(vol("actually", 2.7)) == [])
+        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [])
+        #expect(turn.handle(tick(5.0)) == [])                                  // still being heard
+        #expect(turn.handle(tick(5.2)) == [.waitingSound(true)])               // the lone word dropped (3 endpoints)
+
+        var ticking = thinkingTurn()
+        #expect(ticking.handle(tick(5.6)) == [.waitingSound(true)])
+        #expect(ticking.handle(vol("actually", 5.8)) == [.waitingSound(false)])
+    }
+
     /// Bug: a tool that started cleared the wait, and its status ("pausing a cycle") was then read aloud.
     @Test func aWaitsStatusIsNeverReadEvenAfterAToolEndedTheWait() {
         var turn = thinkingTurn()
@@ -516,9 +540,11 @@ struct VoiceTurnTests {
                                status(waitingPhase, nil, 3.1), toolStart("web_search", 3.2),
                                toolEnd("read_file", 3.5), toolEnd("web_search", 3.6), tick(4.0),
                                toolStart("read_file", 4.1), tick(4.3), toolEnd("read_file", 4.4), tick(5.1),
-                               status(waitingPhase, nil, 5.2), draft("Done.", 5.3), status(waitingPhase, nil, 5.4),
-                               end(nil, 5.5))
+                               toolStart("web_search", 5.11), toolEnd("web_search", 5.12), tick(5.8),
+                               status(waitingPhase, nil, 5.9), draft("Done.", 6.0), status(waitingPhase, nil, 6.1),
+                               end(nil, 6.2))
         #expect(actions == [.waitingSound(true), .workingSound(true), .waitingSound(false), .workingSound(false),
+                            .workingSound(true), .workingSound(false),          // the hum starts again for a new tool
                             .waitingSound(true), .waitingSound(false), .speak(id: 1, text: "Done.", isStatus: false)])
         #expect(workingAlternates(actions))
     }

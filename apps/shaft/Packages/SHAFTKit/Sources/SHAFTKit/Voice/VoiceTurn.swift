@@ -52,7 +52,7 @@ public struct VoiceTurn: Sendable {
     private var queued: Set<Int> = []
     private var statusIds: Set<Int> = []
     private var working = false
-    /// The waiting sound plays (the silence before the reply's first text).
+    /// The waiting sound plays (the reply keeps you waiting in silence: before its first text, or for a cycle).
     private var waiting = false
     private var ducked = false
     private var shown = ""
@@ -114,7 +114,7 @@ public struct VoiceTurn: Sendable {
         default:
             guard state != .idle else { return [] }
             step(input)
-            // Only the clock turns the waiting sound on; anything may turn it off.
+            // The clock turns the waiting sound on, or a wait for a cycle at once; anything may turn it off.
             if case .tick(let at) = input { syncWaiting(at: at) } else { syncWaiting(at: nil) }
         }
         return out
@@ -544,12 +544,14 @@ public struct VoiceTurn: Sendable {
     }
 
     /// The waiting sound plays while the reply keeps you waiting in silence: no working sound, nothing queued to
-    /// speak, you not talking, and either nothing of the reply heard yet with `fillerS` gone since the silence began,
-    /// or a wait for a cycle (at once). `at` nil (any input but a tick): only a cycle wait turns it on.
+    /// speak, none of your words being heard (not even one below `bargeWords`), and either nothing of the reply heard
+    /// yet with `fillerS` gone since the silence began, or the running reply waits for a cycle (at once; a stopped
+    /// reply's wait is not the next turn's). `at` nil (any input but a tick): only a cycle wait turns it on.
     private mutating func syncWaiting(at: TimeInterval?) {
+        let cycleWait = reply.running && reply.waiting
         let quiet = tuning.workingSound && (state == .thinking || state == .speaking) && replyOpen && !working
-            && queued.isEmpty && (!textSinceSend || reply.waiting)
-        let due = reply.waiting || (at.map { $0 - quietSince >= tuning.fillerS } ?? false)
+            && queued.isEmpty && heard.isEmpty && (!textSinceSend || cycleWait)
+        let due = cycleWait || (at.map { $0 - quietSince >= tuning.fillerS } ?? false)
         let on = quiet && (waiting || due)
         guard on != waiting else { return }
         waiting = on
