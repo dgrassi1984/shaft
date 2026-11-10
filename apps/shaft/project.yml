@@ -18,8 +18,6 @@ settings:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     DEAD_CODE_STRIPPING: YES
 
@@ -38,6 +36,8 @@ targetTemplates:
   SHAFTTarget:
     settings:
       base:
+        # Version stamping reads git metadata, including the main repo of a linked worktree.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         SHAFT_KEYCHAIN_GROUP: $(DEVELOPMENT_TEAM).$(SHAFT_BUNDLE_PREFIX).shaft
 
 targets:
@@ -66,8 +66,6 @@ targets:
       path: Generated/iOS-Info.plist
       properties:
         CFBundleDisplayName: SHAFT
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # audio: a voice session goes on with the iPhone locked or the app in the background.
         UIBackgroundModes: [remote-notification, audio]
@@ -105,6 +103,11 @@ targets:
         inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
         outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
         basedOnDependencyAnalysis: false
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/iOS.entitlements
       properties:
@@ -135,8 +138,6 @@ targets:
       path: Generated/macOS-Info.plist
       properties:
         CFBundleDisplayName: SHAFT
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # Voice mode: asked when voice mode first opens.
@@ -162,6 +163,11 @@ targets:
           touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
         inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
         outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
+        basedOnDependencyAnalysis: false
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
         basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/macOS.entitlements
@@ -216,12 +222,16 @@ targets:
       path: Generated/NotificationService-iOS-Info.plist
       properties:
         CFBundleDisplayName: SHAFT Notifications
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    postBuildScripts:
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/NotificationService-iOS.entitlements
       properties:
@@ -245,12 +255,16 @@ targets:
       path: Generated/NotificationService-macOS-Info.plist
       properties:
         CFBundleDisplayName: SHAFT Notifications
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    postBuildScripts:
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/NotificationService-macOS.entitlements
       properties:

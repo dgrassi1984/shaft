@@ -151,6 +151,12 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 AppearanceSection()
+                if let version = AppVersion.label(info: Bundle.main.infoDictionary) {
+                    Section("App") {
+                        LabeledContent("Version", value: version)
+                    }
+                    .listRowBackground(Color.elevated)
+                }
                 if let credential = session.credential {
                     Section("Server") {
                         LabeledContent("Address", value: credential.baseURL.absoluteString)

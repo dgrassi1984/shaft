@@ -71,6 +71,11 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=m
 ```
 
 Each app scheme builds its notification extension too.
+Every build, in Xcode or `xcodebuild` and in any configuration, stamps the apps and extensions from git.
+The nearest reachable `v[0-9]*` tag supplies the plain release version. The build number is the HEAD commit count
+plus 100, preserving the offset needed after a history rewrite. No version override is needed.
+Settings shows the git description with `+changes` when tracked files differ from HEAD.
+Building requires git and a reachable release tag; missing tags fail the build.
 
 ## Try it against a fixture server
 
