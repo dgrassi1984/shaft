@@ -719,7 +719,7 @@ more: reload it"), or while it replies.
 ### 7.5 `POST /app/v1/chat/<n>/seen`
 
 `{"version": str}`: this device has shown the current chat up to that version (the app sends it when the newest item's end is
-on screen and the app is in the foreground).
+on screen in a window that shows the chat: on the Mac also one beside another app's window in front).
 
 - **Response 200:** `{"unread": false, "badge": int}`: the badge to set now.
 - **`409 stale_version`**, with the current `version` in `error`, when `version` is not the feed's current one: the

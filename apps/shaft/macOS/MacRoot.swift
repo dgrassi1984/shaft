@@ -234,8 +234,9 @@ struct MacChats: View {
     }
 }
 
-/// Whether the window is in front: the app active, the window its key or main window, not minimised and not covered
-/// whole. The chat's `scenePhase` follows it: `.active` in front, `.inactive` behind, `.background` hidden.
+/// Whether the window shows the chat: `.active` in front (the app active, the window its key or main window),
+/// `.inactive` shown behind another app's window, `.background` closed, minimised, hidden or covered whole. The chat's
+/// `scenePhase` is `.active` for both shown phases (it long-polls and is marked seen), `.background` otherwise.
 @MainActor
 @Observable
 final class MacPresence {

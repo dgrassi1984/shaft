@@ -644,8 +644,8 @@ set by `SHAFT_APP_API_FIXTURES`.
   Shift-Enter and Option-Enter insert a new line, Cmd-Enter queues (sends now when idle); `/` focuses the composer;
   files pasted or dropped are attached. The menu bar has New Message (⌘N), New Chat (⇧⌘N), Stop (⌘.), End (⇧⌘E),
   Queue after reply (⌘↩), Next cycle, Documents (⌥⌘D), Earlier chats (⇧⌘Y), Next/Previous chat (⌥↓/⌥↑) and Reload
-  (⌘R); Settings (⌘,) shows the server and this device, with Unpair. The chat long-polls while the window shows it and
-  is marked seen only while the window is in front; the Dock icon carries the server's badge; a notification click
+  (⌘R); Settings (⌘,) shows the server and this device, with Unpair. The chat long-polls and is marked seen while the window
+  shows it, in front or beside another app's window; the Dock icon carries the server's badge; a notification click
   brings the window forward (opened again if it was closed: the app keeps running) on that chat.
 
 Sources: [the API](../supervisor/app_api.py), [the chat model](../supervisor/web_chat.py),
