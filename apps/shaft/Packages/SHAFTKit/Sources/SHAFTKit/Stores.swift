@@ -466,7 +466,7 @@ public final class ChatStore {
         await act { try await $0.clear(name, cid: cid) }
     }
 
-    /// The feed's end is on screen and the app is in front: mark the version shown seen (§7.5).
+    /// The feed's end is on screen in a window that shows the chat: mark the version shown seen (§7.5).
     @discardableResult
     public func markSeen() async -> Bool {
         guard cid == nil, let version = feed?.version, let owner else { return false }

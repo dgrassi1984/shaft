@@ -15,7 +15,6 @@ struct ChatScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(InstancesStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.chatInFront) private var inFront
     @Environment(\.chatCovered) private var externallyCovered
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     #if os(iOS)
@@ -196,7 +195,6 @@ struct ChatScreen: View {
         }
         .onChange(of: scenePhase) { follow() }
         .onChange(of: watched) { follow() }
-        .onChange(of: inFront) { follow() }
         .onChange(of: covers) { _, covers in
             screen.documentsCover = covers
             follow()
@@ -376,7 +374,7 @@ struct ChatScreen: View {
         }
         if visible && scenePhase == .active {
             chat.start()
-            if watched && inFront { markSeen() } else { stopMarkingSeen() }
+            if watched { markSeen() } else { stopMarkingSeen() }
         } else {
             stopMarkingSeen()
             let wasPolling = chat.isPolling
@@ -396,15 +394,16 @@ struct ChatScreen: View {
         seenVersion = nil
     }
 
-    /// The newest item's end is on screen and the app (on the Mac: its window) in front: mark the version shown seen (§7.5).
+    /// The newest item's end is on screen and the chat watched (its window shows it, on the Mac even beside another app's
+    /// window in front): mark the version shown seen (§7.5).
     /// Retry failures with the current feed version until seen succeeds or the task is cancelled.
     private func markSeen() {
-        guard chat.cid == nil, watched, inFront, newestOnScreen, let version = chat.feed?.version,
+        guard chat.cid == nil, watched, newestOnScreen, let version = chat.feed?.version,
               version != seenVersion else { return }
         seenVersion = version
         seenTask?.cancel()
         seenTask = Task {
-            guard watched, inFront, newestOnScreen else {
+            guard watched, newestOnScreen else {
                 if seenVersion == version { seenVersion = nil }
                 return
             }

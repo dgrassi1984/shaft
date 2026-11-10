@@ -137,10 +137,9 @@ struct MacChats: View {
                     }
             }
             .environment(state.shell)
-            // The chat long-polls while this window shows it, and is marked seen only while the window is in front
-            // (MacPresence): the scene's own phase says neither.
+            // The chat long-polls and is marked seen while this window shows it (MacPresence: visible, not hidden,
+            // minimized or fully covered, in front or beside another app's window): the scene's own phase says neither.
             .environment(\.scenePhase, presence.phase == .background ? .background : .active)
-            .environment(\.chatInFront, presence.phase == .active)
             // A column width of its own: left to its content, the chat's minimum moved with what it shows while the
             // documents opened, and each new minimum asked the window for another constraints pass, until AppKit's
             // guard ended the app (crash of 2026-11-04, a document opened from the chat).

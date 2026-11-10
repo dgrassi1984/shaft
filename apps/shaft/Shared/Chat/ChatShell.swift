@@ -62,10 +62,6 @@ final class ChatShell {
 }
 
 extension EnvironmentValues {
-    /// The window showing the chat is the one in front (the Mac's `MacPresence`): only then is the chat marked seen.
-    /// A window behind another app's still shows the chat, so it keeps its long-poll (`scenePhase` says that). A
-    /// phone or tablet has one window: always true there.
-    @Entry var chatInFront = true
     @Entry var chatCovered = false
 }
 

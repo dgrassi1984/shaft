@@ -64,8 +64,21 @@ struct NativeChromePinTests {
         let chat = try shared("Shared/Chat/ChatScreen.swift")
         let stop = try #require(chat.range(of: "private func stopMarkingSeen()"))
         #expect(chat[stop.upperBound...].prefix(120).contains("seenVersion = nil"))
-        // A retry must not outlive the chat being in front.
-        #expect(chat.contains("if watched && inFront { markSeen() } else { stopMarkingSeen() }"))
+        // A retry must not outlive the chat being watched.
+        #expect(chat.contains("if watched { markSeen() } else { stopMarkingSeen() }"))
+    }
+
+    /// Bug: on the Mac a chat read in a window shown beside another app's kept its unread dot until the operator clicked
+    /// into SHAFT: seen needed the window in front (key, app active), though the chat was on screen and watched.
+    @Test func aChatShownBesideAnotherAppIsMarkedSeen() throws {
+        let chat = try shared("Shared/Chat/ChatScreen.swift")
+        let markSeen = try #require(chat.range(of: "private func markSeen()"))
+        let guardLine = chat[markSeen.upperBound...].prefix(200)
+        #expect(guardLine.contains("guard chat.cid == nil, watched, newestOnScreen,"), "\(guardLine)")
+        #expect(!chat.contains("inFront"), "seen must not wait for the window to be in front")
+        let mac = try shared("macOS/MacRoot.swift")
+        #expect(!mac.contains("chatInFront"))
+        #expect(mac.contains(".environment(\\.scenePhase, presence.phase == .background ? .background : .active)"))
     }
 
     /// Bug: thumbs showed only on the last answer, so a message sent proactively had none; and a turn that failed with no

@@ -9,7 +9,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Design/` | tokens and `Appearance.swift`: per-device theme and reading text size, the Appearance settings section |
 | `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
 | `Settings/` | `InstanceSettingsView` (server settings for one instance) and `ServerSection` (API restart and scheduler drain, shared with app settings through `session.store.services`) |
-| `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll while visible and active; watching only while uncovered; seen marks only while in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (Documents and Cycles beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
+| `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll while visible and active; watching only while uncovered; seen marks while shown, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (Documents and Cycles beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
 | `Composer/` | quote cards with their answers, attachment chips, the field, Send or Stop, and a "More ways to send" chevron beside Send once there is text or other draft content (Queue after reply / Next cycle); these choices also stay in + and, on iOS, a long press on Send |
 | `Documents/` | the panel (folders, sort, new document), a document (rendered, threads, overwritten lines, Select text with Reply and Comment, Download, Delete), the editor with the stale-save choice, comments, `CommentHighlight.swift` and `DocumentMarkdown.swift` |
@@ -50,11 +50,12 @@ running, both watches continue until completion or another settings screen close
 - **Documents beside the chat** (`Chat/ChatShell.swift`): a shell puts `ChatShell` in the environment of its chat
   column and `.documentsInspector(shell, store:)` on its split view, outside the chat's navigation stack. A phone sets
   `sheetsDocuments`, so documents open in a system sheet instead of the inspector. The chat stops watching while the sheet covers it, but keeps polling while visible and active.
-- **In front** (`chatInFront`, `Chat/ChatShell.swift`): the chat is marked seen only while its window is the one in
-  front and the end of the newest item is on screen, however tall the item is. Failed seen requests retry after 2, 4,
-  8, 16, then 30 seconds, capped at 30 seconds, using the current feed version; retries cancel when that end leaves the
-  screen, or the chat is covered or no longer in front. The Mac sets it from its window, and gives the chat a `scenePhase` that is active
-  while the window shows it.
+- **Seen** (`ChatScreen.markSeen`): the chat is marked seen while it is watched (its window shows it and nothing covers
+  it) and the end of the newest item is on screen, however tall the item is. On the Mac a window shown beside another
+  app's window in front counts: what is on screen has been seen. Failed seen requests retry after 2, 4, 8, 16, then 30
+  seconds, capped at 30 seconds, using the current feed version; retries cancel when that end leaves the screen, or the
+  chat is covered or no longer shown. The Mac gives the chat a `scenePhase` that is active while the window shows it
+  (`MacPresence`: visible, not hidden, minimized or fully covered).
 - **Menus**: `ChatScreenModel.sendRequest` (a send in a mode, through the composer's own send) and
   `confirmingNewChat` and `confirmingEnd`.
 - **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply
