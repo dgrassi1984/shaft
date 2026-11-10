@@ -2,16 +2,19 @@ import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// One chat on screen: the header (name, state, Talk, Documents, New chat, ⋯), the feed and the composer, with the
-/// documents beside it or over it, and voice mode over it (iPhone, iPad) or in the composer's place (Mac). It long-polls
-/// while it is visible, says `away` when it leaves, marks the chat seen when the end of the newest item is on screen,
-/// announces a new reply, and takes files dropped on it.
+/// One chat on screen: the header (name and thread, state, Talk, Documents, New thread or New chat, ⋯), the feed and
+/// the composer, with the documents beside it or over it, and voice mode over it (iPhone, iPad) or in the composer's
+/// place (Mac). It long-polls while it is visible, says `away` when it leaves, marks the chat seen when the end of the
+/// newest item is on screen, announces a new reply, and takes files dropped on it. The chat is one conversation of the
+/// instance (`chat.ref`): a thread, its From feed, its one chat on a server before threads, or an earlier chat.
 struct ChatScreen: View {
     let chat: ChatStore
     /// Open an earlier chat (§5).
     var openArchived: (ChatSummary) -> Void = { _ in }
     /// Back to the current chat from an earlier one.
     var backToCurrent: (() -> Void)?
+    /// Show another conversation of the instance (a thread just started).
+    var openThread: (ChatRef) -> Void = { _ in }
     @Environment(AppModel.self) private var model
     @Environment(InstancesStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
@@ -30,14 +33,19 @@ struct ChatScreen: View {
     @State private var seenVersion: String?
     @State private var seenTask: Task<Void, Never>?
     @State private var dropTargeted = false
+    /// Rename… asks for the thread's new title.
+    @State private var renaming = false
+    @State private var newTitle = ""
     #if os(macOS)
     @State private var columnWidth: CGFloat = 700
     #endif
 
-    init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil) {
+    init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil,
+         openThread: @escaping (ChatRef) -> Void = { _ in }) {
         self.chat = chat
         self.openArchived = openArchived
         self.backToCurrent = backToCurrent
+        self.openThread = openThread
         _screen = State(initialValue: ChatScreenModel(chat: chat))
     }
 
@@ -48,7 +56,7 @@ struct ChatScreen: View {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
             || screen.showEarlierChats || screen.showInstanceSettings || preview.showing || preview.error != nil
             || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
-            || (screen.showVoice && Self.voiceCovers)
+            || renaming || (screen.showVoice && Self.voiceCovers)
     }
     /// Voice mode covers the chat on an iPhone or iPad (a full-screen cover); on the Mac it takes the composer's place
     /// and the feed stays in view.
@@ -57,9 +65,18 @@ struct ChatScreen: View {
     #else
     private static let voiceCovers = false
     #endif
-    /// Talk: voice mode is on for the instance (its row's `voiceMode`), and this is its current chat.
+    /// Talk: voice mode is on for the instance (its row's `voiceMode`), and this is a conversation it answers in (its
+    /// current chat or a thread; not an earlier chat, nor the From feed, which only writes for the next cycle).
     private var canTalk: Bool {
-        chat.cid == nil && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
+        !chat.isEarlier && !chat.ref.isFrom && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
+    }
+    /// The instance has threads (a server with them): New thread starts one beside the others, and ends nothing.
+    private var hasThreads: Bool { store.threads(chat.instance) != nil }
+    /// The header's second name: the thread's title, "From <instance>" for the From feed, nil for the one chat of a
+    /// server before threads.
+    private var threadTitle: String? {
+        if chat.ref.isFrom { return String(localized: "From \(chat.instance)") }
+        return chat.isEarlier ? nil : chat.title
     }
     /// On an iPhone's width, five header buttons left no room for the instance's name (M3, iPhone Simulator): with Talk
     /// shown, Cycles moves into ⋯.
@@ -77,7 +94,7 @@ struct ChatScreen: View {
         @Bindable var screen = screen
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                if chat.cid != nil { archivedBanner }
+                if chat.isEarlier { archivedBanner }
                 // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
                     .scrollEdgeEffectHidden(true, for: .all)
@@ -100,7 +117,8 @@ struct ChatScreen: View {
                                     }
                             }
                             if screen.showVoice && !Self.voiceCovers {
-                                VoiceScreen(client: store.client, instance: chat.instance, style: .panel) {
+                                VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.cid,
+                                            style: .panel) {
                                     screen.showVoice = false
                                 }
                             } else if !screen.archived {
@@ -123,7 +141,7 @@ struct ChatScreen: View {
         // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
         // inspector inside the navigation stack took the chat's toolbar away.
         .sheet(isPresented: Binding(get: { screen.showDocuments && sheetsDocuments }, set: { screen.showDocuments = $0 })) {
-            SidePanel(store: store, instance: chat.instance, cid: chat.cid)
+            SidePanel(store: store, instance: chat.instance, cid: chat.ref.cid)
                 .environment(screen)
                 .environment(preview)
                 .environment(store)
@@ -142,7 +160,7 @@ struct ChatScreen: View {
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $screen.showVoice) {
-            VoiceScreen(client: store.client, instance: chat.instance, style: .fullScreen) {
+            VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.cid, style: .fullScreen) {
                 screen.showVoice = false
             }
         }
@@ -159,6 +177,15 @@ struct ChatScreen: View {
         .alert(preview.error ?? "", isPresented: Binding(get: { preview.error != nil },
                                                          set: { if !$0 { preview.error = nil } })) {
             Button("OK", role: .cancel) {}
+        }
+        .alert("Rename the thread", isPresented: $renaming) {
+            TextField("Title", text: $newTitle)
+            Button("Rename") {
+                let title = newTitle
+                Task { await chat.rename(title) }
+            }
+            .disabled(newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel) {}
         }
         .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
             guard !screen.archived else { return false }
@@ -213,7 +240,7 @@ struct ChatScreen: View {
     @ViewBuilder
     private var content: some View {
         if let feed = chat.feed {
-            FeedView(feed: feed, rows: FeedRows.rows(feed, unsent: chat.cid == nil ? chat.unsent : [])) { visible in
+            FeedView(feed: feed, rows: FeedRows.rows(feed, unsent: chat.unsent)) { visible in
                 newestOnScreen = visible
                 if !visible { stopMarkingSeen() }
                 markSeen()
@@ -285,12 +312,12 @@ struct ChatScreen: View {
     @ToolbarContentBuilder
     private var header: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            ChatTitle(instance: chat.instance, archived: screen.archived)
+            ChatTitle(instance: chat.instance, thread: threadTitle, archived: screen.archived)
                 .environment(screen)
                 #if os(macOS)
                 // Talk is one button more at the right: the title, centred, gives up its width at both ends.
                 .titleWidth(limit: MacChrome.titleLimit(column: columnWidth - (canTalk ? 2 * Design.Header.height : 0),
-                                                        sidebar: shell?.sidebarWidth ?? 0, earlier: chat.cid != nil))
+                                                        sidebar: shell?.sidebarWidth ?? 0, earlier: chat.isEarlier))
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
@@ -320,7 +347,12 @@ struct ChatScreen: View {
             Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
                 .accessibilityLabel("Cycles")
         }
-        if chat.cid == nil {
+        if hasThreads && !chat.isEarlier {
+            // A thread more, beside this one: it ends nothing, so nothing to confirm.
+            Button { newThread() } label: { Image(systemName: "square.and.pencil") }
+                .accessibilityLabel("New thread")
+                .accessibilityHint("Starts another conversation with \(chat.instance); this one stays open")
+        } else if !chat.isEarlier {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                 .disabled(chat.content?.canClear != true)
                 .accessibilityLabel("New chat")
@@ -339,6 +371,14 @@ struct ChatScreen: View {
             }
             if cyclesInMenu {
                 Button { screen.togglePanel(.cycles) } label: { Label("Cycles", systemImage: "clock.arrow.circlepath") }
+            }
+            if case .thread = chat.ref, !screen.archived {
+                Button {
+                    newTitle = chat.title ?? ""
+                    renaming = true
+                } label: {
+                    Label("Rename thread…", systemImage: "pencil")
+                }
             }
             Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
             if chat.content?.canStop == true {
@@ -359,18 +399,29 @@ struct ChatScreen: View {
                             isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
             Button("End it", role: .destructive) { Task { await chat.end() } }
         } message: {
-            Text("It writes up its journal. Your next message starts a new conversation.")
+            hasThreads ? Text("It writes up its journal. Its other threads stay open.")
+                       : Text("It writes up its journal. Your next message starts a new conversation.")
         }
     }
+
+    /// New thread: started on the server, then shown.
+    private func newThread() {
+        Task {
+            if let ref = await store.newThread(chat.instance) { openThread(ref) }
+        }
+    }
+
+    /// What `AppModel.visibleChat` says while this chat is on screen: its instance and thread.
+    private var target: ChatTarget { ChatTarget(instance: chat.instance, cid: chat.ref.seenID) }
 
     // MARK: Lifecycle
 
     /// The long-poll runs while the chat is visible (§4); leaving says `away` (§7.6).
     private func follow() {
         chat.setWatching(watched)
-        if chat.cid == nil {
-            if watched { model.visibleChat = chat.instance }
-            else if model.visibleChat == chat.instance { model.visibleChat = nil }
+        if !chat.isEarlier {
+            if watched { model.visibleChat = target }
+            else if model.visibleChat == target { model.visibleChat = nil }
         }
         if visible && scenePhase == .active {
             chat.start()
@@ -379,8 +430,8 @@ struct ChatScreen: View {
             stopMarkingSeen()
             let wasPolling = chat.isPolling
             chat.stop()
-            if chat.cid == nil {
-                if model.visibleChat == chat.instance { model.visibleChat = nil }
+            if !chat.isEarlier {
+                if model.visibleChat == target { model.visibleChat = nil }
                 if wasPolling { Task { await chat.away() } }
             }
         }
@@ -398,7 +449,7 @@ struct ChatScreen: View {
     /// window in front): mark the version shown seen (§7.5).
     /// Retry failures with the current feed version until seen succeeds or the task is cancelled.
     private func markSeen() {
-        guard chat.cid == nil, watched, newestOnScreen, let version = chat.feed?.version,
+        guard !chat.isEarlier, watched, newestOnScreen, let version = chat.feed?.version,
               version != seenVersion else { return }
         seenVersion = version
         seenTask?.cancel()
@@ -417,6 +468,8 @@ struct ChatScreen: View {
 /// when it is busy, its model and its spend. Text stops growing at the largest size two lines fit in the capsule.
 struct ChatTitle: View {
     let instance: String
+    /// The thread's title (or "From <instance>"), after the name; nil for the one chat of a server before threads.
+    var thread: String? = nil
     let archived: Bool
     @Environment(InstancesStore.self) private var store
     @Environment(ChatScreenModel.self) private var screen
@@ -427,9 +480,10 @@ struct ChatTitle: View {
         let row = store.row(instance)
         Button { if row != nil { showNote = true } } label: {
             VStack(spacing: 0) {
-                Text(instance)
+                let name = Text(instance).foregroundStyle(Color.textPrimary)
+                let second = Text(thread.map { " · \($0)" } ?? "").foregroundStyle(Color.textSecondary)
+                Text("\(name)\(second)")
                     .font(.headline)
-                    .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
                 if let row, !archived {
                     ViewThatFits(in: .horizontal) {

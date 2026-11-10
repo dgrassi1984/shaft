@@ -96,7 +96,7 @@ class FixtureVoiceTest(unittest.TestCase):
         self.assertGreaterEqual(tools[3][1] - tools[2][1], 1.45)
         self.assertLessEqual(tools[2][1] - tools[1][1], 0.5)
         self.assertGreaterEqual(tools[2][1] - tools[1][1], 0.25)
-        chat = self.chat.open_chat("tundra")
+        chat = self.chat.current("tundra")
         self.assertEqual(chat["state"], "idle")
         self.assertTrue(chat["turns"][-2]["interjected"])
         self.assertEqual(chat["turns"][-2]["via"], "voice")
@@ -114,7 +114,7 @@ class FixtureVoiceTest(unittest.TestCase):
         self.assertGreaterEqual(rows[-1][1] - rows[0][1], 5.8)
         # _finish emits end before starting the unheard interjection's follow-up.
         deadline = time.monotonic() + 2
-        while self.chat.stream_of(self.chat.open_chat("tundra")["id"]).id == events[0]["reply"]:
+        while self.chat.stream_of(self.chat.current("tundra")["id"]).id == events[0]["reply"]:
             self.assertLess(time.monotonic(), deadline)
             time.sleep(0.01)
         followup = self.check_reply(list(self.events()))

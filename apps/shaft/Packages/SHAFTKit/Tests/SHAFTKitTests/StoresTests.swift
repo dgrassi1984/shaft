@@ -134,7 +134,8 @@ struct StoresTests {
         let posts = server.requests.filter { $0.method == "POST" }
         #expect(posts.count == 2)
         #expect(posts.allSatisfy { $0.path == "/app/v1/chat/wisp/seen" })
-        #expect(posts.allSatisfy { $0.json?["version"] as? String == "55edd8cc46b944f6" })
+        let shown = try DecodingTests.revision("idle").version
+        #expect(posts.allSatisfy { $0.json?["version"] as? String == shown })
     }
 
     @Test func markingSeenStopsWhenCancelled() async throws {

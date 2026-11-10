@@ -156,7 +156,7 @@ enum MacDevDriver {
             button.accessibilityPerformPress()
         case "state":
             let chat = state.screen?.chat
-            log("chat=\(state.selection ?? "-") archived=\(state.screen?.archived ?? false) draft=\(String(reflecting: chat?.draft.text ?? "")) quotes=\(chat?.draft.quotes.map(\.quote) ?? []) answers=\(chat?.draft.quotes.map(\.answer) ?? []) files=\(chat?.draft.attachments.map(\.name) ?? []) first=\(window?.firstResponder.map { String(describing: type(of: $0)) } ?? "-") said=\(chat?.said ?? "-") error=\(chat?.actionError?.message ?? "-") visibleChat=\(model.visibleChat ?? "-") docs=\(state.screen?.showDocuments ?? false) dock=\(NSApp.dockTile.badgeLabel ?? "-") window=[key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] replying=\(chat?.feed?.reply != nil) feed=\(chat?.feed != nil) polling=\(chat?.isPolling ?? false) connection=\(String(describing: chat?.connection)) queued=\(chat?.content?.queued.count ?? -1) unsent=\(chat?.unsent.count ?? -1)")
+            log("chat=\(state.selection.map { [$0.instance, state.store?.resolve($0).seenID].compactMap { $0 }.joined(separator: "/") } ?? "-") archived=\(state.screen?.archived ?? false) draft=\(String(reflecting: chat?.draft.text ?? "")) quotes=\(chat?.draft.quotes.map(\.quote) ?? []) answers=\(chat?.draft.quotes.map(\.answer) ?? []) files=\(chat?.draft.attachments.map(\.name) ?? []) first=\(window?.firstResponder.map { String(describing: type(of: $0)) } ?? "-") said=\(chat?.said ?? "-") error=\(chat?.actionError?.message ?? "-") visibleChat=\(model.visibleChat.map { [$0.instance, $0.cid].compactMap { $0 }.joined(separator: "/") } ?? "-") docs=\(state.screen?.showDocuments ?? false) dock=\(NSApp.dockTile.badgeLabel ?? "-") window=[key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] replying=\(chat?.feed?.reply != nil) feed=\(chat?.feed != nil) polling=\(chat?.isPolling ?? false) connection=\(String(describing: chat?.connection)) queued=\(chat?.content?.queued.count ?? -1) unsent=\(chat?.unsent.count ?? -1)")
         case "shot":
             shot(rest, dir: dir)
         case "voicestate":
@@ -209,7 +209,7 @@ enum MacDevDriver {
             window.setContentSize(NSSize(width: size[0], height: size[1]))
         case "archived":
             // An earlier chat of the chat shown, as Earlier chats opens it.
-            guard let name = state.selection else { return }
+            guard let name = state.selection?.instance else { return }
             state.path.append(ArchivedRoute(instance: name, cid: rest))
         case "windows":
             log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) \(type(of: $0)) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))

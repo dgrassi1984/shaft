@@ -378,7 +378,8 @@ class VoiceApiSessionTest(WarmFixture, unittest.TestCase):
         with mock.patch.object(base, "EVENTS", voice_api.WEATHER):
             typed = self.turn([{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"},
                                {"role": "user", "content": "weather in Rome?"}], voice=False)
-        self.assertEqual(typed, voice_api.TYPED)                 # byte for byte the stream captured before voice
+        # the stream captured before voice, with the status events only the web chat's typed stream gets (threads)
+        self.assertEqual(typed, voice_api.TYPED_STATUS)
         self.assertEqual(base.fake_run_agent.args, ["answer"])   # in a process of its own
         self.assertNotIn("voice", base.fake_run_agent.request)
         spoken = self.content(self.turn([{"role": "user", "content": "back to voice"}]))

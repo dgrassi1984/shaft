@@ -54,6 +54,7 @@ class CommentChatTest(unittest.TestCase):
     def finish(self, cid, answer="Answer", heard=0, status=200, stopped=False):
         # Exercise _run, including SSE decoding and finalization, with the harness's wire format.
         response = mock.MagicMock(status=status)
+        response.getheader.return_value = None
         response.__iter__.return_value = iter([chunk({"content": answer}),
                                               chunk({}, "stop", interjections_heard=heard), b"data: [DONE]\n"])
         response.read.return_value = b'{"error":{"message":"API failed"}}'
@@ -162,7 +163,7 @@ class CommentChatTest(unittest.TestCase):
             c = web_chat.load(first["id"])
             c["state"], c["reply"] = "ended", None
             web_chat.save(c)
-        self.assertIsNone(web_chat.open_chat("wisp"))
+        self.assertIsNone(web_chat.current("wisp"))
         _, said = web_chat.send_comment("wisp", ME, pid)
         self.assertEqual(said, "already sent to wisp")
         self.start.assert_called_once()                       # the first send only: never a second copy
@@ -291,6 +292,7 @@ class CommentChatTest(unittest.TestCase):
         tid, pid = self.add()
         response_done = threading.Event()
         response = mock.MagicMock(status=200)
+        response.getheader.return_value = None
 
         def stream():
             yield chunk({"content": "Fast answer"})

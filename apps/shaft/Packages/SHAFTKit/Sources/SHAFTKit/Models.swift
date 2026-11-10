@@ -45,8 +45,107 @@ public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {
     public var unread: Bool
     public var nextCycle: String
     public var voiceMode: String
+    /// Its open threads (§3, topic threads); nil from a server before threads, which has one chat per instance.
+    public var threads: Int?
 
     public var id: String { name }
+}
+
+// MARK: - Threads (§3.1, `GET /app/v1/threads/<n>`)
+
+/// An instance's open threads and its From feed. A server before threads answers the request `404`: the app then keeps
+/// one chat per instance (`InstancesStore.ThreadsState.unsupported`).
+public struct ThreadsResponse: Codable, Sendable, Equatable {
+    public var threads: [ThreadRow]
+    public var from: FromRow
+
+    public init(threads: [ThreadRow], from: FromRow) {
+        self.threads = threads
+        self.from = from
+    }
+
+    /// The most recently active open thread: where a send without `cid` goes (§6), and what an instance's row opens.
+    public var newest: ThreadRow? {
+        threads.max { ($0.last ?? $0.created) < ($1.last ?? $1.created) }
+    }
+}
+
+/// One open thread: its own conversation on its own topic.
+public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var title: String
+    public var created: Date
+    /// When it last moved; nil when nothing was said in it yet.
+    public var last: Date?
+    /// Its last line, as the rail's (`"you: …"` for the operator's own).
+    public var line: String
+    /// `"idle"` or `"replying"`.
+    public var state: String
+    /// While its reply waits for the instance: what it waits on (`waiting: answering in «…»`); nil otherwise.
+    public var waiting: String?
+    public var unread: Bool
+
+    public init(id: String, title: String, created: Date, last: Date?, line: String, state: String, waiting: String?,
+                unread: Bool) {
+        self.id = id
+        self.title = title
+        self.created = created
+        self.last = last
+        self.line = line
+        self.state = state
+        self.waiting = waiting
+        self.unread = unread
+    }
+
+    public var replying: Bool { state == "replying" }
+
+    private enum CodingKeys: String, CodingKey { case id, title, created, last, line, state, waiting, unread }
+
+    /// `last` and `waiting` are null-able; a server that leaves them out means null too.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        created = try container.decode(Date.self, forKey: .created)
+        last = try container.decodeIfPresent(Date.self, forKey: .last)
+        line = try container.decode(String.self, forKey: .line)
+        state = try container.decode(String.self, forKey: .state)
+        waiting = try container.decodeIfPresent(String.self, forKey: .waiting)
+        unread = try container.decode(Bool.self, forKey: .unread)
+    }
+}
+
+/// The From *instance* feed's row: what it sent from its cycles.
+public struct FromRow: Codable, Sendable, Equatable {
+    public var line: String
+    public var last: Date?
+    public var unread: Bool
+
+    public init(line: String, last: Date?, unread: Bool) {
+        self.line = line
+        self.last = last
+        self.unread = unread
+    }
+
+    private enum CodingKeys: String, CodingKey { case line, last, unread }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        line = try container.decode(String.self, forKey: .line)
+        last = try container.decodeIfPresent(Date.self, forKey: .last)
+        unread = try container.decode(Bool.self, forKey: .unread)
+    }
+}
+
+/// `POST /app/v1/chat/<n>/new` (§7.7): the thread made.
+public struct NewThreadResponse: Codable, Sendable, Equatable {
+    public struct Chat: Codable, Sendable, Equatable {
+        public var id: String
+        public var title: String
+    }
+
+    public var chat: Chat
+    public var said: String
 }
 
 // MARK: - The feed (§4)
@@ -161,6 +260,9 @@ public struct FeedContent: Codable, Sendable, Equatable {
 
 public struct ChatInfo: Codable, Sendable, Equatable {
     public var id: String
+    /// Its title (§4.2): explicit, else the first line of the operator's first message, else "New thread". Nil from a
+    /// server before threads.
+    public var title: String?
     /// `"idle"`, `"replying"` or `"ended"`.
     public var state: String
     public var created: Date
@@ -658,6 +760,9 @@ public struct PushEvent: Codable, Sendable, Equatable {
     public var url: String
     public var tag: String
     public var instance: String?
+    /// The thread it is about (a chat id), `"from"` for the From feed, nil for the instance's current chat or from a
+    /// server before threads.
+    public var cid: String?
 }
 
 // MARK: - Errors (§1.5)

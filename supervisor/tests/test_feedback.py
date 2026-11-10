@@ -289,12 +289,13 @@ class FeedbackRouteTest(WebTest):
         self.assertEqual([r["kind"] for r in messages.history()[1:]], ["feedback", "feedback"])
         self.assertEqual(web_chat.load("web-abc"), self.chat)
 
-    def test_feedback_send_non_open_chat_to_inbox(self):
+    def test_feedback_send_to_another_open_thread_stays_pending_there(self):
         self.open()
         web_chat.save({**self.chat, "id": "web-def", "created": "2026-10-29T11:00:00"})
         self.sent(self.rated())
-        self.assertEqual(len(self.inbox()), 1)
-        self.assertNotIn("pending_feedback", web_chat.load("web-abc"))
+        self.assertEqual(self.inbox(), [])
+        self.assertEqual(len(web_chat.load("web-abc")["pending_feedback"]), 1)
+        self.assertNotIn("pending_feedback", web_chat.load("web-def"))
 
     def test_feedback_send_twice_refused(self):
         for state in ("idle", "ended"):

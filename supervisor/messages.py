@@ -23,16 +23,18 @@ LOG_NAME = "messages.jsonl"
 
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
-           mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False) -> None:
+           mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False,
+           talk: str | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
     them. `via`: how the operator sent it, when that matters to who shows it (BACKGROUND: the web chat shows it);
     `mid`: the sending page's id for it, so a retry is not delivered twice (sent_mid). `shown`: what the operator
     wrote, when the text the instance got says more (the files' lines, a comment's block); `comments`: [{id, doc}], the
-    document comments it carries."""
+    document comments it carries. `talk` is the sending conversation, or None outside a conversation.
+    Every new row carries it; an absent key identifies a legacy row."""
     row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
-           "file": path.name, "text": text.strip()}
+           "file": path.name, "text": text.strip(), "talk": talk}
     if sender == "operator" and kind == "reply":
         head = safe_read(path.parent, path.name, "").split("\n\n", 1)[0]
         if ref := re.search(r"(?m)^In-Reply-To: (.+)$", head):

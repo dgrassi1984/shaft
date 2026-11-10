@@ -114,6 +114,7 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-iOS -destination 'platform=iOS
   -derivedDataPath build/dd CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build
 xcrun simctl install booted build/dd/Build/Products/Debug-iphonesimulator/SHAFT.app
 xcrun simctl openurl booted shaft://chat/<name>      # opens that chat, as a notification tap does
+xcrun simctl openurl booted shaft://chat/<name>/<cid> # one thread of it (`from`: its From feed)
 ```
 
 ### The Mac app against the fixture server

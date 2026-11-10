@@ -50,7 +50,7 @@ class LiveActivityTest(ChatRoutesTest):
         first = self.get("/fragment/chat/wisp")
         self.assertEqual(first.status, 200)
         self.assertNotIn(b"read notes/a.md", first.body)                         # not in the feed
-        self.assertIn(b'data-poll="/fragment/chat/wisp/live"', first.body)       # its own poll, inside the live turn
+        self.assertIn(b'data-poll="/fragment/chat/wisp/live?id=web-0123456789abcdef"', first.body)
         live = self.get("/fragment/chat/wisp/live")
         self.assertIn(b"read notes/a.md", live.body)
         chat = web_chat.load("web-0123456789abcdef")
@@ -185,8 +185,8 @@ class WatchingTest(ChatRoutesTest):
         away = self.get("/fragment/chat/wisp?away=1", cookie=phone)
         self.assertEqual((away.status, away.body), (204, b""))
         self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
-        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=phone)    # an earlier chat's page: not watching
-        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=phone)    # the selected open thread
+        self.assertEqual(len(web_chat.watchers("wisp")), 2)
 
 
 class AwayOrderTest(ChatRoutesTest):

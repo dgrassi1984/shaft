@@ -236,7 +236,7 @@ class RelayTest(ChatTest):
         self.assertEqual(web_chat.end(chat["id"]), "ended")
 
     def test_a_relay_the_web_server_lost_is_marked_interrupted(self):
-        chat = web_chat.new_chat("wisp", ME)
+        chat = web_chat.new_thread("wisp", ME)
         chat.update(state="replying", reply={"started": "x", "activity": ["thinking"], "answer": "half"})
         web_chat.save(chat)
         web_chat.reap()
@@ -343,7 +343,7 @@ class ChatRoutesTest(WebTest):
         self.cookie = self.paired()
 
     def chat_with(self, turns: list[dict], state: str = "idle") -> dict:
-        chat = web_chat.new_chat("wisp", ME)
+        chat = web_chat.new_thread("wisp", ME)
         chat.update(turns=turns, state=state)
         web_chat.save(chat)
         return chat
@@ -401,7 +401,7 @@ class ChatRoutesTest(WebTest):
         chat["reply"] = {"started": "2026-10-19T12:00:01", "activity": ["waiting: wisp is in a cycle"], "answer": ""}
         web_chat.save(chat)
         body = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
-        self.assertIn('data-poll="/fragment/chat/wisp/live"', body)             # W12: its activity, polled on its own
+        self.assertIn(f'data-poll="/fragment/chat/wisp/live?id={chat["id"]}"', body)             # W12: its activity, polled on its own
         self.assertIn("waiting: wisp is in a cycle", self.req("/fragment/chat/wisp/live", cookie=self.cookie).body.decode())
         self.assertIn('data-post="/action/chat-stop"', body)
 
@@ -480,7 +480,7 @@ class ChatCentricTest(ChatRoutesTest):
                      "/i/wisp/activity"):
             self.assertIn(f'href="{page}"', body, page)
         self.assertIn('data-post="/action/cycle"', body)                       # its actions too
-        self.assertIn('data-poll="/fragment/rail?c=i:wisp"', body)
+        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=current"', body)
 
     def test_with_no_chat_going_on_the_page_shows_the_last_one_and_a_composer(self):
         """It showed "No chat open" over an empty box, though the conversation had just ended."""
@@ -793,7 +793,7 @@ class DocEditsTest(DocsChatCase):
         web_chat.doc_saved("wisp", ME, "plan.md", "one", "two", "s1")
         said = web_chat.doc_saved("wisp", ME, "plan.md", "two", None, "none")
         self.assertEqual(said, "deleted · wisp gets the change with your next message")
-        c = web_chat.open_chat("wisp")
+        c = web_chat.current("wisp")
         self.assertNotIn("plan.md", c["saved_docs"])
         self.assertEqual(web_chat._take_edits(c), ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
         self.assertEqual(web_chat._take_edits(c), ("", [], []))
@@ -862,7 +862,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("deleted", r.body.decode())
         self.assertFalse(p.exists())
         self.assertEqual(self.ran, [["docs", "wisp", "rm", "plan.md", "--expect-sha", docs.sha(b"one")]])
-        self.assertEqual(web_chat._take_edits(web_chat.open_chat("wisp")),
+        self.assertEqual(web_chat._take_edits(web_chat.current("wisp")),
                          ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
         self.assertEqual(doc_comments.threads("wisp", "plan.md")[0]["id"], tid)
         panel = self.req(f"/fragment/docs/wisp?doc=plan.md&thread={tid}", cookie=self.cookie)
@@ -882,7 +882,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(self.req("/docs/wisp/delete", "POST").status, 403)
         self.assertEqual(p.read_text(), "one")
         self.assertEqual(self.ran, [])
-        self.assertIsNone(web_chat.open_chat("wisp"))
+        self.assertIsNone(web_chat.current("wisp"))
 
     def test_delete_refuses_a_write_between_the_route_check_and_cli(self):
         from supervisor import actions, docs
@@ -898,7 +898,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(r.status, 409)
         self.assertIn("changed since you looked", r.body.decode())
         self.assertEqual(p.read_text(), "two")
-        self.assertIsNone(web_chat.open_chat("wisp"))
+        self.assertIsNone(web_chat.current("wisp"))
 
     def test_a_save_goes_through_the_cli_and_is_queued_for_the_instance(self):
         from supervisor import docs
@@ -908,7 +908,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(r.headers["X-Doc"], "plan.md")
         self.assertEqual(self.ran[0][:4], ["docs", "wisp", "set", "plan.md"])
         self.assertEqual((self.docs / "plan.md").read_text(), "one\nmine\n")
-        chat = web_chat.open_chat("wisp")
+        chat = web_chat.current("wisp")
         self.assertEqual(chat["pending_edits"]["plan.md"], {"old": "one\n", "new": "one\nmine\n"})
         feed = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
         self.assertIn("Your changes to plan.md go to wisp with your next message", feed)
@@ -930,7 +930,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("changed since you looked", body)
         self.assertIn("+by the instance", body)
         self.assertEqual((self.docs / "plan.md").read_text(), "one\nby the instance\n")
-        self.assertIsNone(web_chat.open_chat("wisp"))
+        self.assertIsNone(web_chat.current("wisp"))
         # Found live: Save after the refusal was refused forever (the page kept the old sha). It gets the sha now:
         self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"one\nby the instance\n"))
         again = self.post(path="plan.md", text="one\nmine\n", sha=r.headers["X-Doc-Sha"])
@@ -1066,7 +1066,7 @@ class SaveRecordTest(DocSaveRouteTest):
         with mock.patch.object(actions, "run_now", side_effect=save_then_instance_writes):
             r = self.post(path="plan.md", text="one\nmy line\n", sha=docs.sha(b"one\n"))
         self.assertEqual(r.status, 200)
-        saved = web_chat.open_chat("wisp")["saved_docs"]["plan.md"]
+        saved = web_chat.current("wisp")["saved_docs"]["plan.md"]
         self.assertEqual(saved["sha"], docs.sha(b"one\nmy line\n"))
         panel = self.req("/fragment/docs/wisp?doc=plan.md", cookie=self.cookie).body.decode()
         self.assertIn("you wrote at", panel)
@@ -1137,6 +1137,66 @@ class ArchivedClearTest(ChatRoutesTest):
 
 
 class ClearInHeaderTest(ChatRoutesTest):
+    def test_selected_open_thread_refreshes_its_own_feed_header_and_activity(self):
+        chat = self.chat_with([{"role": "user", "content": "selected topic", "ts": "2026-10-19T12:00:00"}])
+        other = self.chat_with([])
+        self.assertEqual(web_chat.current("wisp")["id"], other["id"])
+        cid = chat["id"]
+
+        def form(body, route):
+            return next(f.split("</form>", 1)[0] for f in body.split("<form") if f'data-post="{route}"' in f)
+
+        for state in ("idle", "replying"):
+            with self.subTest(state=state):
+                chat["state"] = state
+                chat["reply"] = ({"started": "2026-10-19T12:00:01", "activity": ["selected activity"], "answer": ""}
+                                 if state == "replying" else None)
+                web_chat.save(chat)
+                page = self.req(f"/i/wisp/chat?id={cid}", cookie=self.cookie).body.decode()
+                self.assertIn(f'data-poll="/fragment/chat/wisp?id={cid}"', page)
+                self.assertIn(f'data-poll="/fragment/chat/wisp/header?id={cid}"', page)
+                self.assertIn(f'name="cid" value="{cid}"', form(page, "/chat/wisp/send"))
+                self.assertIn(f'name="cid" value="{cid}"', form(page, "/chat/wisp/clear"))
+                header = self.req(f"/fragment/chat/wisp/header?id={cid}", cookie=self.cookie).body.decode()
+                self.assertIn(f'name="cid" value="{cid}"', form(header, "/chat/wisp/clear"))
+                feed = self.req(f"/fragment/chat/wisp?id={cid}", cookie=self.cookie).body.decode()
+                self.assertIn("selected topic", feed)
+                action = "stop" if state == "replying" else "end"
+                self.assertIn(f'name="cid" value="{cid}"', form(feed, f"/action/chat-{action}"))
+                web._sent_during.assert_called_with("wisp", chat, False)
+                if state == "replying":
+                    self.assertIn(f'data-poll="/fragment/chat/wisp/live?id={cid}"', feed)
+                    activity = self.req(f"/fragment/chat/wisp/live?id={cid}", cookie=self.cookie).body.decode()
+                    self.assertIn("selected activity", activity)
+        # Selecting the current thread explicitly must pin it too.
+        page = self.req(f'/i/wisp/chat?id={other["id"]}', cookie=self.cookie).body.decode()
+        self.assertIn(f'data-poll="/fragment/chat/wisp?id={other["id"]}"', page)
+
+    def test_the_plain_chat_page_follows_the_current_thread_and_names_none(self):
+        """Review of the threads lane: the plain page's composer named the open thread it was drawn with, so after End
+        (from this page or another device) the next message was refused as sent to an ended thread, where before
+        threads it started a new chat."""
+        chat = self.chat_with([{"role": "user", "content": "topic", "ts": "2026-10-19T12:00:00"}])
+        page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
+        composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
+        self.assertNotIn('name="cid"', composer)
+        selected = self.req(f'/i/wisp/chat?id={chat["id"]}', cookie=self.cookie).body.decode()
+        composer = selected.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
+        self.assertIn(f'name="cid" value="{chat["id"]}"', composer)
+
+    def test_shown_ended_thread_leaves_the_next_message_unaddressed(self):
+        chat = self.chat_with([{"role": "user", "content": "old topic", "ts": "2026-10-19T12:00:00"}], "ended")
+        page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
+        composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
+        self.assertNotIn('name="cid"', composer)
+        self.assertIn('data-poll="/fragment/chat/wisp"', page)
+        archived = self.req(f'/i/wisp/chat?id={chat["id"]}', cookie=self.cookie).body.decode()
+        self.assertNotIn('<form class="composer"', archived)
+        self.assertIn(f'data-poll="/fragment/chat/wisp?id={chat["id"]}"', archived)
+        feed = self.req(f'/fragment/chat/wisp?id={chat["id"]}', cookie=self.cookie).body.decode()
+        self.assertNotIn('data-post="/action/chat-end"', feed)
+        web._sent_during.assert_called_with("wisp", chat, True)
+
     def test_issue_10_18_header_refreshes_facts_actions_and_busy_warning(self):
         """Reverting #10/#18 leaves the header frozen and Pause unchanged after pausing."""
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
@@ -1188,7 +1248,7 @@ class ClearInHeaderTest(ChatRoutesTest):
             with self.subTest(body=body):
                 r = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers=headers, body=body)
                 self.assertEqual(r.status, 409, r.body)
-                self.assertIn(b"that is not the chat on this page any more: reload it", r.body)
+                self.assertIn(b"not a chat of wisp", r.body)
                 self.assertNotIn("cleared", web_chat.load(chat["id"]))
 
     def test_clear_is_in_the_header_always_on_screen(self):
@@ -1278,13 +1338,13 @@ class PushWhenTest(ChatTest):
     def test_a_failed_reply_is_not_pushed_as_replied_20261029(self):
         # Regression (2026-10-29 10:39): tundra's reply ended on "stream error: Upstream idle timeout exceeded" and the
         # phone was told "tundra replied".
-        failed = {"instance": "tundra", "turns": [
+        failed = {"id": "web-test", "instance": "tundra", "turns": [
             {"role": "user", "content": "q"},
             {"role": "assistant", "content": "", "note": "error: stream error: Upstream idle timeout exceeded"}]}
         event = web_chat.reply_event(failed)
         self.assertEqual(event["title"], "tundra's reply failed")
         self.assertIn("Upstream idle timeout", event["body"])
-        done = {"instance": "tundra", "turns": [{"role": "assistant", "content": "Done", "note": ""}]}
+        done = {"id": "web-test", "instance": "tundra", "turns": [{"role": "assistant", "content": "Done", "note": ""}]}
         self.assertEqual(web_chat.reply_event(done)["title"], "tundra replied")
 
     def test_a_reply_that_ends_unwatched_wakes_the_phone_and_a_watched_one_does_not(self):
@@ -1294,7 +1354,7 @@ class PushWhenTest(ChatTest):
             self.wait_idle(chat["id"])
             time.sleep(0.2)
         (event,), kw = notify.call_args                          # what this push shows: this reply (issue #23)
-        self.assertEqual((event["title"], event["url"]), ("wisp replied", "/i/wisp/chat"))
+        self.assertEqual((event["title"], event["url"]), ("wisp replied", f"/i/wisp/chat?id={chat['id']}"))
         self.assertEqual(kw, {"skip": set()})
         notify.assert_called_once()
         web_chat.watching("wisp", "laptop")                      # its page is open and refreshing there

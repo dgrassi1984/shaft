@@ -149,7 +149,7 @@ class DocsSortRouteTest(test_web.WebTest):
 
     def test_a_sort_link_followed_without_the_script_sorts_the_list_not_opens_the_chats_document(self):
         """Codex's review: ?sort=name alone made the page open what this chat last changed instead of the list."""
-        chat = web_chat.new_chat("wisp", test_web.ME)
+        chat = web_chat.new_thread("wisp", test_web.ME)
         chat.update(turns=[{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                            {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
                             "docs": [{"path": "mid.md", "created": True}]}], state="idle")

@@ -1,11 +1,12 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "55edd8cc46b944f6",
+  "version": "9dfa2b748cfe1ceb",
   "live": "",
   "reply": null,
   "chat": {
     "id": "web-3f9a1c0d7e2b4a65",
+    "title": "> Ship the ledger fix today?",
     "state": "idle",
     "created": "2026-11-03T13:58:40+01:00",
     "ended": null

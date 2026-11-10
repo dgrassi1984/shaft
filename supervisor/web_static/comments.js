@@ -340,6 +340,9 @@
       const result = form.querySelector(".comment-result");
       const body = new URLSearchParams({ ...fields, text: textarea.value });
       if (mode !== "edit" && when() !== "keep") body.set("send", when() === "now" ? "1" : "cycle");
+      // beside a thread's own page: sent now, it goes into that thread, not the current one
+      const thread = window.shaftWeb && window.shaftWeb.cid && window.shaftWeb.cid();
+      if (thread) body.set("cid", thread);
       form._saveDraft();
       const submittedDraft = draftValue();
       form.dataset.busy = "1";

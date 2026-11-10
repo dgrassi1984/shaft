@@ -18,7 +18,7 @@ from supervisor import apns, core, pushes, web, web_alerts, webpush
 TOKEN = "ab" * 32
 TOPIC = "io.example.shaft"
 EVENT = {"title": "tundra replied", "body": "private reply only over the tailnet", "url": "/i/tundra/chat",
-         "tag": "tundra"}
+         "tag": "tundra", "cid": None}
 
 
 def unb64(s: str) -> bytes:
@@ -104,9 +104,18 @@ class APNsTest(unittest.TestCase):
             self.assertEqual(argv[argv.index("--data-binary") + 1], "@-")
             self.assertEqual(json.loads(kwargs["input"]), {"aps": {"alert": {"title": "tundra replied"},
                               "badge": 3, "sound": "default", "thread-id": "tundra", "mutable-content": 1},
-                              "instance": "tundra"})
+                              "instance": "tundra", "cid": None})
             self.assertNotIn(EVENT["body"], repr(curl.call_args))
             self.seen.badge.assert_called_with("phone")
+
+    def test_payload_preserves_thread_and_from_identity_without_body(self):
+        for cid, url in (("web-a", "/i/tundra/chat?id=web-a"), ("from", "/i/tundra/from")):
+            with self.subTest(cid=cid), mock.patch.dict(EVENT, cid=cid, url=url):
+                said, curl = self.send("200")
+                payload = json.loads(curl.call_args.kwargs["input"])
+                self.assertEqual((payload["instance"], payload["cid"]), ("tundra", cid))
+                self.assertEqual(payload["aps"]["thread-id"], "tundra")
+                self.assertNotIn(EVENT["body"], repr(curl.call_args))
 
     def test_dead_tokens_are_dropped_but_a_renewed_token_is_kept(self):
         for code, reason in (("410", ""), ("400", "BadDeviceToken"), ("400", "Unregistered")):
@@ -192,7 +201,7 @@ class APNsTest(unittest.TestCase):
                 mock.patch.object(apns, "_wake"):
             self.assertEqual(web_alerts.forward_new(), 1)
             self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "tundra: held",
-                "url": "/overview", "tag": "shaft-digest-held.md"}])
+                "url": "/overview", "tag": "shaft-digest-held.md", "cid": None}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
     def test_digest_nighttime_gate_regression_delivers_apns_by_day(self):
@@ -213,7 +222,7 @@ class APNsTest(unittest.TestCase):
             clock.now.return_value = datetime(2026, 11, 7, 12)
             self.assertEqual(web_alerts.forward_new(), 1)
             self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "tundra: held",
-                "url": "/overview", "tag": "shaft-digest-held.md"}])
+                "url": "/overview", "tag": "shaft-digest-held.md", "cid": None}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
     def test_unconfigured_apns_without_registration_does_not_log(self):

@@ -316,7 +316,7 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
 
 
 def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wait_lock: bool = True,
-              output: list[str] | None = None, driver=None) -> int:
+              output: list[str] | None = None, driver=None, talk_id: str | None = None) -> int:
     """Run the instance once. If `output` is given, the agent's stdout is captured into it.
     If `driver` is given, the agent runs in its own process group with pipes on stdin/stdout/stderr
     and driver(proc) talks to it; it returns when the run ends."""
@@ -327,7 +327,7 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
     held = _Held(name, kind)
     held.acquire(wait_lock)
     try:
-        return _run(name, root, kind, agent_args, interactive, output, driver, held=held)
+        return _run(name, root, kind, agent_args, interactive, output, driver, held=held, talk_id=talk_id)
     except RunRefused as e:
         return _refused(name, e)
     finally:
@@ -578,12 +578,14 @@ def _refused(name: str, e: RunRefused) -> int:
     return REFUSED
 
 
-def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None, approved: dict | None = None):
+def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None, approved: dict | None = None,
+            talk_id: str | None = None):
     """Start the broker and launch from _reconcile's approved bytes (#86), keeping root as cwd and mind.
     Return (broker, command, environment); the caller removes SHAFT_CODE_ROOT after the agent ends."""
     if localmodel.is_service(instance_config(name).get("LLM_BASE_URL", "")):
         localmodel.ensure(f"{name}'s {kind}")   # it runs only while used (localmodel.py)
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
+    broker.talk_id = talk_id
     broker.run_kind = kind
     broker.run_started = datetime.now().isoformat(timespec="seconds")
     broker.start()
@@ -887,12 +889,12 @@ def _record_cycle(name: str) -> None:
 
 
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
-         output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
+         output: list[str] | None = None, driver=None, held: _Held | None = None, talk_id: str | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     _clean_tmp(root)
     run = {"before": _snapshot(root, _reconcile(name, root)), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
-    broker, cmd, env = _launch(name, root, kind, agent_args, budget, run["before"].get("code"))
+    broker, cmd, env = _launch(name, root, kind, agent_args, budget, run["before"].get("code"), talk_id=talk_id)
     run["deadline"] = float(env["SHAFT_DEADLINE"]) if env.get("SHAFT_DEADLINE") else None
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.

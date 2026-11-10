@@ -203,7 +203,7 @@ def unsubscribe(device: str, endpoint: str | None = None) -> bool:
 
 # -- what each push shows -------------------------------------------------------------------------------------------
 QUEUE_MAX = 20                               # per device: older ones are dropped (a phone off for a day)
-NOTHING = {"title": "SHAFT", "body": "Open SHAFT to see what is new", "url": "/", "tag": "shaft"}
+NOTHING = {"title": "SHAFT", "body": "Open SHAFT to see what is new", "url": "/", "tag": "shaft", "cid": None}
 
 
 def _queue_path() -> Path:
@@ -228,7 +228,7 @@ def _save_queue(queue: dict) -> None:
 
 
 def _fields(event: dict) -> dict:
-    return {k: event[k] for k in ("title", "body", "url", "tag")}
+    return {**{k: event[k] for k in ("title", "body", "url", "tag")}, "cid": event.get("cid")}
 
 
 def take(device: str, instance: str | None = None, now: float | None = None) -> list[dict]:
@@ -237,23 +237,26 @@ def take(device: str, instance: str | None = None, now: float | None = None) -> 
     push service's error) left its event behind, and the next wake shows it too, beside its own (Codex review,
     2026-10-20). With nothing queued — an earlier wake showed it all — the last one shown again under its own tag
     (it replaces itself), since iOS shows something for every push; with nothing ever, a plain one. With an instance,
-    take only its chat URL and fall back only to its last event; other chats stay queued."""
+    take its thread and From URLs and fall back only to its last event; other instances stay queued."""
     now = time.time() if now is None else now
     with _lock:
         queue = _queue()
         mine = queue.get(device) or {}
         pending = [e for e in mine.get("pending") or [] if now - e.get("at", 0) <= TTL_S]
-        url = f"/i/{instance}/chat" if instance is not None else None
-        fresh = [e for e in pending if url is None or e["url"] == url]
+        def matches(event):
+            path = urllib.parse.urlsplit(event["url"]).path
+            return instance is None or path in (f"/i/{instance}/chat", f"/i/{instance}/from")
+        fresh = [e for e in pending if matches(e)]
         lasts = mine.get("last_by_url") or {}
         if previous := mine.get("last"):
             lasts.setdefault(previous["url"], previous)
         for event in fresh:
             lasts[event["url"]] = event
-        fallback = lasts.get(url) if url is not None else mine.get("last")
+        fallback = (max((e for e in reversed(list(lasts.values())) if matches(e)),
+                        key=lambda e: e.get("at", 0), default=None) if instance is not None else mine.get("last"))
         last = fresh[-1] if fresh else fallback
         if last:
-            queue[device] = {"pending": [e for e in pending if url is not None and e["url"] != url],
+            queue[device] = {"pending": [e for e in pending if not matches(e)],
                              "last": fresh[-1] if fresh else mine.get("last"), "last_by_url": lasts}
             _save_queue(queue)
     return [_fields(e) for e in fresh] if fresh else [_fields(last)] if last else [dict(NOTHING)]
@@ -291,8 +294,18 @@ def _paired() -> set[str] | None:
     return set(data) if isinstance(data, dict) else None
 
 
+def apns_payload(event: dict, badge: int) -> dict:
+    """What APNs carries for `event` (apns.py sends it): the title, the badge, and which instance and thread it opens
+    (the notification extension fetches the body itself, /app/v1/push/latest). Here, not in apns.py, because the apps'
+    fixture server replaces apns.py with a stub and writes this same payload, so a simulator sees what a phone gets."""
+    parts = urllib.parse.urlsplit(event["url"]).path.split("/")
+    instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
+    return {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
+                    "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+
+
 def notify(event: dict, skip=frozenset()) -> list[str]:
-    """Queue `event` ({title, body, url, tag}: what the notification shows) for every Web Push or configured APNs device
+    """Queue `event` ({title, body, url, tag, cid}: what the notification shows) for every Web Push or configured APNs device
     still paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
     a reply's end never waits on a push service). A subscription of a device no longer paired is dropped: a revoked
     phone kept getting a push for every reply (W1, review 2026-10-24). Returns the devices it woke."""

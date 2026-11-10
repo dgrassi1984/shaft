@@ -27,7 +27,7 @@ class RecoveryTest(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def chat(self):
-        chat = web_chat.new_chat("wisp", "operator")
+        chat = web_chat.new_thread("wisp", "operator")
         chat.update(state="replying", reply={"interjections": 0, "turn_start": 1}, turns=[
             {"role": "user", "content": "original request\n\n" + web_chat.DOCS_NOTE,
              "shown": 'original <request> "please"', "ts": "2026-10-20T12:00:00"}])
@@ -53,6 +53,7 @@ class RecoveryTest(unittest.TestCase):
             else:
                 events.append(api._chunk("test", "wisp", {}, reply_error={"message": text, "tools_ran": tools}))
         response = mock.MagicMock(status=status)
+        response.getheader.return_value = None
         response.__iter__.return_value = iter(events + ([b"data: [DONE]\n\n"] if complete else []))
         response.read.return_value = json.dumps({"error": {"message": text}}).encode()
         conn = mock.Mock()
@@ -187,9 +188,11 @@ class RecoveryTest(unittest.TestCase):
         """Reverting #11 hides Clear's full label and leaves End/Stop consequences unexplained."""
         chat = self.chat()
         header = str(web_views.chat_header("wisp", {}, chat, []))
-        # Clear is New chat: an icon named for what it does; its confirm says what is kept
-        self.assertIn('title="New chat" aria-label="New chat" data-focus="clear">', header)
-        self.assertIn("Start a new chat? This one is kept in Earlier chats and Transcripts", header)
+        # New thread ends nothing; Clear, in ⋯, says what it does and its confirm says what is kept
+        self.assertIn('aria-label="New thread" data-focus="new-thread">', header)
+        self.assertIn('<button type="submit" data-focus="clear">Clear this thread</button>', header)
+        self.assertIn("Clear this thread? It is kept in Earlier chats and Transcripts", header)
+        self.assertIn("Your other threads stay open.", header)
         self.assertIn("Only the reply stops. The conversation stays open.", str(web_views.chat_feed("wisp", chat, [])))
         chat["state"] = "idle"
         rendered = str(web_views.chat_feed("wisp", chat, []))
@@ -209,7 +212,10 @@ class ApiFailureTest(unittest.TestCase):
                     proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO("".join(json.dumps(e)+"\n" for e in events)))
                     handler = api.Handler.__new__(api.Handler)
                     handler.wfile = io.BytesIO()
-                    handler.conversations = mock.Mock()
+                    handler.headers = {}
+                    handler.conversations = mock.MagicMock()
+                    handler.conversations._key.return_value = "test"
+                    handler.conversations.talks = {"test": {}}
                     handler.conversations.talk_id.return_value = "api-test"
                     handler.live = mock.Mock()
                     handler.send_response = handler.send_header = handler.end_headers = mock.Mock()

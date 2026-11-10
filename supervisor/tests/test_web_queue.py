@@ -36,14 +36,14 @@ class QueueTest(unittest.TestCase):
         response = web._post(web.Request("POST", "/chat/wisp/send",
                              {"content-type": "multipart/form-data; boundary=B"}, body.encode()), "device")
         self.assertEqual(response.status, 200)
-        return web_chat.open_chat("wisp")
+        return web_chat.current("wisp")
 
     def test_issue_70_queue_combines_once_and_dedupes(self):
         """Reverting #70 interjects queued text instead of persisting and sending one next turn."""
         for error, stopped, interject in ((None, False, False), ("failed", False, False),
                                            (None, True, False), (None, False, True)):
             with self.subTest(error=error, stopped=stopped, interject=interject):
-                chat = web_chat.new_chat("wisp", "")
+                chat = web_chat.new_thread("wisp", "")
                 web_chat.send("wisp", "", "start", [])
                 relay = self.started[-1]
                 relay.stopped = stopped
@@ -75,7 +75,7 @@ class QueueTest(unittest.TestCase):
     def test_issue_70_a_restart_mid_reply_sends_what_was_queued(self):
         """Found in review: reap() ended a reply cut by a web-service restart and left its queued messages waiting
         for a reply end that would never come."""
-        chat = web_chat.new_chat("wisp", "")
+        chat = web_chat.new_thread("wisp", "")
         web_chat.send("wisp", "", "start", [])
         self.queue("after the restart", "q9")
         web_chat._relays.clear()                     # the old web process is gone
@@ -91,7 +91,7 @@ class QueueTest(unittest.TestCase):
     def test_issue_70_queuing_leaves_doc_notices_for_when_it_is_sent(self):
         """Found in review: queuing took the pending document notices into the queued message, so cancelling it
         meant the instance never heard of them. They are taken when the queue is sent."""
-        chat = web_chat.new_chat("wisp", "")
+        chat = web_chat.new_thread("wisp", "")
         web_chat.send("wisp", "", "start", [])
         with mock.patch("supervisor.doc_comments.take_notices", return_value=["[a comment notice]"]) as take:
             self.queue("queued", "q8")

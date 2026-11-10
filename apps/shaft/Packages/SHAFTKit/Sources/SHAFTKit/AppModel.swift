@@ -15,10 +15,12 @@ public final class AppModel {
     public private(set) var startupError: String?
     /// Why the system gave no push token, when it did not.
     public private(set) var pushError: String?
-    /// The instance whose chat a notification tap asked for: the UI opens it, then sets this to nil.
-    public var openChat: String?
-    /// The chat on screen while the app is in front, nil otherwise: a notification about it shows no banner.
-    public var visibleChat: String?
+    /// The chat a notification tap (or a link) asked for, its thread when it named one: the UI opens it, then sets this
+    /// to nil.
+    public var openChat: ChatTarget?
+    /// The chat on screen while the app is in front (its thread's `cid`, `"from"`, or nil for the current chat), nil
+    /// otherwise: a notification about it shows no banner.
+    public var visibleChat: ChatTarget?
 
     public init() {
         do {
@@ -63,16 +65,19 @@ public final class AppModel {
     }
 
     /// How a notification that arrives while the app is open shows: nothing but the badge for the chat already on
-    /// screen (its feed shows the reply), a banner for any other.
-    nonisolated public static func presentation(for instance: String?, visibleChat: String?)
+    /// screen (its feed shows the reply), a banner for any other — another thread of the same instance included. One
+    /// that names no thread (a server before threads) is about the instance's chat on screen, whichever it is.
+    nonisolated public static func presentation(for instance: String?, cid: String? = nil, visibleChat: ChatTarget?)
         -> UNNotificationPresentationOptions {
-        if let instance, instance == visibleChat { return [.badge] }
+        if let instance, let visibleChat, instance == visibleChat.instance, cid == nil || cid == visibleChat.cid {
+            return [.badge]
+        }
         return [.banner, .list, .sound, .badge]
     }
 
-    /// A notification was tapped: open the chat it is about.
-    public func notificationTapped(instance: String?) {
-        if let instance { openChat = instance }
+    /// A notification was tapped: open the chat it is about, its thread when it names one.
+    public func notificationTapped(instance: String?, cid: String? = nil) {
+        if let instance { openChat = ChatTarget(instance: instance, cid: cid) }
     }
 
     /// Show the server's badge (§12) on the app icon.

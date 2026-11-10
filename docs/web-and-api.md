@@ -65,6 +65,26 @@ poll GitHub itself, or a GitHub Action can join the tailnet.
 curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
+### Topic threads
+
+`supervisor.api.ReplyQueue` gives API replies for each instance first-come tickets. A reply in another thread
+waits instead of interjecting. Cycles still pause for replies; terminal conversations use the run lock outside this
+queue. A waiting stream names the API thread ahead of it as `waiting: answering in «<title>»`.
+The web relay stores this phase in `reply.waiting`. The `started` status clears it and resets the document snapshot,
+so documents written while waiting do not become this reply's cards.
+
+The web client sends the UTF-8 percent-encoded title in `X-Shaft-Thread-Title`. The API stores the decoded title beside
+the talk id and returns `X-Shaft-Talk` on completions. A non-streamed answer also carries `talk_id`, so an idempotent
+replay can return the same header. Cached answers from before this field was added have no talk header.
+`supervisor.web_chat._api_messages` prepends a short system digest of the other open threads, newest first.
+The broker's `read_thread` tool lists open threads followed by the 20 newest ended threads. With an id, it returns
+that instance's thread as text, limited to the last 12,000 characters. Trial replays cannot use it.
+
+`supervisor.messages.record` writes `talk` on every new message row. Messages sent during an API reply belong to
+that thread's recorded talks. `supervisor.web_chat.from_feed` contains cycle messages with `talk: null` and the
+operator's next-cycle notes. It returns the newest window with revisions and unread timestamps computed over the
+whole feed. Legacy rows without `talk` keep their time-span display in `sent_during`.
+
 ### `/v1` wire contract
 
 Examples use illustrative instance names and values. This API accepts a subset of
@@ -140,7 +160,7 @@ Only the reply's last step is its `content`: text written before a tool call is 
 `reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. Text of a model
 call cut off at its token limit is dropped when the call is asked again (`retry`), as the instance drops it. A `voice`
 request's stream is the same stream with extra chunks in between: each has an empty delta and a top-level
-`shaft_event` (a typed request never gets one).
+`shaft_event`. Typed streams also carry `status` events, including `started` once the instance is held.
 
 | `shaft_event.type` | Fields | Sent |
 |---|---|---|
@@ -241,10 +261,22 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   If cleanup fails or a browser API is missing, it still reloads and shows which step failed.
   Only that notice is stored in sessionStorage, then removed after it is shown. If the browser blocks
   sessionStorage, the notice cannot survive reload.
-- Unread marks clear when the current chat's reply, or a message the instance sent you, is on screen in the feed of a
-  visible tab (scrolled into view, not only rendered: one below the fold stays unread until you scroll to it). A
-  message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
-  do not consume a new reply. Marks are shared across tabs in the same browser.
+- Unread marks are per thread, and for From: one clears when that thread's reply, or a message the instance sent you
+  there, is on screen in its feed in a visible tab (scrolled into view, not only rendered: one below the fold stays
+  unread until you scroll to it). The rail marks the thread, and its instance while any of its threads or From is
+  unread; the app badge counts instances. Config, Journal, earlier chats, another thread and a failed feed refresh do
+  not consume a new reply. Marks are kept in this browser (`shaft.seen`: per instance, per thread id or `from`) and
+  shared across its tabs; a mark kept from before threads counts for every thread until each is seen again.
+- **Topic threads.** Under the instance being viewed, the rail lists its open threads, most recently active first:
+  the title (the first line of its first message until renamed), a dot (hollow idle, pulsing replying, amber while
+  it waits for the instance because another thread's reply holds it) and the unread mark; then **From <instance>**,
+  then **+ New thread**, which opens a new thread (`POST /chat/<name>/new`) and goes to it. A thread's page is
+  `/i/<name>/chat?id=<id>`: its feed, header and composer stay on that thread (the composer sends its id, and a
+  document saved or commented on beside it goes to that thread's next message); its draft is its own. The plain
+  `/i/<name>/chat` follows the most recently active thread. **From <instance>** (`/i/<name>/from`) shows what it sent
+  you outside any thread (a cycle, a terminal or Telegram talk) and what you left for its next cycle, refreshed like a
+  chat (`/fragment/from/<name>`); its composer only sends for the next cycle. A reply waiting for its turn says so on
+  its own line, `waiting: answering in «<title>»`, until it starts.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
   the jump (the draft in the composer, the documents sheet, an image, the keyboard closing after Send) grows the feed
@@ -267,7 +299,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   at its corner while the code scrolls sideways). Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Below the quote cards, the composer keeps its main field: the paperclip attaches files, the arrow sends now
-  (during a reply: an interjection), and ⌃ beside it — or a long press on the arrow — offers **Queue after reply**
+  (during a reply in that thread: an interjection), and ⌃ beside it — or a long press on the arrow — offers **Queue after reply**
   (only while a reply runs) and **Next cycle**. A tap on the arrow keeps the keyboard up and the text focused, as in Messages.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
   until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
@@ -281,7 +313,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   **Next cycle** is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
-  (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
+  (the next wake's time, a cycle running now, no scheduled cycles, or paused). Its From-feed row is yours, marked
   **⏾ next cycle · waiting**, then **read** once a cycle has read it. Its answer, if it sends one, is a message
   like any other (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.
@@ -313,16 +345,16 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   and follows its end if you are there; when the reply ends it stays until the answer replaces it, which is fetched
   at once. Rendered
   Markdown and the documents' hashes are kept until their text or file changes.
-- The chat header refreshes every 1.5 seconds. It is the name with its state and model under it, then three controls:
-  **Documents**, **New chat** and **⋯**. ⋯ holds the instance's pages, Earlier chats, its actions, notifications and
+- The chat header refreshes every 1.5 seconds. It is the name and the thread's title (tap it to **Rename**), its state
+  and model under them, then three controls: **Documents**, **New thread** and **⋯**. ⋯ holds the instance's pages,
+  Earlier chats, **Clear this thread**, its actions, notifications and
   Reload / update, and last, apart and in red, **Kill**. The icons are one drawn set in the text's colour (no emoji)
   and stay their size when the text size grows. When the instance is busy and not writing a reply, its state under
   the name (with an icon: working, asleep, paused by you, waiting for you) opens a notice on hover, tap or keyboard
   saying what a message does now. The open notice, history list, ⋯ menu and keyboard focus survive refreshes; your
   draft and documents stay in place.
-  A failed refresh marks the header stale. New chat (what Clear did) sends the conversation id shown by the header; a
-  missing or outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and
-  Transcripts.
+  A failed refresh marks the header stale. Clear this thread sends the thread id shown by the header; a missing or
+  outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and Transcripts.
 - **Earlier chats** is in the ⋯ menu. Its quick list shows the latest 20 and the total count;
   **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
   Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
@@ -332,8 +364,9 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
   **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
   cards in an archive also open the file in the current chat.
-- **New chat** ends an open conversation and clears the page. The conversation stays in Earlier chats and
-  Transcripts. **End the conversation** leaves messages visible; the next message starts a new conversation.
+- **New thread** opens another thread and ends none. **Clear this thread** (⋯) ends its open conversation and clears
+  it from the page; your other threads stay open. The conversation stays in Earlier chats and Transcripts. **End the
+  conversation** leaves messages visible; the next message starts a new conversation.
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain

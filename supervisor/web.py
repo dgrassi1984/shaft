@@ -620,6 +620,8 @@ def _post(req: Request, dev: str) -> Response:
             extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
             if send is not web_chat.background:          # spoken: a turn of the chat, not the inbox
                 extra["voice"] = fields.get("voice") == "1"
+                if fields.get("cid"):
+                    extra["cid"] = fields["cid"]
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
             reply_links.record(m[1], fields.get("in_reply_to"), f"send:{m[1]}:{fields.get('mid') or secrets.token_hex(16)}")
@@ -630,7 +632,27 @@ def _post(req: Request, dev: str) -> Response:
         from . import web_chat
         if m[1] not in _names():
             return _not_found(req.path)
-        return _html(200, web_pages.h("<p>{t}</p>", t=web_chat.unqueue(m[1], req.form().get("mid", ""))))
+        form = req.form()
+        try:
+            said = web_chat.unqueue(m[1], form.get("mid", ""), cid=form.get("cid", ""))
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/(new|rename)", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        form = req.form()
+        try:
+            if m[2] == "new":
+                chat = web_chat.new_thread(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
+                                           title=form.get("title", ""))
+                return _html(200, web_pages.h('<p data-cid="{cid}"><a href="/i/{n}/chat?id={cid}">New thread</a></p>',
+                                              cid=chat["id"], n=m[1]))
+            said = web_chat.rename(m[1], form.get("cid", ""), form.get("title", ""))
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
     if m := re.match(r"^/docs/([A-Za-z0-9_-]+)/save$", req.path):
         if m[1] not in _names():
             return _not_found(req.path)
@@ -738,10 +760,9 @@ def _get(req: Request, csrf: str) -> Response | None:
         from . import version
         return _html(200, web_pages.changelog_body(version.changelog()))
     if path == "/fragment/rail":
-        from . import messages, web_chat
-        history = messages.history()
-        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(),
-                                         {n: web_chat.summary(n, history) for n in names}))
+        current = qs.get("c", "")
+        return _html(200, web_pages.rail(names, current, overview(), _rail_chats(names),
+                                         _rail_thread(names, current, qs.get("t", ""))))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/cycles-next$", path):
         if m[1] not in names:
             return None
@@ -756,6 +777,20 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf, doc_sort=_doc_sort(req))
+    if m := re.match(r"^/fragment/from/([A-Za-z0-9_-]+)(/header)?$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        if m[2]:
+            past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
+            return _html(200, v.chat_header(m[1], _live(m[1]), None, past, from_feed=True))
+        if qs.get("away"):                          # its page went hidden on this device: push From to it again
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid="from")
+            return Response(204, b"")
+        at = _page_ms(req.headers.get("x-shaft-at"))   # as a thread's feed: watched while on screen, not when covered
+        (web_chat.unwatch if req.headers.get("x-shaft-watching") == "0" else web_chat.watching)(
+            m[1], req.device, at, cid="from")
+        return _html(200, v.feed_html(web_chat.from_feed(m[1]), from_feed=True))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
         if m[1] not in names:
             return None
@@ -764,34 +799,36 @@ def _get(req: Request, csrf: str) -> Response | None:
         if chat and chat.get("instance") != m[1]:
             return None
         past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
-        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=bool(qs.get("id"))))
+        read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
+        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=read_only))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
         from . import web_chat
         if qs.get("away"):                          # its page went hidden on this device: push to it again (W9)
-            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")))
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid=qs.get("id"))
             return Response(204, b"")
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
-        if not qs.get("id"):
+        if not chat or chat.get("state") != "ended":
             # A covering sheet still polls the feed, but must not silence push. Stamp both paths so a late
             # poll sent before the sheet opened cannot restore watching (as with the page's away signal).
             at = _page_ms(req.headers.get("x-shaft-at"))
             if req.headers.get("x-shaft-watching") == "0":
-                web_chat.unwatch(m[1], req.device, at)
+                web_chat.unwatch(m[1], req.device, at, cid=(chat or {}).get("id"))
             else:
-                web_chat.watching(m[1], req.device, at)
-        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
-                                      archived=bool(qs.get("id")), whole=qs.get("all") == "1"))
+                web_chat.watching(m[1], req.device, at, cid=(chat or {}).get("id"))
+        archived = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
+        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, archived),
+                                      archived=archived, whole=qs.get("all") == "1"))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
         # The running reply's activity, polled on its own (W12): it changes every second, and inside the feed it
         # changed the feed's ETag on every poll — the whole conversation rendered and sent again each 1.5 s.
         if m[1] not in names:
             return None
         from . import web_chat
-        chat = web_chat.shown(m[1])
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         return _html(200, v.live_activity(chat if chat and chat.get("instance") == m[1] else None))
     if path == "/push/key":
         from . import webpush
@@ -965,7 +1002,7 @@ def save_doc(name: str, login: str, form: dict) -> tuple[str, str, str]:
     new_sha = docs.sha(text.encode())             # what was written — never read again: the instance may write next
     rel = docs._rel(path)
     try:
-        said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
+        said = web_chat.doc_saved(name, login, rel, old, text, new_sha, **({"cid": form["cid"]} if form.get("cid") else {}))
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
     return said, rel, new_sha
@@ -1003,7 +1040,7 @@ def delete_doc(name: str, login: str, form: dict) -> str:
     if not ok:
         raise DocRefused(last)
     try:
-        return web_chat.doc_saved(name, login, path, old, None, "none")
+        return web_chat.doc_saved(name, login, path, old, None, "none", **({"cid": form["cid"]} if form.get("cid") else {}))
     except web_chat.Refused as e:
         return f"deleted, but {name} was not told yet: {e}"
 
@@ -1038,7 +1075,7 @@ def comment_action(name: str, login: str, action: str | None, form: dict) -> tup
         if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle
             try:
                 said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
-                        else web_chat.send_comment(name, login, pid)[1])
+                        else web_chat.send_comment(name, login, pid, **({"cid": form["cid"]} if form.get("cid") else {}))[1])
             except (doc_comments.Refused, web_chat.Refused) as e:
                 said = f"saved, but not sent: {e}"
         else:                                 # the instance's copy holds unsent comments too (sending syncs it)
@@ -1063,7 +1100,7 @@ def comment_action(name: str, login: str, action: str | None, form: dict) -> tup
         elif form.get("when") == "cycle":
             said = web_chat.send_comment_background(name, login, pid)
         else:
-            _, said = web_chat.send_comment(name, login, pid)
+            _, said = web_chat.send_comment(name, login, pid, **({"cid": form["cid"]} if form.get("cid") else {}))
     return said, tid
 
 
@@ -1190,6 +1227,11 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         body = v.join([v.link(f"/i/{v.q(name)}/chat", "Back to the current chat"),
                        v.section("Earlier chats", v.earlier_chats(name, past))])
         return _html(200, v.instance_frame(name, "chat", "Earlier chats", body, names, csrf))
+    if tab == "from":
+        from . import web_chat
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        return _html(200, v.from_page(name, web_chat.from_feed(name), past, _live(name), names, csrf,
+                                      later=_next_cycle(name)))
     if tab == "chat":
         from . import web_chat
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
@@ -1200,8 +1242,8 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only,
                                  att=qs.get("att", ""), folder=qs.get("dir", ""), sort=doc_sort,
                                  listing_only=qs.get("list") == "1")
-        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
-                                      read_only=read_only,
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, read_only), past, _live(name), names, csrf,
+                                      read_only=read_only, selected=bool(qs.get("id")),
                                       panel=panel, doc=doc, att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
                                       listing_only=qs.get("list") == "1" and not qs.get("doc"),
@@ -1248,6 +1290,35 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         thinking = qs.get("thinking") == "1"
         return _html(200, v.transcript_page(name, e, panel.transcript_lines(name, e, thinking), thinking, names, csrf))
     return None
+
+
+def _rail_chats(names: list[str]) -> dict[str, dict]:
+    """Each instance's rail entry (web_chat.summary), with its open threads (id, title, state: idle / replying /
+    waiting, waiting's words, and `last`: when the instance last wrote in it, as the thread's feed computes it) and
+    when it last wrote in its From feed (`from_last`): the browser's unread marks per thread compare these with what
+    it saw in each feed (web.js markRail)."""
+    from . import messages, web_chat
+    history = messages.history()
+    out = {}
+    for n in names:
+        threads = []
+        for c in web_chat.threads(n):
+            waiting = (c.get("reply") or {}).get("waiting") if c.get("state") == "replying" else None
+            threads.append({"id": c["id"], "title": web_chat.title(c), "waiting": waiting,
+                            "state": "waiting" if waiting else "replying" if c.get("state") == "replying" else "idle",
+                            "last": web_chat.last_from(c, web_chat.sent_during(n, c)) or ""})
+        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or ""}
+    return out
+
+
+def _rail_thread(names: list[str], current: str, thread: str) -> str:
+    """The thread lit in the rail: the one the page named (?t=: an id, or "from"); on an instance's plain chat page
+    (t=current), which follows its current thread, the one that page shows; none on its other pages."""
+    from . import web_chat
+    if thread != "current":
+        return thread
+    shown = web_chat.shown(current[2:]) if current.startswith("i:") and current[2:] in names else None
+    return shown["id"] if shown and shown.get("state") != "ended" else ""
 
 
 def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:

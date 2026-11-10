@@ -7,7 +7,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | Folder | What |
 |---|---|
 | `Design/` | tokens and `Appearance.swift`: per-device theme and reading text size, the Appearance settings section |
-| `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
+| `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows (an instance, its open threads, From *instance*, New thread), `ChatSelection` |
 | `Settings/` | `InstanceSettingsView` (server settings for one instance) and `ServerSection` (API restart and scheduler drain, shared with app settings through `session.store.services`) |
 | `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll while visible and active; watching only while uncovered; seen marks while shown, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (Documents and Cycles beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
@@ -19,6 +19,18 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
 | `Voice/` | voice mode: `VoiceScreen` (its model, the iPhone's full-screen cover and the Mac's panel where the composer was) and `VoiceControls`; `VoiceSetup` (this device's voice preferences, permissions, the speech model, the session from the engine's parts, the Debug hooks); `VoicePicker` (a voice per language, with Preview); `VoiceReporter` (this device's voices, for the instance's `propose_voice`). The engine itself is in SHAFTKit's `Voice/` |
+
+## Threads
+
+On a server with topic threads an instance has several open chats, each its own conversation, plus a From *instance*
+feed of what it sent from its cycles. The list nests them under the instance (title, replying or waiting, unread), with
+New thread; a thread's row has Rename… in its context menu, and the chat's ⋯ has Rename thread… and End. The selection
+is a `ChatSelection` (instance, and a `ChatRef` or nil for its default: the most recently active thread), resolved by
+`InstancesStore.resolve`; a thread that ended gives way to the default. Each conversation has its own `ChatStore`, draft
+and unsent messages (SHAFTKit keys them by thread), so nothing typed in one thread shows in another. The header shows
+the thread's title after the name, and New thread (it ends nothing) replaces New chat. The From feed's composer sends
+for the next cycle only. A notification opens the thread it names. A server before threads answers `404` for
+`/app/v1/threads/<n>`: that instance keeps its one chat and New chat, as before, and is not asked again this session.
 
 If the initial chat list cannot load, the chat area shows the error, Retry and Settings on all three devices.
 The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Appearance before pairing, plus Unpair

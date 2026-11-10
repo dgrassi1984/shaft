@@ -43,10 +43,13 @@ struct FeedPollTests {
               case .failed(let failure, let retryIn) = events[3] else {
             Issue.record("unexpected events: \(events)"); return
         }
-        #expect(idle.version == "55edd8cc46b944f6")
-        #expect(live.version == "04cdc1f9bb08b132")
+        let (idleVersion, _) = try DecodingTests.revision("idle")
+        let (liveVersion, liveLive) = try DecodingTests.revision("live")
+        let (partialVersion, partialLive) = try DecodingTests.revision("live-partial")
+        #expect(idle.version == idleVersion)
+        #expect(live.version == liveVersion)
         #expect(merged.partial == false)
-        #expect(merged.live == "fb7597261efc6cb5")
+        #expect(merged.live == partialLive)
         #expect(merged.content == live.content)
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(failure.code == "internal")
@@ -58,15 +61,15 @@ struct FeedPollTests {
         #expect(requests.count == 6)
         #expect(requests[0].query("since") == nil)
         #expect(requests[0].query("wait") == "0")
-        #expect(requests[1].query("since") == "55edd8cc46b944f6")
+        #expect(requests[1].query("since") == idleVersion)
         #expect(requests[1].query("live") == "")
         #expect(requests[1].query("wait") == "25")
-        #expect(requests[2].query("since") == "55edd8cc46b944f6")
-        #expect(requests[3].query("since") == "04cdc1f9bb08b132")
-        #expect(requests[3].query("live") == "cc72a715f5f61774")
+        #expect(requests[2].query("since") == idleVersion)
+        #expect(requests[3].query("since") == liveVersion)
+        #expect(requests[3].query("live") == liveLive)
         // After a failure the loop asks again with what it held.
-        #expect(requests[5].query("since") == "04cdc1f9bb08b132")
-        #expect(requests[5].query("live") == "fb7597261efc6cb5")
+        #expect(requests[5].query("since") == partialVersion)
+        #expect(requests[5].query("live") == partialLive)
         for request in requests {
             #expect(request.path == "/app/v1/chat/tundra")
             #expect(request.query("watch") == "1")

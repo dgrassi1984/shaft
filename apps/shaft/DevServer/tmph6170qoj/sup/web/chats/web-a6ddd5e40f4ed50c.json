@@ -1,0 +1,31 @@
+{
+ "id": "web-a6ddd5e40f4ed50c",
+ "instance": "tundra",
+ "login": "operator@example.com",
+ "created": "2026-11-10T16:55:37",
+ "state": "replying",
+ "turns": [
+  {
+   "role": "user",
+   "content": "Describe the garden\n\n[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document the operator sees live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you as a diff in their next message. The operator's comments on notes/docs/X.md, sent or not, are in notes/comments/X.md.]",
+   "shown": "Describe the garden",
+   "ts": "2026-11-10T16:55:37",
+   "attachments": [],
+   "mid": "test-1285752555965541",
+   "via": "voice"
+  }
+ ],
+ "reply": {
+  "started": "2026-11-10T16:55:37",
+  "activity": [],
+  "answer": "",
+  "interjections": 0,
+  "docs_before": {},
+  "comment_ids": [],
+  "started_by": null,
+  "turn_start": 1
+ },
+ "mids": [
+  "test-1285752555965541"
+ ]
+}

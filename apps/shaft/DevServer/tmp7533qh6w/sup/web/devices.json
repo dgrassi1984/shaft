@@ -1,0 +1,10 @@
+{
+ "b8fd3d6551839bcf": {
+  "name": "voice-test",
+  "login": "operator@example.com",
+  "created": "2026-11-10T16:44:43",
+  "last_seen": "2026-11-10T16:44:43",
+  "hash": "6dd0912385c589a919d5edcdb299404613323475df74f345b22bb3b16fdad15f",
+  "platform": "macos"
+ }
+}

@@ -30,6 +30,9 @@ public final class VoiceSession {
     public private(set) var muted = false
     public let language: VoiceLanguage
     public let instance: String
+    /// The thread the session was started from (§3.5): its turns go there and its replies are followed there. Nil for
+    /// the current chat (a server before threads).
+    public let cid: String?
 
     private let client: APIClient
     private let transcriber: any TranscriptSource
@@ -52,11 +55,12 @@ public final class VoiceSession {
     private var chat: String?
     private var ended = false
 
-    public init(client: APIClient, instance: String, instanceName: String, language: VoiceLanguage,
+    public init(client: APIClient, instance: String, cid: String? = nil, instanceName: String, language: VoiceLanguage,
                 tuning: VoiceTuning = VoiceTuning(), transcriber: any TranscriptSource, speech: any SpeechOutput,
                 sounds: any VoiceSounds, graph: VoiceAudioGraph? = nil) {
         self.client = client
         self.instance = instance
+        self.cid = cid
         self.language = language
         self.transcriber = transcriber
         self.speech = speech
@@ -173,7 +177,7 @@ public final class VoiceSession {
     // MARK: The server
 
     private func send(_ text: String) {
-        let message = OutgoingMessage(text: text, mode: .now, voice: true)
+        let message = OutgoingMessage(text: text, mode: .now, voice: true, cid: cid)
         let following = follow != nil
         if following { interjected = true }
         let post = post
@@ -196,7 +200,7 @@ public final class VoiceSession {
         follow?.cancel()
         follow = nil
         interjected = false
-        guard let chat else { return }
+        guard let chat = chat ?? cid else { return }
         Task { [client, instance] in _ = try? await client.stop(instance, cid: chat) }
     }
 
@@ -206,14 +210,15 @@ public final class VoiceSession {
     private func followReply(fresh: Bool) {
         let post = post
         let start = fresh ? (reply: String?.none, after: 0) : held
-        follow = Task { [client, instance, weak self] in     // on the main actor; awaits the network
+        follow = Task { [client, instance, cid, weak self] in     // on the main actor; awaits the network
             var sawEnd = false
             var events = 0
             let tries = fresh ? 1 : 5
             for attempt in 0..<tries {
                 if attempt > 0 { try? await Task.sleep(for: .milliseconds(300)) }
                 do {
-                    for try await event in client.followReply(instance, after: start.after, reply: start.reply) {
+                    for try await event in client.followReply(instance, after: start.after, reply: start.reply,
+                                                              cid: cid) {
                         events += 1
                         self?.held = (event.reply, event.seq)
                         post.yield(.stream(event, at: VoiceClock.now()))
