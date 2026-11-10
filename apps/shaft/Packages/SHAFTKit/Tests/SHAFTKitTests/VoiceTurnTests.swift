@@ -535,35 +535,95 @@ struct VoiceTurnTests {
         #expect(later.handle(toolStart("web_search", 3.2)) == [.workingSound(true), .duckWorkingSound(true)])
     }
 
-    // MARK: Fillers
+    // MARK: Fillers: the waiting sound, and status lines that say something
 
-    @Test func oneStatusLineAfterSilenceAndTheSameLineIsNotReadTwice() {
+    /// "Tundra is thinking" is never said: the silence before the reply's first text gets the waiting sound instead.
+    @Test func theSilenceBeforeTheReplyGetsTheWaitingSoundNotThinkingWords() {
         var turn = thinkingTurn()
         #expect(turn.handle(tick(5.4)) == [])
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is thinking", isStatus: true)])
-        #expect(turn.handle(started(1, 5.7)) == [])           // a status line: still thinking, no latency
+        #expect(turn.handle(tick(5.6)) == [.waitingSound(true)])
+        #expect(turn.handle(tick(5.7)) == [])                  // once on, it stays on
+        #expect(turn.handle(tick(12.0)) == [])                 // and no words, however long the silence
         #expect(turn.state == .thinking)
-        #expect(turn.handle(finished(1, 7.0)) == [])
-        #expect(turn.handle(tick(15.0)) == [])
+    }
+
+    @Test func aStatusThatOnlySaysThinkingIsNotRead() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(status("model", "thinking", 3.0)) == [])
+        #expect(turn.handle(tick(5.6)) == [.waitingSound(true)])
+        var dots = thinkingTurn()
+        #expect(dots.handle(status("model", "Thinking…", 3.0)) == [])
+        #expect(dots.handle(tick(5.6)) == [.waitingSound(true)])
+    }
+
+    @Test func aStatusLineThatSaysSomethingIsReadOnceAndTheWaitingSoundComesBackAfterIt() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(tick(5.6)) == [.waitingSound(true)])
         #expect(turn.handle(status("model", "reading ledger.md", 15.1)) == [])
-        #expect(turn.handle(tick(15.2)) == [.speak(id: 2, text: "Tundra is reading ledger.md", isStatus: true)])
+        #expect(turn.handle(tick(15.2)) == [.waitingSound(false),
+                                            .speak(id: 1, text: "Tundra is reading ledger.md", isStatus: true)])
+        #expect(turn.handle(started(1, 15.3)) == [])          // a status line: still thinking, no latency
+        #expect(turn.state == .thinking)
+        #expect(turn.handle(finished(1, 16.5)) == [])
+        #expect(turn.handle(tick(16.6)) == [.waitingSound(true)])
+        #expect(turn.handle(tick(30.0)) == [])                 // the same line is not read twice
     }
 
     @Test func atMostOneFillerEveryThreeFillerS() {
         var turn = thinkingTurn()
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is thinking", isStatus: true)])
-        #expect(turn.run(finished(1, 6.5), status("model", "reading ledger.md", 7.0)) == [])
+        #expect(turn.handle(status("model", "reading a.md", 3.0)) == [])
+        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is reading a.md", isStatus: true)])
+        #expect(turn.run(finished(1, 6.5), status("model", "reading b.md", 7.0)) == [])
+        #expect(turn.handle(tick(7.1)) == [.waitingSound(true)])
         #expect(turn.handle(tick(14.5)) == [])
-        #expect(turn.handle(tick(14.7)) == [.speak(id: 2, text: "Tundra is reading ledger.md", isStatus: true)])
+        #expect(turn.handle(tick(14.7)) == [.waitingSound(false),
+                                            .speak(id: 2, text: "Tundra is reading b.md", isStatus: true)])
     }
 
     @Test func noFillerWhileAStatusLineIsStillBeingSpoken() {
         var turn = thinkingTurn()
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is thinking", isStatus: true)])
-        #expect(turn.handle(status("model", "reading ledger.md", 7.0)) == [])
-        #expect(turn.handle(tick(15.0)) == [])                 // line 1 not finished yet
+        #expect(turn.handle(status("model", "reading a.md", 3.0)) == [])
+        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is reading a.md", isStatus: true)])
+        #expect(turn.handle(status("model", "reading b.md", 7.0)) == [])
+        #expect(turn.handle(tick(15.0)) == [])                 // line 1 not finished yet: no line, no sound
         #expect(turn.handle(finished(1, 15.1)) == [])
-        #expect(turn.handle(tick(15.2)) == [.speak(id: 2, text: "Tundra is reading ledger.md", isStatus: true)])
+        #expect(turn.handle(tick(15.2)) == [.speak(id: 2, text: "Tundra is reading b.md", isStatus: true)])
+    }
+
+    @Test func theWaitingSoundGivesWayToTheWorkingSoundAndComesBackAfterTheTool() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(tick(5.6)) == [.waitingSound(true)])
+        #expect(turn.handle(toolStart("web_search", 6.0)) == [.workingSound(true), .waitingSound(false)])
+        #expect(turn.handle(toolEnd("web_search", 7.0)) == [])       // the working sound's grace
+        #expect(turn.handle(tick(7.7)) == [.workingSound(false)])
+        #expect(turn.handle(tick(9.9)) == [])                          // fillerS from the tool's end
+        #expect(turn.handle(tick(10.1)) == [.waitingSound(true)])
+    }
+
+    @Test func theWaitingSoundStopsWhenTheReplySpeaksYouTalkItEndsOrYouEnd() {
+        var speaks = thinkingTurn()
+        _ = speaks.handle(tick(5.6))
+        #expect(speaks.handle(draft("It is sunny. ", 6.0)) == [.waitingSound(false),
+                                                              .speak(id: 1, text: "It is sunny.", isStatus: false)])
+
+        var talks = thinkingTurn()
+        _ = talks.handle(tick(5.6))
+        #expect(talks.handle(vol("hold on", 6.0)) == [.stopSpeaking, .state(.userTalking),
+                                                      .showTranscript("hold on"), .waitingSound(false)])
+
+        var ends = thinkingTurn()
+        _ = ends.run(status("model", "thinking", 3.0), tick(5.6))
+        #expect(ends.handle(end(nil, 6.0)) == [.state(.listening), .waitingSound(false)])
+
+        var ended = thinkingTurn()
+        _ = ended.handle(tick(5.6))
+        #expect(ended.handle(.end(at: 6.0)) == [.stopSpeaking, .waitingSound(false), .state(.ended)])
+    }
+
+    @Test func noWaitingSoundWhenSoundsAreOff() {
+        var turn = thinkingTurn(tuning: VoiceTuning(workingSound: false))
+        #expect(turn.handle(tick(5.6)) == [])
+        #expect(turn.handle(tick(20.0)) == [])
     }
 
     @Test func aWaitForACycleIsReadFromItsPhase() {
@@ -578,7 +638,7 @@ struct VoiceTurnTests {
     @Test func theFirstFillerCountsFromYourTurnNotFromTheStreamsFirstEvent() {
         var turn = thinkingTurn()
         #expect(turn.handle(status("model", "thinking", 5.0)) == [])
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is thinking", isStatus: true)])
+        #expect(turn.handle(tick(5.6)) == [.waitingSound(true)])
     }
 
     @Test func aToolRunningLongerThanThreeFillerSIsNamed() {
@@ -599,7 +659,7 @@ struct VoiceTurnTests {
 
     @Test func italianFillersAreSpokenInItalian() {
         var thinking = thinkingTurn(.it)
-        #expect(thinking.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra sta pensando", isStatus: true)])
+        #expect(thinking.handle(tick(5.6)) == [.waitingSound(true)])      // nobody says "sta pensando"
 
         var tool = thinkingTurn(.it)
         _ = tool.handle(toolStart("web_search", 3.0))
@@ -610,17 +670,18 @@ struct VoiceTurnTests {
         #expect(waiting.handle(tick(5.6)) == [
             .speak(id: 1, text: "Tundra sta mettendo in pausa il suo ciclo per te", isStatus: true)])
 
-        // An English detail is not read by the Italian voice.
+        // An English detail is not read by the Italian voice: the waiting sound fills the silence.
         var english = thinkingTurn(.it)
         _ = english.handle(status("model", "reading ledger.md", 2.8))
-        #expect(english.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra sta pensando", isStatus: true)])
+        #expect(english.handle(tick(5.6)) == [.waitingSound(true)])
     }
 
     // MARK: Latency, speaking, ids
 
     @Test func latencyIsReportedOnceAtTheFirstWordsOfTheInstanceNotAtAStatusLine() {
         var turn = thinkingTurn()
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is thinking", isStatus: true)])
+        #expect(turn.handle(status("model", "reading a.md", 3.0)) == [])
+        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is reading a.md", isStatus: true)])
         #expect(turn.run(started(1, 5.7), finished(1, 6.5)) == [])
         #expect(turn.handle(draft("Here it is. And more.", 7.0)) == [
             .speak(id: 2, text: "Here it is.", isStatus: false), .speak(id: 3, text: "And more.", isStatus: false)])
@@ -636,8 +697,9 @@ struct VoiceTurnTests {
         #expect(turn.handle(finished(2, 4.5)) == [.state(.listening)])
         _ = turn.run(fin("And then?", 6.0))
         #expect(turn.handle(tick(7.0)) == [.send(text: "And then?"), .showTranscript(""), .state(.thinking)])
-        #expect(turn.handle(tick(10.1)) == [.speak(id: 3, text: "Tundra is thinking", isStatus: true)])
-        #expect(turn.handle(answer("Three.", 11.0, r2)) == [.speak(id: 4, text: "Three.", isStatus: false)])
+        #expect(turn.handle(tick(10.1)) == [.waitingSound(true)])
+        #expect(turn.handle(answer("Three.", 11.0, r2)) == [.waitingSound(false),
+                                                            .speak(id: 3, text: "Three.", isStatus: false)])
     }
 
     @Test func theSendsAnswerIsShownAsAStatusLine() {

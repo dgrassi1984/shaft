@@ -216,7 +216,7 @@ enum VoiceSetup {
 
     // MARK: - Words
 
-    /// The instance's name as status lines speak it ("Tundra is thinking").
+    /// The instance's name as status lines speak it ("Tundra is using web search").
     static func spokenName(_ instance: String) -> String {
         instance.prefix(1).uppercased() + instance.dropFirst()
     }

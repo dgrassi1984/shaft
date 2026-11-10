@@ -111,6 +111,7 @@ private final class RecordingSounds: VoiceSounds, @unchecked Sendable {
     init(_ inner: GeneratedVoiceSounds, _ log: Log) { self.inner = inner; self.log = log }
 
     func working(_ on: Bool) { log.add(on ? "working on" : "working off"); inner.working(on) }
+    func waiting(_ on: Bool) { log.add(on ? "waiting on" : "waiting off"); inner.waiting(on) }
     func duckWorking(_ ducked: Bool) { inner.duckWorking(ducked) }
     func setWorkingVolume(_ volume: Float) { inner.setWorkingVolume(volume) }
     func earcon(_ state: VoiceState) { log.add("state \(state.rawValue)"); inner.earcon(state) }
@@ -206,6 +207,31 @@ final class VoiceSessionEndToEndTests: XCTestCase {
         XCTAssertLessThan(latency, 8)
         print("e2e tool turn: latency \(String(format: "%.2f", latency)) s;",
               log.all.map { String(format: "%.2f %@", $0.at - log.all[0].at, $0.what) })
+    }
+
+    /// A reply that thinks 4.5 s in silence (its only status says "thinking"): nothing is said while it thinks —
+    /// never "Tundra is thinking" — the waiting sound starts fillerS after your turn and stops before the answer is
+    /// spoken.
+    func testALongThinkPlaysTheWaitingSoundAndSaysNothing() async throws {
+        let log = Log()
+        let (session, _) = try await session([(try spoken("Take it slow and tell me about the garden."), at: 0.5)],
+                                             log: log)
+        defer { Task { await session.end() } }
+        try await wait(40, "the answer to be spoken") { log.first("start The garden gate is open.") != nil }
+
+        let queued = log.all.map(\.what).filter { $0.hasPrefix("queue ") }
+        XCTAssertEqual(queued, ["queue The garden gate is open.", "queue The lantern is beside the door."],
+                       "only the answer is spoken")
+        let thinking = try XCTUnwrap(log.first("state thinking"))
+        let on = log.times("waiting on"), off = log.times("waiting off")
+        XCTAssertEqual(on.count, 1, "\(log.all.map(\.what))")
+        XCTAssertEqual(off.count, 1, "\(log.all.map(\.what))")
+        if let start = on.first, let stop = off.first {
+            XCTAssertEqual(start - thinking, VoiceTuning().fillerS, accuracy: 0.3, "fillerS after your turn")
+            let answer = try XCTUnwrap(log.first("queue The garden gate"))
+            XCTAssertLessThanOrEqual(stop, answer + 0.05, "the waiting sound stops before the answer is spoken")
+        }
+        print("e2e slow turn:", log.all.map { String(format: "%.2f %@", $0.at - log.all[0].at, $0.what) })
     }
 
     /// Barge-in: while a long answer is spoken, you talk; its speech stops at once, your words go in as a spoken

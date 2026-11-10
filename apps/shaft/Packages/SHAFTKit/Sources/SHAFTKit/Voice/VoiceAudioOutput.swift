@@ -180,11 +180,17 @@ public final class EngineSpeechOutput: SpeechOutput, @unchecked Sendable {
     }
 }
 
-/// The working sound and the state earcons, generated as PCM (no audio assets): a soft low pulse that loops without a
-/// seam while a tool runs, ducked by 12 dB while the operator talks, and a short distinct earcon per state.
+/// The working sound, the waiting sound and the state earcons, generated as PCM (no audio assets): a soft low pulse
+/// that loops without a seam while a tool runs, a soft tick that loops while the reply is silent, both ducked by 12 dB
+/// while the operator talks, and a short distinct earcon per state. The two loops share one player: the working sound
+/// wins while both are on, so the order the switches come in never matters.
 public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
     /// One loop of the working sound, seconds.
     static let loopSeconds: Double = 1.2
+    /// One loop of the waiting sound, seconds: one tick, then quiet.
+    static let waitingLoopSeconds: Double = 1.5
+
+    enum Loop { case working, waiting }
     /// −12 dB while the operator talks.
     static let duckGain: Float = 0.251_188_64
 
@@ -193,37 +199,68 @@ public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
     private let queue = DispatchQueue(label: "shaft.voice.sounds")
     private var volume: Float
     private var ducked = false
-    private var on = false
+    private var workingOn = false
+    private var waitingOn = false
+    /// The loop queued on the player now.
+    private var playing: Loop?
     private let loop = GeneratedVoiceSounds.workingLoop(sampleRate: VoiceAudioGraph.playerFormat.sampleRate)
+    private let waitingTicks = GeneratedVoiceSounds.waitingLoop(sampleRate: VoiceAudioGraph.playerFormat.sampleRate)
 
     public init(graph: VoiceAudioGraph, volume: Float = VoiceTuning().workingVolume) {
         self.graph = graph
         self.volume = min(max(volume, 0), 1)
     }
 
-    /// Whether the working sound is playing.
-    public var isWorking: Bool { queue.sync { on } }
+    /// Whether the working sound is on.
+    public var isWorking: Bool { queue.sync { workingOn } }
+
+    /// Whether the waiting sound is on.
+    public var isWaiting: Bool { queue.sync { waitingOn } }
+
+    /// The loop the player has queued now (the working sound wins).
+    var playingLoop: Loop? { queue.sync { playing } }
 
     /// The working player's gain now: the volume, less 12 dB while ducked.
     public var workingGain: Float { queue.sync { gain } }
 
+    /// The switch is kept even when the graph cannot start now: the loop plays at the next sound that starts it (an
+    /// earcon, the other switch) or when the graph runs again by itself (`resumeLoops`).
     public func working(_ on: Bool) {
+        queue.sync { workingOn = on }
         if on, (try? graph.start()) == nil { return }
+        queue.sync { reconcile() }
+    }
+
+    public func waiting(_ on: Bool) {
+        queue.sync { waitingOn = on }
+        if on, (try? graph.start()) == nil { return }
+        queue.sync { reconcile() }
+    }
+
+    /// After the graph ran again by itself (the system had stopped the engine, and the player lost its loop): queue
+    /// again the loop that is on, if any. It never starts the graph: one its owner stopped meanwhile stays stopped.
+    public func resumeLoops() {
         queue.sync {
-            let player = graph.workingPlayer
-            if on {
-                // Already looping: nothing to do. On but silent (the graph was stopped under it): start again.
-                if self.on && player.isPlaying { return }
-                self.on = true
-                player.volume = gain
-                player.scheduleBuffer(loop, at: nil, options: [.loops, .interrupts])
-                player.play()
-            } else {
-                guard self.on else { return }
-                self.on = false
-                player.stop()
-            }
+            guard (workingOn || waitingOn) && graph.isRunning else { return }
+            reconcile()
         }
+    }
+
+    /// On `queue`: the player loops what is on now. Already looping it: nothing to do. On but silent (the graph was
+    /// stopped under it): queued again.
+    private func reconcile() {
+        let want: Loop? = workingOn ? .working : (waitingOn ? .waiting : nil)
+        let player = graph.workingPlayer
+        guard let want else {
+            if playing != nil { player.stop() }
+            playing = nil
+            return
+        }
+        if want == playing && player.isPlaying { return }
+        playing = want
+        player.volume = gain
+        player.scheduleBuffer(want == .working ? loop : waitingTicks, at: nil, options: [.loops, .interrupts])
+        player.play()
     }
 
     public func duckWorking(_ ducked: Bool) {
@@ -249,6 +286,7 @@ public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
             let player = graph.earconPlayer
             player.scheduleBuffer(buffer, at: nil, options: [.interrupts])
             if !player.isPlaying { player.play() }
+            reconcile()             // a loop switched on while the graph could not start plays now
         }
     }
 
@@ -267,6 +305,24 @@ public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
             let swell = 0.65 - 0.35 * cos(2 * Double.pi * t / loopSeconds)
             let tone = sin(2 * Double.pi * 110 * t) + 0.3 * sin(2 * Double.pi * 220 * t)
             channel[frame] = Float(0.3 * swell * tone / 1.3)
+        }
+        return buffer
+    }
+
+    /// One loop of the waiting sound: a soft, short tick (D5 with a faint octave, 5 ms rise, quick decay to nothing),
+    /// then quiet to the loop's end, so the loop runs into itself without a click and the silence reads as waiting.
+    static func waitingLoop(sampleRate: Double) -> AVAudioPCMBuffer {
+        let frames = Int((waitingLoopSeconds * sampleRate).rounded())
+        let tickFrames = Int((0.12 * sampleRate).rounded())
+        let buffer = AVAudioPCMBuffer(pcmFormat: VoiceAudioGraph.playerFormat, frameCapacity: AVAudioFrameCount(frames))!
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let channel = buffer.floatChannelData![0]
+        for frame in 0..<frames {
+            guard frame < tickFrames else { channel[frame] = 0; continue }
+            let t = Double(frame) / sampleRate
+            let envelope = min(1, t / 0.005) * exp(-t / 0.03) * (1 - Double(frame) / Double(tickFrames))
+            let tone = sin(2 * Double.pi * 587.33 * t) + 0.2 * sin(2 * Double.pi * 1174.66 * t)
+            channel[frame] = Float(0.6 * envelope * tone / 1.2)
         }
         return buffer
     }

@@ -82,6 +82,62 @@ final class VoiceAudioGraphChangeTests: XCTestCase {
         XCTAssertTrue(after, "the working sound stayed silent after the configuration change")
     }
 
+    func testAConfigurationChangeQueuesTheWaitingSoundAgain() async throws {
+        let graph = VoiceAudioGraph(silent: true)
+        defer { graph.stop() }
+        let sounds = GeneratedVoiceSounds(graph: graph, volume: 0.25)
+        graph.keepWorkingSound(sounds)
+        sounds.waiting(true)
+        XCTAssertTrue(graph.workingPlayer.isPlaying)
+        systemChangesConfiguration(of: graph)
+        let back = await waitUntil(3) { graph.isRunning && graph.workingPlayer.isPlaying }
+        XCTAssertTrue(back, "the waiting sound stayed silent after a configuration change")
+        XCTAssertEqual(sounds.playingLoop, .waiting)
+    }
+
+    /// Bug: a restart whose first try failed lost "the players were stopped", so the try that
+    /// succeeded ran no restart handler and the loop stayed silent.
+    func testARestartWhoseFirstTryFailsStillQueuesTheLoopAgain() async throws {
+        let graph = VoiceAudioGraph(silent: true)
+        defer { graph.stop() }
+        let sounds = GeneratedVoiceSounds(graph: graph, volume: 0.25)
+        graph.keepWorkingSound(sounds)
+        sounds.waiting(true)
+        graph.failingStarts = 1
+        systemChangesConfiguration(of: graph)
+        let back = await waitUntil(3) { graph.isRunning && graph.workingPlayer.isPlaying }
+        XCTAssertTrue(back, "the loop stayed silent after a restart whose first try failed")
+        XCTAssertEqual(graph.restarts, 1)
+        XCTAssertEqual(graph.failingStarts, 0)
+    }
+
+    /// Bug: a loop switched on while the graph could not start was forgotten.
+    func testALoopSwitchedOnWhileTheGraphCannotStartPlaysAtTheNextSound() throws {
+        let graph = VoiceAudioGraph(silent: true)
+        defer { graph.stop() }
+        let sounds = GeneratedVoiceSounds(graph: graph, volume: 0.25)
+        graph.failingStarts = 1
+        sounds.waiting(true)
+        XCTAssertFalse(graph.isRunning)
+        XCTAssertTrue(sounds.isWaiting, "the switch was dropped with the failed start")
+        sounds.earcon(.thinking)
+        XCTAssertTrue(graph.isRunning)
+        XCTAssertEqual(sounds.playingLoop, .waiting)
+        XCTAssertTrue(graph.workingPlayer.isPlaying)
+    }
+
+    /// Bug: resuming the loops started the graph again, even one its owner had stopped (the session
+    /// ended while the restart handler ran).
+    func testResumingTheLoopsNeverStartsAGraphItsOwnerStopped() {
+        let graph = VoiceAudioGraph(silent: true)
+        let sounds = GeneratedVoiceSounds(graph: graph, volume: 0.25)
+        sounds.waiting(true)
+        graph.stop()
+        sounds.resumeLoops()
+        XCTAssertFalse(graph.isRunning, "the stopped graph was started again")
+        sounds.waiting(false)
+    }
+
     func testAfterTheSystemStoppedTheEngineNoPlayerSaysItPlaysWhatItLost() async throws {
         let graph = VoiceAudioGraph(silent: true)
         defer { graph.stop() }

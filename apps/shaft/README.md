@@ -165,7 +165,8 @@ Voice mode asks for the microphone and speech recognition the first time it open
 on-device speech model of its language (English or Italian). A missing model is offered as Download on the voice
 screen, a system download that runs only on that tap. The Talk button shows for an instance whose `voice_mode` is `on`
 (its Settings → Voice). The fixture server's voice replies are scripted: a question containing "tool" runs two tools
-first (the working sound), one containing "long" gets a long answer (room for a barge-in), anything else a short one.
+first (the working sound), one containing "slow" thinks 4.5 s in silence first (the waiting sound), one containing
+"long" gets a long answer (room for a barge-in), anything else a short one.
 
 Debug builds take two test hooks from the environment (`Shared/Voice/VoiceSetup.swift`, read when a session starts):
 

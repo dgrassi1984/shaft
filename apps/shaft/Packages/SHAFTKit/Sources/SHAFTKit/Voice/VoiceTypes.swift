@@ -119,6 +119,8 @@ public enum VoiceAction: Sendable, Equatable {
     case stopSpeaking
     /// The working sound on or off.
     case workingSound(Bool)
+    /// The waiting sound on or off: a soft tick looping in the silence before the reply's first text.
+    case waitingSound(Bool)
     /// Lower the working sound while you talk (true), back to its volume after (false).
     case duckWorkingSound(Bool)
     /// Your live transcript, for the screen ("" clears it).
@@ -160,9 +162,11 @@ public protocol SpeechOutput: AnyObject, Sendable {
     func stopAll()
 }
 
-/// The soft looping "working" sound and the state earcons.
+/// The soft looping "working" sound, the "waiting" sound and the state earcons.
 public protocol VoiceSounds: AnyObject, Sendable {
     func working(_ on: Bool)
+    /// The waiting sound on or off. The working sound wins while both are on.
+    func waiting(_ on: Bool)
     func duckWorking(_ ducked: Bool)
     func setWorkingVolume(_ volume: Float)
     func earcon(_ state: VoiceState)

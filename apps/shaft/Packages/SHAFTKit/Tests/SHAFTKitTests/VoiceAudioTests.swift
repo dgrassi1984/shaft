@@ -252,6 +252,46 @@ final class VoiceAudioTests: XCTestCase {
         XCTAssertEqual(Double(loop.frameLength) / 48_000, GeneratedVoiceSounds.loopSeconds, accuracy: 0.001)
     }
 
+    func testTheWaitingLoopIsOneSoftTickThenQuietAndLoopsWithoutAClick() {
+        let rate = 48_000.0
+        let loop = GeneratedVoiceSounds.waitingLoop(sampleRate: rate)
+        let samples = Array(UnsafeBufferPointer(start: loop.floatChannelData![0], count: Int(loop.frameLength)))
+        XCTAssertEqual(Double(loop.frameLength) / rate, GeneratedVoiceSounds.waitingLoopSeconds, accuracy: 0.001)
+        let tick = samples.prefix(Int(0.12 * rate))
+        XCTAssertGreaterThan(tick.map(abs).max() ?? 0, 0.1, "the tick is inaudible")
+        XCTAssertLessThan(tick.map(abs).max() ?? 1, 0.6, "the tick is louder than meant")
+        XCTAssertEqual(samples.dropFirst(tick.count).map(abs).max() ?? 1, 0, "the rest of the loop is not quiet")
+        XCTAssertLessThan(abs(samples[0]), 0.01, "the tick starts with a click")
+        // Quieter at the player's volume than an earcon at full volume: it is a background sound.
+        let earcon = GeneratedVoiceSounds.earconBuffer(.thinking, sampleRate: rate)!
+        let earconPeak = UnsafeBufferPointer(start: earcon.floatChannelData![0], count: Int(earcon.frameLength))
+            .map(abs).max() ?? 0
+        XCTAssertLessThan((tick.map(abs).max() ?? 0) * VoiceTuning().workingVolume, earconPeak)
+    }
+
+    func testTheWorkingSoundWinsOverTheWaitingSoundInEitherOrder() throws {
+        let graph = VoiceAudioGraph(silent: true)
+        try graph.start()
+        defer { graph.stop() }
+        let sounds = GeneratedVoiceSounds(graph: graph)
+        sounds.waiting(true)
+        XCTAssertEqual(sounds.playingLoop, .waiting)
+        XCTAssertTrue(graph.workingPlayer.isPlaying)
+        sounds.working(true)                       // a tool starts, then the waiting sound is switched off
+        XCTAssertEqual(sounds.playingLoop, .working)
+        sounds.waiting(false)
+        XCTAssertEqual(sounds.playingLoop, .working, "switching the waiting sound off stopped the working sound")
+        XCTAssertTrue(graph.workingPlayer.isPlaying)
+        sounds.waiting(true)                       // on while the tool runs: the working sound keeps playing
+        XCTAssertEqual(sounds.playingLoop, .working)
+        sounds.working(false)                      // the tool ends: back to waiting
+        XCTAssertEqual(sounds.playingLoop, .waiting)
+        XCTAssertTrue(graph.workingPlayer.isPlaying)
+        sounds.waiting(false)
+        XCTAssertNil(sounds.playingLoop)
+        XCTAssertFalse(graph.workingPlayer.isPlaying)
+    }
+
     func testDuckLowersTheWorkingSoundTwelveDecibelsAndRestoresIt() throws {
         let graph = VoiceAudioGraph(silent: true)
         try graph.start()

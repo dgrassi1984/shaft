@@ -86,6 +86,11 @@ public final class VoiceAudioGraph: @unchecked Sendable {
     /// Restarts done after a configuration or route change, or an interruption's end (for tests and the log).
     private var restartCount = 0
     private var restartHandlers: [@Sendable () -> Void] = []
+    /// The system stopped the engine and the players were stopped for it, and the restart handlers have not run since:
+    /// kept across a start that failed, so the start that succeeds still runs them.
+    private var playersDropped = false
+    /// Tests: this many engine starts fail before one is tried for real.
+    var failingStarts = 0
     /// System notifications and restart handlers run here, one at a time and never on the thread that posted them or
     /// under the lock: a change can be posted while `start()` holds it.
     private let changes: OperationQueue = {
@@ -144,12 +149,12 @@ public final class VoiceAudioGraph: @unchecked Sendable {
             }
             engine.mainMixerNode.outputVolume = silent ? 0 : 1
             // Running and not paused by us, yet stopped: the system stopped it, and the players' audio is gone.
-            let dropped = running && !interrupted && stopDroppedPlayers()
+            if running && !interrupted && stopDroppedPlayers() { playersDropped = true }
             refreshMicrophoneTap()
             try startEngine()
             running = true
             interrupted = false
-            return dropped
+            return takeDropped()
         }
         if dropped { runRestartHandlers() }
     }
@@ -245,13 +250,13 @@ public final class VoiceAudioGraph: @unchecked Sendable {
                 do {
                     if resuming { try activateSession() }
                     // Paused by the graph (an interruption) or still running: the players' audio is kept.
-                    let dropped = !resuming && !engine.isRunning && stopDroppedPlayers()
+                    if !resuming && !engine.isRunning && stopDroppedPlayers() { playersDropped = true }
                     if engine.isRunning { engine.pause() }
                     refreshMicrophoneTap()
                     try startEngine()
                     interrupted = false
                     restartCount += 1
-                    return .success(dropped)
+                    return .success(takeDropped())
                 } catch {
                     return .failure(error)
                 }
@@ -276,6 +281,12 @@ public final class VoiceAudioGraph: @unchecked Sendable {
             any = true
         }
         return any
+    }
+
+    /// Under `lock`, after a start that succeeded: whether the restart handlers must run, cleared.
+    private func takeDropped() -> Bool {
+        defer { playersDropped = false }
+        return playersDropped
     }
 
     private func runRestartHandlers() {
@@ -316,12 +327,38 @@ public final class VoiceAudioGraph: @unchecked Sendable {
 
     /// Under `lock`.
     private func startEngine() throws {
+        if failingStarts > 0 {
+            failingStarts -= 1
+            throw VoiceAudioError.engineFailed("a start made to fail (test)")
+        }
+        connectMixerToOutput()
         engine.prepare()
         do {
             try engine.start()
         } catch {
             throw VoiceAudioError.engineFailed(error.localizedDescription)
         }
+    }
+
+    /// The format the main mixer feeds the output in: the microphone's sample rate, the output's channels (stereo when
+    /// the output tells none). Nil on a silent graph, or with no microphone to match.
+    func mixerOutputFormat() -> AVAudioFormat? {
+        guard !silent else { return nil }
+        let rate = engine.inputNode.outputFormat(forBus: 0).sampleRate
+        guard rate > 0 else { return nil }
+        let channels = engine.outputNode.inputFormat(forBus: 0).channelCount
+        return AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels > 0 ? channels : 2)
+    }
+
+    /// Under `lock`: the main mixer feeds the output at the microphone's sample rate. Voice processing needs both sides
+    /// at one rate, or the engine does not start (-10875, "client-side input and output formats do not match"). With
+    /// it on, the output node tells no format of its own, so a mixer left to connect itself falls back to 44.1 kHz
+    /// against a 48 kHz microphone. Done on every start, so a device that moved the rate (AirPods) is followed.
+    private func connectMixerToOutput() {
+        guard let format = mixerOutputFormat() else { return }
+        let current = engine.mainMixerNode.outputFormat(forBus: 0)
+        if current.sampleRate == format.sampleRate && current.channelCount == format.channelCount { return }
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
     }
 
     /// Listen for what the system does to the audio: the engine's configuration changes (both platforms), and on iOS
@@ -372,13 +409,10 @@ public final class VoiceAudioGraph: @unchecked Sendable {
 }
 
 extension VoiceAudioGraph {
-    /// After the system stopped the engine (a device change), the working sound loops on if it was on: its player
-    /// lost the loop with the engine, and VoiceTurn asks for the sound only when a tool starts.
+    /// After the system stopped the engine (a device change), the working or waiting sound loops on if it was on: its
+    /// player lost the loop with the engine, and VoiceTurn asks for each sound only when it starts.
     public func keepWorkingSound(_ sounds: GeneratedVoiceSounds) {
-        addRestartHandler { [weak sounds] in
-            guard let sounds, sounds.isWorking else { return }
-            sounds.working(true)
-        }
+        addRestartHandler { [weak sounds] in sounds?.resumeLoops() }
     }
 }
 

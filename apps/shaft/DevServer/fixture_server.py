@@ -437,6 +437,8 @@ class _VoiceAPI:
         yield chunk({"role": "assistant", "content": ""})
         yield chunk({"reasoning_content": "model · thinking\n"})
         yield event("status", phase="model", detail="thinking")
+        if "slow" in ask and self.closed.wait(4.5):      # a long think with nothing to say: the waiting sound
+            return
         if "tool" in ask:
             narration = "I will check the garden notes."
             yield event("draft", text=narration)

@@ -24,13 +24,16 @@ import Foundation
 ///   ignored: that turn's reply is still to come.
 /// - **Latency is measured once per turn you send**: from the moment the turn ended (the input that sent it) to the
 ///   first spoken word of the instance's own text after it. One turn, one reply: exactly once per reply.
-/// - **Fillers are for the silence before any text**: only while thinking and before the reply's first text (a
-///   narration counts: it already said what it is doing, and the working sound plays during its tools). The same
-///   line is never read twice in a row. A tool's name is read with spaces for underscores ("using web search").
-///   A status with a `detail` is read as "<name> is <detail>"; a waiting phase without one ("waiting: x is pausing
-///   its cycle for you (live)") as "<name> is pausing its cycle for you"; anything else as "<name> is thinking".
-///   In Italian the server's three waiting phrases are translated, and any other status is "<name> sta pensando", so
-///   the Italian voice never reads English.
+/// - **The silence before any text is filled with sound, and with words only when they say something**: only while
+///   thinking and before the reply's first text (a narration counts: it already said what it is doing, and the
+///   working sound plays during its tools). After `fillerS` of silence the soft waiting sound loops (`.waitingSound`)
+///   until anything else is heard: the reply's text, a status line, a tool's working sound, you talking, the reply's
+///   end. Nobody says "<name> is thinking". A status line is read only when it tells something: a status with a
+///   `detail` other than "thinking" as "<name> is <detail>"; a waiting phase without one ("waiting: x is pausing its
+///   cycle for you (live)") as "<name> is pausing its cycle for you"; a tool running longer than three `fillerS` as
+///   "<name> is using web search" (spaces for underscores). The same line is never read twice in a row. In Italian
+///   the server's three waiting phrases are translated and any other status is not read, so the Italian voice never
+///   reads English.
 /// - **Muting while you talk drops what you were saying**: nothing is sent.
 public struct VoiceTurn: Sendable {
     /// What the screen shows.
@@ -49,6 +52,8 @@ public struct VoiceTurn: Sendable {
     private var queued: Set<Int> = []
     private var statusIds: Set<Int> = []
     private var working = false
+    /// The waiting sound plays (the silence before the reply's first text).
+    private var waiting = false
     private var ducked = false
     private var shown = ""
 
@@ -78,7 +83,7 @@ public struct VoiceTurn: Sendable {
     private var lastFillerText: String?
 
     /// - Parameters:
-    ///   - instanceName: as spoken in status lines ("Tundra is thinking").
+    ///   - instanceName: as spoken in status lines ("Tundra is using web search").
     ///   - chunker: makes a fresh sentence chunker; one is used per step of the reply.
     public init(tuning: VoiceTuning, language: VoiceLanguage, instanceName: String,
                 chunker: @escaping @Sendable () -> any SpeechChunking) {
@@ -104,10 +109,13 @@ public struct VoiceTurn: Sendable {
                 working = false
                 out.append(.workingSound(false))
             }
+            stopWaiting()
             setState(.ended)
         default:
             guard state != .idle else { return [] }
             step(input)
+            // Only the clock turns the waiting sound on; anything may turn it off.
+            if case .tick(let at) = input { syncWaiting(at: at) } else { syncWaiting(at: nil) }
         }
         return out
     }
@@ -496,8 +504,8 @@ public struct VoiceTurn: Sendable {
             guard at - reply.toolStartedAt >= tuning.fillerS * 3 else { return }
             line = toolLine(reply.tool)
         } else {
-            guard at - quietSince >= tuning.fillerS else { return }
-            line = statusLine()
+            guard at - quietSince >= tuning.fillerS, let status = statusLine() else { return }
+            line = status
         }
         guard line != lastFillerText else { return }
         lastFillerAt = at
@@ -513,10 +521,11 @@ public struct VoiceTurn: Sendable {
         }
     }
 
-    private func statusLine() -> String {
-        let thinking = language == .en ? "\(instanceName) is thinking" : "\(instanceName) sta pensando"
-        guard reply.running, reply.hasStatus else { return thinking }      // never a past reply's status
+    /// The status worth reading now, or nil: a status that only says it is thinking is left to the waiting sound.
+    private func statusLine() -> String? {
+        guard reply.running, reply.hasStatus else { return nil }      // never a past reply's status
         let detail = reply.detail.trimmingCharacters(in: .whitespaces)
+        guard !Self.saysOnlyThinking(detail) else { return nil }
         var what = detail
         if what.isEmpty, reply.phase.lowercased().hasPrefix("waiting:"),
            let range = reply.phase.range(of: " is ") {
@@ -526,7 +535,7 @@ public struct VoiceTurn: Sendable {
             }
             what = what.trimmingCharacters(in: .whitespaces)
         }
-        guard !what.isEmpty else { return thinking }
+        guard !what.isEmpty else { return nil }
         switch language {
         case .en:
             return "\(instanceName) is \(what)"
@@ -535,14 +544,39 @@ public struct VoiceTurn: Sendable {
             case "pausing its cycle for you": return "\(instanceName) sta mettendo in pausa il suo ciclo per te"
             case "finishing a run": return "\(instanceName) sta finendo un'esecuzione"
             case "in another conversation": return "\(instanceName) è in un'altra conversazione"
-            default: return thinking
+            default: return nil
             }
         }
+    }
+
+    /// "thinking", "Thinking…": a status that tells nothing the waiting sound does not.
+    static func saysOnlyThinking(_ detail: String) -> Bool {
+        let word = detail.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .…"))
+        return word == "thinking" || word == "pensando"
+    }
+
+    /// The waiting sound plays while the reply you wait for is silent: thinking, nothing of it heard yet, no working
+    /// sound, nothing queued to speak, and `fillerS` gone since the silence began. `at` nil (any input but a tick):
+    /// it can only stop.
+    private mutating func syncWaiting(at: TimeInterval?) {
+        let quiet = tuning.workingSound && state == .thinking && replyOpen && !textSinceSend && !working
+            && queued.isEmpty
+        let on = quiet && (waiting || (at.map { $0 - quietSince >= tuning.fillerS } ?? false))
+        guard on != waiting else { return }
+        waiting = on
+        out.append(.waitingSound(on))
+    }
+
+    private mutating func stopWaiting() {
+        guard waiting else { return }
+        waiting = false
+        out.append(.waitingSound(false))
     }
 
     // MARK: - Small helpers
 
     private mutating func speak(_ sentences: [String], status: Bool) {
+        if sentences.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { stopWaiting() }
         for sentence in sentences {
             let text = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }

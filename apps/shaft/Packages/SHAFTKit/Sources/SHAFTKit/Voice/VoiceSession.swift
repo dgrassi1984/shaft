@@ -119,6 +119,7 @@ public final class VoiceSession {
         await transcriber.stop()
         speech.stopAll()
         sounds.working(false)
+        sounds.waiting(false)
         graph?.stop()
     }
 
@@ -155,6 +156,8 @@ public final class VoiceSession {
                 speech.stopAll()
             case .workingSound(let on):
                 sounds.working(on)
+            case .waitingSound(let on):
+                sounds.waiting(on)
             case .duckWorkingSound(let on):
                 sounds.duckWorking(on)
             case .showTranscript(let text):
