@@ -4,10 +4,15 @@ import SHAFTKit
 import SwiftUI
 
 /// Choose and preview this device's voices. Only an explicit Preview tap produces audio.
+///
+/// `embedded`: shown inside another screen (the voice screen's first-time choice) rather than as its own sheet: no
+/// navigation bar, title or Done of its own, and choosing never dismisses — `dismiss` there is the voice screen's
+/// own, and closed voice mode as the voice was chosen (M3, iPhone Simulator). The host acts on `onChosen`.
 struct VoicePicker: View {
     let client: APIClient
     let instance: String
     let language: VoiceLanguage
+    var embedded = false
     var onChosen: (VoicesResponse) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var installed: [VoicesResponse.AvailableVoice] = []
@@ -19,7 +24,27 @@ struct VoicePicker: View {
     @State private var preview = VoicePreview()
 
     var body: some View {
-        NavigationStack {
+        Group {
+            if embedded {
+                list
+            } else {
+                NavigationStack {
+                    list
+                        .navigationTitle("Choose a voice for \(instance)")
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+                }
+            }
+        }
+        .task {
+            installed = InstalledVoices.report().filter {
+                $0.language.lowercased() == language.rawValue || $0.language.lowercased().hasPrefix(language.rawValue + "-")
+            }
+            await load()
+        }
+        .onDisappear { preview.stop() }
+    }
+
+    private var list: some View {
             List {
                 if let loadError {
                     Text(loadError).foregroundStyle(Color.warning)
@@ -73,18 +98,8 @@ struct VoicePicker: View {
                 }
             }
             .buttonStyle(.borderless)
-            .navigationTitle("Choose a voice for \(instance)")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .scrollContentBackground(.hidden)
             .background(Color.canvas)
-        }
-        .task {
-            installed = InstalledVoices.report().filter {
-                $0.language.lowercased() == language.rawValue || $0.language.lowercased().hasPrefix(language.rawValue + "-")
-            }
-            await load()
-        }
-        .onDisappear { preview.stop() }
     }
 
     private func load() async {
@@ -105,7 +120,7 @@ struct VoicePicker: View {
             do {
                 let answer = try await client.setVoice(instance, language: language.rawValue, identifier: voice.identifier)
                 onChosen(answer)
-                dismiss()
+                if !embedded { dismiss() }
             } catch { errors[voice.identifier] = APIError.from(error)?.message }
         }
     }

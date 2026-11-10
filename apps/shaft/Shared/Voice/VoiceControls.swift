@@ -363,7 +363,7 @@ struct VoiceChooseStep: View {
                 .font(.footnote)
                 .foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            VoicePicker(client: model.client, instance: model.instance, language: model.language,
+            VoicePicker(client: model.client, instance: model.instance, language: model.language, embedded: true,
                         onChosen: { answer in Task { await model.voiceChosen(answer) } })
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             HStack(spacing: Design.Space.s12) {

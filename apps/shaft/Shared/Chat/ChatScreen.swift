@@ -18,6 +18,9 @@ struct ChatScreen: View {
     @Environment(\.chatInFront) private var inFront
     @Environment(\.chatCovered) private var externallyCovered
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
     /// or on a phone, this screen presents them as a sheet.
     @Environment(ChatShell.self) private var shell: ChatShell?
@@ -58,6 +61,15 @@ struct ChatScreen: View {
     /// Talk: voice mode is on for the instance (its row's `voiceMode`), and this is its current chat.
     private var canTalk: Bool {
         chat.cid == nil && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
+    }
+    /// On an iPhone's width, five header buttons left no room for the instance's name (M3, iPhone Simulator): with Talk
+    /// shown, Cycles moves into ⋯.
+    private var cyclesInMenu: Bool {
+        #if os(iOS)
+        canTalk && sizeClass == .compact
+        #else
+        false
+        #endif
     }
     private var covers: Bool { shell?.documentsCover ?? true }
     private var sheetsDocuments: Bool { shell?.sheetsDocuments ?? true }
@@ -306,8 +318,10 @@ struct ChatScreen: View {
         }
         Button { screen.togglePanel(.documents) } label: { Image(systemName: "doc.text") }
             .accessibilityLabel("Documents")
-        Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
-            .accessibilityLabel("Cycles")
+        if !cyclesInMenu {
+            Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
+                .accessibilityLabel("Cycles")
+        }
         if chat.cid == nil {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                 .disabled(chat.content?.canClear != true)
@@ -324,6 +338,9 @@ struct ChatScreen: View {
                 Button { screen.showInstanceSettings = true } label: {
                     Label("Settings for \(chat.instance)", systemImage: "gearshape")
                 }
+            }
+            if cyclesInMenu {
+                Button { screen.togglePanel(.cycles) } label: { Label("Cycles", systemImage: "clock.arrow.circlepath") }
             }
             Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
             if chat.content?.canStop == true {
