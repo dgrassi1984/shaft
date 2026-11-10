@@ -321,6 +321,13 @@ class Account:
     def post(self, url: str, body: dict, **params) -> dict:
         return self._request("POST", url, body, **params)
 
+    def upload(self, method: str, url: str, body: bytes, content_type: str, **params) -> dict:
+        """POST or PUT raw upload bytes through the normal authentication and retry path."""
+        if method not in ("POST", "PUT"):
+            raise ValueError("uploads require POST or PUT")
+        return self._response(method, url, body, json.load, 30,
+                              headers={"Content-Type": content_type}, **params)
+
     def patch(self, url: str, body: dict, *, etag: str = "", **params) -> dict:
         return self._request("PATCH", url, body, headers={"If-Match": etag} if etag else {}, **params)
 
@@ -348,7 +355,8 @@ class Account:
         refreshed, waited, attempt = False, 0.0, 0
         while True:
             req = urllib.request.Request(url + (f"?{query}" if query else ""),
-                                         data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         data=body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None,
+                                         method=method,
                                          headers={"Authorization": f"Bearer {self.token()}",
                                                   "Content-Type": "application/json", **(headers or {})})
             try:

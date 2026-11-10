@@ -5,8 +5,8 @@ holds one. The account and its token are google.py's (.supervisor/google/<alias>
 module enforces the label itself, on every call: the search filters on the label's ID (labelIds, never by
 editing the search text), and every thread it returns, reads or downloads from is checked again for the label before
 anything of it is shown. A thread is visible while any of its messages carries the label — then all its messages
-are, later replies included — leaving out drafts, trashed and spam messages. Read-only: nothing here modifies the
-mailbox (the scope could not).
+are, later replies included — leaving out drafts, trashed and spam messages. Draft writes require a separate grant.
+Drafts are never sent.
 
 google.urlopen is the one door to Google; the tests put a fake Gmail behind it.
 """
@@ -15,10 +15,14 @@ from __future__ import annotations
 import base64
 import html
 import json
+import mimetypes
 import re
+import urllib.parse
+import uuid
 from datetime import datetime
 from email.header import decode_header, make_header
-from email.message import Message
+from email.message import Message, EmailMessage
+from email.policy import SMTP
 from email.utils import getaddresses
 
 from . import google
@@ -338,3 +342,80 @@ def attachment_bytes(acct: google.Account, msg: dict, att: dict) -> bytes:
     if len(data) > FILE_MAX:
         raise ValueError(f"{att['name']} is {size_text(len(data))}, more than {size_text(FILE_MAX)} per file")
     return data
+
+
+# -- drafts: never sent ----------------------------------------------------------
+def reply_defaults(msgs: list[dict], operator_addresses: set[str]) -> dict:
+    """Reply headers from visible messages only. An operator follow-up keeps its recipients."""
+    last = msgs[-1]
+    own = {a.casefold() for a in operator_addresses}
+    if any(a.casefold() in own for _, a in getaddresses([header(last, "from")])):
+        to, cc = header(last, "to"), header(last, "cc")
+    else:
+        to, cc = header(last, "reply-to") or header(last, "from"), ""
+    subject = header(msgs[0], "subject")
+    mid = header(last, "message-id")
+    return {"to": [to] if to else [], "cc": [cc] if cc else [],
+            "subject": subject if subject.lower().startswith("re:") else "Re: " + subject,
+            "in_reply_to": mid, "references": " ".join(filter(None, [header(last, "references"), mid]))}
+
+
+def build_message(address: str, to: list[str], cc: list[str], bcc: list[str], subject: str, body: str,
+                  attachments: list[tuple[str, bytes]], in_reply_to: str = "", references: str = "") -> bytes:
+    """Build an RFC 2822 message, rejecting header injection and malformed recipients."""
+    values = [address, subject, in_reply_to, references]
+    for recipients in (to, cc, bcc):
+        if not isinstance(recipients, list) or not all(isinstance(a, str) for a in recipients):
+            raise ValueError("recipients must be arrays of addresses")
+        values.extend(recipients)
+    values.extend(name for name, _ in attachments)
+    if any(not isinstance(v, str) or "\r" in v or "\n" in v for v in values):
+        raise ValueError("header values must be strings without CR or LF")
+    recipients = getaddresses(to + cc + bcc)
+    if not recipients or any("@" not in a for _, a in recipients):
+        raise ValueError("at least one recipient is required; each recipient needs an @")
+    msg = EmailMessage(policy=SMTP)
+    msg["From"], msg["Subject"] = address, subject
+    for key, addresses in (("To", to), ("Cc", cc), ("Bcc", bcc)):
+        if addresses:
+            msg[key] = ", ".join(addresses)
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+    msg.set_content(body)
+    for name, data in attachments:
+        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        main, sub = mime.split("/", 1)
+        msg.add_attachment(data, maintype=main, subtype=sub, filename=name)
+    return msg.as_bytes()
+
+
+def _draft_upload(acct, method, draft_id, raw, thread_id):
+    boundary = "shaft-" + uuid.uuid4().hex
+    metadata = {"message": {"threadId": thread_id} if thread_id else {}}
+    data = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()
+            + json.dumps(metadata).encode()
+            + f"\r\n--{boundary}\r\nContent-Type: message/rfc822\r\n\r\n".encode()
+            + raw + f"\r\n--{boundary}--\r\n".encode())
+    url = "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts"
+    if draft_id:
+        url += "/" + urllib.parse.quote(draft_id, safe="")
+    return acct.upload(method, url, data, f"multipart/related; boundary={boundary}", uploadType="multipart")
+
+
+def create_draft(acct: google.Account, raw: bytes, thread_id: str | None) -> dict:
+    return _draft_upload(acct, "POST", "", raw, thread_id)
+
+
+def update_draft(acct: google.Account, draft_id: str, raw: bytes, thread_id: str | None) -> dict:
+    return _draft_upload(acct, "PUT", draft_id, raw, thread_id)
+
+
+def draft_message_id(acct: google.Account, draft_id: str) -> str | None:
+    try:
+        return _get(acct, "drafts/" + urllib.parse.quote(draft_id, safe=""), format="minimal")["message"]["id"]
+    except google.ApiError as e:
+        if e.status == 404:
+            return None
+        raise
