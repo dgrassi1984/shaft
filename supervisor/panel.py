@@ -236,7 +236,7 @@ def instance_detail(name: str) -> dict:
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
             "tools_off": sorted(disabled_tools(name)),
             "shared": str(shared_folder(name) or ""),
-            "mail": ", ".join(f"{g['account']}/{g['label']}" for g in mail_grants(name)),
+            "mail": ", ".join(f"{g['account']}/{g['label']}" + (" [drafts]" if g.get("draft") else "") for g in mail_grants(name)),
             "gchat": ", ".join(g["account"] for g in gchat_grants(name)),
             "gdrive": ", ".join(f"{g['account']} ({g['reach']})" for g in gdrive_grants(name)),
             "calendar": "; ".join(f"{g['account']}/{g['name']}" for g in calendar_grants(name)),

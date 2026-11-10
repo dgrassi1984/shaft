@@ -368,7 +368,9 @@ def cmd_status(names: list[str]) -> int:
                   f"(shaft share {name} off)")
         from .core import calendar_grants, gdrive_grants, gchat_grants, mail_grants
         if (grants := mail_grants(name)):
-            print(f"  mail        {', '.join(g['account'] + '/' + g['label'] for g in grants)} (shaft mail {name} off)")
+            labels = ", ".join(g["account"] + "/" + g["label"] + (" [drafts]" if g.get("draft") else "")
+                               for g in grants)
+            print(f"  mail        {labels} (shaft mail {name} off)")
         if (grants := gdrive_grants(name)):
             print(f"  gdrive      {', '.join(g['account'] + ' (' + g['reach'] + ')' for g in grants)} (shaft gdrive {name} off)")
         if (grants := gchat_grants(name)):
@@ -632,7 +634,11 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
             "operator")
         print(f"logged in: Google account {alias} is {saved['address']} (mail, calendar, Drive and Chat; client {saved['client']}). "
               f"Granted: {got}.")
-        missing = [google.SCOPE_NAMES[s] for s in google.SCOPES if s not in google.scopes(saved)]
+        missing = [google.SCOPE_NAMES[s] for s in google.SCOPES
+                   if s != google.GMAIL_COMPOSE and s not in google.scopes(saved)]
+        if google.GMAIL_COMPOSE not in google.scopes(saved):
+            print("Drafting needs Log in again. " + google.missing_scope_message(alias, saved, google.GMAIL_COMPOSE),
+                  file=sys.stderr)
         if missing:
             print(f"NOT granted: {', '.join(missing)} (unticked on Google's consent page, or not on the app's Data "
                   f"Access list): the tools that need it refuse, naming this login. To add it, run this login again "
@@ -664,7 +670,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
 
 
 def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
-    """The operator's Gmail an instance may read, one label at a time: grant, revoke, show. The
+    """Grant or revoke label reads and optional drafts, never sending. The
     accounts are `shaft google`'s. The grant is read on every mail call, so a revoke takes effect on the instance's
     next call."""
     from . import google, mail
@@ -672,7 +678,9 @@ def cmd_mail(target: str | None, action: str | None, alias: str | None, label: s
 
     def show(name: str) -> None:
         grants = mail_grants(name)
-        print(f"{name} may read: " + (", ".join(f"{g['account']}/{g['label']}" for g in grants) if grants else "no mail"))
+        labels = ", ".join(f"{g['account']}/{g['label']}" + (" [drafts]" if g.get("draft") else "")
+                           for g in grants)
+        print(f"{name} may read: " + (labels or "no mail"))
 
     if not target:
         accts = google.accounts()
@@ -693,27 +701,37 @@ def cmd_mail(target: str | None, action: str | None, alias: str | None, label: s
     elif not (alias and label):
         print(f"usage: shaft mail {target} {action} <alias> <label>", file=sys.stderr)
         return 2
-    elif action == "grant":
-        if not google.account(alias):
+    elif action in ("grant", "grant-draft"):
+        saved = google.account(alias)
+        if not saved:
             known = ", ".join(google.accounts()) or "none"
             print(f"no Google account {alias!r} (logged in: {known}); first: shaft google login {alias} <address>",
                   file=sys.stderr)
             return 2
         try:   # the label must exist in that account now
+            if action == "grant-draft" and google.GMAIL_COMPOSE not in google.scopes(saved):
+                raise google.AccountError(google.missing_scope_message(alias, saved, google.GMAIL_COMPOSE))
             mail.label_id(google.Account(alias, secrets_env()).require(google.GMAIL), label)
         except (google.AccountError, google.ApiError) as e:
             print(f"not granted: {e}", file=sys.stderr)
             return 2
-        set_mail_grants(target, grants + [{"account": alias, "label": label}])
-        log(f"{target}: mail grant {alias}/{label} added by the operator")
-    else:   # revoke
-        rest = [g for g in grants if g != {"account": alias, "label": label}]
-        if rest == grants:
+        prior = next((g for g in grants if (g["account"], g["label"]) == (alias, label)), {})
+        grant = {"account": alias, "label": label}
+        if action == "grant-draft" or prior.get("draft"):
+            grant["draft"] = True
+        set_mail_grants(target, grants + [grant])
+        log(f"{target}: mail {action} {alias}/{label} added by the operator")
+    else:   # revoke-draft leaves the read grant; neither revoke contacts Google.
+        hits = [g for g in grants if (g["account"], g["label"]) == (alias, label)]
+        if not hits or (action == "revoke-draft" and not any(g.get("draft") for g in hits)):
             print(f"{target} has no grant {alias}/{label}", file=sys.stderr)
             show(target)
             return 1
+        rest = [g for g in grants if g not in hits]
+        if action == "revoke-draft":
+            rest += [{k: v for k, v in g.items() if k != "draft"} for g in hits]
         set_mail_grants(target, rest)
-        log(f"{target}: mail grant {alias}/{label} revoked by the operator")
+        log(f"{target}: mail {action} {alias}/{label} revoked by the operator")
     show(target)
     print(f"(from {target}'s next mail call; the prompt line changes from its next run)")
     return 0
@@ -1567,10 +1585,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--client", default="", help="with login: the OAuth client (GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env); "
                                                 "default: the alias. One per Google organisation: personal Google needs its own")
     p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: "
-                                    "'<name> grant|revoke <alias> <label>', '<name> off', '<name>' shows; alone lists all "
+                                    "'<name> grant|revoke|grant-draft|revoke-draft <alias> <label>', "
+                                    "'<name> off', '<name>' shows; alone lists all "
                                     "(accounts: shaft google)")
     p.add_argument("target", nargs="?", help="an instance")
-    p.add_argument("action", nargs="?", help="grant, revoke, off")
+    p.add_argument("action", nargs="?", help="grant, revoke, grant-draft, revoke-draft, off")
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("label", nargs="?", help="the Gmail label")
     p = sub.add_parser("gdrive", help="your Drive an instance may read: '<name> grant <alias> [--all]', "
@@ -1780,8 +1799,8 @@ def main(argv: list[str]) -> int:
         if args.target == "login":   # one login for every Google service
             print("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", file=sys.stderr)
             return 2
-        if args.target and args.action not in (None, "grant", "revoke", "off"):
-            print(f"unknown mail action {args.action!r}: grant, revoke or off", file=sys.stderr)
+        if args.target and args.action not in (None, "grant", "revoke", "grant-draft", "revoke-draft", "off"):
+            print(f"unknown mail action {args.action!r}: grant, revoke, grant-draft, revoke-draft or off", file=sys.stderr)
             return 2
         return cmd_mail(args.target, args.action, args.alias, args.label)
     if args.cmd == "gchat":
