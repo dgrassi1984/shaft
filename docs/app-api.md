@@ -1040,10 +1040,10 @@ plugin grants or global settings.
 | POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
-| GET | `/services` | 200, `{"services": [<api>, <scheduler>]}` |
-| POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>]}` |
-| POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>]}` |
-| POST | `/services/scheduler/cancel` | 200, `{"services": [<api>, <scheduler>]}` |
+| GET | `/services` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
+| POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
+| POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
+| POST | `/services/scheduler/cancel` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 
 ### 15.1 Settings
 
@@ -1095,8 +1095,10 @@ Their bodies may be empty.
 ### 15.2 Services
 
 Each service has `name: str`, `running: bool`, `pid: int or null`, `started: str or null`, `commit: str or null`,
-and `busy: str`. The service record supplies its process and version fields, with timestamps as in §1.6. `busy`
-is `actions.service_guard(name, "restart")` verbatim, empty when free. API replies hold the run lock and are included.
+`version: str or null`, and `busy: str`. The row's `version` is the service record's git describe, null when the service
+is not running or has no record. The top-level `version: str` is the version of the web service serving `/app/v1`.
+It is `"unknown — restart to record"` when that service has no record.
+The service record supplies its process and version fields, with timestamps as in §1.6. `busy` is `actions.service_guard(name, "restart")` verbatim, empty when free. API replies hold the run lock and are included.
 Only the scheduler also has `drain`, either null or `{"state": str, "waiting": [str], "deadline": str or null}`.
 A pending restart request appears as `draining` before the first drain tick only when its PID matches the running scheduler. Leftover requests for dead processes are ignored.
 

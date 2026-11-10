@@ -921,6 +921,7 @@ def _services() -> list[dict]:
         rec = version.service(name, stale=False)
         row = {"name": name, "running": bool(rec), "pid": rec.get("pid") if rec else None,
                "started": stamp(rec.get("started")) if rec else None, "commit": rec.get("commit") if rec else None,
+               "version": version.service_version(rec) if rec else None,
                "busy": actions.service_guard(name, "restart")}
         if name == "scheduler":
             drain = autonomy.drain_status()
@@ -934,8 +935,14 @@ def _services() -> list[dict]:
     return rows
 
 
+def _services_response() -> Response:
+    from . import version
+    return _json(200, {"services": _services(),
+                       "version": version.service_version(version.service("web", stale=False))})
+
+
 def _get_services(req: Request) -> Response:
-    return _json(200, {"services": _services()})
+    return _services_response()
 
 
 def _service_action(req: Request, service: str, act: str) -> Response:
@@ -952,7 +959,7 @@ def _service_action(req: Request, service: str, act: str) -> Response:
             args, timeout = ["api", "on"], actions.SLOW_S
         else:
             if act == "restart" and (_pending_drain() or autonomy.draining_now()):
-                return _json(200, {"services": _services()})
+                return _services_response()
             args = ["autonomy", "restart"] + (["--cancel"] if act == "cancel" else [])
             timeout = actions.RUN_NOW_S
         ok, said = actions.run_now(args, timeout, who=who)
@@ -960,7 +967,7 @@ def _service_action(req: Request, service: str, act: str) -> Response:
         lock.release()
     if not ok:
         raise Refusal(409, "refused", said)
-    return _json(200, {"services": _services()})
+    return _services_response()
 
 
 ROUTES: list[tuple[str, dict]] = [

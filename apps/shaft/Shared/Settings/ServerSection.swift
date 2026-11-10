@@ -47,6 +47,9 @@ struct ServerSection: View {
             if let started = service.started {
                 Text("Started \(Stamp.full(started))").font(.footnote).foregroundStyle(Color.textSecondary)
             }
+            if let version = service.version {
+                Text("Version \(version)").font(.footnote).foregroundStyle(Color.textSecondary)
+            }
             if service.name == "api", !service.busy.isEmpty {
                 Text(service.busy).font(.footnote).foregroundStyle(Color.textSecondary)
             }

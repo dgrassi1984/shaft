@@ -291,18 +291,28 @@ class SettingsTest(AppTest):
                     self.assertEqual(command.call_count, 1)
 
     def test_services_only_project_allowed_record_fields(self):
-        rec = {"pid": 123, "started": "2026-11-05T10:00:00", "commit": "abc", "settings": {"key": self.fake}}
+        rec = {"pid": 123, "started": "2026-11-05T10:00:00", "commit": "abc", "describe": "v0.43.0", "settings": {"key": self.fake}}
         drain = {"state": "draining", "waiting": ["wisp live"], "deadline": 1793876400, "secret": self.fake}
-        with mock.patch.object(version, "service", side_effect=lambda n, **kw: rec if n == "api" else None), \
+        with mock.patch.object(version, "service", side_effect=lambda n, **kw: {"api": rec, "web": {"describe": "v0.44.0"}}.get(n)), \
                 mock.patch.object(autonomy, "drain_status", return_value=drain):
             r = self.api("/app/v1/services")
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(json.loads(r.body), {"services": [
             {"name": "api", "running": True, "pid": 123, "started": app_api.stamp(rec["started"]),
-             "commit": "abc", "busy": ""},
-            {"name": "scheduler", "running": False, "pid": None, "started": None, "commit": None, "busy": "",
-             "drain": {"state": "draining", "waiting": ["wisp live"], "deadline": app_api.stamp(1793876400)}}]})
+             "commit": "abc", "version": "v0.43.0", "busy": ""},
+            {"name": "scheduler", "running": False, "pid": None, "started": None, "commit": None, "version": None, "busy": "",
+             "drain": {"state": "draining", "waiting": ["wisp live"], "deadline": app_api.stamp(1793876400)}}], "version": "v0.44.0"})
         self.assertNotIn(self.fake.encode(), r.body)
+
+    def test_services_responses_include_server_version(self):
+        for rec, expected in (({"describe": "v0.44.0"}, "v0.44.0"), (None, "unknown — restart to record")):
+            with mock.patch.object(version, "service", side_effect=lambda n, **kw: rec if n == "web" else None):
+                for path, method in (("", "GET"), ("/api/restart", "POST"),
+                                     ("/scheduler/restart", "POST"), ("/scheduler/cancel", "POST")):
+                    with self.subTest(path=path, record=rec):
+                        r = self.api("/app/v1/services" + path, method)
+                        self.assertEqual(r.status, 200, r.body)
+                        self.assertEqual(json.loads(r.body)["version"], expected)
 
     def test_service_restart_and_cancel_use_existing_commands_and_timeouts(self):
         for path, args, timeout in (("api/restart", ["api", "on"], actions.SLOW_S),
@@ -341,11 +351,12 @@ class SettingsTest(AppTest):
     def test_repeated_drain_is_not_requested_again_even_before_first_tick(self):
         req = {"pid": 123, "at": 10, "deadline": 100}
         for record in (None, {**req, "state": "draining", "waiting": ["wisp live"]}):
-            with mock.patch.object(version, "service", return_value={"pid": 123}), \
+            with mock.patch.object(version, "service", return_value={"pid": 123, "describe": "v0.44.0"}), \
                     mock.patch.object(autonomy, "restart_request", return_value=req), \
                     mock.patch.object(autonomy, "drain_status", return_value=record):
                 r = self.api("/app/v1/services/scheduler/restart", "POST")
                 self.assertEqual(r.status, 200, r.body)
+                self.assertEqual(json.loads(r.body)["version"], "v0.44.0")
                 drain = json.loads(r.body)["services"][1]["drain"]
                 self.assertEqual(drain["state"], "draining")
                 self.assertEqual(drain["deadline"], app_api.stamp(100))

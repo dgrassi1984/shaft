@@ -15,7 +15,7 @@ private let settingsExample = #"""
 """#
 
 private func serviceExample(pid: Int = 123, running: Bool = true, drain: String = "null") -> String {
-    #"{"services":[{"name":"api","running":\#(running),"pid":\#(pid),"started":"2026-11-05T10:00:00+01:00","commit":"abc","busy":""},{"name":"scheduler","running":true,"pid":\#(pid),"started":null,"commit":null,"busy":"","drain":\#(drain)}]}"#
+    #"{"version":"v0.44.0","services":[{"name":"api","running":\#(running),"pid":\#(pid),"started":"2026-11-05T10:00:00+01:00","commit":"abc","version":"v0.43.0","busy":""},{"name":"scheduler","running":true,"pid":\#(pid),"started":null,"commit":null,"busy":"","drain":\#(drain)}]}"#
 }
 
 private let pendingDrain = #"{"state":"draining","waiting":["wisp is replying"],"deadline":"2026-11-05T11:00:00+01:00"}"#
@@ -256,6 +256,24 @@ struct SettingsTests {
         await owner.services.load()
         #expect(!settings.unsupported && settings.loadError == nil)
         #expect(!owner.services.unsupported && owner.services.loadError == nil)
+    }
+
+    @Test func servicesLoadExposesServerAndServiceVersions() async {
+        let server = StubServer { _ in .json(200, serviceExample()) }
+        let store = ServicesStore(client: server.client)
+        await store.load()
+        #expect(store.serverVersion == "v0.44.0")
+        #expect(store.services.first?.version == "v0.43.0")
+        #expect(store.services.last?.version == nil)
+    }
+
+    @Test func servicesWithoutVersionsStillDecode() throws {
+        let old = serviceExample()
+            .replacingOccurrences(of: #""version":"v0.44.0","#, with: "")
+            .replacingOccurrences(of: #""version":"v0.43.0","#, with: "")
+        let answer = try SHAFTJSON.decoder().decode(ServicesResponse.self, from: Data(old.utf8))
+        #expect(answer.version == nil)
+        #expect(answer.services.allSatisfy { $0.version == nil })
     }
 
     @Test func nullIsSentExplicitlyAndPauseAndRestartCarryLongerTimeouts() async throws {

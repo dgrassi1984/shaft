@@ -113,6 +113,7 @@ public struct SettingSave: Codable, Sendable, Equatable {
 
 public struct ServicesResponse: Codable, Sendable, Equatable {
     public var services: [ServiceStatus]
+    public var version: String?
 }
 
 public struct ServiceStatus: Codable, Sendable, Equatable {
@@ -121,6 +122,7 @@ public struct ServiceStatus: Codable, Sendable, Equatable {
     public var pid: Int?
     public var started: Date?
     public var commit: String?
+    public var version: String?
     public var busy: String
     public var drain: ServiceDrain?
 }

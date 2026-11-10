@@ -88,6 +88,7 @@ public final class InstanceSettingsStore {
 @MainActor
 public final class ServicesStore {
     public private(set) var services: [ServiceStatus] = []
+    public private(set) var serverVersion: String?
     public private(set) var loadError: APIError?
     public private(set) var unsupported = false
     public private(set) var restarting: Set<String> = []
@@ -209,6 +210,7 @@ public final class ServicesStore {
 
     private func apply(_ answer: ServicesResponse) {
         services = answer.services
+        serverVersion = answer.version
         loadError = nil
         unsupported = false
     }

@@ -155,6 +155,9 @@ struct SettingsView: View {
                     Section("Server") {
                         LabeledContent("Address", value: credential.baseURL.absoluteString)
                         LabeledContent("Tailnet login", value: credential.login)
+                        if let version = session.store?.services.serverVersion {
+                            LabeledContent("Version", value: version)
+                        }
                     }
                     .listRowBackground(Color.elevated)
                     Section("This device") {

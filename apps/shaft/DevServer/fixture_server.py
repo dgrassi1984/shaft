@@ -226,7 +226,7 @@ def _write_json(path: Path, value: dict) -> None:
 
 def _service_record(base: Path, name: str, pid: int) -> None:
     _write_json(base / "sup" / "services" / f"{name}.json",
-                {"pid": pid, "started": datetime.now().isoformat(), "commit": "fixture", "fixture": True,
+                {"pid": pid, "started": datetime.now().isoformat(), "commit": "fixture", "describe": "fixture", "fixture": True,
                  "settings": {"drain": True} if name == "scheduler" else {}})
 
 
@@ -774,6 +774,8 @@ def main() -> int:
             time.sleep(a.slow_seen)
             return real_seen(*args, **kwargs)
         web_seen.seen = slow_seen
+    from supervisor.version import record_service
+    record_service("web", {"port": a.port})             # as web.serve does: the version the app's Settings shows
     server = ThreadingHTTPServer(("127.0.0.1", a.port), web.Handler)
     server.daemon_threads = True
     print(f"SHAFT fixture server on http://127.0.0.1:{a.port} over {a.dir.resolve()}", flush=True)
