@@ -127,7 +127,7 @@ class ServerThreadsTest(unittest.TestCase):
 
     def test_read_thread_lists_reads_scopes_and_refuses_replay(self):
         b = broker.Broker.__new__(broker.Broker)
-        b.name, b.as_of, b.disabled = "example", None, set()
+        b.name, b.as_of, b.disabled, b.thread_reads = "example", None, set(), {}
         self.chat(turns=[dict(role="user", ts="2026-02-01", content="hello", activity=["hidden"])])
         for i in range(22):
             c = self.chat(f"web-{i}", state="ended")

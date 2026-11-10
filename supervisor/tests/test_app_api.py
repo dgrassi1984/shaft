@@ -1241,8 +1241,17 @@ class FixturesTest(AppTest):
         # sent: what it sent (a message, an answered question), what was left for its next cycle
         self.message("2026-11-03T14:12:00", "20261103-141200-000001-from-wisp.md", "Answered question?",
                       kind="question", read=True)
+        # ... and its cycle's answer to work queued in this thread (send_message's conversation): part of the thread
+        self.message("2026-11-03T14:13:00", "20261103-141300-000001-from-wisp.md", "March reconciles: 3 lines moved.",
+                     talk=None, thread=CID)
         self.chat([turn("user", "2026-11-03T14:01:00", "hi", shown="hi")])
         self.keep("sent", self.get("/app/v1/chat/wisp"))
+        # from: an answer for a thread that had ended shows in From, linked to it (re)
+        self.chat([turn("user", "2026-11-03T09:00:00", "Check the fees", shown="Check the fees")],
+                  state="ended", cid="web-00000000000000e1", created="2026-11-03T09:00:00", title="Fees")
+        self.message("2026-11-03T14:14:00", "20261103-141400-000001-from-wisp.md", "The fees match the contract.",
+                     talk=None, re="web-00000000000000e1")
+        self.keep("from", self.get("/app/v1/from/wisp"))
         # feedback: a rating sent, one pending with the next message, one on a message; a turn that carried one
         self.rating("f-111111111111111111111111", {"kind": "chat", "chat": CID, "k": 3}, "down", "2026-11-03T14:06:40",
                     reason="Wrong month")
@@ -1375,7 +1384,7 @@ class FixturesTest(AppTest):
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
                  "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                 "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream"}
+                 "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"}
         self.assertEqual(set(self.out), names)
         if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
             FIXTURES.mkdir(exist_ok=True)

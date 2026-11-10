@@ -456,7 +456,7 @@ def _send(req: Request, n: str) -> Response:
     login = _login(req)
     try:
         if mode == "background":
-            file, said = web_chat.background(n, login, text, files, mid=mid)
+            file, said = web_chat.background(n, login, text, files, mid=mid, cid=fields.get("cid", ""))
             reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
             return _said(said, chat=None, file=file or None)
         if mode == "queue":

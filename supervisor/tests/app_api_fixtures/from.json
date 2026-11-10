@@ -1,0 +1,36 @@
+{
+  "instance": "wisp",
+  "partial": false,
+  "version": "b0b9a858736e3292",
+  "live": "",
+  "reply": null,
+  "chat": null,
+  "archived": false,
+  "earlier": 0,
+  "items": [
+    {
+      "key": "s20261103-141400-000001-from-wisp.md",
+      "type": "sent",
+      "file": "20261103-141400-000001-from-wisp.md",
+      "ts": "2026-11-03T14:14:00+01:00",
+      "kind": "message",
+      "read": true,
+      "text": "The fees match the contract.",
+      "attachments": [],
+      "from_cycle": false,
+      "re": {
+        "cid": "web-00000000000000e1",
+        "title": "Fees"
+      },
+      "rating": null
+    }
+  ],
+  "queued": [],
+  "pending_feedback": [],
+  "pending_edits": [],
+  "mids": [],
+  "last": "2026-11-03T14:14:00+01:00",
+  "can_stop": false,
+  "can_end": false,
+  "can_clear": false
+}

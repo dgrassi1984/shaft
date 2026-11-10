@@ -169,7 +169,7 @@ class NextCycleRouteTest(WebTest):
             r = self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body, headers=headers)
         self.assertEqual(r.status, 200, r.body)
         self.assertIn(b"for wisp&#x27;s next cycle", r.body)
-        later.assert_called_once_with("wisp", ME, "later", [], mid="m9")
+        later.assert_called_once_with("wisp", ME, "later", [], mid="m9", cid="")   # no thread named: From
         send.assert_not_called()
         queue.assert_not_called()
 

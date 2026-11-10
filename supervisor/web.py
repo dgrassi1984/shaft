@@ -622,6 +622,8 @@ def _post(req: Request, dev: str) -> Response:
                 extra["voice"] = fields.get("voice") == "1"
                 if fields.get("cid"):
                     extra["cid"] = fields["cid"]
+            else:            # the thread it was written in (the plain page names the thread it shows): answered there
+                extra["cid"] = fields.get("cid") or fields.get("thread") or ""
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
             reply_links.record(m[1], fields.get("in_reply_to"), f"send:{m[1]}:{fields.get('mid') or secrets.token_hex(16)}")

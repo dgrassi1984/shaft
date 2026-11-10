@@ -36,10 +36,11 @@ def _write_cursor(offset: int) -> None:
 
 
 def _cid_of_message(row: dict) -> str:
-    """The thread a message to the operator shows in (web_chat.thread_of_talk), else "from": its push opens that, and
-    a device looking at exactly that feed is not pushed."""
+    """The thread a message to the operator shows in — the one it was routed to (a cycle's answer to work queued
+    there), else its conversation's (web_chat.thread_of_talk) — else "from": its push opens that, and a device looking
+    at exactly that feed is not pushed."""
     from . import web_chat
-    return web_chat.thread_of_talk(row["from"], row.get("talk")) or "from"
+    return row.get("thread") or web_chat.thread_of_talk(row["from"], row.get("talk")) or "from"
 
 
 def event(m: dict) -> dict:
