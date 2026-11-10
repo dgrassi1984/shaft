@@ -131,20 +131,24 @@ class VoiceTest(AppTest):
 
     def wait_idle(self, cid: str, timeout: float = 10) -> dict:
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
+        while True:                                  # checked once more after the deadline: a sleep that overran it
+            past = time.monotonic() >= end           # must not fail a condition that came true meanwhile
             c = web_chat.load(cid)
             if c["state"] != "replying" and not web_chat.replying(cid):
                 return c
+            if past:
+                self.fail(f"still replying: {c}")
             time.sleep(0.02)
-        self.fail(f"still replying: {web_chat.load(cid)}")
 
     def wait_for(self, check, timeout: float = 5, what: str = "") -> None:
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
+        while True:                                  # as wait_idle: the last check comes after the deadline
+            past = time.monotonic() >= end
             if check():
                 return
+            if past:
+                self.fail(f"timed out waiting for {what or check}")
             time.sleep(0.01)
-        self.fail(f"timed out waiting for {what or check}")
 
     def sent(self, r) -> str:
         self.assertEqual(r.status, 200, r.body)
@@ -370,6 +374,22 @@ class StreamTest(VoiceTest):
         hold.set()
 
 
+def sse_events(sock: socket.socket, n: int) -> tuple[bytes, list[dict]]:
+    """A streamed response read off `sock` until `n` whole events have come: (the response head, the events). Whole
+    frames only — a read may end inside one, so counting `data: ` prefixes could stop before an event's text came."""
+    raw = b""
+    while True:
+        head, sep, body = raw.partition(b"\r\n\r\n")
+        frames = body.split(b"\n\n")[:-1] if sep else []  # the last piece is a frame still arriving (or b"")
+        events = [json.loads(line[6:]) for f in frames for line in f.split(b"\n") if line.startswith(b"data: ")]
+        if len(events) >= n:
+            return head, events[:n]
+        piece = sock.recv(65536)
+        if not piece:
+            raise AssertionError(f"the stream ended after {len(events)} of {n} events: {raw[-300:]!r}")
+        raw += piece
+
+
 class StreamServerTest(VoiceTest):
     """The stream through the real web server (web.Handler on a loopback port), as tailscale serve reaches it."""
 
@@ -389,30 +409,55 @@ class StreamServerTest(VoiceTest):
 
     def test_a_client_that_leaves_is_noticed_and_others_are_served_meanwhile(self):
         """The bugs: a held stream blocked every other request of the web server (one thread), or a client that left
-        kept its stream — and its watching mark, silencing pushes — until the reply ended."""
+        kept its stream — and its watching mark, silencing pushes — until the reply ended. The test's own bug (it
+        failed now and then in the gate's 4 workers): it stopped reading at the third `data: ` prefix, which a read
+        may deliver without that event's text, and it held the other request to a 2 s clock instead of to the fact
+        that the reply was still held."""
         hold = threading.Event()
         self.fake.script = voice_turn(hold)
         cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
         s = self.open("/app/v1/chat/wisp/stream")
-        raw = b""
-        while raw.count(b"data: ") < 3:                     # status and both drafts, flushed as they came
-            raw += s.recv(65536)
-        self.assertIn(b"200", raw.split(b"\r\n")[0])
-        self.assertIn(b"Content-Type: text/event-stream; charset=utf-8", raw)
-        self.assertNotIn(b"Content-Length", raw.partition(b"\r\n\r\n")[0])
-        self.assertIn(b'"text": "look."', raw)
+        head, events = sse_events(s, 3)                     # status and both drafts, flushed as they came
+        self.assertIn(b"200", head.split(b"\r\n")[0])
+        self.assertIn(b"Content-Type: text/event-stream; charset=utf-8", head)
+        self.assertNotIn(b"Content-Length", head)
+        self.assertEqual([(e["type"], e.get("text")) for e in events],
+                         [("status", None), ("draft", "Let me "), ("draft", "look.")])
         self.assertEqual(app_api.held("wisp"), 1)
-        started = time.monotonic()                          # meanwhile, another request is answered at once
+        # Meanwhile another request is answered: while the API still holds the reply, so the stream is still held. A
+        # server that served one request at a time would answer it only after `hold` is set, which this test does
+        # later; the socket's timeout (open) bounds the wait.
         with self.open("/app/v1/instances") as other:
             answer = b""
-            while chunk_ := other.recv(65536):
-                answer += chunk_
+            try:
+                while chunk_ := other.recv(65536):
+                    answer += chunk_
+            except TimeoutError:
+                self.fail(f"another request waited on the held stream: {answer[:200]!r}")
         self.assertIn(b" 200 ", answer.split(b"\r\n")[0])
-        self.assertLess(time.monotonic() - started, 2)
+        self.assertFalse(hold.is_set())
+        self.assertEqual(app_api.held("wisp"), 1)
         s.close()                                           # the phone locked, the network went
         self.wait_for(lambda: app_api.held("wisp") == 0, what="the server to notice the client left")
         hold.set()
         self.wait_idle(cid)
+
+    def test_the_test_reads_whole_events_when_a_read_ends_inside_one(self):
+        """The test's bug (a gate flake): reading stopped at the third `data: ` prefix, so a read that ended inside
+        the third event left its text unread and `"text": "look."` was not found."""
+        a, b = socket.socketpair()
+        with a, b:
+            first = (b"HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+                     b'id: 1\ndata: {"type": "status"}\n\nid: 2\ndata: {"type": "draft", "text": "Let me "}\n\n'
+                     b'id: 3\ndata: {"type": "dr')
+            b.sendall(first)
+            threading.Timer(0.2, lambda: b.sendall(b'aft", "text": "look."}\n\n')).start()
+            head, events = sse_events(a, 3)
+            self.assertTrue(head.startswith(b"HTTP/1.0 200"))
+            self.assertEqual(events[-1], {"type": "draft", "text": "look."})
+            b.close()
+            with self.assertRaisesRegex(AssertionError, "ended after 0 of 1"):
+                sse_events(a, 1)                    # a stream that ends early fails, never loops on empty reads
 
     def test_a_closed_client_is_seen_before_a_write_fails(self):
         """The bug: a client that left was noticed only when a write failed — the first write after a close usually
