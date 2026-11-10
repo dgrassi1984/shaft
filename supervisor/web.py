@@ -760,10 +760,9 @@ def _get(req: Request, csrf: str) -> Response | None:
         from . import version
         return _html(200, web_pages.changelog_body(version.changelog()))
     if path == "/fragment/rail":
-        from . import messages, web_chat
-        history = messages.history()
-        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(),
-                                         {n: web_chat.summary(n, history) for n in names}))
+        current = qs.get("c", "")
+        return _html(200, web_pages.rail(names, current, overview(), _rail_chats(names),
+                                         _rail_thread(names, current, qs.get("t", ""))))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/cycles-next$", path):
         if m[1] not in names:
             return None
@@ -778,6 +777,20 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf, doc_sort=_doc_sort(req))
+    if m := re.match(r"^/fragment/from/([A-Za-z0-9_-]+)(/header)?$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        if m[2]:
+            past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
+            return _html(200, v.chat_header(m[1], _live(m[1]), None, past, from_feed=True))
+        if qs.get("away"):                          # its page went hidden on this device: push From to it again
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid="from")
+            return Response(204, b"")
+        at = _page_ms(req.headers.get("x-shaft-at"))   # as a thread's feed: watched while on screen, not when covered
+        (web_chat.unwatch if req.headers.get("x-shaft-watching") == "0" else web_chat.watching)(
+            m[1], req.device, at, cid="from")
+        return _html(200, v.feed_html(web_chat.from_feed(m[1]), from_feed=True))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
         if m[1] not in names:
             return None
@@ -1214,6 +1227,11 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         body = v.join([v.link(f"/i/{v.q(name)}/chat", "Back to the current chat"),
                        v.section("Earlier chats", v.earlier_chats(name, past))])
         return _html(200, v.instance_frame(name, "chat", "Earlier chats", body, names, csrf))
+    if tab == "from":
+        from . import web_chat
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        return _html(200, v.from_page(name, web_chat.from_feed(name), past, _live(name), names, csrf,
+                                      later=_next_cycle(name)))
     if tab == "chat":
         from . import web_chat
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
@@ -1272,6 +1290,35 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         thinking = qs.get("thinking") == "1"
         return _html(200, v.transcript_page(name, e, panel.transcript_lines(name, e, thinking), thinking, names, csrf))
     return None
+
+
+def _rail_chats(names: list[str]) -> dict[str, dict]:
+    """Each instance's rail entry (web_chat.summary), with its open threads (id, title, state: idle / replying /
+    waiting, waiting's words, and `last`: when the instance last wrote in it, as the thread's feed computes it) and
+    when it last wrote in its From feed (`from_last`): the browser's unread marks per thread compare these with what
+    it saw in each feed (web.js markRail)."""
+    from . import messages, web_chat
+    history = messages.history()
+    out = {}
+    for n in names:
+        threads = []
+        for c in web_chat.threads(n):
+            waiting = (c.get("reply") or {}).get("waiting") if c.get("state") == "replying" else None
+            threads.append({"id": c["id"], "title": web_chat.title(c), "waiting": waiting,
+                            "state": "waiting" if waiting else "replying" if c.get("state") == "replying" else "idle",
+                            "last": web_chat.last_from(c, web_chat.sent_during(n, c)) or ""})
+        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or ""}
+    return out
+
+
+def _rail_thread(names: list[str], current: str, thread: str) -> str:
+    """The thread lit in the rail: the one the page named (?t=: an id, or "from"); on an instance's plain chat page
+    (t=current), which follows its current thread, the one that page shows; none on its other pages."""
+    from . import web_chat
+    if thread != "current":
+        return thread
+    shown = web_chat.shown(current[2:]) if current.startswith("i:") and current[2:] in names else None
+    return shown["id"] if shown and shown.get("state") != "ended" else ""
 
 
 def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:

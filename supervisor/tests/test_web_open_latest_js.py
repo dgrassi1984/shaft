@@ -42,7 +42,8 @@ const box = { _top: 0, get scrollTop() { return this._top; },
   getBoundingClientRect() { return { top: 0, bottom: this.clientHeight }; } };
 const items = [...input.html.matchAll(/<(?:div|p) class="[^"]*"([^>]*)>/g)].map(m =>
   Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]))).filter(a => a.k)
-  .map((a, i) => ({ key: a.k, dataset: { seenInst: a["seen-inst"], seenReply: a["seen-reply"], sentAt: a["sent-at"] },
+  .map((a, i) => ({ key: a.k, dataset: { seenInst: a["seen-inst"], seenKey: a["seen-key"], seenReply: a["seen-reply"],
+                                          sentAt: a["sent-at"] },
                     top: i * 100, getClientRects: () => [1], closest: q => q === "[data-scroll]" ? box : null,
                     getBoundingClientRect() { return { top: this.top - box.scrollTop, bottom: this.top + 100 - box.scrollTop }; } }));
 box.scrollHeight = items.length * 100;
@@ -73,7 +74,11 @@ for (const f of handlers.DOMContentLoaded || []) f();
 const end = () => box.scrollHeight - box.clientHeight;
 assert.equal(box.scrollTop, end(), "opened at the last message");
 assert.equal(newbelow.hidden, true, "nothing new below the last message");
-if (input.seen !== null && !input.archived) assert.equal(JSON.parse(stored).wisp, input.after, "what is on screen is seen");
+// marks are per thread now; a mark from before threads ("*") still counts for the thread until it is seen again
+if (input.seen !== null && !input.archived) {
+  const w = JSON.parse(stored).wisp, mark = typeof w === "string" ? w : [w.current || "", w["*"] || ""].sort()[1];
+  assert.equal(mark, input.after, "what is on screen is seen");
+}
 // Pinned: the feed's box and the feed itself are watched; growth after the jump goes back to the end ...
 const pin = observers.find(o => o.seen.includes(box) && o.seen.includes(feed));
 assert.ok(pin, "the feed and its box are watched for size changes");

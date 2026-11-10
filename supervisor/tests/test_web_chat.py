@@ -480,7 +480,7 @@ class ChatCentricTest(ChatRoutesTest):
                      "/i/wisp/activity"):
             self.assertIn(f'href="{page}"', body, page)
         self.assertIn('data-post="/action/cycle"', body)                       # its actions too
-        self.assertIn('data-poll="/fragment/rail?c=i:wisp"', body)
+        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=current"', body)
 
     def test_with_no_chat_going_on_the_page_shows_the_last_one_and_a_composer(self):
         """It showed "No chat open" over an empty box, though the conversation had just ended."""

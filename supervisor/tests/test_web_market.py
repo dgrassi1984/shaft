@@ -50,12 +50,15 @@ class HeaderTest(unittest.TestCase):
             self.assertIn('class="i"', body)
 
     def test_i11_three_controls_and_new_chat_not_beside_the_title(self):
-        """Review I11: seven bordered boxes, Clear one tap from the title. Now Documents, New chat, ⋯."""
+        """Review I11: seven bordered boxes, Clear one tap from the title. Now Documents, New thread, ⋯ — New thread
+        ends nothing (topic threads), so Clear, which ends the thread, is in ⋯."""
         body = self.header()
         tools = re.search(r'<div class="headtools">(.*)</header>', body, re.S).group(1)
         self.assertEqual(re.findall(r'aria-label="([^"]+)"', tools.split('<div class="menubody">')[0]),
-                         ["Documents", "New chat", "wisp: pages and actions"])
-        self.assertIn('data-key="earlier-chats"', tools.split('<div class="menubody">', 1)[1])   # in ⋯
+                         ["Documents", "New thread", "wisp: pages and actions"])
+        menu = tools.split('<div class="menubody">', 1)[1]
+        self.assertIn('data-key="earlier-chats"', menu)   # in ⋯
+        self.assertIn('data-post="/chat/wisp/clear"', menu)
 
     def test_i13_kill_last_and_apart_and_not_on_overview_cards(self):
         """Review I13: Kill sat beside Pause on every card and among the ⋯ menu's pages."""

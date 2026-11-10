@@ -261,10 +261,22 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   If cleanup fails or a browser API is missing, it still reloads and shows which step failed.
   Only that notice is stored in sessionStorage, then removed after it is shown. If the browser blocks
   sessionStorage, the notice cannot survive reload.
-- Unread marks clear when the current chat's reply, or a message the instance sent you, is on screen in the feed of a
-  visible tab (scrolled into view, not only rendered: one below the fold stays unread until you scroll to it). A
-  message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
-  do not consume a new reply. Marks are shared across tabs in the same browser.
+- Unread marks are per thread, and for From: one clears when that thread's reply, or a message the instance sent you
+  there, is on screen in its feed in a visible tab (scrolled into view, not only rendered: one below the fold stays
+  unread until you scroll to it). The rail marks the thread, and its instance while any of its threads or From is
+  unread; the app badge counts instances. Config, Journal, earlier chats, another thread and a failed feed refresh do
+  not consume a new reply. Marks are kept in this browser (`shaft.seen`: per instance, per thread id or `from`) and
+  shared across its tabs; a mark kept from before threads counts for every thread until each is seen again.
+- **Topic threads.** Under the instance being viewed, the rail lists its open threads, most recently active first:
+  the title (the first line of its first message until renamed), a dot (hollow idle, pulsing replying, amber while
+  it waits for the instance because another thread's reply holds it) and the unread mark; then **From <instance>**,
+  then **+ New thread**, which opens a new thread (`POST /chat/<name>/new`) and goes to it. A thread's page is
+  `/i/<name>/chat?id=<id>`: its feed, header and composer stay on that thread (the composer sends its id, and a
+  document saved or commented on beside it goes to that thread's next message); its draft is its own. The plain
+  `/i/<name>/chat` follows the most recently active thread. **From <instance>** (`/i/<name>/from`) shows what it sent
+  you outside any thread (a cycle, a terminal or Telegram talk) and what you left for its next cycle, refreshed like a
+  chat (`/fragment/from/<name>`); its composer only sends for the next cycle. A reply waiting for its turn says so on
+  its own line, `waiting: answering in «<title>»`, until it starts.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
   the jump (the draft in the composer, the documents sheet, an image, the keyboard closing after Send) grows the feed
@@ -333,16 +345,16 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   and follows its end if you are there; when the reply ends it stays until the answer replaces it, which is fetched
   at once. Rendered
   Markdown and the documents' hashes are kept until their text or file changes.
-- The chat header refreshes every 1.5 seconds. It is the name with its state and model under it, then three controls:
-  **Documents**, **New chat** and **⋯**. ⋯ holds the instance's pages, Earlier chats, its actions, notifications and
+- The chat header refreshes every 1.5 seconds. It is the name and the thread's title (tap it to **Rename**), its state
+  and model under them, then three controls: **Documents**, **New thread** and **⋯**. ⋯ holds the instance's pages,
+  Earlier chats, **Clear this thread**, its actions, notifications and
   Reload / update, and last, apart and in red, **Kill**. The icons are one drawn set in the text's colour (no emoji)
   and stay their size when the text size grows. When the instance is busy and not writing a reply, its state under
   the name (with an icon: working, asleep, paused by you, waiting for you) opens a notice on hover, tap or keyboard
   saying what a message does now. The open notice, history list, ⋯ menu and keyboard focus survive refreshes; your
   draft and documents stay in place.
-  A failed refresh marks the header stale. New chat (what Clear did) sends the conversation id shown by the header; a
-  missing or outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and
-  Transcripts.
+  A failed refresh marks the header stale. Clear this thread sends the thread id shown by the header; a missing or
+  outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and Transcripts.
 - **Earlier chats** is in the ⋯ menu. Its quick list shows the latest 20 and the total count;
   **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
   Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
@@ -352,8 +364,9 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
   **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
   cards in an archive also open the file in the current chat.
-- **New chat** ends an open conversation and clears the page. The conversation stays in Earlier chats and
-  Transcripts. **End the conversation** leaves messages visible; the next message starts a new conversation.
+- **New thread** opens another thread and ends none. **Clear this thread** (⋯) ends its open conversation and clears
+  it from the page; your other threads stay open. The conversation stays in Earlier chats and Transcripts. **End the
+  conversation** leaves messages visible; the next message starts a new conversation.
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain

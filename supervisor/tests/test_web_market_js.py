@@ -66,7 +66,7 @@ for (const changed of [true, false]) {
         self.node(r'''
 const assert = require('node:assert/strict');
 let sheet = {kind:'docs'}, seen = {}, headers;
-const item = {dataset:{seenInst:'wisp', seenReply:'2026-10-27T10:00:00'},
+const item = {dataset:{seenInst:'wisp', seenKey:'web-a', seenReply:'2026-10-27T10:00:00'},
   getClientRects:()=>[1], closest:()=>null, getBoundingClientRect:()=>({top:10,bottom:20})};
 const document = {visibilityState:'visible', querySelectorAll:()=>[item], addEventListener(){}};
 const window = {innerHeight:800, addEventListener(){}};
@@ -88,11 +88,11 @@ eval(process.argv[1]);
     assert.ok(Number(headers['X-Shaft-At']) > 0);
   }
   sheet = null; seenFeed();
-  assert.equal(seen.wisp, '2026-10-27T10:00:00');
+  assert.equal(seen.wisp['web-a'], '2026-10-27T10:00:00');   // per thread (topic threads)
   await el._tick();
   assert.notEqual(headers['X-Shaft-Watching'], '0');
 })().then(()=>console.log("ok")).catch(e=>{console.error(e);process.exitCode=1;});
-''', '\n'.join(function(n) for n in ('poll', 'seenFeed', 'onScreen')))
+''', '\n'.join(function(n) for n in ('poll', 'seenFeed', 'onScreen', 'seenAt', 'seenMark')))
 
     def test_m17_push_deadline_shows_generic_notification_inside_wait_until(self):
         """M17: an unbounded /push/latest fetch prevented the required push notification."""
