@@ -139,8 +139,8 @@ class WebAlertsTest(Sandbox):
         n = self.message("kiln", "a note", alert=("web", "x"))
         self.assertEqual(web_alerts.forward_new(), 2)
         self.assertEqual(self.pushed, [                                     # each its own tag: none replaces another
-            {"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/chat", "tag": f"wisp-{q['file']}"},
-            {"title": "kiln says", "body": "a note", "url": "/i/kiln/chat", "tag": f"kiln-{n['file']}"}])
+            {"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/from", "cid": "from", "tag": f"wisp-{q['file']}"},
+            {"title": "kiln says", "body": "a note", "url": "/i/kiln/from", "cid": "from", "tag": f"kiln-{n['file']}"}])
         self.assertEqual(web_alerts.forward_new(), 0)                         # each once
         self.assertEqual(len(self.pushed), 2)
 
@@ -176,14 +176,14 @@ class WebAlertsTest(Sandbox):
         p.start()
         self.addCleanup(p.stop)
         web_alerts.forward_new()
-        web_chat.watching("wisp", "laptop")
+        web_chat.watching("wisp", "laptop", cid="from")
         self.message("wisp", "seen on the laptop", alert=("web", "x"))
         self.assertEqual(web_alerts.forward_new(), 1)
         woke = webpush._wake.call_args[0][0]
         self.assertEqual(set(woke), {"phone"})                                  # the phone is told; the laptop is not
         self.assertEqual([e["body"] for e in webpush.take("phone")], ["seen on the laptop"])
         self.assertEqual(webpush.take("laptop"), [webpush.NOTHING])
-        web_chat.watching("wisp", "phone")                                       # both looking: nobody is woken
+        web_chat.watching("wisp", "phone", cid="from")                                       # both looking: nobody is woken
         webpush._wake.reset_mock()
         self.message("wisp", "seen on both", alert=("web", "x"))
         self.assertEqual(web_alerts.forward_new(), 0)

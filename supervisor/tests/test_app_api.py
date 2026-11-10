@@ -80,6 +80,8 @@ class AppTest(WebTest):
             return code == 0, out[-1] if out else ""
         for p in (mock.patch.object(web, "_names", return_value=["wisp"]),
                   mock.patch.object(web, "_next_cycle", return_value=NEXT),
+                  mock.patch.object(web_chat, "from_feed", create=True,
+                                    side_effect=lambda n: web_chat.build(n, None, [])),
                   mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(core, "SUP_DIR", self.sup),
                   mock.patch.object(core, "INSTANCES", self.inst),
                   mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "INSTANCES", self.inst),
@@ -654,8 +656,8 @@ class LongPollTest(AppTest):
         self.assertIn(self.device, web_chat.watchers("wisp"))
         self.get("/app/v1/chat/wisp?watch=0")
         self.assertNotIn(self.device, web_chat.watchers("wisp"))
-        self.get(f"/app/v1/chat/wisp/{CID}")                    # a chat named by id is not the one on screen
-        self.assertNotIn(self.device, web_chat.watchers("wisp"))
+        self.get(f"/app/v1/chat/wisp/{CID}")                    # an explicit open thread is on screen too
+        self.assertIn(self.device, web_chat.watchers("wisp"))
         self.get("/app/v1/chat/wisp?at=2000")
         self.assertEqual(self.get("/app/v1/chat/wisp/away", method="POST", data={"at": 3000}), {"ok": True})
         self.assertNotIn(self.device, web_chat.watchers("wisp"))
@@ -1105,7 +1107,7 @@ class PushTest(AppTest):
             {"title": "wisp replied", "body": "Done.", "url": "/i/wisp/chat", "tag": "wisp", "at": time.time()}]}})
         got = self.get("/app/v1/push/latest")
         self.assertEqual(got["events"], [{"title": "wisp replied", "body": "Done.", "url": "/i/wisp/chat", "tag": "wisp",
-                                          "instance": "wisp"}])
+                                          "instance": "wisp", "cid": None}])
         self.assertEqual(got["badge"], 0)
         self.assertEqual(self.get("/app/v1/push/latest")["events"][0]["title"], "wisp replied")   # shown again
         self.assertEqual(self.get("/app/v1/push/latest", method="GET")["events"][0]["instance"], "wisp")

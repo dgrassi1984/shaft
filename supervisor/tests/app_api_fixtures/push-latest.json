@@ -5,6 +5,7 @@
       "body": "Done.",
       "url": "/i/wisp/chat",
       "tag": "wisp",
+      "cid": null,
       "instance": "wisp"
     },
     {
@@ -12,6 +13,7 @@
       "body": "Should the nightly report keep the per-account lines?",
       "url": "/i/wisp/chat",
       "tag": "wisp-ask",
+      "cid": null,
       "instance": "wisp"
     }
   ],

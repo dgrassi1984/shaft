@@ -193,26 +193,29 @@ def rename(name: str, cid: str, title: str) -> str:
 # Both say when the page sent them, on its own clock (`at`, ms): a poll sent before the latest away but arriving after
 # it does not make the device watching again (Grok review of 8735c62).
 WATCH_S = 6.0
-_watched: dict[tuple[str, str], float] = {}
-_away: dict[tuple[str, str], float] = {}
+_watched: dict[tuple[str, str, str], float] = {}
+_away: dict[tuple[str, str, str], float] = {}
 
 
-def watching(name: str, device: str, at: float | None = None) -> None:
-    if at is not None and at <= _away.get((name, device), float("-inf")):
+def watching(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
+    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
+    if at is not None and at <= _away.get((name, cid, device), float("-inf")):
         return
-    _watched[(name, device)] = time.monotonic()
+    _watched[(name, cid, device)] = time.monotonic()
 
 
-def unwatch(name: str, device: str, at: float | None = None) -> None:
-    _watched.pop((name, device), None)
+def unwatch(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
+    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
+    _watched.pop((name, cid, device), None)
     if at is not None:
-        _away[(name, device)] = max(at, _away.get((name, device), float("-inf")))
+        _away[(name, cid, device)] = max(at, _away.get((name, cid, device), float("-inf")))
 
 
-def watchers(name: str) -> set[str]:
-    """The devices that have this instance's chat on screen now."""
+def watchers(name: str, cid: str | None = None) -> set[str]:
+    """Only devices looking at this thread suppress its push."""
+    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
     now = time.monotonic()
-    return {d for (n, d), at in list(_watched.items()) if n == name and now - at < WATCH_S}
+    return {d for (n, c, d), at in list(_watched.items()) if n == name and c == cid and now - at < WATCH_S}
 
 
 def reply_event(chat: dict) -> dict:
@@ -222,7 +225,7 @@ def reply_event(chat: dict) -> dict:
     t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
     first = first_line(t.get("content") or "") or (t.get("note") or "")          # the text, not its Markdown
     title = f"{name}'s reply failed" if t.get("note") else f"{name} replied"
-    return {"title": title, "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
+    return {"title": title, "body": first[:160], "url": f"/i/{name}/chat?id={chat['id']}", "cid": chat["id"], "tag": name}
 
 
 def _instance_stamps(chat: dict | None, sent: list[dict]) -> list[str]:
@@ -951,7 +954,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         del _relays[cid]
     if not unheard and not queued and not relay.stopped:
         from . import webpush                       # each device not looking is told
-        webpush.notify(reply_event(chat), skip=watchers(chat["instance"]))
+        webpush.notify(reply_event(chat), skip=watchers(chat["instance"], chat["id"]))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard or queued:
