@@ -34,30 +34,53 @@ class AppVersionTest(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "Version stamping requires macOS PlistBuddy")
     def test_processed_plist_uses_git_versions(self):
-        """Apps shipped as 0.1.0 forever; every build must overwrite processed bundle versions."""
-        def git(*args):
-            return subprocess.check_output(["git", "-C", str(APP), *args], text=True).strip()
+        """Apps shipped as 0.1.0 forever; every build must overwrite processed bundle versions.
 
-        version = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")[1:]
-        build = str(int(git("rev-list", "--count", "HEAD")) + 100)
-        label = git("describe", "--tags", "--always", "HEAD")
-        if git("diff", "--name-only", "HEAD", "--"):
-            label += "+changes"
+        On a throwaway repository of its own (one commit, tagged v1.2.3): the gate runs the suite on a copy of the
+        commit with no tags, so the checkout's own tags cannot be relied on."""
         with tempfile.TemporaryDirectory(prefix="shaft-app-version-") as directory:
-            plist = Path(directory) / "Info.plist"
-            env = dict(os.environ, SRCROOT=str(APP), TARGET_BUILD_DIR=directory,
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            def git(*args):
+                subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                                "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
+                               check=True, capture_output=True, text=True)
+            git("init", "-q")
+            (repo / "file").write_text("one\n")
+            git("add", "file")
+            git("commit", "-q", "-m", "one")
+            git("tag", "-a", "v1.2.3", "-m", "v1.2.3")
+            plist = root / "Info.plist"
+            env = dict(os.environ, SRCROOT=str(repo), TARGET_BUILD_DIR=directory,
                        INFOPLIST_PATH="Info.plist", DERIVED_FILE_DIR=directory)
-            # Exercise both Add on absent keys and Set on keys from an earlier build.
-            for initial in ({}, {"CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1",
-                                 "SHAFTVersion": "stale"}):
+            env.pop("GIT_DIR", None)
+            env.pop("GIT_WORK_TREE", None)
+
+            def stamp(initial: dict) -> dict:
                 with plist.open("wb") as stream:
                     plistlib.dump({**initial, "Unrelated": "kept"}, stream)
                 subprocess.run([str(SCRIPT)], env=env, check=True, capture_output=True, text=True)
                 with plist.open("rb") as stream:
-                    info = plistlib.load(stream)
-                self.assertEqual(info["CFBundleShortVersionString"], version)
-                self.assertEqual(info["CFBundleVersion"], build)
-                self.assertEqual(info["SHAFTVersion"], label)
-                self.assertTrue(info["SHAFTVersion"].startswith("v"))
+                    return plistlib.load(stream)
+
+            # Exercise both Add on absent keys and Set on keys from an earlier build.
+            for initial in ({}, {"CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1",
+                                 "SHAFTVersion": "stale"}):
+                info = stamp(initial)
+                self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
+                self.assertEqual(info["CFBundleVersion"], "101")            # one commit + 100
+                self.assertEqual(info["SHAFTVersion"], "v1.2.3")
                 self.assertEqual(info["Unrelated"], "kept")
-                self.assertTrue((Path(directory) / "stamp-version.stamp").is_file())
+                self.assertTrue((root / "stamp-version.stamp").is_file())
+
+            (repo / "file").write_text("two\n")
+            self.assertEqual(stamp({})["SHAFTVersion"], "v1.2.3+changes")
+
+            git("tag", "-d", "v1.2.3")
+            with plist.open("wb") as stream:
+                plistlib.dump({}, stream)
+            done = subprocess.run([str(SCRIPT)], env=env, capture_output=True, text=True)
+            self.assertNotEqual(done.returncode, 0, "a build with no release tag must fail, not ship 0.1.0")
+            self.assertIn("No reachable v[0-9]* git tag", done.stderr)
+
