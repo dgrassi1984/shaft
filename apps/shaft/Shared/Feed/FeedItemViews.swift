@@ -91,6 +91,7 @@ struct UserItemView: View {
     let turn: UserItem
     @Environment(ChatScreenModel.self) private var screen
     @State private var hovering = false
+    private var spoken: Bool { turn.via == "voice" }
 
     var body: some View {
         ChipColumn {
@@ -106,13 +107,16 @@ struct UserItemView: View {
                     #if os(macOS)
                     if !turn.text.isEmpty { HoverActions(source: turn.text, shown: hovering).padding(.trailing, 6) }
                     #endif
+                    // Said aloud in voice mode (`via: voice`, PLAN-voice §5.1): its text is the transcript, which may hold
+                    // recognition errors.
+                    if spoken { Image(systemName: "waveform").imageScale(.small) }
                     Text(Stamp.time(turn.ts))
                     if turn.interjected { Text("· during its reply") }
                 }
                 .font(Design.Text.metadata)
                 .foregroundStyle(Color.textSecondary)
-                .accessibilityLabel(turn.interjected ? "Sent \(Stamp.full(turn.ts)), during its reply"
-                                                     : "Sent \(Stamp.full(turn.ts))")
+                .accessibilityLabel((spoken ? "Spoken, " : "") + (turn.interjected ? "sent \(Stamp.full(turn.ts)), during its reply"
+                                                                                  : "sent \(Stamp.full(turn.ts))"))
             }
         }
         #if os(macOS)

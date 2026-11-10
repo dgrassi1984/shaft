@@ -3,8 +3,9 @@ import SHAFTKit
 import SwiftUI
 
 /// The menu bar's commands (PLAN-native-apps.md M5): File → New Message and New Chat; a Chat menu with Stop, End,
-/// Queue after reply, Next cycle, Documents, Earlier chats, the next and previous chat (Option-↓/↑) and Reload. Each
-/// acts on the chat on display and is off when it cannot (an earlier chat, nothing to send, no reply to stop).
+/// Queue after reply, Next cycle, Talk (voice mode, ⇧⌘T), Documents, Earlier chats, the next and previous chat
+/// (Option-↓/↑) and Reload. Each acts on the chat on display and is off when it cannot (an earlier chat, nothing to
+/// send, no reply to stop, voice mode off for the instance).
 struct MacCommands: Commands {
     let state: MacState
     /// What the menus may do now. Menu commands are not redrawn when observable state they read changes, so the
@@ -41,6 +42,10 @@ struct MacCommands: Commands {
             Button("Send for the Next Cycle") { screen?.sendRequest = .background }
                 .disabled(!now.canSend)
             Divider()
+            // The voice panel in the chat window. "Talk" is what the scripted driver's `menu Talk` picks.
+            Button("Talk") { screen?.showVoice = true }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!now.canTalk)
             Button("Documents") { state.screen?.togglePanel(.documents) }
                 .keyboardShortcut("d", modifiers: [.command, .option])
                 .disabled(!now.chat)
@@ -74,8 +79,10 @@ final class MacMenu: ObservableObject {
         var canStop = false
         var canEnd = false
         var canClear = false
-        /// The composer holds something to send.
+        /// The composer holds something to send (and shows: the voice panel takes its place).
         var canSend = false
+        /// Voice mode is on for the current chat's instance.
+        var canTalk = false
         var replying = false
         var instances = false
         var paired = false
@@ -89,7 +96,8 @@ final class MacMenu: ObservableObject {
         let content = screen?.chat.content
         return Snapshot(chat: state.screen != nil, current: screen != nil, canStop: content?.canStop == true,
                         canEnd: content?.canEnd == true, canClear: content?.canClear == true,
-                        canSend: screen.map { !$0.chat.draft.isEmpty } ?? false,
+                        canSend: screen.map { !$0.chat.draft.isEmpty && !$0.showVoice } ?? false,
+                        canTalk: screen.map { state.store?.row($0.instance)?.voiceMode == "on" } ?? false,
                         replying: screen?.chat.feed?.reply != nil,
                         instances: !(state.store?.instances.isEmpty ?? true), paired: state.store != nil)
     }

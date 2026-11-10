@@ -129,6 +129,58 @@ struct SettingsTests {
         #expect(request.json?["expect"] as? String == "the operator")
     }
 
+    @Test func voiceSettingsSaveTheirWireFieldsAndRefreshTheDisplayedValue() async throws {
+        for (field, wire, before, after, applies) in [
+            (SettingField.voiceMode, "voice_mode", "on", "off", "now"),
+            (SettingField.voiceEffort, "voice_effort", "", "low", "next run")
+        ] {
+            let folder = try temporaryFolder("voice-settings-" + wire)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            var freshSettings = try SHAFTJSON.decoder().decode(InstanceSettings.self, from: Data(settingsExample.utf8))
+            if field == .voiceMode { freshSettings.voiceMode.value = after }
+            else { freshSettings.voiceEffort.value = after }
+            let fresh = String(decoding: try SHAFTJSON.encoder().encode(freshSettings), as: UTF8.self)
+            let server = StubServer { request in
+                request.method == "GET" ? .json(200, settingsExample)
+                    : .json(200, #"{"settings":\#(fresh),"applies":"\#(applies)"}"#)
+            }
+            let owner = try makeOwner(server, folder: folder)
+            let store = owner.settings("wren")
+            await store.load()
+            #expect(await store.save(field, value: .string(after)))
+            let request = try #require(server.requests.last)
+            #expect(request.path == "/app/v1/settings/wren")
+            #expect(request.json?["field"] as? String == wire)
+            #expect(request.json?["expect"] as? String == before)
+            #expect(request.json?["value"] as? String == after)
+            #expect(store.settings?.value(for: field) == .string(after))
+            #expect(store.notice == (applies == "now" ? "Applies now" : "Applies from the next run"))
+            #expect(await store.save(field, value: .string(before)))
+            #expect(server.requests.last?.json?["expect"] as? String == after)
+        }
+    }
+
+    @Test func emptyVoiceEffortIsAStringAndRefusalsKeepBothVoiceSettings() async throws {
+        let folder = try temporaryFolder("voice-settings-refused")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(409, #"{"error":{"code":"refused","message":"Choose a listed voice setting."}}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        await store.load()
+        for (field, value) in [(SettingField.voiceMode, "off"), (SettingField.voiceEffort, "")] {
+            #expect(!(await store.save(field, value: .string(value))))
+            #expect(store.saveError == "Choose a listed voice setting.")
+            #expect(store.settings?.voiceMode.value == "on")
+            #expect(store.settings?.voiceEffort.value == "")
+            #expect(server.requests.last?.json?["value"] as? String == value)
+        }
+        #expect(server.requests.last?.json?["expect"] as? String == "")
+        #expect(server.requests.filter { $0.method == "POST" }.count == 2)
+    }
+
     @Test func numericAndNullableSettingsSendTheShownValueAsExpect() async throws {
         let folder = try temporaryFolder("settings-expect")
         defer { try? FileManager.default.removeItem(at: folder) }

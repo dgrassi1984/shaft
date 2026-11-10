@@ -11,6 +11,7 @@ struct IOSRoot: View {
     var body: some View {
         SessionRoot(model: model) { session, store in
             ChatsLayout(session: session, store: store)
+                .task { await VoiceReporter.atLaunch(client: store.client) }
         }
     }
 }
