@@ -1604,8 +1604,9 @@ def feed_html(model: dict) -> Html:
         day_separator(r["started"])
         # Its activity is polled on its own (/fragment/chat/<name>/live, live_activity): this shell stays the same
         # for the whole reply, so the feed's refresh is a 304 while it runs (W12, review 2026-10-24).
-        live = (h('<div class="liveact" data-poll="/fragment/chat/{n}/live" data-every="1500" data-keyed="1" '
-                  'data-now="1"></div>', n=q(name)) if not archived else _activity(r["activity"], "live", open_=True))
+        live = (h('<div class="liveact" data-poll="/fragment/chat/{n}/live?id={cid}" data-every="1500" data-keyed="1" '
+                  'data-now="1"></div>', n=q(name), cid=chat["id"])
+                if not archived else _activity(r["activity"], "live", open_=True))
         feed.append(h('<div class="turn it live" data-k="live"><div class="who">{n} <span class="dim">replying since {s}'
                       '<span class="elapsed" data-since="{iso}"></span></span></div>'
                       '{act}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r["started"]),
@@ -1616,7 +1617,8 @@ def feed_html(model: dict) -> Html:
     for t in model["queued"]:
         cancel = Html("") if archived else h(
             '<form class="act" data-post="/chat/{n}/unqueue"{a}><input type="hidden" name="mid" value="{mid}">'
-            '<button type="submit" class="act small">Cancel</button></form>', n=q(name), mid=t["mid"],
+            '<input type="hidden" name="cid" value="{cid}">'
+            '<button type="submit" class="act small">Cancel</button></form>', n=q(name), mid=t["mid"], cid=chat["id"],
             a=post_attrs("the chat (is it still queued?)"))
         feed.append(h('<div class="turn me" data-k="{key}"{dm}><div class="who">you '
                       '<span class="dim">queued — sent when this reply ends</span></div>{text}{atts}{cancel}</div>',
@@ -1644,19 +1646,22 @@ def feed_html(model: dict) -> Html:
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False) -> Html:
+              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False,
+              selected: bool = False) -> Html:
     """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
     `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
     `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
     from . import messages, web_chat
-    feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
+    # An explicitly selected thread stays selected when another thread becomes current.
+    thread_query = f"?id={q(chat['id'])}" if (selected or read_only) and chat else ""
+    feed_url = f"/fragment/chat/{q(name)}" + thread_query
     if whole:                                          # all of it asked for: its refreshes too
         feed_url += ("&" if "?" in feed_url else "?") + "all=1"
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
-        '<input type="hidden" name="retry_of" value="">'
+        '<input type="hidden" name="retry_of" value="">{cid}'
         '<div class="chips" data-picked></div><div class="cbox">'
         '<label class="pick iconbtn" title="Attach files">{attach}<span class="sr">Attach files</span>'
         '<input type="file" name="files" multiple class="sr-file"></label>'
@@ -1676,6 +1681,10 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         'Next cycle<span class="dim">not answered now — {later}</span></button></div></details></div></div>'
         '<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat'
         '</span></form>',
+        # Only a page opened on one thread (?id=) names it: the plain chat page follows the current thread, and after
+        # End its next message starts a new one, as before threads.
+        cid=h('<input type="hidden" name="cid" value="{c}">', c=chat["id"])
+            if selected and chat and chat.get("state") != "ended" else Html(""),
         attach=icon("attach"), send=icon("send"), up=icon("up"),
         qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"), later=later or "for its next cycle",
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
@@ -1696,7 +1705,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"
-                      + (f"?id={q(chat['id'])}" if read_only and chat else ""))
+                      + thread_query)
 
 
 def calendar_proposals_body(rows: list[dict]) -> Html:

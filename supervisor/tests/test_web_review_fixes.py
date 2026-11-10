@@ -50,7 +50,7 @@ class LiveActivityTest(ChatRoutesTest):
         first = self.get("/fragment/chat/wisp")
         self.assertEqual(first.status, 200)
         self.assertNotIn(b"read notes/a.md", first.body)                         # not in the feed
-        self.assertIn(b'data-poll="/fragment/chat/wisp/live"', first.body)       # its own poll, inside the live turn
+        self.assertIn(b'data-poll="/fragment/chat/wisp/live?id=web-0123456789abcdef"', first.body)
         live = self.get("/fragment/chat/wisp/live")
         self.assertIn(b"read notes/a.md", live.body)
         chat = web_chat.load("web-0123456789abcdef")

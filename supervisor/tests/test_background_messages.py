@@ -131,7 +131,7 @@ class NextCycleMessageTest(unittest.TestCase):
         self.assertIn(f"Kind: reply\nIn-Reply-To: {question['path'].name}\n", text)
 
     def test_the_chat_shows_it_as_yours_waiting_then_read(self):
-        chat = web_chat.new_chat("wisp", ME)
+        chat = web_chat.new_thread("wisp", ME)
         web_chat.background("wisp", ME, "> quoted\n\nfor later", [("notes.txt", b"hello")])
         sent = web._sent_during("wisp", chat)
         self.assertEqual([m["via"] for m in sent], [messages.BACKGROUND])

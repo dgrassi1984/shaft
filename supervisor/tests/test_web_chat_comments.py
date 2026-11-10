@@ -162,7 +162,7 @@ class CommentChatTest(unittest.TestCase):
             c = web_chat.load(first["id"])
             c["state"], c["reply"] = "ended", None
             web_chat.save(c)
-        self.assertIsNone(web_chat.open_chat("wisp"))
+        self.assertIsNone(web_chat.current("wisp"))
         _, said = web_chat.send_comment("wisp", ME, pid)
         self.assertEqual(said, "already sent to wisp")
         self.start.assert_called_once()                       # the first send only: never a second copy

@@ -430,9 +430,9 @@ def _send(req: Request, n: str) -> Response:
             reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
             return _said(said, chat=None, file=file or None)
         if mode == "queue":
-            chat, said = web_chat.queue(n, login, text, files, mid=mid, voice=voice)
+            chat, said = web_chat.queue(n, login, text, files, mid=mid, voice=voice, cid=fields.get("cid", ""))
         else:
-            chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of, voice=voice)
+            chat, said = web_chat.send(n, login, text, files, mid=mid, retry_of=retry_of, voice=voice, cid=fields.get("cid", ""))
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
     reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
@@ -443,8 +443,14 @@ def _action(req: Request, n: str, act: str) -> Response:
     from . import web_chat, web_seen
     data = _body(req)
     try:
+        if act == "new":
+            chat = web_chat.new_thread(n, _login(req), title=_str(data, "title", ""))
+            return _said("thread created", chat={"id": chat["id"], "title": web_chat.title(chat)})
         if act == "unqueue":
-            return _said(web_chat.unqueue(n, _str(data, "mid")))
+            cid = _str(data, "cid", "")
+            if cid:
+                _chat_of(n, cid)
+            return _said(web_chat.unqueue(n, _str(data, "mid"), cid=cid))
         if act == "seen":
             version = _str(data, "version")
             if not web_seen.seen(req.device, n, version):
@@ -460,6 +466,8 @@ def _action(req: Request, n: str, act: str) -> Response:
             return _json(200, {"ok": True})
         cid = _str(data, "cid")
         _chat_of(n, cid)
+        if act == "rename":
+            return _said(web_chat.rename(n, cid, _str(data, "title")))
         if act == "stop":
             return _said(web_chat.stop(cid))
         if act == "end":
@@ -495,7 +503,7 @@ def _stream(req: Request, n: str) -> Response:
     if not raw.isdigit():
         raise Refusal(400, "bad_request", "after is the seq of the last event the app has, 0 for none.")
     after, reply, at = int(raw), qs.get("reply"), web._page_ms(qs.get("at"))
-    chat = web_chat.open_chat(n)
+    chat = web_chat.current(n)
     relay = web_chat.stream_of(chat["id"]) if chat else None
     if relay is not None and reply is not None and reply != relay.id:
         after = 0                                  # a newer reply than the app's: all of it
@@ -987,7 +995,7 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}", {"GET": _feed}),
     (rf"/chat/{N}/send", {"POST": _send}),
     (rf"/chat/{N}/stream", {"GET": _stream}),
-    (rf"/chat/{N}/(?P<act>unqueue|stop|end|clear|seen|away)", {"POST": _action}),
+    (rf"/chat/{N}/(?P<act>new|rename|unqueue|stop|end|clear|seen|away)", {"POST": _action}),
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
     (rf"/file/chat/{CID}/(?P<k>\d+)/(?P<j>\d+)", {"GET": _chat_file}),

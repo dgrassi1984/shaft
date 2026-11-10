@@ -1,11 +1,12 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "ea07a44807a97f7e",
+  "version": "48003e7aad106ff1",
   "live": "",
   "reply": null,
   "chat": {
     "id": "web-3f9a1c0d7e2b4a65",
+    "title": "Again.",
     "state": "idle",
     "created": "2026-11-03T13:58:40+01:00",
     "ended": null

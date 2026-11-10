@@ -27,7 +27,7 @@ class RecoveryTest(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def chat(self):
-        chat = web_chat.new_chat("wisp", "operator")
+        chat = web_chat.new_thread("wisp", "operator")
         chat.update(state="replying", reply={"interjections": 0, "turn_start": 1}, turns=[
             {"role": "user", "content": "original request\n\n" + web_chat.DOCS_NOTE,
              "shown": 'original <request> "please"', "ts": "2026-10-20T12:00:00"}])

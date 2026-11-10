@@ -812,6 +812,67 @@ class SendTest(AppTest):
         types = [i["type"] for i in self.get("/app/v1/chat/wisp")["items"]]
         self.assertEqual(types, ["retried", "user"])
 
+    def test_web_thread_actions_and_composer_keep_the_named_thread(self):
+        cookie = self.paired()
+        headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)}
+        response = self.req("/chat/wisp/new", "POST", body=b"title=Ledger", headers=headers, cookie=cookie)
+        self.assertEqual(response.status, 200, response.body)
+        a = web_chat.current("wisp")["id"]
+        self.assertIn(f'data-cid="{a}"'.encode(), response.body)
+        self.assertNotIn("HX-Redirect", response.headers)
+        b = web_chat.new_thread("wisp", "operator")
+        b["created"] = "2099-01-01T00:00:00"
+        web_chat.save(b)
+        self.assertEqual(web_chat.current("wisp")["id"], b["id"])
+        page = self.req(f"/i/wisp/chat?id={a}", cookie=cookie).body.decode()
+        composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
+        self.assertIn(f'name="cid" value="{a}"', composer)
+        response = self.req("/chat/wisp/rename", "POST", body=f"cid={a}&title=Mail".encode(),
+                            headers=headers, cookie=cookie)
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual(web_chat.title(web_chat.load(a)), "Mail")
+        response = self.req("/chat/wisp/rename", "POST", body=f"cid={a}&title=".encode(),
+                            headers=headers, cookie=cookie)
+        self.assertEqual(response.status, 409)
+        response = self.req("/chat/missing/new", "POST", headers=headers, cookie=cookie)
+        self.assertEqual(response.status, 404)
+
+    def test_new_and_rename_threads(self):
+        a = self.get("/app/v1/chat/wisp/new", method="POST", data={})
+        b = self.get("/app/v1/chat/wisp/new", method="POST", data={"title": "  October\nclose  "})
+        self.assertEqual(a["chat"]["title"], "New thread")
+        self.assertEqual(b["chat"]["title"], "October close")
+        self.assertTrue(a["said"])
+        self.assertEqual({c["id"] for c in web_chat.threads("wisp")}, {a["chat"]["id"], b["chat"]["id"]})
+        cid = a["chat"]["id"]
+        got = self.get("/app/v1/chat/wisp/rename", method="POST", data={"cid": cid, "title": " Ledger "})
+        self.assertEqual(got, {"said": "thread renamed"})
+        self.assertEqual(self.get(f"/app/v1/chat/wisp/{cid}")["chat"]["title"], "Ledger")
+        self.error(self.api("/app/v1/chat/wisp/rename", "POST", {"cid": cid, "title": " "}), 409, "refused")
+        self.error(self.api("/app/v1/chat/wisp/rename", "POST", {"cid": "web-missing", "title": "x"}),
+                   404, "not_found")
+        self.error(self.api("/app/v1/chat/missing/new", "POST", {}), 404, "not_found")
+        self.error(self.api("/app/v1/chat/wisp/new", "POST", {"title": 3}), 400, "bad_request")
+        chat = web_chat.load(cid)
+        chat["state"] = "ended"
+        web_chat.save(chat)
+        self.error(self.api("/app/v1/chat/wisp/rename", "POST", {"cid": cid, "title": "x"}), 409, "refused")
+
+    def test_send_queue_and_unqueue_target_the_named_thread(self):
+        a = self.get("/app/v1/chat/wisp/new", method="POST", data={})["chat"]["id"]
+        b = self.get("/app/v1/chat/wisp/new", method="POST", data={})["chat"]["id"]
+        response = self.send(text="alpha", cid=a)
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual(json.loads(response.body)["chat"], a)
+        self.assertEqual(web_chat.load(a)["turns"][0]["shown"], "alpha")
+        self.assertEqual(web_chat.load(b)["turns"], [])
+        response = self.send(mode="queue", text="after", mid="queued", cid=a)
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual([t["mid"] for t in web_chat.load(a)["queued"]], ["queued"])
+        self.get("/app/v1/chat/wisp/unqueue", method="POST", data={"cid": a, "mid": "queued"})
+        self.assertEqual(web_chat.load(a)["queued"], [])
+        self.error(self.send(cid="web-missing", mid="missing"), 409, "refused")
+
     def test_the_actions(self):
         self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi"),
                    turn("assistant", "2026-11-03T13:59:00", "hello")], state="replying",

@@ -257,7 +257,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `version` | str | 16 hex: the revision of everything but the running reply's activity and answer (§4.3) |
 | `live` | str | 16 hex, or `""` with no reply running: the revision of that activity and answer |
 | `reply` | object or null | the reply running now (§4.6); null when none |
-| `chat` † | object or null | `{id, state, created, ended}` below; null when no chat is shown |
+| `chat` † | object or null | `{id, title, state, created, ended}` below; null when no chat is shown |
 | `archived` † | bool | a past chat (`<cid>` of an ended chat): read-only, nothing in it acts on the current chat |
 | `earlier` † | int | turns left out by the window (§4.1); 0 with `all=1` or a short chat |
 | `items` † | list | the conversation in time order (§4.4) |
@@ -275,6 +275,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | Field | Type | |
 |---|---|---|
 | `id` | str | `web-…` |
+| `title` | str | explicit title, else the first line of the operator's first message, else `"New thread"`; at most 80 characters |
 | `state` | str | `"idle"`, `"replying"` or `"ended"` |
 | `created` | timestamp | |
 | `ended` | timestamp or null | |
@@ -559,6 +560,7 @@ The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multip
 
   | Field | Type | |
   |---|---|---|
+  | `cid` | str | optional open thread of `<n>` for `now` and `queue`; omitted or empty selects the most recently active open thread, or starts one. Ignored for `background`. An unknown, foreign or ended thread answers `409 refused` |
   | `text` | str | what the operator wrote below the quotes; may be `""` |
   | `mid` | str | required: the message's id (§1.3). The same `mid` again answers as the first send did, without sending twice — also across `now`, `queue` and `background` |
   | `mode` | str | `now` (default): a new reply, or an interjection while one runs ("Send now"). `queue`: after the running reply (sent now when idle). `background`: to the inbox for its next cycle, no reply now |
@@ -699,7 +701,7 @@ All take JSON and answer `{"said": str}` unless said otherwise; a refused one an
 
 ### 7.1 `POST /app/v1/chat/<n>/unqueue`
 
-`{"mid": str}`: cancel a queued message. `{"said": "queued message cancelled"}` (also when it had already gone).
+`{"mid": str, "cid"?: str}`: cancel a queued message in that open thread. Without `cid`, uses the most recently active open thread. `{"said": "queued message cancelled"}` (also when it had already gone).
 
 ### 7.2 `POST /app/v1/chat/<n>/stop`
 
@@ -713,8 +715,8 @@ Refused while it replies, or when it is already over.
 ### 7.4 `POST /app/v1/chat/<n>/clear`
 
 `{"cid": str}`: New chat. An open conversation is ended first; the chat is kept (Earlier chats, Transcripts).
-`cid` is the chat the app shows: refused when that is no longer the current one ("that is not the chat on this page any
-more: reload it"), or while it replies.
+Only `cid` is cleared; other open threads stay open. Refused while it replies. An ended chat must still be the
+shown chat, else "that is not the chat on this page any more: reload it".
 
 ### 7.5 `POST /app/v1/chat/<n>/seen`
 
@@ -733,6 +735,20 @@ on screen in a window that shows the chat: on the Mac also one beside another ap
 `{"at": int}` (Unix ms on the device): the chat left the screen (the app went to the background, the phone locked, the
 operator opened another chat). Pushes for it reach this device again at once rather than after `WATCH_S`
 (`web_chat.unwatch`). A held long-poll sent before `at` stops marking it watching. `{"ok": true}`.
+
+### 7.7 `POST /app/v1/chat/<n>/new`
+
+`{"title"?: str}`: create an open thread without ending other threads. Titles are stripped, joined onto one line,
+and limited to 80 characters. An omitted or blank title uses the first message once sent, or "New thread".
+
+Response 200: `{"chat": {"id": str, "title": str}, "said": "thread created"}`.
+An unknown instance answers `404 not_found`.
+
+### 7.8 `POST /app/v1/chat/<n>/rename`
+
+`{"cid": str, "title": str}`: rename an open thread. Titles use the same normalization as `/new`.
+Response 200: `{"said": "thread renamed"}`. Blank titles and ended threads answer `409 refused`.
+An unknown instance or a chat that does not belong to it answers `404 not_found`.
 
 ## 8. Files
 
