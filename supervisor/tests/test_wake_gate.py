@@ -273,6 +273,7 @@ class EventWakeTest(StateCase):
         (project / "instances" / "evy").mkdir(parents=True)
         b = object.__new__(Broker)
         b.name, b.project = "wisp", project
+        b.talk_id = None
         st = {"cycles": {"evy": (datetime.now() - timedelta(minutes=11)).isoformat(timespec="seconds")}}
         (self.sup / "schedule.json").write_text(json.dumps(st))
         b._deliver("evy", "inbox/m1.md", "hi", "message", NOW, "hi")
@@ -289,6 +290,7 @@ class EventWakeTest(StateCase):
         (project / "instances" / "evp" / "shaft").mkdir(parents=True)
         b = object.__new__(Broker)
         b.name, b.project = "wisp", project
+        b.talk_id = None
         began = datetime.now().replace(microsecond=0) - timedelta(minutes=2)   # a cycle that has ended since
         (self.sup / "schedule.json").write_text(json.dumps({"cycles": {"evp": began.isoformat()}}))
         b._deliver("evp", "inbox/m1.md", "hi", "message", NOW, "hi")

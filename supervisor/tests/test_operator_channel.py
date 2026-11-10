@@ -107,6 +107,7 @@ class DeliverTest(Sandbox):
         self.addCleanup(shutil.rmtree, project, True)
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.project = "wisp", project
+        b.talk_id = None
         channel.set_preference("wisp", "web")
         with mock.patch.object(broker, "notify"), mock.patch.object(messages, "SUP_DIR", project / ".supervisor"):
             b._deliver("operator", "20991231-000000-000000-from-wisp.md", "From: wisp\n\nhello", "question",
@@ -206,12 +207,20 @@ class TalksFileTest(unittest.TestCase):
 
 
 class ChatShowsWhatItSentTest(Sandbox):
-    def test_a_message_after_the_chat_ended_shows_under_it_with_reply(self):
+    def legacy_rows(self):
+        path = self.sup / messages.LOG_NAME
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            row.pop("talk")
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    def test_a_legacy_message_after_the_chat_ended_shows_under_it_with_reply(self):
         from supervisor import web, web_views
         chat = {"id": "web-1", "instance": "wisp", "created": "2026-10-20T09:00:00", "state": "ended",
                 "ended": "2026-10-20T09:30:00", "turns": [{"role": "user", "content": "hi", "ts": "2026-10-20T09:00:00"}]}
         self.message("wisp", "during", at=datetime(2026, 10, 20, 9, 10))
         self.message("wisp", "Ship it now?", kind="question", at=datetime(2026, 10, 20, 11, 0))
+        self.legacy_rows()
         sent = web._sent_during("wisp", chat)
         self.assertEqual([m["text"] for m in sent], ["during", "Ship it now?"])
         self.assertEqual([m["text"] for m in web._sent_during("wisp", chat, archived=True)], ["during"])
@@ -222,11 +231,12 @@ class ChatShowsWhatItSentTest(Sandbox):
         self.assertIn("data-reply-message", card)
         self.assertIn("a question", card)
 
-    def test_with_no_chat_its_unread_messages_show(self):
+    def test_with_no_chat_its_unread_legacy_messages_show(self):
         from supervisor import web, web_views
         self.message("wisp", "read already")
         messages._archive(next(self.inbox.glob("*.md")))
         self.message("wisp", "still waiting")
+        self.legacy_rows()
         with mock.patch.object(web_chat, "chats", return_value=[]):
             sent = web._sent_during("wisp", None)
         self.assertEqual([m["text"] for m in sent], ["still waiting"])

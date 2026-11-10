@@ -8,12 +8,12 @@ and the commit; its narration rule; waiting while the instance is busy — and t
 A reply keeps going when the browser drops: it is relayed by a thread of the web server, which
 saves its activity as it streams and the answer when it ends, so a reload, a phone that locked or a second device
 shows it. Only Stop stops it (the relay closes the API connection; the API then stops the agent). A message sent while
-it replies is an interjection (/v1/chat/interject): the instance reads it at its next step; one it did not hear in
+that thread replies is an interjection (/v1/chat/interject): the instance reads it at its next step; one it did not hear in
 time is answered by a reply of its own once this one ends, as on Telegram. End asks for the journal write-up now
 (/v1/chat/end does not wait for the entry to be written) instead of after SHAFT_IDLE_MINUTES.
 
 Files go in with a message: saved in the instance's folder by messages.from_operator (as Telegram's are), and the
-message says where. Files it sends the operator meanwhile (send_message) are shown in the chat, as in Messages.
+message says where. Messages sent during a reply belong to that thread. Cycle messages belong to the From feed.
 
 Chats are kept in .supervisor/web/chats/<id>.json, written only by this process.
 
@@ -32,6 +32,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from .core import SUP_DIR, UnsafePath, log
 from .web_md import first_line
@@ -283,28 +284,39 @@ def shown(name: str) -> dict | None:
 
 
 def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
-    """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
-    chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
-    a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
-    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread.
-    With them, in the same span, what the operator left for its next cycle (messages.BACKGROUND): not a chat turn, its
-    `read` says whether a cycle has read it yet."""
+    """Messages from this thread's talks. Legacy rows retain their time-span display."""
     from . import messages
     if chat:
         start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
     else:
         last = next(iter(chats(name)), None)
         start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
-    rows = [m for m in messages.history() if start <= m["ts"] <= end and (
+    talks = (chat or {}).get("talks", [])
+    rows = [m for m in messages.history() if (
+        (m.get("talk") in talks and m.get("talk") is not None and m.get("via") != messages.BACKGROUND)
+        if "talk" in m else start <= m["ts"] <= end) and (
         (m["from"] == name and m["to"] == "operator") or
         (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))]
-    return rows if start else [m for m in rows if not m["read"]]
+    return rows if chat or start else [m for m in rows if not m["read"]]
+
+
+def from_feed(name: str) -> dict:
+    """Cycle messages and next-cycle notes, with revisions over the whole feed."""
+    from . import messages
+    rows = sorted((m for m in messages.history() if "talk" in m and (
+        (m["from"] == name and m["to"] == "operator" and m["talk"] is None) or
+        (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))),
+        key=lambda m: m["ts"])
+    model = build(name, None, rows)
+    model["earlier"] = max(0, len(rows) - CHAT_WINDOW)
+    model["items"] = model["items"][-CHAT_WINDOW:]
+    return model
 
 
 def excerpt(chat: dict) -> tuple[str, int]:
     """(the first line of the operator's first message, at most 80 characters; how many messages they sent in it): how
     Earlier chats lists a chat."""
-    users = [t for t in chat["turns"] if t["role"] == "user"]
+    users = [t for t in chat.get("turns") or [] if t["role"] == "user"]
     text = users[0].get("shown", users[0].get("content", "")) if users else ""
     first = (text or "").splitlines()
     line = first[0].strip() if first else ""
@@ -452,7 +464,7 @@ def sent_mids(chat: dict | None, sent: list[dict]) -> list[str]:
 
 def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> dict:
     """What a chat shows (docs/app-api.md §4.2, before app_api.to_json stamps its times and turns each file's `path`
-    into a URL): its turns, the messages of its span (`sent`: sent_during), the reply running now, what is queued, the
+    into a URL): its turns, its talk messages (`sent`: sent_during), the reply running now, what is queued, the
     thumbs down waiting for the next message. `archived`: a past chat's page, where nothing acts on the current chat.
     The last CHAT_WINDOW turns unless `whole`; `version` and `live` are computed over every turn, before the window."""
     from . import feedback
@@ -656,7 +668,8 @@ def _headers(chat: dict) -> dict:
     if not key:
         raise Refused("the API is not set up: shaft api on")
     return {"Content-Type": "application/json", "Authorization": f"Bearer {key}", "Tailscale-User-Login": chat["login"],
-            "X-Shaft-Conversation": chat["id"], "X-Shaft-Channel": "web", "User-Agent": "SHAFT web UI"}
+            "X-Shaft-Conversation": chat["id"], "X-Shaft-Thread-Title": quote(title(chat), safe=""),
+            "X-Shaft-Channel": "web", "User-Agent": "SHAFT web UI"}
 
 
 def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int, dict]:
@@ -683,8 +696,17 @@ def spoken(chat: dict) -> bool:
 
 def _api_messages(chat: dict) -> list[dict]:
     """The conversation for the API — without a try that failed and was retried (mark_retried): the model would read the
-    question twice and a failed answer between."""
-    return [{"role": t["role"], "content": t["content"]} for t in chat["turns"]
+    question twice and a failed answer between. A short digest names the other open threads."""
+    others = [c for c in threads(chat["instance"]) if c["id"] != chat["id"]]
+    digest = []
+    for c in others:
+        last = {role: next((t.get("content", "").split("\n", 1)[0] for t in reversed(c["turns"])
+                           if t["role"] == role and not t.get("retried")), "") for role in ("user", "assistant")}
+        digest.append(f"- {c['id']} «{title(c)}» (last moved {_activity(c)[0]}): "
+                      f"you: {last['user']} / me: {last['assistant']}")
+    prefix = [{"role": "system", "content": "Other open threads:\n" + "\n".join(digest)
+               + "\nread_thread reads any of them."}] if digest else []
+    return prefix + [{"role": t["role"], "content": t["content"]} for t in chat["turns"]
             if not t.get("retried") and (t.get("content") or t["role"] == "user")]
 
 
@@ -823,6 +845,11 @@ def _run(relay: Relay) -> None:
             relay.stop()
         resp = conn.getresponse()
         status = resp.status
+        if talk := resp.getheader("X-Shaft-Talk"):
+            with _lock(cid):
+                chat = load(cid)
+                chat["talks"] = list(dict.fromkeys([*chat.get("talks", []), talk]))
+                save(chat)
         if resp.status != 200:
             try:
                 error = json.loads(resp.read())["error"]["message"]
@@ -847,6 +874,15 @@ def _run(relay: Relay) -> None:
                 if "interjections_heard" in ev:
                     heard = int(ev["interjections_heard"])
                 se = ev.get("shaft_event")
+                if isinstance(se, dict) and se.get("type") == "status":
+                    phase = se.get("phase", "")
+                    if phase == "started" or phase.startswith("waiting:"):
+                        with _lock(cid):
+                            chat = load(cid)
+                            chat["reply"]["waiting"] = None if phase == "started" else phase
+                            if phase == "started":
+                                chat["reply"]["docs_before"] = _docs_now(chat["instance"])
+                            save(chat)
                 if isinstance(se, dict) and se.get("type") in STREAM_EVENTS:     # at once: no file, no poll between
                     relay.emit(se["type"], **{k: se.get(k) for k in STREAM_EVENTS[se["type"]]})
                 delta = (ev.get("choices") or [{}])[0].get("delta") or {}
@@ -917,7 +953,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             cause = {"note_kind": kind, "note_retry": retry and not sent and bool(request),
                      "retry_text": request if not sent else ""}
         from . import docs
-        made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
+        made = [] if reply.get("waiting") else docs.changed(reply.get("docs_before") or {}, _docs_now(chat["instance"]))
         chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(),
                               "activity": activity[-200:], "note": note, **cause,
                               **({"docs": made} if made else {})})

@@ -24,7 +24,8 @@ them in `interjections_heard` (in the order sent): the client answers any others
 
 `"voice": true` in a chat or interject body: the operator spoke it. The agent's request (or the interjection's line)
 carries it, and a voice request's stream also carries `shaft_event` chunks: the step's text as it is written (`draft`),
-whether it was the answer (`step_end`), status and tool events (_chat; docs/web-and-api.md). Typed: unchanged.
+whether it was the answer (`step_end`), status and tool events (_chat; docs/web-and-api.md).
+Typed streams carry status events too.
 A spoken, streamed turn is answered by its conversation's warm process (VoiceSessions, runner.Warm): one agent kept up
 between turns, so its model session and memory stay warm; it holds the instance only while a turn runs, and ends after
 SHAFT_VOICE_SESSION_IDLE_S without one, with its conversation, or when its instance is paused, updated or deleted.
@@ -56,6 +57,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import tom
@@ -99,6 +101,41 @@ def _last_text(messages: list[dict]) -> str:
     content = messages[-1].get("content")
     return (content if isinstance(content, str) else "\n".join(
         p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text")).strip()
+
+
+class ReplyQueue:
+    """Tickets keep API replies in arrival order; terminal conversations use the run lock alone."""
+
+    def __init__(self):
+        self.changed = threading.Condition()
+        self.queues = {}
+
+    def join(self, model: str, title: str):
+        ticket = (object(), title)
+        with self.changed:
+            self.queues.setdefault(model, []).append(ticket)
+        return ticket
+
+    def wait(self, model, ticket, cancelled, status):
+        with self.changed:
+            previous = None
+            while self.queues[model][0] is not ticket:
+                if cancelled.is_set():
+                    return False
+                title = self.queues[model][0][1]
+                phase = f"waiting: answering in «{title}»" if title else f"waiting: {model} is in another conversation"
+                if phase != previous:
+                    status({"type": "status", "phase": phase})
+                    previous = phase
+                self.changed.wait(0.1)
+            return not cancelled.is_set()
+
+    def leave(self, model, ticket):
+        with self.changed:
+            self.queues[model].remove(ticket)
+            if not self.queues[model]:
+                del self.queues[model]
+            self.changed.notify_all()
 
 
 class Conversations:
@@ -407,7 +444,7 @@ def _chunk(cid: str, model: str, delta: dict, finish: str | None = None, **extra
 def _note(ev: dict) -> str | None:
     """Tool activity and status as human-readable reasoning lines."""
     t = ev["type"]
-    if t == "status" and ev.get("phase") not in ("reading my memory",):
+    if t == "status" and ev.get("phase") not in ("reading my memory", "started"):
         return f"{ev['phase']}{' · ' + ev['detail'] if ev.get('detail') else ''}\n"
     if t == "tool_start":
         return f"⚙ {ev['name']} {ev.get('args', '')[:120]}\n"
@@ -422,6 +459,7 @@ def _note(ev: dict) -> str | None:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "shaft-api/1"
+    reply_queue = ReplyQueue()
     conversations: Conversations
     live: Live
     answered: Answered | None = None
@@ -435,6 +473,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if talk := getattr(self, "_response_talk", None):
+            self.send_header("X-Shaft-Talk", talk)
         self.end_headers()
         self.wfile.write(body)
 
@@ -607,6 +647,7 @@ class Handler(BaseHTTPRequestHandler):
         first: the process is already running and may take its first step at once). Returns (the process's exit code,
         or None when it is still up for the next turn — or REFUSED; its stderr's tail when it ended)."""
         def on_start(stop) -> None:
+            events.put({"type": "status", "phase": "started"})
             stops.append(stop)
             try:
                 self.live.started(live)
@@ -639,10 +680,16 @@ class Handler(BaseHTTPRequestHandler):
                 Handler.answered = Answered()
             if (done := Handler.answered.get(model, rid)) is not None:
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
+                self._response_talk = done.get("talk_id")
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
         if text := _last_text(messages):
             tom.heard(model, text, channel, voice)   # what the operator said, for scoring reply predictions (tom.py)
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
+        self._response_talk = talk_id
+        title = unquote(self.headers.get("X-Shaft-Thread-Title", ""))
+        with self.conversations.lock:
+            self.conversations.talks[self.conversations._key(model, messages, cid)]["title"] = title
+            self.conversations._save()
         live = self.live.begin(model, talk_id)
         # A spoken, streamed turn goes to the conversation's warm process (VoiceSessions); a typed one, or any turn
         # while the instance is paused or warm sessions are off, runs in a process of its own, as before.
@@ -654,6 +701,7 @@ class Handler(BaseHTTPRequestHandler):
                    "talk_id": talk_id, "client": app.split()[0][:40], **({"voice": True} if voice else {})}
 
         def driver(proc):
+            events.put({"type": "status", "phase": "started"})
             procs.append(proc)
             proc.stdin.write(json.dumps(request))
             proc.stdin.close()
@@ -676,10 +724,14 @@ class Handler(BaseHTTPRequestHandler):
         answered = threading.Event()
         errored = threading.Event()
 
+        ticket = self.reply_queue.join(model, title)
+
         def work():
             reply = Reply(model, "api")      # a running cycle of this instance pauses for this reply, then resumes
             try:
                 reply.__enter__()
+                if not self.reply_queue.wait(model, ticket, cancelled, events.put):
+                    return
                 if b := busy_with(model):
                     if not b.startswith(("talk", "api", "live", "sleep", "reflect")):
                         request_yield([model])          # anything else: ask it to wrap up
@@ -697,7 +749,7 @@ class Handler(BaseHTTPRequestHandler):
                     code, err = self._warm_turn(model, talk_id, request, live, events, answered, errored, stops,
                                                 cancelled)
                 else:
-                    code = run_agent(model, "api", ["answer"], interactive=True, driver=driver)
+                    code = run_agent(model, "api", ["answer"], interactive=True, driver=driver, talk_id=talk_id)
                     err = None
                 if code == REFUSED:
                     events.put({"type": "error", "message": f"the supervisor refused to start {model}'s run: its "
@@ -719,9 +771,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.live.end(live)         # before "done": a message after this is the client's next request
                 except (OSError, UnsafePath) as e:
                     log(f"api: {e}")
-                if reply.f is not None:
-                    reply.__exit__(None, None, None)
-                events.put({"type": "done"})
+                try:
+                    if reply.f is not None:
+                        reply.__exit__(None, None, None)
+                finally:
+                    self.reply_queue.leave(model, ticket)
+                    events.put({"type": "done"})
 
         threading.Thread(target=work, daemon=True).start()
         cid = f"chatcmpl-{uuid.uuid4().hex[:20]}"
@@ -734,20 +789,17 @@ class Handler(BaseHTTPRequestHandler):
         spoken = stream and voice
 
         def event(**shaft_event) -> None:
-            """A voice reply's own event, in a chunk of its own with an empty delta: OpenAI clients
-            see nothing new, and a typed request never gets one. A step's text goes out at once as `draft` pieces
-            (the app speaks them) and is still held in `step` as above; `step_end` then says whether it was the
-            answer (its whole text also comes as `content`) or narration before a tool call (only reasoning)."""
-            if spoken:
+            """Status reaches every stream. Drafts and step boundaries reach spoken streams only."""
+            if spoken or (stream and shaft_event.get("type") == "status"):
                 self.wfile.write(_chunk(cid, model, {}, shaft_event=shaft_event))
 
-        if stream:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
         try:
             if stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Shaft-Talk", talk_id)
+                self.end_headers()
                 self.wfile.write(_chunk(cid, model, {"role": "assistant", "content": ""}))
                 self.wfile.flush()
             idle = 0
@@ -835,7 +887,7 @@ class Handler(BaseHTTPRequestHandler):
                           "choices": [{"index": 0, "finish_reason": "stop", "message": {
                               "role": "assistant", "content": "".join(content), "reasoning_content": "".join(notes)}}],
                           "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                          "interjections_heard": heard}
+                          "interjections_heard": heard, "talk_id": talk_id}
                 if rid:
                     try:
                         Handler.answered.put(model, rid, answer)   # made in the check above

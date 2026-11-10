@@ -130,29 +130,23 @@ class NextCycleMessageTest(unittest.TestCase):
         text = self.f.inbox()[0].read_text()
         self.assertIn(f"Kind: reply\nIn-Reply-To: {question['path'].name}\n", text)
 
-    def test_the_chat_shows_it_as_yours_waiting_then_read(self):
+    def test_the_from_feed_shows_next_cycle_notes_waiting_then_read(self):
         chat = web_chat.new_thread("wisp", ME)
         web_chat.background("wisp", ME, "> quoted\n\nfor later", [("notes.txt", b"hello")])
-        sent = web._sent_during("wisp", chat)
-        self.assertEqual([m["via"] for m in sent], [messages.BACKGROUND])
-        feed = str(web_views.chat_feed("wisp", chat, sent))
-        self.assertIn('class="turn me later"', feed)
-        self.assertIn("next cycle · waiting", feed)
-        self.assertIn("<blockquote", feed)                     # its own text, quotes as quotes
-        self.assertIn("📎 notes.txt", feed)
-        self.assertNotIn("wisp sent you", feed)                # not mistaken for the instance's message
+        self.assertEqual(web._sent_during("wisp", chat), [])
+        [item] = web_chat.from_feed("wisp")["items"]
+        self.assertEqual((item["type"], item["text"], item["read"]), ("later", "> quoted\n\nfor later", False))
+        self.assertEqual(item["attachments"][0]["name"], "notes.txt")
         self.f.cycle_reads_inbox()
-        feed = str(web_views.chat_feed("wisp", chat, web._sent_during("wisp", chat)))
-        self.assertIn("next cycle · read", feed)
+        self.assertTrue(web_chat.from_feed("wisp")["items"][0]["read"])
 
-    def test_the_composer_offers_next_cycle_and_its_sent_mids_include_it(self):
+    def test_the_composer_offers_next_cycle_and_from_feed_keeps_its_receipt(self):
         web_chat.background("wisp", ME, "later", [], mid="m-later")
-        sent = web._sent_during("wisp", None)
-        page = str(web_views.chat_page("wisp", None, sent, [], {}, ["wisp"], "csrf", later="for wisp's next cycle (≈14:20)"))
+        page = str(web_views.chat_page("wisp", None, [], [], {}, ["wisp"], "csrf", later="for wisp's next cycle (≈14:20)"))
         self.assertIn('data-background="1"', page)
         self.assertIn('name="background"', page)
         self.assertIn("Not answered now: to wisp&#x27;s inbox, for wisp&#x27;s next cycle (≈14:20)", page)
-        self.assertIn("m-later", page)                         # a reload after a lost answer does not offer it again
+        self.assertIn("m-later", web_chat.from_feed("wisp")["mids"])
 
 
 class NextCycleRouteTest(WebTest):

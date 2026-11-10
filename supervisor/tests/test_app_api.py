@@ -772,7 +772,8 @@ class SendTest(AppTest):
         got = json.loads(self.send("background", text="later please", mid="m-2").body)
         self.assertEqual((got["said"], got["chat"]), (NEXT, None))
         self.assertTrue((self.inst / "wisp" / "inbox" / got["file"]).is_file())
-        later = [i for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "later"]
+        self.assertFalse([i for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "later"])
+        later = [i for i in web_chat.from_feed("wisp")["items"] if i["type"] == "later"]
         self.assertEqual([(i["file"], i["mid"], i["text"]) for i in later], [(got["file"], "m-2", "later please")])
 
     def test_quotes_become_the_text_as_the_web_composer_writes_it(self):

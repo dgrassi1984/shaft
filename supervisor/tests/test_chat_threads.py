@@ -26,7 +26,8 @@ class ThreadsTest(ChatTest):
         self.assertEqual(shown(b["id"]), ["beta"])
         self.assertEqual(len(self.completions(a["id"])), 1)
         self.assertEqual(len(self.completions(b["id"])), 1)
-        self.assertNotIn("alpha", str(self.completions(b["id"])[0]["messages"]))
+        self.assertNotIn("alpha", str([m for m in self.completions(b["id"])[0]["messages"]
+                                     if m["role"] != "system"]))
         self.assertEqual({c["id"] for c in web_chat.threads("wisp")}, {a["id"], b["id"]})
 
     def test_regression_a_message_sent_to_thread_b_never_lands_in_a_while_a_replies(self):

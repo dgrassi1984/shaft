@@ -37,7 +37,11 @@ def event(**e):
     return [{}, None, {"shaft_event": e}]
 
 
-VOICE = [TYPED[0], TYPED[1], event(type="status", phase="waiting for the model", detail=""),
+STARTED = event(type="status", phase="started", detail="")
+TYPED_STATUS = [TYPED[0], STARTED, TYPED[1], event(type="status", phase="waiting for the model", detail=""),
+                *TYPED[2:6], event(type="status", phase="waiting for the model", detail=""), *TYPED[6:]]
+
+VOICE = [TYPED[0], STARTED, TYPED[1], event(type="status", phase="waiting for the model", detail=""),
          event(type="draft", text="Let me check "), event(type="draft", text="the weather."),
          event(type="step_end", answer=False),
          TYPED[2], TYPED[3], event(type="tool_start", name="get_weather"),
@@ -79,12 +83,11 @@ class VoiceApiTest(unittest.TestCase):
                 self.chat(**extra)
                 self.assertNotIn("voice", base.fake_run_agent.request)
 
-    def test_a_typed_request_streams_exactly_as_before_voice(self):
-        """Bug guarded: voice events leaking into typed streams (Telegram, the web chat, OpenAI clients) or the voice
-        change reordering their chunks. The chunk sequence is the one captured before voice existed."""
+    def test_a_typed_request_adds_status_events_without_voice_drafts(self):
+        """Typed streams carry scheduling status but never voice drafts or step boundaries."""
         for extra in ({}, {"voice": False}, {"voice": "1"}):
             with self.subTest(extra=extra):
-                self.assertEqual(self.chat(**extra), TYPED)
+                self.assertEqual(self.chat(**extra), TYPED_STATUS)
 
     def test_a_voice_request_streams_drafts_and_step_ends_around_the_typed_stream(self):
         """Bug guarded: the answer held back until the step ended (M0: no model streamed its answer to the app), or
@@ -115,12 +118,12 @@ class VoiceApiTest(unittest.TestCase):
         """Bug guarded: the drafts of a model call cut off at max_tokens (discarded by llm._answer) left open, so the
         app took them for the start of the answer the second call then wrote again."""
         got = self.chat(base.ApiTest.CUT_THEN_ASKED_AGAIN, voice=True)
-        self.assertEqual(got[1:7], [event(type="draft", text="Teal is a dark cy"), event(type="step_end", answer=False),
+        self.assertEqual(got[2:8], [event(type="draft", text="Teal is a dark cy"), event(type="step_end", answer=False),
                                     [{"reasoning_content": "reply cut off at 16384 tokens — asking again with 32768\n"},
                                      None, {}],
                                     event(type="draft", text="Teal is "), event(type="draft", text="blue-green."),
                                     event(type="step_end", answer=True)])
-        self.assertEqual(got[7], [{"content": "Teal is blue-green."}, None, {}])
+        self.assertEqual(got[8], [{"content": "Teal is blue-green."}, None, {}])
 
     def test_a_spoken_interjection_is_marked_for_the_agent_and_the_reply_scoring(self):
         """Bug guarded: a spoken interjection recorded as typed (C1.3), so its talk episode and the reply-prediction

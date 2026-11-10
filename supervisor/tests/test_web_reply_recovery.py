@@ -53,6 +53,7 @@ class RecoveryTest(unittest.TestCase):
             else:
                 events.append(api._chunk("test", "wisp", {}, reply_error={"message": text, "tools_ran": tools}))
         response = mock.MagicMock(status=status)
+        response.getheader.return_value = None
         response.__iter__.return_value = iter(events + ([b"data: [DONE]\n\n"] if complete else []))
         response.read.return_value = json.dumps({"error": {"message": text}}).encode()
         conn = mock.Mock()
@@ -209,7 +210,10 @@ class ApiFailureTest(unittest.TestCase):
                     proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO("".join(json.dumps(e)+"\n" for e in events)))
                     handler = api.Handler.__new__(api.Handler)
                     handler.wfile = io.BytesIO()
-                    handler.conversations = mock.Mock()
+                    handler.headers = {}
+                    handler.conversations = mock.MagicMock()
+                    handler.conversations._key.return_value = "test"
+                    handler.conversations.talks = {"test": {}}
                     handler.conversations.talk_id.return_value = "api-test"
                     handler.live = mock.Mock()
                     handler.send_response = handler.send_header = handler.end_headers = mock.Mock()

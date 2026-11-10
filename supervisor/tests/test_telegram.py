@@ -839,6 +839,7 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wisp", set(), False
+        b.as_of = None
         b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         from supervisor import channel
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
@@ -860,6 +861,7 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
         from supervisor import broker, channel
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wisp", set(), False
+        b.as_of = None
         b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
                 mock.patch.object(channel, "route", return_value=("web", "the operator set it for wisp")):

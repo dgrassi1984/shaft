@@ -65,6 +65,26 @@ poll GitHub itself, or a GitHub Action can join the tailnet.
 curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
+### Topic threads
+
+`supervisor.api.ReplyQueue` gives API replies for each instance first-come tickets. A reply in another thread
+waits instead of interjecting. Cycles still pause for replies; terminal conversations use the run lock outside this
+queue. A waiting stream names the API thread ahead of it as `waiting: answering in «<title>»`.
+The web relay stores this phase in `reply.waiting`. The `started` status clears it and resets the document snapshot,
+so documents written while waiting do not become this reply's cards.
+
+The web client sends the UTF-8 percent-encoded title in `X-Shaft-Thread-Title`. The API stores the decoded title beside
+the talk id and returns `X-Shaft-Talk` on completions. A non-streamed answer also carries `talk_id`, so an idempotent
+replay can return the same header. Cached answers from before this field was added have no talk header.
+`supervisor.web_chat._api_messages` prepends a short system digest of the other open threads, newest first.
+The broker's `read_thread` tool lists open threads followed by the 20 newest ended threads. With an id, it returns
+that instance's thread as text, limited to the last 12,000 characters. Trial replays cannot use it.
+
+`supervisor.messages.record` writes `talk` on every new message row. Messages sent during an API reply belong to
+that thread's recorded talks. `supervisor.web_chat.from_feed` contains cycle messages with `talk: null` and the
+operator's next-cycle notes. It returns the newest window with revisions and unread timestamps computed over the
+whole feed. Legacy rows without `talk` keep their time-span display in `sent_during`.
+
 ### `/v1` wire contract
 
 Examples use illustrative instance names and values. This API accepts a subset of
@@ -140,7 +160,7 @@ Only the reply's last step is its `content`: text written before a tool call is 
 `reasoning_content` when the tool starts, so a step's text is held until the API knows which it was. Text of a model
 call cut off at its token limit is dropped when the call is asked again (`retry`), as the instance drops it. A `voice`
 request's stream is the same stream with extra chunks in between: each has an empty delta and a top-level
-`shaft_event` (a typed request never gets one).
+`shaft_event`. Typed streams also carry `status` events, including `started` once the instance is held.
 
 | `shaft_event.type` | Fields | Sent |
 |---|---|---|
@@ -267,7 +287,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   at its corner while the code scrolls sideways). Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Below the quote cards, the composer keeps its main field: the paperclip attaches files, the arrow sends now
-  (during a reply: an interjection), and ⌃ beside it — or a long press on the arrow — offers **Queue after reply**
+  (during a reply in that thread: an interjection), and ⌃ beside it — or a long press on the arrow — offers **Queue after reply**
   (only while a reply runs) and **Next cycle**. A tap on the arrow keeps the keyboard up and the text focused, as in Messages.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
   until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
@@ -281,7 +301,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   **Next cycle** is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
-  (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
+  (the next wake's time, a cycle running now, no scheduled cycles, or paused). Its From-feed row is yours, marked
   **⏾ next cycle · waiting**, then **read** once a cycle has read it. Its answer, if it sends one, is a message
   like any other (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.

@@ -482,6 +482,10 @@ SPECS["trial"] = _spec(
      "extend": {"type": "string", "description": "id of a finished trial with no clear difference: add 4 more "
                                                  "cycles to it (then files and hypothesis are not needed)"}},
     [])
+SPECS["read_thread"] = _spec(
+    "read_thread", "List your web threads, or read one thread's turns. Includes ended threads.",
+    {"id": {"type": "string", "description": "Thread id; omit to list threads"}}, [])
+
 # The operator's mail: offered only to an instance they granted a label to, and only threads under it.
 SPECS["mail_search"] = _spec(
     "mail_search",
@@ -1612,6 +1616,8 @@ class Broker:
         grants, calendars, drives = self.mail_grants(), self.calendar_grants(), self.gdrive_grants()
         chats = self.gchat_grants()
         for tool, spec in SPECS.items():
+            if tool == "read_thread" and self.as_of is not None:
+                continue
             if tool in self.disabled or (tool in MAIL_ALL_TOOLS and not grants) or (tool in CALENDAR_TOOLS and not calendars) \
                     or (tool in DRIVE_TOOLS and not drives) or (tool in GCHAT_TOOLS and not chats) \
                     or (tool in CALENDAR_WRITE_TOOLS and (self.as_of or not any(g.get("write") for g in calendars))):
@@ -1645,6 +1651,21 @@ class Broker:
                     spec["function"]["description"] += self._orders_line()
             out.append(spec)
         return out
+
+    def _read_thread(self, id: str = "") -> str:
+        """Read only this instance's conversations; live threads are unavailable in replays."""
+        if self.as_of is not None:
+            raise PermissionError("read_thread is unavailable in a replay")
+        from . import web_chat
+        if id:
+            chat = web_chat.thread_of(self.name, id, writing=False)
+            return "\n\n".join(
+                f"{'operator' if t['role'] == 'user' else self.name} ({t['ts']}): {t.get('content', '')}"
+                for t in chat.get("turns", []))[-12000:]
+        ended = sorted((c for c in web_chat.chats(self.name) if c.get("state") == "ended"),
+                       key=web_chat._activity, reverse=True)[:20]
+        return "\n".join(f"{c['id']} «{web_chat.title(c)}» {c['state']} (last moved {web_chat._activity(c)[0]})"
+                         for c in [*web_chat.threads(self.name), *ended])
 
     def _channel_line(self) -> str:
         """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
@@ -1786,7 +1807,7 @@ class Broker:
                 alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
                 log(f"{self.name}: message to the operator: {alert[1]}")
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
-                            alert, urgent=urgent)
+                            alert, urgent=urgent, talk=self.talk_id)
             from . import pushes
             row = next((r for r in pushes.records(self.project / ".supervisor") if r["file"] == path.name), {})
             held = (row["push_due"], row.get("push_held") or "held") if row.get("push_due") else None
@@ -1796,7 +1817,7 @@ class Broker:
             return held
         from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
         path = safe_write(self.project / "instances" / to, rel, content)
-        messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+        messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments, talk=self.talk_id)
         from . import autonomy         # it wakes for this once idle, not at its next timed wake (review C15)
         autonomy.event_wake(to, f"message from {self.name}", from_instance=True)
         return None

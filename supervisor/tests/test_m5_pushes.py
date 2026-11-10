@@ -48,6 +48,7 @@ class PushTest(unittest.TestCase):
         self.b.calls, self.b.max_calls, self.b.counts = 0, 60, Counter()
         self.b.disabled, self.b.unavailable = {"trial", "delegate_coding"}, {}
         self.b.model_allowed, self.b.as_of = True, None
+        self.b.talk_id = None
 
     def message(self, at=NOW, sender="m", to="operator", alert=True):
         path = self.sup / f"{at:%Y%m%d-%H%M%S-%f}-from-{sender}.md"

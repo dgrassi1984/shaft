@@ -245,7 +245,10 @@ class RetryInPlaceTest(unittest.TestCase):
         self.assertTrue(web_chat.mark_retried(chat, 1, "first"))
         self.assertFalse(web_chat.mark_retried(chat, 1, "first"))                 # once
         chat["turns"].append({"role": "user", "content": "first", "ts": "2026-10-27T10:01:00"})
-        self.assertEqual(web_chat._api_messages(chat), [{"role": "user", "content": "first"}])
+        from unittest import mock
+        chat["instance"] = "wisp"
+        with mock.patch.object(web_chat, "threads", return_value=[]):
+            self.assertEqual(web_chat._api_messages(chat), [{"role": "user", "content": "first"}])
         feed = str(web_views.chat_feed("wisp", chat, []))
         self.assertEqual(feed.count(">first<"), 1)
         self.assertIn('<p class="dim retried" data-k="a1">The first try failed and was sent again', feed)

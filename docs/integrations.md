@@ -45,8 +45,8 @@ Every message an instance sends you (`send_message` to the operator) lands in yo
 and raises a banner on the Mac. It also notifies you on **one** channel, where you pick the conversation up:
 
 - **The web UI**: a push to every device with notifications on (⋯ then **Notify me on this device**). It opens the
-  instance's chat, where the message shows under the conversation with a Reply button; quoting a question there
-  answers it.
+  instance's chat. Messages sent during a reply belong to that thread; cycle messages belong to the From feed
+  (`supervisor.web_chat.sent_during` and `from_feed`). Quoting a question answers it.
 - **Telegram**: from the instance's own bot. Replying to it answers a question.
 
 Which one, decided when the message is sent:
