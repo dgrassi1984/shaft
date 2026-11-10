@@ -65,6 +65,8 @@ public struct InstanceSettings: Codable, Sendable, Equatable {
         case .cloudCap: cloudCap.value.map(SettingValue.double) ?? .null
         case .channel: .string(channel.value)
         case .operatorName: .string(operatorName.value)
+        case .voiceMode: .string(voiceMode.value)
+        case .voiceEffort: .string(voiceEffort.value)
         }
     }
 }
@@ -74,6 +76,8 @@ public enum SettingField: String, Codable, Sendable, CaseIterable {
     case wakeInterval = "wake_interval"
     case cloudCap = "cloud_cap"
     case operatorName = "operator_name"
+    case voiceMode = "voice_mode"
+    case voiceEffort = "voice_effort"
 }
 
 /// A scalar JSON value. `.null` explicitly unsets effort or the cloud-cap override.

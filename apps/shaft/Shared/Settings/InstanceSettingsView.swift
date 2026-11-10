@@ -4,6 +4,7 @@ import SwiftUI
 struct InstanceSettingsView: View {
     let store: InstanceSettingsStore
     let services: ServicesStore
+    @Environment(InstancesStore.self) private var instances
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingPause = false
     @State private var pausing = false
@@ -79,6 +80,7 @@ struct InstanceSettingsView: View {
                 }
             }
             .listRowBackground(Color.elevated)
+            VoiceSettingsSection(store: store, client: instances.client, settings: settings)
             Section {
                 HStack {
                     Toggle("Paused", isOn: Binding(
@@ -219,6 +221,169 @@ private struct SettingTextRow: View {
         }
         Task {
             if await store.save(field, value: value), draft == text { draft = nil }
+        }
+    }
+}
+
+/// The shared voice preferences and proposals, with failures kept beside the action that failed.
+private struct VoiceSettingsSection: View {
+    let store: InstanceSettingsStore
+    let client: APIClient
+    let settings: InstanceSettings
+    @State private var voices: VoicesResponse?
+    @State private var loadError: String?
+    @State private var rowErrors: [String: String] = [:]
+    @State private var pending: String?
+    @State private var picking: VoiceLanguage?
+    @State private var rejecting: String?
+    @State private var reason = ""
+
+    var body: some View {
+        Section("Voice") {
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
+                Toggle("Voice mode", isOn: Binding(
+                    get: { store.settings?.voiceMode.value == "on" },
+                    set: { save(.voiceMode, value: $0 ? "on" : "off") }
+                ))
+                errorRow(SettingField.voiceMode.rawValue)
+            }
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
+                if let choices = settings.voiceEffort.choices {
+                    Picker("Voice-turn effort", selection: Binding(
+                        get: { store.settings?.voiceEffort.value ?? "" },
+                        set: { save(.voiceEffort, value: $0) }
+                    )) {
+                        if !choices.contains(settings.voiceEffort.value) {
+                            Text(effortLabel(settings.voiceEffort.value)).tag(settings.voiceEffort.value)
+                        }
+                        ForEach(choices, id: \.self) { Text(effortLabel($0)).tag($0) }
+                    }
+                } else {
+                    LabeledContent("Voice-turn effort", value: effortLabel(settings.voiceEffort.value))
+                    Text("Effort choices are unavailable.").font(.footnote).foregroundStyle(Color.textSecondary)
+                }
+                errorRow(SettingField.voiceEffort.rawValue)
+            }
+            if let voices {
+                ForEach(VoiceLanguage.allCases, id: \.self) { language in
+                    languageRow(language, voices: voices)
+                }
+                ForEach(voices.proposals.filter { $0.state == "open" }, id: \.id) { proposal in
+                    proposalRow(proposal)
+                }
+            } else if let loadError {
+                Text(loadError).foregroundStyle(Color.warning)
+                Button("Retry voices") { Task { await load() } }
+            } else {
+                ProgressView("Loading voices…")
+            }
+        }
+        .listRowBackground(Color.elevated)
+        .disabled(pending != nil)
+        .task {
+            await VoiceReporter.report(client: client)
+            await load()
+        }
+        .sheet(isPresented: Binding(get: { picking != nil }, set: { if !$0 { picking = nil } })) {
+            if let language = picking {
+                VoicePicker(client: client, instance: store.instance, language: language) { voices = $0 }
+                    .sheetFrame()
+            }
+        }
+    }
+
+    private func effortLabel(_ value: String) -> String {
+        value.isEmpty ? "Same as typed (\(settings.effort.value ?? "Not set"))" : value
+    }
+
+    private func languageRow(_ language: VoiceLanguage, voices: VoicesResponse) -> some View {
+        let voice = voices.voices[language.rawValue].flatMap { $0 }
+        return VStack(alignment: .leading, spacing: Design.Space.s4) {
+            Text(language == .en ? "English" : "Italian").font(.headline)
+            Text(voice?.name ?? "System voice")
+            if let voice {
+                Text(voice.by == "operator" ? "chosen by you" : "chosen by \(store.instance)")
+                    .font(.footnote).foregroundStyle(Color.textSecondary)
+            }
+            HStack {
+                Button { picking = language } label: { Text("Change").quietHitArea() }
+                Button { clear(language) } label: { Text("Clear").quietHitArea() }
+                    .disabled(voice == nil)
+            }
+            .buttonStyle(.borderless)
+            errorRow(language.rawValue)
+        }
+    }
+
+    private func proposalRow(_ proposal: VoicesResponse.Proposal) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.s8) {
+            Text("\(proposal.name) · \(proposal.language == "en" ? "English" : proposal.language == "it" ? "Italian" : proposal.language)")
+                .font(.headline)
+            Text("Proposed by \(store.instance)").font(.footnote).foregroundStyle(Color.textSecondary)
+            Text(proposal.why)
+            if rejecting == proposal.id {
+                TextField("Reason (optional)", text: $reason)
+                HStack {
+                    Button { decide(proposal, accept: false) } label: { Text("Reject proposal").quietHitArea() }
+                    Button { rejecting = nil; reason = "" } label: { Text("Cancel").quietHitArea() }
+                }
+            } else {
+                HStack {
+                    Button { decide(proposal, accept: true) } label: { Text("Accept").quietHitArea() }
+                    Button { rejecting = proposal.id; reason = "" } label: { Text("Reject…").quietHitArea() }
+                }
+            }
+            errorRow(proposal.id)
+        }
+        .buttonStyle(.borderless)
+    }
+
+    @ViewBuilder
+    private func errorRow(_ key: String) -> some View {
+        if let error = rowErrors[key] { Text(error).font(.footnote).foregroundStyle(Color.warning) }
+        if pending == key { ProgressView().controlSize(.small) }
+    }
+
+    private func save(_ field: SettingField, value: String) {
+        pending = field.rawValue
+        rowErrors[field.rawValue] = nil
+        Task {
+            defer { pending = nil }
+            if !(await store.save(field, value: .string(value))) {
+                rowErrors[field.rawValue] = store.saveError
+            }
+        }
+    }
+
+    private func load() async {
+        do {
+            voices = try await client.voices(store.instance)
+            loadError = nil
+        } catch { loadError = APIError.from(error)?.message }
+    }
+
+    private func clear(_ language: VoiceLanguage) {
+        pending = language.rawValue
+        rowErrors[language.rawValue] = nil
+        Task {
+            defer { pending = nil }
+            do { voices = try await client.clearVoice(store.instance, language: language.rawValue) }
+            catch { rowErrors[language.rawValue] = APIError.from(error)?.message }
+        }
+    }
+
+    private func decide(_ proposal: VoicesResponse.Proposal, accept: Bool) {
+        pending = proposal.id
+        rowErrors[proposal.id] = nil
+        let rejectionReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { pending = nil }
+            do {
+                voices = try await client.decideVoiceProposal(store.instance, id: proposal.id, accept: accept,
+                    reason: accept || rejectionReason.isEmpty ? nil : rejectionReason)
+                rejecting = nil
+                reason = ""
+            } catch { rowErrors[proposal.id] = APIError.from(error)?.message }
         }
     }
 }

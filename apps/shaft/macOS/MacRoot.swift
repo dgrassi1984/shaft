@@ -92,6 +92,7 @@ struct MacRoot: View {
     var body: some View {
         SessionRoot(model: model) { session, store in
             MacChats(session: session, store: store, state: state)
+                .task { await VoiceReporter.atLaunch(client: store.client) }
         }
         .frame(minWidth: Self.minimumWidth, minHeight: 480)
         // The reading surface behind everything, the title bar's area too.
