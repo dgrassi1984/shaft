@@ -9,11 +9,10 @@ import re
 from unittest import mock
 
 from supervisor import messages, web, web_chat, web_pages, web_views
-from supervisor.tests.test_web_chat import ME, ChatRoutesTest
+from supervisor.tests.test_web_chat import ME, ChatRoutesCase
 
 
-class ThreadsWebTest(ChatRoutesTest):
-    """(It runs ChatRoutesTest's own tests again too, as every ChatRoutesTest subclass does.)"""
+class ThreadsWebTest(ChatRoutesCase):
     def setUp(self):
         super().setUp()
         for p in (mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "INSTANCES", self.inst),
@@ -223,7 +222,7 @@ class ThreadsWebTest(ChatRoutesTest):
         self.assertNotIn("waitline", self.get(f"/fragment/chat/wisp/live?id={b['id']}"))
 
 
-class RailMarkupTest(ChatRoutesTest):
+class RailMarkupTest(ChatRoutesCase):
     def test_first_render_without_threads_keeps_the_old_shape(self):
         """A page's first render (no snapshot) lists the names only; web.js fills the threads at once."""
         rail = str(web_pages.rail(["wisp"], "i:wisp"))

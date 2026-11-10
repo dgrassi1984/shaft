@@ -329,7 +329,11 @@ class FilesTest(ChatTest):
         self.assertEqual(files, [("a.png", PNG)])
 
 
-class ChatRoutesTest(WebTest):
+class ChatRoutesCase(WebTest):
+    """The web chat's routes over a temporary instance folder: the harness only, with no test of its own, so the many
+    classes built on it (here, test_web_threads) do not each run a base class's tests again. Importing a class that
+    has tests into another module runs them twice (the release gate's "run twice", v0.49.0)."""
+
     def setUp(self):
         super().setUp()
         self.inst = Path(tempfile.mkdtemp(prefix="shaft-chat-inst-")).resolve()
@@ -348,6 +352,8 @@ class ChatRoutesTest(WebTest):
         web_chat.save(chat)
         return chat
 
+
+class ChatRoutesTest(ChatRoutesCase):
     def test_the_send_route_takes_multipart_with_the_page_token_only(self):
         body, ctype = b"--B\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\nhi\r\n--B--\r\n", "multipart/form-data; boundary=B"
         with mock.patch.object(web_chat, "send", return_value=({}, "sent to wisp")) as send:
@@ -427,7 +433,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ChatCentricTest(ChatRoutesTest):
+class ChatCentricTest(ChatRoutesCase):
     """The chat is the front page, a live rail lists every chat, the instance's pages sit behind ⋯."""
 
     def test_the_front_page_is_the_chat_last_opened_else_the_first(self):
@@ -596,7 +602,7 @@ class DocsInChatTest(DocsChatCase):
         self.assertNotIn("docs", c["turns"][1])
 
 
-class DocsPanelTest(ChatRoutesTest):
+class DocsPanelTest(ChatRoutesCase):
     def setUp(self):
         super().setUp()
         self.docs = self.inst / "wisp" / "notes" / "docs"
@@ -1035,7 +1041,7 @@ class ClearTest(DocsChatCase):
         self.assertIn("+more", c3["turns"][0]["content"])
 
 
-class ClearRouteTest(ChatRoutesTest):
+class ClearRouteTest(ChatRoutesCase):
     def test_the_page_offers_clear_and_the_route_takes_the_page_token_only(self):
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}], "ended")
@@ -1121,7 +1127,7 @@ class LifecycleRaceTest(ChatTest):
         self.assertEqual(web_chat.load(sent["chat"]["id"])["turns"][0]["shown"], "one more")
 
 
-class ArchivedClearTest(ChatRoutesTest):
+class ArchivedClearTest(ChatRoutesCase):
     def test_a_past_chats_page_acts_on_nothing_and_a_stale_clear_is_refused(self):
         past = self.chat_with([{"role": "user", "content": "old", "ts": "2026-10-19T11:00:00"}], "ended")
         now = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
@@ -1136,7 +1142,7 @@ class ArchivedClearTest(ChatRoutesTest):
         self.assertEqual(web_chat.load(now["id"])["state"], "idle")   # the current one untouched
 
 
-class ClearInHeaderTest(ChatRoutesTest):
+class ClearInHeaderTest(ChatRoutesCase):
     def test_selected_open_thread_refreshes_its_own_feed_header_and_activity(self):
         chat = self.chat_with([{"role": "user", "content": "selected topic", "ts": "2026-10-19T12:00:00"}])
         other = self.chat_with([])
@@ -1268,7 +1274,7 @@ class ClearInHeaderTest(ChatRoutesTest):
         self.assertNotIn("/chat/wisp/clear", body)
 
 
-class NetworkTest(ChatRoutesTest):
+class NetworkTest(ChatRoutesCase):
     """What a phone on cellular pays for a chat left open."""
 
     def test_an_unchanged_refresh_is_a_304_with_no_body(self):
