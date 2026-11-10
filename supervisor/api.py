@@ -789,8 +789,13 @@ class Handler(BaseHTTPRequestHandler):
         spoken = stream and voice
 
         def event(**shaft_event) -> None:
-            """Status reaches every stream. Drafts and step boundaries reach spoken streams only."""
-            if spoken or (stream and shaft_event.get("type") == "status"):
+            """A voice reply's own event, in a chunk of its own with an empty delta: OpenAI clients see nothing new. A
+            step's text goes out at once as `draft` pieces (the app speaks them) and is still held in `step` as above;
+            `step_end` then says whether it was the answer (its whole text also comes as `content`) or narration
+            before a tool call (only reasoning). A typed stream gets none of them, except the web chat's, which gets
+            the status events (waiting for another thread, started): every other client's typed stream is
+            byte for byte what it was before voice and threads (test_voice_api, test_voice_session)."""
+            if spoken or (stream and channel == "web" and shaft_event.get("type") == "status"):
                 self.wfile.write(_chunk(cid, model, {}, shaft_event=shaft_event))
 
         try:

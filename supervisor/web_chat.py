@@ -898,7 +898,8 @@ def _run(relay: Relay) -> None:
                             if phase == "started":
                                 chat["reply"]["docs_before"] = _docs_now(chat["instance"])
                             save(chat)
-                if isinstance(se, dict) and se.get("type") in STREAM_EVENTS:     # at once: no file, no poll between
+                # `started` only tells this relay the reply holds the instance now: not a line for the apps to show
+                if isinstance(se, dict) and se.get("type") in STREAM_EVENTS and se.get("phase") != "started":
                     relay.emit(se["type"], **{k: se.get(k) for k in STREAM_EVENTS[se["type"]]})
                 delta = (ev.get("choices") or [{}])[0].get("delta") or {}
                 if delta.get("reasoning_content"):

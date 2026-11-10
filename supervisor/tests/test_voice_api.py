@@ -56,9 +56,13 @@ class VoiceApiTest(unittest.TestCase):
     setUp = base.ApiTest.setUp
     req = base.ApiTest.req
 
-    def chat(self, events=WEATHER, **extra):
+    def chat(self, events=WEATHER, channel="", **extra):
         body = {"model": "wisp", "stream": True, "messages": [{"role": "user", "content": "weather in Rome?"}], **extra}
-        with mock.patch.object(base, "EVENTS", events):
+        real = urllib.request.Request
+
+        def request(*a, headers=None, **k):   # the web UI names its channel; every other client does not
+            return real(*a, headers={**(headers or {}), **({"X-Shaft-Channel": channel} if channel else {})}, **k)
+        with mock.patch.object(base, "EVENTS", events), mock.patch("urllib.request.Request", request):
             with self.req("/chat/completions", body) as response:
                 raw = response.read().decode()
         out = []
@@ -83,11 +87,18 @@ class VoiceApiTest(unittest.TestCase):
                 self.chat(**extra)
                 self.assertNotIn("voice", base.fake_run_agent.request)
 
-    def test_a_typed_request_adds_status_events_without_voice_drafts(self):
-        """Typed streams carry scheduling status but never voice drafts or step boundaries."""
+    def test_a_typed_request_streams_exactly_as_before_voice(self):
+        """Bug guarded: voice events leaking into typed streams (Telegram, OpenAI clients) or the voice change
+        reordering their chunks. The chunk sequence is the one captured before voice existed."""
         for extra in ({}, {"voice": False}, {"voice": "1"}):
             with self.subTest(extra=extra):
-                self.assertEqual(self.chat(**extra), TYPED_STATUS)
+                self.assertEqual(self.chat(**extra), TYPED)
+
+    def test_only_the_web_chats_typed_stream_carries_status_events(self):
+        """Threads: the web chat learns from status events that its reply waits for another thread and when it starts
+        (its document snapshot is taken again then). Other typed clients keep the stream captured before voice."""
+        self.assertEqual(self.chat(channel="web"), TYPED_STATUS)
+        self.assertEqual(self.chat(channel="telegram"), TYPED)
 
     def test_a_voice_request_streams_drafts_and_step_ends_around_the_typed_stream(self):
         """Bug guarded: the answer held back until the step ended (M0: no model streamed its answer to the app), or
