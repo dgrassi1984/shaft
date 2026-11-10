@@ -224,8 +224,8 @@ struct ChatsLayout: View {
             InstancesLoadFailure(error: error, settings: { settings = true })
         } else if let selection {
             let chat = store.chat(selection)
-            ChatScreen(chat: chat, openArchived: { summary in
-                path.append(ArchivedRoute(instance: selection.instance, cid: summary.id))
+            ChatScreen(chat: chat, openArchived: { cid in
+                path.append(ArchivedRoute(instance: selection.instance, cid: cid))
             }, openThread: { ref in open(ChatSelection(selection.instance, ref)) })
             .id(ChatSelection(selection.instance, chat.ref))
         } else if store.loaded {

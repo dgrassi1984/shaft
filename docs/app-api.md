@@ -378,6 +378,8 @@ Native apps normalize this only for drawing; Copy and Reply keep the source.
 | `file` | str | its file name in the message log: rating target, `/messages/<file>` in the web UI |
 | `ts` | timestamp | |
 | `kind` | str | `"message"` or `"question"` |
+| `from_cycle` | bool | written later, in a cycle, for work queued in this thread: part of the thread (shown "⏾ from its cycle") |
+| `re` | object or null | in From: `{"cid", "title"}` of the ended thread it answers (shown as a link to that earlier chat) |
 | `read` | bool | it has left the operator's inbox. A question that is read is answered ("a question (answered)") |
 | `text` | str | Markdown |
 | `attachments` | list | `{name, bytes, image, text, url}` |
@@ -588,7 +590,7 @@ The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multip
 
   | Field | Type | |
   |---|---|---|
-  | `cid` | str | optional open thread of `<n>` for `now` and `queue`; omitted or empty selects the most recently active open thread, or starts one. Ignored for `background`. An unknown, foreign or ended thread answers `409 refused` |
+  | `cid` | str | optional open thread of `<n>` for `now` and `queue`; omitted or empty selects the most recently active open thread, or starts one. An unknown, foreign or ended thread answers `409 refused`. With `background`: the thread the note was written in — while open, the note shows there and its answer comes there; omitted, `"from"` or an ended thread: From |
   | `text` | str | what the operator wrote below the quotes; may be `""` |
   | `mid` | str | required: the message's id (§1.3). The same `mid` again answers as the first send did, without sending twice — also across `now`, `queue` and `background` |
   | `mode` | str | `now` (default): a new reply, or an interjection while one runs ("Send now"). `queue`: after the running reply (sent now when idle). `background`: to the inbox for its next cycle, no reply now |

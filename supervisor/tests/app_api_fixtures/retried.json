@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "48003e7aad106ff1",
+  "version": "e38b854f3e196632",
   "live": "",
   "reply": null,
   "chat": {
@@ -23,6 +23,8 @@
       "read": false,
       "text": "Should the nightly report keep the per-account lines?",
       "attachments": [],
+      "from_cycle": false,
+      "re": null,
       "rating": {
         "id": "f-222222222222222222222222",
         "thumb": "up",
@@ -98,6 +100,8 @@
           "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/2"
         }
       ],
+      "from_cycle": false,
+      "re": null,
       "rating": null
     },
     {
@@ -109,6 +113,21 @@
       "read": true,
       "text": "Answered question?",
       "attachments": [],
+      "from_cycle": false,
+      "re": null,
+      "rating": null
+    },
+    {
+      "key": "s20261103-141300-000001-from-wisp.md",
+      "type": "sent",
+      "file": "20261103-141300-000001-from-wisp.md",
+      "ts": "2026-11-03T14:13:00+01:00",
+      "kind": "message",
+      "read": true,
+      "text": "March reconciles: 3 lines moved.",
+      "attachments": [],
+      "from_cycle": true,
+      "re": null,
       "rating": null
     }
   ],
@@ -118,7 +137,7 @@
   "mids": [
     "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54"
   ],
-  "last": "2026-11-03T14:12:00+01:00",
+  "last": "2026-11-03T14:13:00+01:00",
   "can_stop": false,
   "can_end": true,
   "can_clear": true

@@ -25,7 +25,7 @@ def tool(name, args, cid="1"):
 class ReplyFirstTest(InstanceFixture, unittest.TestCase):
     """#133: the next call must reply after either budget, without cutting a running answer."""
 
-    def respond(self, replies, *, advance=None):
+    def respond(self, replies, *, advance=None, talk_id=""):
         seen = []
         client = mock.Mock()
         ticks = [0]
@@ -39,6 +39,7 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
 
         client.stream.side_effect = stream
         self.box, self.view = Toolbox(self.root), mock.Mock()
+        self.box.commit_talk_id = talk_id
         with mock.patch.object(talk.time, "monotonic", side_effect=lambda: ticks[0]), \
                 mock.patch.object(clock, "now", return_value=NOW):
             result = talk._respond(client, self.cfg, self.box,
@@ -104,6 +105,21 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
         for text in (f"From: {self.cfg.NAME}", "Kind: queued from conversation", "Date: 2026-10-28 14:05",
                      "Finish the orchard survey", "Why: Reply first"):
             self.assertIn(text, shown.split("\n\n## ", 1)[0])
+
+    def test_queued_work_names_its_conversation_so_the_cycle_answers_there(self):
+        """The 2026-11-10 case: a queued verdict was answered in the From feed, blind to the conversation. The note
+        names the conversation (header and instruction), and the reply is told its answer comes back there."""
+        seen = self.respond([Reply("", tool_calls=[tool("queue_for_next_cycle", {
+            "task": "Read the whole call", "why": "Budget used"})]), Reply("I will come back here.")],
+            talk_id="api-0a1b2c3d4e")
+        [(_, body)] = live.read_inbox(self.state)
+        self.assertIn("Conversation: api-0a1b2c3d4e — answer in it: send_message(conversation=api-0a1b2c3d4e)\n",
+                      body)
+        self.assertIn("read it first with read_thread", body)
+        self.assertNotIn("report back to the operator", body)
+        result = next(m["content"] for m in seen[-1][0] if m.get("role") == "tool")
+        self.assertIn("its answer will come back in this conversation", result)
+        self.assertIn("Conversation: api-0a1b2c3d4e", live.inbox_line(*live.read_inbox(self.state)[0]))
 
     def test_talk_and_api_prompts_show_defaults_and_disabled_budgets(self):
         self.assertEqual(config.FIELDS["TALK_REPLY_CALLS"], (int, 6))

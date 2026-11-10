@@ -51,6 +51,8 @@ RUN_SAVED_CHARS = 1_000_000   # a saved `run` output keeps at most this many cha
 RUN_SAVED_FILES = 32          # saved `run` outputs kept in .tmp/outputs/; the oldest go first,
 RUN_SAVED_HOURS = 24          # and any older than this
 MAX_MESSAGE_CHARS = 8000
+READ_THREAD_CHARS = 12000          # read_thread's view of one thread: its tail, from the operator's latest message at least
+READ_THREAD_ITEM_CHARS = 3000      # each of the instance's own items in it, cut beyond this
 # Messages to the operator per instance per day; 0 = no limit.
 OPERATOR_DAILY_LIMIT, _ = knob(
     "SHAFT_OPERATOR_PER_DAY", "0", whole, "messages per day one instance may send the operator (0: no limit)",
@@ -296,7 +298,16 @@ SPECS = {
                                            "description": "paths of files in your folder (e.g. notes/report.md), "
                                                           "up to 10, 20 MB each, 50 MB in all; the operator opens them "
                                                           "in the web UI, and gets them on Telegram when your message "
-                                                          "goes there"}},
+                                                          "goes there"},
+                           "conversation": {"type": "string", "description":
+                                            "for the operator: the conversation this answers — the Conversation id of "
+                                            "work queued in one (an inbox note's Conversation line, a commitment's "
+                                            "talk_id) or a web thread id (web-…). While that thread is open your "
+                                            "message becomes part of it, after what was said there since: read it "
+                                            "with read_thread first (refused otherwise), then write as the next turn "
+                                            "of that conversation as it stands now — rephrase, shorten, or send "
+                                            "nothing if it was settled there. An ended thread's answer goes to the "
+                                            "From feed, linked to it"}},
                           ["to", "text"]),
     "record_order": _spec("record_order", "Record a standing order the operator gave you: a decision that stays "
                           "decided ('Retire it', 'Drop the X', 'the paper body has no process blocks'). The supervisor "
@@ -484,7 +495,8 @@ SPECS["trial"] = _spec(
     [])
 SPECS["read_thread"] = _spec(
     "read_thread", "List your web threads, or read one thread's turns. Includes ended threads.",
-    {"id": {"type": "string", "description": "Thread id; omit to list threads"}}, [])
+    {"id": {"type": "string", "description": "Thread id (web-…) or a conversation id (api-…) of one; omit to list "
+                                             "threads"}}, [])
 
 # The operator's mail: offered only to an instance they granted a label to, and only threads under it.
 SPECS["mail_search"] = _spec(
@@ -959,6 +971,7 @@ class Broker:
         self._project_charges = []
         self.calls = 0
         self.counts: dict[str, int] = {}
+        self.thread_reads: dict[str, tuple[int, str]] = {}   # thread id -> what read_thread saw (web_chat.thread_mark)
         self.channel = None
         self.channel_down: str | None = None
         self._channel_rate = None
@@ -1501,10 +1514,15 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
-                      expect_reply: dict | None = None, urgent: bool = False) -> str:
+                      expect_reply: dict | None = None, urgent: bool = False, conversation: str = "") -> str:
         from . import messages
         if type(urgent) is not bool:
             raise ValueError("urgent must be a boolean")
+        if not isinstance(conversation, str):
+            raise ValueError("conversation must be text: a conversation id (api-…) or a thread id (web-…)")
+        conversation = conversation.strip()
+        if conversation and to != "operator":
+            raise ValueError("conversation is for a message to the operator")
         if not text.strip():
             raise ValueError("empty message")
         if self.counts["send_message"] > 10:
@@ -1540,20 +1558,23 @@ class Broker:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
             stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}"
+            thread, re_, where = self._conversation_target(conversation)   # refused before anything is checked or sent
             check, checked = self._check_orders(text, f"{stem}.md", stamp)   # refused here when it goes against one
+            if conversation:   # the orders check can take seconds: what the operator did in the thread meanwhile counts
+                thread, re_, where = self._conversation_target(conversation)
             atts = self._store(self.project / ".supervisor" / "operator-inbox", f"attachments/{stem}", files)
             body = text.strip() + messages.attachment_lines(atts, "path")
             held = self._deliver("operator", f"{stem}.md",
                                  f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                                 kind, stamp, body, atts, urgent=urgent)
+                                 kind, stamp, body, atts, urgent=urgent, thread=thread, re_=re_)
             if check:
                 self._log_check(check)
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
             waited = self._waited_share(self.as_of or stamp)
-            return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
-                    f"; message_file {stem}.md" + expectation
+            return (f"delivered to the operator ({kind}){with_files}{where}; their reply, if any, will arrive in your "
+                    f"inbox; message_file {stem}.md" + expectation
                     + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}" if push else "")
                     + (f"; its notification is held for the operator's digest at {held[0][:16].replace('T', ' ')} "
                        f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
@@ -1653,19 +1674,76 @@ class Broker:
         return out
 
     def _read_thread(self, id: str = "") -> str:
-        """Read only this instance's conversations; live threads are unavailable in replays."""
+        """Read only this instance's conversations; live threads are unavailable in replays. A thread reads as one
+        conversation (web_chat.dialogue): its turns and what was routed into it from outside its replies. Reading one
+        is what lets send_message answer in it (thread_reads)."""
         if self.as_of is not None:
             raise PermissionError("read_thread is unavailable in a replay")
-        from . import web_chat
+        from . import messages, web_chat
         if id:
-            chat = web_chat.thread_of(self.name, id, writing=False)
-            return "\n\n".join(
-                f"{'operator' if t['role'] == 'user' else self.name} ({t['ts']}): {t.get('content', '')}"
-                for t in chat.get("turns", []))[-12000:]
+            chat = web_chat.thread_of(self.name, self._thread_id(id) or id, writing=False)
+            history = messages.history()
+            items = web_chat.dialogue(chat, history)
+            # Its own long answers are cut, and the view never starts after the operator's latest message: reading
+            # a thread is what lets send_message answer in it (thread_reads), so what the operator said last is
+            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail)
+            lines = [f"operator ({ts}): {text}" if role == "user" else
+                     f"{self.name} ({ts}): " + (text if len(text) <= READ_THREAD_ITEM_CHARS else
+                                                text[:READ_THREAD_ITEM_CHARS]
+                                                + f" … [{len(text) - READ_THREAD_ITEM_CHARS} more characters cut]")
+                     for ts, role, text in items]
+            out = "\n\n".join(lines)
+            said = [k for k, (_, role, _) in enumerate(items) if role == "user"]
+            keep = len("\n\n".join(lines[said[-1]:])) if said else 0
+            self.thread_reads[chat["id"]] = web_chat.thread_mark(chat, history)
+            return out[-max(READ_THREAD_CHARS, keep):]
         ended = sorted((c for c in web_chat.chats(self.name) if c.get("state") == "ended"),
                        key=web_chat._activity, reverse=True)[:20]
         return "\n".join(f"{c['id']} «{web_chat.title(c)}» {c['state']} (last moved {web_chat._activity(c)[0]})"
                          for c in [*web_chat.threads(self.name), *ended])
+
+    def _thread_id(self, ref: str) -> str:
+        """A web thread id from a thread id (web-…) or the id of a conversation that ran in one (api-…); a conversation
+        that ran in no web thread — a terminal talk, Telegram — gives ""."""
+        from . import web_chat
+        ref = ref.strip()
+        return ref if ref.startswith("web-") else (web_chat.thread_of_talk(self.name, ref) or "")
+
+    def _conversation_target(self, conversation: str) -> tuple[str | None, str | None, str]:
+        """Where send_message's `conversation` puts a message to the operator: (thread, re, what to tell the
+        instance). An open thread takes it as part of the conversation — only when this run read the thread after the
+        last thing the operator wrote there (read_thread), so an answer from a cycle is written knowing what was said
+        since it was queued (2026-11-10: an answer queued at 21:12 was sent at 21:15 blind to the operator's
+        21:13 turn). An ended thread: From, linked to it (re). A conversation with no web thread: From. A replay
+        cannot read threads (read_thread) and must not depend on what they became since: nothing is looked up."""
+        from . import messages, web_chat
+        if not conversation:
+            return None, None, ""
+        if self.as_of is not None:   # a replay: today's threads are not its past; it is simulated, never routed
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation):
+                raise ValueError(f"unknown conversation {conversation!r}: read_thread() lists your threads")
+            return None, None, " to the conversation it names (a replay: not looked up)"
+        cid = self._thread_id(conversation)
+        if not cid:
+            if conversation.startswith("web-") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation):
+                raise ValueError(f"unknown conversation {conversation!r}: read_thread() lists your threads")
+            return None, None, " in the From feed (that conversation was not a web thread)"
+        chat = web_chat.load(cid)
+        if not chat or chat.get("instance") != self.name:
+            raise ValueError(f"unknown conversation {conversation!r}: read_thread() lists your threads")
+        named = f"«{web_chat.title(chat)}»"
+        if chat.get("state") == "ended":
+            return None, cid, f" in the From feed, linked to the thread {named}: it has ended"
+        now, seen = web_chat.thread_mark(chat, messages.history()), self.thread_reads.get(cid)
+        if seen != now:
+            new = now[0] - (seen or (0, ""))[0]
+            raise ValueError(
+                f"read the thread {named} first: read_thread(id='{cid}')"
+                + (" — you have not read it in this run" if seen is None else
+                   f" — the operator wrote there {new} more time(s) since you read it, last at {now[1][11:16]}")
+                + "; then write as the next turn of that conversation as it stands now (or send nothing if it "
+                  "was settled there)")
+        return cid, None, f" as part of the thread {named}"
 
     def _channel_line(self) -> str:
         """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
@@ -1790,9 +1868,11 @@ class Broker:
                          + ("; or leave source empty in this conversation" if talk else ""))
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
+                 attachments: list[dict] | None = None, urgent: bool = False, thread: str | None = None,
+                 re_: str | None = None) -> tuple[str, str] | None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
-        instance's inbox/ — and in the message log. Returns (when, why) when its notification waits for the digest."""
+        instance's inbox/ — and in the message log. Returns (when, why) when its notification waits for the digest.
+        `thread`/`re_`: the open thread it is part of, or the ended one it answers (_conversation_target)."""
         from . import messages
         if to == "operator":
             inbox = self.project / ".supervisor" / "operator-inbox"
@@ -1807,7 +1887,7 @@ class Broker:
                 alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
                 log(f"{self.name}: message to the operator: {alert[1]}")
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
-                            alert, urgent=urgent, talk=self.talk_id)
+                            alert, urgent=urgent, talk=self.talk_id, thread=thread, re_=re_)
             from . import pushes
             row = next((r for r in pushes.records(self.project / ".supervisor") if r["file"] == path.name), {})
             held = (row["push_due"], row.get("push_held") or "held") if row.get("push_due") else None
@@ -3896,7 +3976,8 @@ class ReplayBroker(Broker):
                  "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
+                 attachments: list[dict] | None = None, urgent: bool = False, thread: str | None = None,
+                 re_: str | None = None) -> tuple[str, str] | None:
         self._tag("simulated: not delivered")
         if to != "operator":
             return None

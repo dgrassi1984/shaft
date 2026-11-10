@@ -294,10 +294,17 @@ def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[di
     else:
         last = next(iter(chats(name)), None)
         start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
-    talks = (chat or {}).get("talks", [])
-    rows = [m for m in messages.history() if (
-        (m.get("talk") in talks and m.get("talk") is not None and m.get("via") != messages.BACKGROUND)
-        if "talk" in m else start <= m["ts"] <= end) and (
+    talks, cid = (chat or {}).get("talks", []), (chat or {}).get("id")
+
+    def here(m: dict) -> bool:
+        if m.get("thread"):                    # routed to one thread (a cycle's answer, a note written there)
+            return m["thread"] == cid
+        if m.get("re"):                        # for an ended thread: From, whatever conversation sent it
+            return False
+        if "talk" in m:
+            return m.get("talk") in talks and m.get("talk") is not None and m.get("via") != messages.BACKGROUND
+        return start <= m["ts"] <= end         # legacy rows: by time span
+    rows = [m for m in messages.history() if here(m) and (
         (m["from"] == name and m["to"] == "operator") or
         (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))]
     return rows if chat or start else [m for m in rows if not m["read"]]
@@ -315,11 +322,12 @@ def from_feed(name: str) -> dict:
     """What the instance sent outside any web thread — from a cycle, or during a terminal or Telegram conversation,
     which has a talk id but no web thread (it showed nowhere on the web before this rule) — and the operator's
     next-cycle notes, with revisions over the whole feed. Rows without the `talk` key are legacy: they keep showing by
-    time span in the chats (sent_during)."""
+    time span in the chats (sent_during). A row routed to a thread (`thread`) shows there instead; one whose thread had
+    ended (`re`) shows here, linked to it."""
     from . import messages
     own = {t for c in chats(name) for t in c.get("talks") or []}
-    rows = sorted((m for m in messages.history() if "talk" in m and (
-        (m["from"] == name and m["to"] == "operator" and m["talk"] not in own) or
+    rows = sorted((m for m in messages.history() if "talk" in m and not m.get("thread") and (
+        (m["from"] == name and m["to"] == "operator" and (m["talk"] not in own or m.get("re"))) or
         (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))),
         key=lambda m: m["ts"])
     model = build(name, None, rows)
@@ -422,9 +430,13 @@ def message_item(name: str, m: dict, ratings: dict, pending: set[str] = frozense
         return {"key": f"b{f}", "type": "later", "file": m["file"], "ts": m["ts"], "text": m.get("shown", m["text"]),
                 "mid": m.get("mid") or None, "read": bool(m.get("read")), "attachments": atts,
                 "comments": [{"id": c["id"], "doc": c["doc"]} for c in m.get("comments") or []]}
+    re_chat = load(m["re"]) if m.get("re") else None
     return {"key": f"s{f}", "type": "sent", "file": m["file"], "ts": m["ts"],
             "kind": "question" if m.get("kind") == "question" else "message", "read": bool(m.get("read")),
             "text": m["text"], "attachments": atts,
+            # an answer from a cycle to work queued in this thread; in From, the ended thread it was for
+            "from_cycle": bool(m.get("thread")) and not m.get("talk"),
+            "re": {"cid": re_chat["id"], "title": title(re_chat)} if re_chat and re_chat.get("instance") == name else None,
             "rating": _rating(ratings.get(feedback.key({"kind": "message", "file": m["file"]})), pending)}
 
 
@@ -721,8 +733,58 @@ def _api_messages(chat: dict) -> list[dict]:
                       f"you: {last['user']} / me: {last['assistant']}")
     prefix = [{"role": "system", "content": "Other open threads:\n" + "\n".join(digest)
                + "\nread_thread reads any of them."}] if digest else []
-    return prefix + [{"role": t["role"], "content": t["content"]} for t in chat["turns"]
-            if not t.get("retried") and (t.get("content") or t["role"] == "user")]
+    items = _dialogue(chat)
+    own = [k for k, it in enumerate(items) if not it[3]]          # the thread's own turns, not routed in
+    if own and items[own[-1]][1] == "user":
+        # The reply answers the operator's last message: what a cycle routed here at or after it (the same second, or
+        # in the instant before the cycle paused) goes before it, never after — a request ends with the operator
+        # (api.py refuses one that does not; found reviewing the routing)
+        last = own[-1]
+        items = items[:last] + items[last + 1:] + [items[last]]
+    items = [{"role": role, "content": text} for _, role, text, _ in items]
+    return prefix + items
+
+
+def routed(name: str, cid: str | None, history: list[dict] | None = None) -> list[dict]:
+    """The message rows routed into thread `cid` (messages.record's `thread`): its instance's answers sent from a cycle
+    for work queued there (send_message's conversation), and the operator's notes for the next cycle written there."""
+    from . import messages
+    if not cid:
+        return []
+    return [m for m in (messages.history() if history is None else history)
+            if m.get("thread") == cid and name in (m["from"], m["to"])]
+
+
+def dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str]]:
+    """The thread as one conversation, oldest first: (ts, role, text) — its turns (without a try that failed and was
+    retried) and, in time order among them, what was routed into it from outside its replies: the instance's answers
+    from a cycle (assistant) and the operator's notes for the next cycle (user), each saying so. What a reply's API call
+    and read_thread both read, so the thread never has two voices (2026-11-10: a cycle's answer sent at 21:15
+    that the replies after it never knew about)."""
+    return [(ts, role, text) for ts, role, text, _ in _dialogue(chat, history)]
+
+
+def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str, bool]]:
+    """dialogue(), each item also saying whether it was routed in (True) or is a turn of the thread (False)."""
+    name = chat["instance"]
+    items = [(t.get("ts", ""), 0, t["role"], t["content"], False) for t in chat.get("turns") or []
+             if not t.get("retried") and (t.get("content") or t["role"] == "user")]
+    for m in routed(name, chat["id"], history):
+        if m["from"] == name:
+            items.append((m["ts"], 1, "assistant", f"[sent from my cycle at {m['ts'][11:16]}, into this thread]\n"
+                                                   f"{m['text']}", True))
+        else:
+            items.append((m["ts"], 1, "user", f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n"
+                                              f"{m['text']}", True))
+    return [(ts, role, text, rt) for ts, _, role, text, rt in sorted(items, key=lambda x: (x[0], x[1]))]
+
+
+def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str]:
+    """What the operator has written in the thread so far — (how many, the newest one's time): its turns and the notes
+    for the next cycle routed into it. read_thread records it; a send_message into the thread needs it unchanged, so
+    an answer from a cycle is written knowing what was said since (broker._conversation_target)."""
+    said = [ts for ts, role, _ in dialogue(chat, history) if role == "user"]
+    return len(said), max(said, default="")
 
 
 def mark_retried(chat: dict, k: int, text: str) -> bool:
@@ -1147,10 +1209,12 @@ def _in_chat(chat: dict | None, mid: str) -> bool:
 
 
 def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
-               comment_block: str = "", comments: list[dict] | None = None) -> tuple[str, str]:
+               comment_block: str = "", comments: list[dict] | None = None, cid: str = "") -> tuple[str, str]:
     """Next cycle: the message goes to the instance's inbox now and is read in
     its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
-    in the chat. Files and a quoted question as send()'s. (inbox file, what to say)"""
+    in the chat. Files and a quoted question as send()'s. (inbox file, what to say). `cid`: the thread it was written
+    in — while that thread is open the note shows there (not in From) and names it, so the cycle answers there too;
+    "current": the thread the plain chat page follows (current); none (the From feed) or an ended one: From."""
     from . import autonomy, messages
     text = text.replace("\r\n", "\n").strip()        # a browser form's line ends: the inbox file is the instance's
     if not text and not files and not comment_block:
@@ -1170,9 +1234,12 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
                 raise Refused(str(e)) from None
         asked = messages.quoted_questions(name, text)
         body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
+        chat = current(name) if cid == "current" else load(cid) if cid and cid != "from" else None
+        thread = ((chat["id"], title(chat)) if chat and chat.get("instance") == name and chat.get("state") != "ended"
+                  else None)
         try:
             path = messages.deliver_background(name, body, shown=text, attachments=atts, mid=mid, comments=comments,
-                                               in_reply_to=asked[0]["path"].name if asked else None)
+                                               in_reply_to=asked[0]["path"].name if asked else None, thread=thread)
         except (OSError, UnsafePath) as e:            # its inbox/ is its own folder: say what stopped it, not a 500
             raise Refused(f"could not put it in {name}'s inbox: {e}") from None
     said = autonomy.next_cycle(name)

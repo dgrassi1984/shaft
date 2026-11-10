@@ -638,12 +638,46 @@ struct SentItemView: View {
     /// A question still waiting for its answer: the loudest thing in the feed.
     private var asking: Bool { message.kind == "question" && !message.read }
 
+    /// The heading, and beside it where the message came from: "⏾ from its cycle" for a cycle's answer to work left in
+    /// this thread; in From, "re: «title»" for the ended thread it answers, which opens that earlier chat.
+    @ViewBuilder private var header: some View {
+        let title = Text(heading)
+            .font(Design.Text.pill)
+            .foregroundStyle(asking ? Color.brand : Color.textSecondary)
+        if message.fromCycle || message.re != nil {
+            FlowLayout(spacing: Design.Space.s8) {
+                title
+                if message.fromCycle {
+                    Label("from its cycle", systemImage: "moon")
+                        .font(Design.Text.metadata)
+                        .foregroundStyle(Color.textSecondary)
+                        .help("Written later, in its cycle, for what was left in this thread")
+                }
+                if let re = message.re { link(re) }
+            }
+        } else {
+            title
+        }
+    }
+
+    @ViewBuilder private func link(_ re: ThreadLink) -> some View {
+        let label = Text("re: «\(re.title)»").font(Design.Text.pill).lineLimit(1)
+        if let open = screen.openEarlier {
+            Button { open(re.cid) } label: {
+                label.foregroundStyle(Color.brand).quietHitArea()
+            }
+            .buttonStyle(.plain)
+            .help("It answers this ended thread")
+            .accessibilityHint("Opens that earlier chat")
+        } else {
+            label.foregroundStyle(Color.textSecondary)
+        }
+    }
+
     var body: some View {
         BarBlock(colour: asking ? .brand : .hairline) {
             VStack(alignment: .leading, spacing: Design.Space.inTurn) {
-                Text(heading)
-                    .font(Design.Text.pill)
-                    .foregroundStyle(asking ? Color.brand : Color.textSecondary)
+                header
                 if !message.text.isEmpty {
                     MessageMarkdown(source: message.text)
                         .liftsOnCanvas()

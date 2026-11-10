@@ -426,10 +426,39 @@ public struct SentItem: Codable, Sendable, Equatable {
     public var ts: Date
     /// `"message"` or `"question"`.
     public var kind: String
+    /// Written later, in a cycle, for work queued in this thread: part of the thread ("⏾ from its cycle").
+    public var fromCycle: Bool
+    /// In the From feed: the ended thread it answers, shown as a link to that earlier chat.
+    public var re: ThreadLink?
     public var read: Bool
     public var text: String
     public var attachments: [Attachment]
     public var rating: Rating?
+
+    private enum CodingKeys: String, CodingKey {
+        case key, file, ts, kind, fromCycle, re, read, text, attachments, rating
+    }
+
+    /// A server before thread replies sends neither `from_cycle` nor `re`: not from a cycle, answering no thread.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(String.self, forKey: .key)
+        file = try container.decodeIfPresent(String.self, forKey: .file)
+        ts = try container.decode(Date.self, forKey: .ts)
+        kind = try container.decode(String.self, forKey: .kind)
+        fromCycle = try container.decodeIfPresent(Bool.self, forKey: .fromCycle) ?? false
+        re = try container.decodeIfPresent(ThreadLink.self, forKey: .re)
+        read = try container.decode(Bool.self, forKey: .read)
+        text = try container.decode(String.self, forKey: .text)
+        attachments = try container.decode([Attachment].self, forKey: .attachments)
+        rating = try container.decodeIfPresent(Rating.self, forKey: .rating)
+    }
+}
+
+/// A thread a message names (`re`): its id and its title.
+public struct ThreadLink: Codable, Sendable, Equatable {
+    public var cid: String
+    public var title: String
 }
 
 /// A message the operator left for the next cycle (key `b<file>`).

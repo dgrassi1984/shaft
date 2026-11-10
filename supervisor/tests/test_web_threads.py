@@ -176,7 +176,7 @@ class ThreadsWebTest(ChatRoutesCase):
             r = self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body,
                          headers={**self.headers, "content-type": "multipart/form-data; boundary=B"})
         self.assertEqual(r.status, 200, r.body)
-        bg.assert_called_once_with("wisp", ME, "note", [], mid="")
+        bg.assert_called_once_with("wisp", ME, "note", [], mid="", cid="")   # From names no thread: it stays in From
         send.assert_not_called()
 
     def test_from_fragment_refreshes_and_watches_from(self):

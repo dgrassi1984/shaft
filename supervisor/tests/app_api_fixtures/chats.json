@@ -6,6 +6,13 @@
       "ended": "2026-11-03T14:30:00+01:00",
       "excerpt": "> Ship the ledger fix today?",
       "messages": 2
+    },
+    {
+      "id": "web-00000000000000e1",
+      "created": "2026-11-03T09:00:00+01:00",
+      "ended": "2026-11-03T09:30:00+01:00",
+      "excerpt": "Check the fees",
+      "messages": 1
     }
   ]
 }

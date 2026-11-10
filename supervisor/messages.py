@@ -24,7 +24,7 @@ LOG_NAME = "messages.jsonl"
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
            mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False,
-           talk: str | None = None) -> None:
+           talk: str | None = None, thread: str | None = None, re_: str | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
@@ -32,13 +32,20 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
     `mid`: the sending page's id for it, so a retry is not delivered twice (sent_mid). `shown`: what the operator
     wrote, when the text the instance got says more (the files' lines, a comment's block); `comments`: [{id, doc}], the
     document comments it carries. `talk` is the sending conversation, or None outside a conversation.
-    Every new row carries it; an absent key identifies a legacy row."""
+    Every new row carries it; an absent key identifies a legacy row. `thread`: the open web thread the message belongs
+    to though no reply of that thread sent it — a cycle's answer to work queued there (send_message's conversation), or
+    the operator's note for the next cycle written there; it shows in that thread, not in From. `re_`: the thread such
+    an answer was for when it had ended: it shows in From, linked to it."""
     row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
            "file": path.name, "text": text.strip(), "talk": talk}
     if sender == "operator" and kind == "reply":
         head = safe_read(path.parent, path.name, "").split("\n\n", 1)[0]
         if ref := re.search(r"(?m)^In-Reply-To: (.+)$", head):
             row["in_reply_to"] = ref[1]
+    if thread:
+        row["thread"] = thread
+    if re_:
+        row["re"] = re_
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
     if alert:
@@ -216,31 +223,36 @@ def show_inbox() -> int:
 # The web chat's Next cycle: delivered to the inbox now, read in the next cycle.
 BACKGROUND = "web-background"
 BACKGROUND_NOTE = ("the web UI, for your next cycle — nobody is waiting on an answer now; answer with send_message "
-                   "if it needs one")
+                   "if it needs one (conversation= its Conversation id, when it has one)")
 
 
 def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *, attachments: list[dict] | None = None,
-             via: str = "", mid: str = "", shown: str | None = None, comments: list[dict] | None = None) -> Path:
+             via: str = "", mid: str = "", shown: str | None = None, comments: list[dict] | None = None,
+             thread: tuple[str, str] | None = None) -> Path:
     root = instance_root(name)
     stamp = datetime.now()
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
     how = f"Via: {BACKGROUND_NOTE}\n" if via == BACKGROUND else ""
+    # The thread it was written in (id, title): the instance answers there (send_message's conversation)
+    conv = f"Conversation: {thread[0]} («{thread[1]}»)\n" if thread else ""
     path = safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md",
-                      f"From: operator\nTo: {name}\nKind: {kind}\n{ref}{how}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
+                      f"From: operator\nTo: {name}\nKind: {kind}\n{ref}{how}{conv}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
                       f"{text.strip()}\n")
     record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
-           comments=comments)
+           comments=comments, thread=thread[0] if thread else None)
     from .autonomy import event_wake   # it wakes for this once idle, not at its next timed wake (review C15)
     event_wake(name, "message from the operator")
     return path
 
 
 def deliver_background(name: str, text: str, *, shown: str, in_reply_to: str | None = None,
-                       attachments: list[dict] | None = None, mid: str = "", comments: list[dict] | None = None) -> Path:
+                       attachments: list[dict] | None = None, mid: str = "", comments: list[dict] | None = None,
+                       thread: tuple[str, str] | None = None) -> Path:
     """A message from the web chat's Next cycle: into the instance's inbox now, logged as BACKGROUND, read in its next
-    cycle. A reply when it answers one of its questions (`in_reply_to`), as `shaft reply` writes it."""
+    cycle. A reply when it answers one of its questions (`in_reply_to`), as `shaft reply` writes it. `thread`: (id,
+    title) of the open thread it was written in — it shows there, and its file names it for the answer."""
     return _deliver(name, text, "reply" if in_reply_to else "message", in_reply_to, attachments=attachments,
-                    via=BACKGROUND, mid=mid, shown=shown, comments=comments)
+                    via=BACKGROUND, mid=mid, shown=shown, comments=comments, thread=thread)
 
 
 def deliver_feedback(name: str, text: str, *, shown: str, mid: str = "") -> Path:

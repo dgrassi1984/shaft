@@ -1500,12 +1500,18 @@ def _message_item(name: str, it: dict, archived: bool, key: str | None = None) -
                 for j, a in enumerate(it["attachments"]))
     asks = it["kind"] == "question"
     what = ("a question" if asks else "a message") + (" (answered)" if asks and it["read"] else "")
+    # An answer from its cycle to what was left in this thread; in From, the ended thread it answers
+    origin = (h(' <span class="laterchip" title="Written later, in its cycle, for what was left in this thread">'
+                '⏾ from its cycle</span>') if it.get("from_cycle") else
+              h(' <a class="laterchip" href="/i/{n}/chat?id={c}" title="It answers this ended thread">re: «{t}»</a>',
+                n=q(name), c=it["re"]["cid"], t=it["re"]["title"]) if it.get("re") else Html(""))
     return h('<div class="turn sent" data-k="{key}" data-raw="{raw}"{at}><div class="who">{n} sent you '
-             '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
+             '<a href="/messages/{f}">{what}</a>{origin} <span class="dim">{ts}</span><button type="button" '
              'class="reply small icon" data-reply-message="{identity}" title="Reply to the message" '
              'aria-label="Reply to the message">{reply}</button>{feedback}</div>{t}'
              '<div class="atts">{a}</div></div>', key=it["key"], n=name, f=q(it["file"]), raw=it["text"], what=what,
              ts=_turn_time(it["ts"]), identity=it["file"], reply=ICONS["reply"], t=markdown(it["text"]), a=atts,
+             origin=origin,
              feedback=_thumbs(name, {"kind": "message", "file": it["file"]}, it["rating"]),
              at=_seen_attrs(name, key, "sent-at", it["ts"]) if not archived else "")
 
@@ -1775,7 +1781,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{draft}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
-        '<input type="hidden" name="retry_of" value="">{cid}'
+        '<input type="hidden" name="retry_of" value="">{cid}{thread}'
         '<div class="chips" data-picked></div><div class="cbox">'
         '<label class="pick iconbtn" title="Attach files">{attach}<span class="sr">Attach files</span>'
         '<input type="file" name="files" multiple class="sr-file"></label>'
@@ -1798,6 +1804,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         # Only a page opened on one thread (?id=) names it: the plain chat page follows the current thread, and after
         # End its next message starts a new one, as before threads.
         cid=h('<input type="hidden" name="cid" value="{c}">', c=chat["id"]) if pinned else Html(""),
+        # A note for its next cycle belongs to the thread it is written in, so the cycle answers there: the plain
+        # page follows the current thread (its first message may open it after this page was drawn), as a send does
+        thread=Html('<input type="hidden" name="thread" value="current">') if not pinned else Html(""),
         # A thread's draft is its own: written in one thread, it is not waiting in the composer of another
         draft=f"{name}/{chat['id']}" if pinned else name,
         attach=icon("attach"), send=icon("send"), up=icon("up"),

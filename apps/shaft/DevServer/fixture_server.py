@@ -670,6 +670,12 @@ def seed(base: Path, web, web_chat, messages) -> None:
                      {"name": "report.md", "path": "instances/tundra/attachments/report.md", "bytes": len(report)}])
     msg(ts(12), "seed-from-operator-b.md", "Look at the March reconciliation when you have time.", "operator",
         "tundra", False, via=messages.BACKGROUND, mid="seed-b")
+    # Its cycle's answer to work left in this thread, as the broker records one (`thread`, no talk): "⏾ from its cycle"
+    msg(ts(8), "seed-from-tundra-cycle.md", "March reconciles: 3 lines moved.", "tundra", "operator", True,
+        talk=None, thread=cid)
+    # An answer for a thread that had ended: in From, "re: «title»" opening that earlier chat
+    msg(ts(7), "seed-from-tundra-re.md", "September closed clean too.", "tundra", "operator", True,
+        talk=None, re=yesterday)
     with feedback.FILE.open("a") as f:
         f.write(json.dumps({"ts": ts(17), "event": "rated", "id": "f-" + "6a0c2e4b8d1f3a5c7e9b0d2f", "instance": "tundra",
                             "login": ME, "target": {"kind": "chat", "chat": cid, "k": 7}, "thumb": "up",

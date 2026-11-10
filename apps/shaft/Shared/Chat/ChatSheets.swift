@@ -151,7 +151,8 @@ struct RatingSheet: View {
 /// read-only.
 struct EarlierChatsSheet: View {
     let instance: String
-    var open: (ChatSummary) -> Void
+    /// Opens the chosen chat by its id.
+    var open: (String) -> Void
     @Environment(InstancesStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var chats: [ChatSummary]?
@@ -167,7 +168,7 @@ struct EarlierChatsSheet: View {
                         List(chats) { chat in
                             Button {
                                 dismiss()
-                                open(chat)
+                                open(chat.id)
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(chat.excerpt.isEmpty ? String(localized: "(no message)") : chat.excerpt)

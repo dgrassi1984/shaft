@@ -23,8 +23,9 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
   Both conversation controls are excluded from the calls count. Work expected to exceed a ceiling is queued up front.
   Requests to take your time mean a brief reply and the full task queued for the next cycle.
   Running calls finish normally. `queue_for_next_cycle(task, why)` writes unfinished work to the
-  instance's own inbox, marked `queued from conversation` with the conversation date. The next live
-  cycle sees it and is asked to report back. Queuing itself sends nothing to the operator.
+  instance's own inbox, marked `queued from conversation` with the conversation date and its id
+  (`Conversation: <talk id>`). The next live cycle sees it and answers in that conversation (see *Later answers in
+  their thread* below). Queuing itself sends nothing to the operator.
 - Shift-Enter in iTerm2 needs
   Settings / Profiles / Keys / General / "Report modifiers using CSI u" (Option-Enter always works).
 
@@ -78,12 +79,26 @@ the talk id and returns `X-Shaft-Talk` on completions. A non-streamed answer als
 replay can return the same header. Cached answers from before this field was added have no talk header.
 `supervisor.web_chat._api_messages` prepends a short system digest of the other open threads, newest first.
 The broker's `read_thread` tool lists open threads followed by the 20 newest ended threads. With an id, it returns
-that instance's thread as text, limited to the last 12,000 characters. Trial replays cannot use it.
+that instance's thread as text: the last 12,000 characters, never starting after the operator's latest message, with
+each of the instance's own items cut at 3,000. Trial replays cannot use it.
 
 `supervisor.messages.record` writes `talk` on every new message row. Messages sent during an API reply belong to
 that thread's recorded talks. `supervisor.web_chat.from_feed` contains cycle messages with `talk: null` and the
 operator's next-cycle notes. It returns the newest window with revisions and unread timestamps computed over the
 whole feed. Legacy rows without `talk` keep their time-span display in `sent_during`.
+
+**Later answers in their thread.** Work queued in a conversation (`queue_for_next_cycle`'s `Conversation:` line, a
+commitment's `talk_id`) or a next-cycle note written in a thread (its inbox file's `Conversation: <thread id>`) is
+answered with `send_message(to="operator", conversation=<talk or thread id>)`. While the thread is open, the row gets
+`thread: <id>`: it shows in that thread (marked **⏾ from its cycle**), not in From, its push opens the thread, and
+`web_chat.dialogue` puts it in the thread's conversation in time order, so the thread's next reply and `read_thread`
+read it. The broker refuses such a send until this run has read the thread (`read_thread`) after the last thing the
+operator wrote there (`web_chat.thread_mark`): the answer is written knowing what was said since it was queued, and may
+be rephrased or dropped. An ended thread's answer goes to From with `re: <id>`, shown as a **re: «title»** link; a
+conversation with no web thread (a terminal talk, Telegram) goes to From. Trial replays neither read nor look up
+threads: the send is simulated. The check runs again after the orders check, just before delivery. A reply's request
+always ends with the operator's message: an answer routed in at or after it goes before it. A next-cycle note written in an open thread (the composer sends `cid`, or `thread` on the plain chat
+page) records `thread` too and shows there; one from From or for an ended thread stays in From.
 
 ### `/v1` wire contract
 
@@ -274,7 +289,8 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   `/i/<name>/chat?id=<id>`: its feed, header and composer stay on that thread (the composer sends its id, and a
   document saved or commented on beside it goes to that thread's next message); its draft is its own. The plain
   `/i/<name>/chat` follows the most recently active thread. **From <instance>** (`/i/<name>/from`) shows what it sent
-  you outside any thread (a cycle, a terminal or Telegram talk) and what you left for its next cycle, refreshed like a
+  you outside any thread (a cycle, a terminal or Telegram talk, an answer for a thread that had ended) and what you left
+  for its next cycle outside a thread, refreshed like a
   chat (`/fragment/from/<name>`); its composer only sends for the next cycle. A reply waiting for its turn says so on
   its own line, `waiting: answering in «<title>»`, until it starts.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
@@ -313,9 +329,9 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   **Next cycle** is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
-  (the next wake's time, a cycle running now, no scheduled cycles, or paused). Its From-feed row is yours, marked
-  **⏾ next cycle · waiting**, then **read** once a cycle has read it. Its answer, if it sends one, is a message
-  like any other (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
+  (the next wake's time, a cycle running now, no scheduled cycles, or paused). Its row is yours, in the thread it was
+  written in (in From when sent from From), marked **⏾ next cycle · waiting**, then **read** once a cycle has read it.
+  Its answer, if it sends one, comes in that thread (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.
   `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
   queued `mid`.

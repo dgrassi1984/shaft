@@ -23,6 +23,55 @@ struct FixtureTests {
         #expect(old.file == nil)
     }
 
+    /// A thread's feed carries its cycle's answer to work queued there, marked `from_cycle`; what it sent otherwise is
+    /// not marked and names no thread.
+    @Test func aCyclesAnswerInItsThreadIsMarkedFromCycle() throws {
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: DecodingTests.fixture("sent"))
+        let sent = (feed.content?.items ?? []).compactMap { item -> SentItem? in
+            if case .sent(let message) = item { return message }
+            return nil
+        }
+        let last = try #require(sent.last)
+        #expect(last.fromCycle)
+        #expect(last.re == nil)
+        #expect(last.text == "March reconciles: 3 lines moved.")
+        #expect(sent.dropLast().count >= 1)
+        #expect(sent.dropLast().allSatisfy { !$0.fromCycle && $0.re == nil })
+    }
+
+    /// The From feed (`chat` null) carries an answer for a thread that had ended, linked to it by `re`.
+    @Test func anAnswerForAnEndedThreadInFromNamesIt() throws {
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: DecodingTests.fixture("from"))
+        let content = try #require(feed.content)
+        #expect(content.chat == nil)
+        guard case .sent(let answer) = try #require(content.items.first) else {
+            Issue.record("from.json's first item is not a sent message"); return
+        }
+        #expect(answer.re == ThreadLink(cid: "web-00000000000000e1", title: "Fees"))
+        #expect(answer.fromCycle == false)
+        #expect(ChatRef.earlier(try #require(answer.re).cid).cid == "web-00000000000000e1")
+    }
+
+    /// A server before thread replies sends neither `from_cycle` nor `re`: the message is not from a cycle and names
+    /// no thread, rather than failing the whole feed.
+    @Test func aSentItemFromAServerBeforeThreadRepliesDecodes() throws {
+        let fixture = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("from")) as? [String: Any])
+        let items = try #require(fixture["items"] as? [[String: Any]])
+        var sent = try #require(items.first { $0["type"] as? String == "sent" })
+        sent.removeValue(forKey: "from_cycle")
+        sent.removeValue(forKey: "re")
+        let old = try SHAFTJSON.decoder().decode(FeedItem.self, from: JSONSerialization.data(withJSONObject: sent))
+        guard case .sent(let message) = old else { Issue.record("not decoded as sent"); return }
+        #expect(message.fromCycle == false)
+        #expect(message.re == nil)
+        // And `re: null`, as a current server sends it outside From.
+        sent["re"] = NSNull()
+        sent["from_cycle"] = true
+        let current = try SHAFTJSON.decoder().decode(SentItem.self, from: JSONSerialization.data(withJSONObject: sent))
+        #expect(current.fromCycle)
+        #expect(current.re == nil)
+    }
+
     static var fixtureDirectory: URL {
         if let folder = ProcessInfo.processInfo.environment["SHAFT_APP_API_FIXTURES"] {
             return URL(filePath: folder)
@@ -48,7 +97,7 @@ struct FixtureTests {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                     "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream"] {
+                     "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
     }
