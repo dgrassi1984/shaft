@@ -35,7 +35,7 @@ public struct FeedPoll: AsyncSequence, Sendable {
 
     let client: APIClient
     let instance: String
-    let cid: String?
+    let ref: ChatRef
     let all: Bool
     let wait: Int
     let watching: @Sendable () -> Bool
@@ -44,23 +44,30 @@ public struct FeedPoll: AsyncSequence, Sendable {
     let sleep: @Sendable (Duration) async throws -> Void
 
     /// - Parameters:
-    ///   - cid: an earlier chat; nil for the current one.
+    ///   - ref: the conversation: the current chat, a thread, the From feed, or an earlier chat.
     ///   - all: every turn instead of the last 80 (§4.1).
     ///   - wait: how long the server holds each request, 0–25 s.
     ///   - watching: whether the chat is on screen now (`watch`, §4); read at each request.
-    public init(client: APIClient, instance: String, cid: String? = nil, all: Bool = false, wait: Int = 25,
+    public init(client: APIClient, instance: String, ref: ChatRef = .current, all: Bool = false, wait: Int = 25,
                 watching: @escaping @Sendable () -> Bool = { true }, backoff: Backoff = Backoff(),
                 random: @escaping @Sendable () -> Double = { Double.random(in: 0..<1) },
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.client = client
         self.instance = instance
-        self.cid = cid
+        self.ref = ref
         self.all = all
         self.wait = wait
         self.watching = watching
         self.backoff = backoff
         self.random = random
         self.sleep = sleep
+    }
+
+    /// An earlier chat by its id (`cid`), or the current one (nil).
+    public init(client: APIClient, instance: String, cid: String?, all: Bool = false, wait: Int = 25,
+                watching: @escaping @Sendable () -> Bool = { true }) {
+        self.init(client: client, instance: instance, ref: cid.map(ChatRef.earlier) ?? .current, all: all, wait: wait,
+                  watching: watching)
     }
 
     public func makeAsyncIterator() -> Iterator {
@@ -82,7 +89,7 @@ public struct FeedPoll: AsyncSequence, Sendable {
                 let answer: Conditional<Feed>
                 do {
                     answer = try await poll.client.feed(
-                        poll.instance, cid: poll.cid, since: current?.version, live: current?.live,
+                        poll.instance, ref: poll.ref, since: current?.version, live: current?.live,
                         wait: current == nil ? 0 : poll.wait, all: poll.all, watch: poll.watching())
                 } catch is CancellationError {
                     return nil
@@ -99,7 +106,7 @@ public struct FeedPoll: AsyncSequence, Sendable {
                 if feed.partial {
                     guard let held = current else {
                         // A partial answer to a request that sent no revision: the server broke §4.2.
-                        throw APIError.decoding(path: "/app/v1/chat/\(poll.instance)",
+                        throw APIError.decoding(path: APIClient.feedPath(poll.instance, poll.ref),
                                                 message: "a partial feed with no full one to lay it over")
                     }
                     current = held.merging(feed)

@@ -25,6 +25,8 @@ final class VoiceScreenModel {
 
     let client: APIClient
     let instance: String
+    /// The thread voice mode was started from: its turns go there (nil: the current chat).
+    let cid: String?
     private(set) var language: VoiceLanguage
     private(set) var phase: Phase = .checking
     /// The running session: set once it started, cleared as it ends.
@@ -35,9 +37,10 @@ final class VoiceScreenModel {
     private var began = false
     private var closed = false
 
-    init(client: APIClient, instance: String) {
+    init(client: APIClient, instance: String, cid: String? = nil) {
         self.client = client
         self.instance = instance
+        self.cid = cid
         language = VoicePreferences.language(for: instance)
     }
 
@@ -132,7 +135,7 @@ final class VoiceScreenModel {
         phase = .starting
         let made: VoiceSession
         do {
-            made = try await VoiceSetup.makeSession(client: client, instance: instance, language: language)
+            made = try await VoiceSetup.makeSession(client: client, instance: instance, cid: cid, language: language)
         } catch {
             guard mine == generation, !closed else { return }
             phase = .problem(Self.problem(error))
@@ -211,10 +214,10 @@ struct VoiceScreen: View {
     @State private var model: VoiceScreenModel
     @Environment(\.scenePhase) private var scenePhase
 
-    init(client: APIClient, instance: String, style: Style, close: @escaping () -> Void) {
+    init(client: APIClient, instance: String, cid: String? = nil, style: Style, close: @escaping () -> Void) {
         self.style = style
         self.close = close
-        _model = State(initialValue: VoiceScreenModel(client: client, instance: instance))
+        _model = State(initialValue: VoiceScreenModel(client: client, instance: instance, cid: cid))
     }
 
     var body: some View {

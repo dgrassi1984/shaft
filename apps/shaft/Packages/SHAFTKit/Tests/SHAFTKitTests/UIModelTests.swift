@@ -306,10 +306,22 @@ struct ChatStoreUITests {
 
 struct NotificationPolicyTests {
     @Test func theChatOnScreenGetsNoBanner() {
-        #expect(AppModel.presentation(for: "tundra", visibleChat: "tundra") == [.badge])
-        #expect(AppModel.presentation(for: "tundra", visibleChat: "wisp").contains(.banner))
+        #expect(AppModel.presentation(for: "tundra", visibleChat: ChatTarget(instance: "tundra")) == [.badge])
+        #expect(AppModel.presentation(for: "tundra", visibleChat: ChatTarget(instance: "wisp")).contains(.banner))
         #expect(AppModel.presentation(for: "tundra", visibleChat: nil).contains(.banner))
-        #expect(AppModel.presentation(for: nil, visibleChat: "tundra").contains(.banner))
+        #expect(AppModel.presentation(for: nil, visibleChat: ChatTarget(instance: "tundra")).contains(.banner))
+    }
+
+    /// Threads: a reply in thread B banners while thread A of the same instance is on screen; one in A does not. A push
+    /// that names no thread (a server before threads) is about whichever chat of the instance is shown.
+    @Test func anotherThreadOfTheInstanceOnScreenStillGetsABanner() {
+        let onA = ChatTarget(instance: "tundra", cid: "web-a")
+        #expect(AppModel.presentation(for: "tundra", cid: "web-a", visibleChat: onA) == [.badge])
+        #expect(AppModel.presentation(for: "tundra", cid: "web-b", visibleChat: onA).contains(.banner))
+        #expect(AppModel.presentation(for: "tundra", cid: "from", visibleChat: onA).contains(.banner))
+        #expect(AppModel.presentation(for: "tundra", cid: nil, visibleChat: onA) == [.badge])
+        #expect(AppModel.presentation(for: "tundra", cid: "from",
+                                      visibleChat: ChatTarget(instance: "tundra", cid: "from")) == [.badge])
     }
 }
 
@@ -331,6 +343,17 @@ struct AppLinksTests {
         #expect(AppLinks.instance(in: URL(string: "shaft://chat/../etc")!) == nil)
         #expect(AppLinks.instance(in: URL(string: "https://chat/tundra")!) == nil)
         #expect(AppLinks.instance(in: URL(string: "shaft://docs/tundra")!) == nil)
+    }
+
+    @Test func aThreadLinkNamesItsThread() throws {
+        let link = try #require(AppLinks.chat("tundra", cid: "web-3f9a1c0d7e2b4a65"))
+        #expect(link.absoluteString == "shaft://chat/tundra/web-3f9a1c0d7e2b4a65")
+        #expect(AppLinks.target(in: link) == ChatTarget(instance: "tundra", cid: "web-3f9a1c0d7e2b4a65"))
+        #expect(AppLinks.target(in: link)?.ref == .thread("web-3f9a1c0d7e2b4a65"))
+        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra/from")!)?.ref == .from)
+        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra")!) == ChatTarget(instance: "tundra"))
+        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra")!)?.ref == nil)
+        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra/..")!) == nil)
     }
 }
 

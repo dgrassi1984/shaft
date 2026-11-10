@@ -324,13 +324,56 @@ struct InstanceRowView: View {
     }
 }
 
-/// The chats, in the rail's order, with the list's own failure. On an iPhone and iPad it sits on `elevated`.
+/// What the chat list selects: an instance, and the conversation of it. `ref` nil is the instance's default (its most
+/// recently active thread, or its one chat on a server before threads), resolved by `InstancesStore.resolve`.
+struct ChatSelection: Hashable {
+    var instance: String
+    var ref: ChatRef?
+
+    init(_ instance: String, _ ref: ChatRef? = nil) {
+        self.instance = instance
+        self.ref = ref
+    }
+
+    /// The selection for `ref` once resolved: a resolved current chat is the instance's own row (nil).
+    static func settled(_ instance: String, _ ref: ChatRef) -> ChatSelection {
+        ChatSelection(instance, ref == .current ? nil : ref)
+    }
+}
+
+extension InstancesStore {
+    /// The conversation `selection` shows now.
+    func resolve(_ selection: ChatSelection) -> ChatRef {
+        resolve(selection.instance, selection.ref)
+    }
+
+    /// `selection` as it should be held once the threads are known: the default named by its thread, a thread that
+    /// ended given way to the default. Nil when it is right as it is.
+    func settle(_ selection: ChatSelection?) -> ChatSelection? {
+        guard let selection else { return nil }
+        let resolved = resolve(selection)
+        if selection.ref == nil, resolved == .current { return nil }
+        let settled = ChatSelection.settled(selection.instance, resolved)
+        return settled == selection ? nil : settled
+    }
+
+    /// The store of the conversation `selection` shows.
+    func chat(_ selection: ChatSelection) -> ChatStore {
+        chat(selection.instance, resolve(selection))
+    }
+}
+
+/// The chats, in the rail's order, with the list's own failure. Under each instance with threads, its open threads,
+/// "From <instance>" and New thread (§3.6). On an iPhone and iPad it sits on `elevated`.
 struct InstancesList: View {
     /// The phone's sheet of chats.
     var switcher = false
-    @Binding var selection: String?
+    @Binding var selection: ChatSelection?
     var settings: () -> Void
     @Environment(InstancesStore.self) private var store
+    /// The thread whose title is being changed (Rename… on its row).
+    @State private var renaming: ChatSelection?
+    @State private var newTitle = ""
 
     var body: some View {
         List(selection: $selection) {
@@ -342,9 +385,12 @@ struct InstancesList: View {
             }
             ForEach(store.instances) { row in
                 InstanceRowView(row: row)
-                    .tag(row.name)
+                    .tag(ChatSelection(row.name))
                     .listRowSeparator(.hidden)
-                    .listRowBackground(rowFill(row))
+                    .listRowBackground(rowFill(selected: selection == ChatSelection(row.name)))
+                if let threads = store.threads(row.name) {
+                    threadRows(row.name, threads)
+                }
             }
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
@@ -362,7 +408,10 @@ struct InstancesList: View {
         .background(QuietListSelection())
         #endif
         .overlay { if !store.loaded && store.error == nil { ProgressView() } }
-        .refreshable { await store.refresh() }
+        .refreshable {
+            await store.refresh()
+            await store.refreshMovedThreads(all: true)
+        }
         .navigationTitle(title)
         .toolbar {
             #if os(iOS)
@@ -385,15 +434,162 @@ struct InstancesList: View {
         #if os(iOS)
         .toolbar(removing: switcher ? nil : .title)
         #endif
+        .alert("Rename the thread", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Title", text: $newTitle)
+            Button("Rename") {
+                if let renaming { rename(renaming, to: newTitle) }
+            }
+            .disabled(newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// An instance's open threads, its From feed and New thread, under its row.
+    @ViewBuilder
+    private func threadRows(_ name: String, _ threads: ThreadsResponse) -> some View {
+        ForEach(threads.threads) { thread in
+            let tag = ChatSelection(name, .thread(thread.id))
+            ThreadRowView(thread: thread)
+                .tag(tag)
+                .listRowSeparator(.hidden)
+                .listRowBackground(rowFill(selected: selection == tag))
+                .contextMenu {
+                    Button {
+                        newTitle = thread.title
+                        renaming = tag
+                    } label: {
+                        Label("Rename…", systemImage: "pencil")
+                    }
+                }
+        }
+        let from = ChatSelection(name, .from)
+        FromRowView(instance: name, from: threads.from)
+            .tag(from)
+            .listRowSeparator(.hidden)
+            .listRowBackground(rowFill(selected: selection == from))
+        Button {
+            Task {
+                if let ref = await store.newThread(name) { selection = ChatSelection(name, ref) }
+            }
+        } label: {
+            Label("New thread", systemImage: "plus")
+                .font(.subheadline)
+                .foregroundStyle(Color.brand)
+                .padding(.leading, ThreadRowView.indent)
+                .frame(minHeight: 44, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+        .accessibilityHint("Starts another conversation with \(name)")
+    }
+
+    private func rename(_ thread: ChatSelection, to title: String) {
+        guard let ref = thread.ref else { return }
+        Task { await store.chat(thread.instance, ref).rename(title) }
     }
 
     private var title: String { store.badge > 0 ? "SHAFT (\(store.badge))" : "SHAFT" }
 
     /// The selected row's quiet fill, in place of the system's accent selection (2026-11-04).
-    private func rowFill(_ row: InstanceRow) -> some View {
+    private func rowFill(selected: Bool) -> some View {
         RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)
-            .fill(row.name == selection ? Color.rowSelected : Color.clear)
+            .fill(selected ? Color.rowSelected : Color.clear)
             .padding(.horizontal, Design.Space.s8)
+    }
+}
+
+/// An open thread under its instance: the title and time, replying or waiting, its last line. The unread dot sits in
+/// the margin, as an instance's does.
+struct ThreadRowView: View {
+    let thread: ThreadRow
+    /// How far a thread sits in from its instance.
+    static let indent = Design.Space.s16
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.s8) {
+                Text(thread.title)
+                    .font(.subheadline)
+                    .fontWeight(thread.unread ? .bold : .medium)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .overlay(alignment: .leading) { UnreadDot(unread: thread.unread) }
+                Spacer(minLength: Design.Space.s4)
+                if let last = thread.last {
+                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                }
+            }
+            if thread.replying || thread.waiting != nil {
+                HStack(spacing: Design.Space.s4) {
+                    Image(systemName: "ellipsis.bubble")
+                        .symbolEffect(.pulse, isActive: thread.waiting == nil && !reduceMotion)
+                        .accessibilityHidden(true)
+                    Text(thread.waiting ?? String(localized: "replying…")).lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(thread.waiting == nil ? Color.brand : Color.textSecondary)
+            } else if !thread.line.isEmpty {
+                Text(RenderedText.plain(PartialMarkdown.closed(thread.line)))
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.leading, Self.indent)
+        .padding(.vertical, 2)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(thread.unread ? String(localized: "unread") : "")
+    }
+}
+
+/// "From <instance>": what it sent from its cycles, and where to write for its next one.
+struct FromRowView: View {
+    let instance: String
+    let from: FromRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.s8) {
+                Label("From \(instance)", systemImage: "tray")
+                    .font(.subheadline)
+                    .fontWeight(from.unread ? .bold : .medium)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .overlay(alignment: .leading) { UnreadDot(unread: from.unread) }
+                Spacer(minLength: Design.Space.s4)
+                if let last = from.last {
+                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                }
+            }
+            if !from.line.isEmpty {
+                Text(RenderedText.plain(PartialMarkdown.closed(from.line)))
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.leading, ThreadRowView.indent)
+        .padding(.vertical, 2)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(from.unread ? String(localized: "unread") : "")
+    }
+}
+
+/// The unread dot in a row's margin.
+private struct UnreadDot: View {
+    let unread: Bool
+
+    var body: some View {
+        if unread {
+            Circle()
+                .fill(Color.brand)
+                .frame(width: Design.Space.s8, height: Design.Space.s8)
+                .offset(x: -Design.Space.s12)
+                .accessibilityHidden(true)
+        }
     }
 }
 

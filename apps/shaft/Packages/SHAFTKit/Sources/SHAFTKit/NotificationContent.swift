@@ -10,10 +10,18 @@ public enum NotificationContent {
         userInfo["instance"] as? String
     }
 
+    /// The thread a notification is about: the payload's `cid` (a chat id, or `"from"` for the From feed), or the one
+    /// the extension found in the event it showed. Nil from a server before threads: the tap opens the instance's
+    /// default conversation.
+    public static func cid(from userInfo: [AnyHashable: Any]) -> String? {
+        guard let cid = userInfo["cid"] as? String, !cid.isEmpty else { return nil }
+        return cid
+    }
+
     /// What to show for a push about `instance`: the newest queued event for it. Nil on any failure. `session` is for
     /// tests; the extension's own is ephemeral, with `timeout` on the whole fetch.
-    public static func fetch(instance: String?, store: any CredentialStore, timeout: TimeInterval = 20,
-                             session: URLSession? = nil) async -> Filled? {
+    public static func fetch(instance: String?, cid: String? = nil, store: any CredentialStore,
+                             timeout: TimeInterval = 20, session: URLSession? = nil) async -> Filled? {
         guard let credential = try? store.load() else { return nil }
         let own: URLSession? = session == nil ? {
             let configuration = URLSessionConfiguration.ephemeral
@@ -24,15 +32,18 @@ public enum NotificationContent {
         defer { own?.finishTasksAndInvalidate() }
         let client = APIClient(credential: credential, session: session ?? own!)
         guard let latest = try? await client.pushLatest(instance: instance) else { return nil }
-        return choose(latest, instance: instance)
+        return choose(latest, instance: instance, cid: cid)
     }
 
-    /// The event to show: the newest for `instance` (or the newest of all when the payload named none). Nil when no
-    /// event matches: a body from another chat would be wrong, so the title stays alone.
-    public static func choose(_ latest: PushLatest, instance: String?) -> Filled? {
-        let event = instance.map { name in latest.events.last { $0.instance == name } } ?? latest.events.last
+    /// The event to show: the newest for `instance` (or the newest of all when the payload named none), of the thread
+    /// `cid` when the payload named one and an event of it is there. Nil when no event of the instance matches: a body
+    /// from another instance's chat would be wrong, so the title stays alone.
+    public static func choose(_ latest: PushLatest, instance: String?, cid: String? = nil) -> Filled? {
+        let mine = instance.map { name in latest.events.filter { $0.instance == name } } ?? latest.events
+        let event = cid.flatMap { cid in mine.last { $0.cid == cid } } ?? mine.last
         guard let event else { return nil }
-        return Filled(title: event.title, body: event.body, badge: latest.badge, instance: event.instance)
+        return Filled(title: event.title, body: event.body, badge: latest.badge, instance: event.instance,
+                      cid: event.cid)
     }
 
     /// What `fetch` found, to lay onto the notification.
@@ -41,6 +52,16 @@ public enum NotificationContent {
         public var body: String
         public var badge: Int
         public var instance: String?
+        /// The thread the event is about (`PushEvent.cid`): kept in `userInfo["cid"]`, so the tap opens it.
+        public var cid: String?
+
+        public init(title: String, body: String, badge: Int, instance: String?, cid: String? = nil) {
+            self.title = title
+            self.body = body
+            self.badge = badge
+            self.instance = instance
+            self.cid = cid
+        }
 
         public func apply(to content: UNMutableNotificationContent) {
             if !title.isEmpty { content.title = title }
@@ -50,6 +71,7 @@ public enum NotificationContent {
                 content.threadIdentifier = instance
                 content.userInfo["instance"] = instance
             }
+            if let cid { content.userInfo["cid"] = cid }
         }
     }
 }
@@ -68,9 +90,12 @@ public final class NotificationDelivery: @unchecked Sendable {
 
     /// Fetch the body and deliver. Runs `NotificationContent.fetch` with the shared Keychain credential.
     public func run(store: any CredentialStore, timeout: TimeInterval = 20) {
-        let instance = lock.withLock { content.flatMap { NotificationContent.instance(from: $0.userInfo) } }
+        let (instance, cid) = lock.withLock {
+            (content.flatMap { NotificationContent.instance(from: $0.userInfo) },
+             content.flatMap { NotificationContent.cid(from: $0.userInfo) })
+        }
         Task {
-            let filled = await NotificationContent.fetch(instance: instance, store: store, timeout: timeout)
+            let filled = await NotificationContent.fetch(instance: instance, cid: cid, store: store, timeout: timeout)
             self.deliver(filled)
         }
     }
@@ -95,17 +120,45 @@ public final class NotificationDelivery: @unchecked Sendable {
     }
 }
 
-/// The app's own links: `shaft://chat/<instance>` opens that chat, as a notification tap does.
+/// The app's own links: `shaft://chat/<instance>` opens that instance's chat, as a notification tap does;
+/// `shaft://chat/<instance>/<cid>` one thread of it (`cid` `from`: its From feed).
 public enum AppLinks {
-    public static func chat(_ instance: String) -> URL? {
-        URL(string: "shaft://chat/\(instance)")
+    public static func chat(_ instance: String, cid: String? = nil) -> URL? {
+        URL(string: "shaft://chat/\(instance)" + (cid.map { "/\($0)" } ?? ""))
     }
 
     /// The instance a link names, nil for any other link (or a name the server could not have: §1.3).
     public static func instance(in url: URL) -> String? {
-        guard url.scheme == "shaft", url.host() == "chat" else { return nil }
-        let name = url.pathComponents.dropFirst().first ?? ""
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-        return !name.isEmpty && name.unicodeScalars.allSatisfy(allowed.contains) ? name : nil
+        target(in: url)?.instance
     }
+
+    /// The instance a link names and the thread, when it names one.
+    public static func target(in url: URL) -> ChatTarget? {
+        guard url.scheme == "shaft", url.host() == "chat" else { return nil }
+        let parts = url.pathComponents.dropFirst()
+        let name = parts.first ?? ""
+        guard Self.isName(name) else { return nil }
+        let cid = parts.dropFirst().first
+        guard let cid else { return ChatTarget(instance: name, cid: nil) }
+        return Self.isName(cid) ? ChatTarget(instance: name, cid: cid) : nil
+    }
+
+    private static func isName(_ text: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        return !text.isEmpty && text.unicodeScalars.allSatisfy(allowed.contains)
+    }
+}
+
+/// A conversation a notification or a link asks for: the instance, and the thread (a chat id, `"from"`) when it names
+/// one. `ref` is what the app opens; nil leaves it to the instance's default.
+public struct ChatTarget: Hashable, Sendable {
+    public var instance: String
+    public var cid: String?
+
+    public init(instance: String, cid: String? = nil) {
+        self.instance = instance
+        self.cid = cid
+    }
+
+    public var ref: ChatRef? { ChatRef(cid: cid) }
 }

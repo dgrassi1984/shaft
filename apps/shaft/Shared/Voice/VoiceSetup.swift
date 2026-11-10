@@ -84,7 +84,8 @@ enum VoiceSetup {
     /// Ask for the microphone and speech permissions when not yet asked, then build a session for `instance`: the
     /// microphone, the instance's voice and this device's tuning. Debug builds take recorded files instead of the
     /// microphone when SHAFT_DEV_VOICE_FILES is set. Throws `VoiceStartProblem`. The caller calls `start()`.
-    static func makeSession(client: APIClient, instance: String, language: VoiceLanguage) async throws -> VoiceSession {
+    static func makeSession(client: APIClient, instance: String, cid: String? = nil,
+                            language: VoiceLanguage) async throws -> VoiceSession {
         #if DEBUG
         let hooks = try VoiceDevHooks.read()
         #else
@@ -108,7 +109,8 @@ enum VoiceSetup {
         let tuning = VoicePreferences.tuning()
         let sounds = GeneratedVoiceSounds(graph: graph, volume: tuning.workingVolume)
         graph.keepWorkingSound(sounds)
-        return VoiceSession(client: client, instance: instance, instanceName: spokenName(instance), language: language,
+        return VoiceSession(client: client, instance: instance, cid: cid, instanceName: spokenName(instance),
+                            language: language,
                             tuning: tuning, transcriber: transcriber, speech: EngineSpeechOutput(graph: graph),
                             sounds: sounds, graph: graph)
     }

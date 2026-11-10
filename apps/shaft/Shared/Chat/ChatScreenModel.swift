@@ -95,7 +95,8 @@ final class ChatScreenModel {
         dismissRequest += 1
     }
 
-    var archived: Bool { chat.cid != nil || chat.content?.archived == true }
+    /// Read-only: an earlier chat, or a thread that ended while on screen.
+    var archived: Bool { chat.isEarlier || chat.content?.archived == true }
 
     // MARK: Message actions
 

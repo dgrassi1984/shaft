@@ -7,8 +7,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class MacState {
-    /// The instance whose chat is shown.
-    var selection: String?
+    /// The instance whose chat is shown, and which of its conversations (nil: its default, `InstancesStore.resolve`).
+    var selection: ChatSelection?
     /// Earlier chats pushed over the current one.
     var path: [ArchivedRoute] = []
     /// The chat screen on display (current or earlier) and the documents beside it.
@@ -29,19 +29,32 @@ final class MacState {
     }
 
     func open(_ name: String) {
-        if selection != name { path.removeAll() }
-        selection = name
-        UserDefaults.standard.set(name, forKey: "chat.last")
+        open(ChatSelection(name))
     }
 
-    /// Next (`by` 1) or previous (-1) chat in the list's order (Option-↓/↑).
+    /// Show `chosen`: an instance's default conversation, or one thread of it.
+    func open(_ chosen: ChatSelection) {
+        if selection != chosen { path.removeAll() }
+        selection = chosen
+        UserDefaults.standard.set(chosen.instance, forKey: "chat.last")
+    }
+
+    /// Next (`by` 1) or previous (-1) chat in the list's order (Option-↓/↑): instances, each at its default.
     func step(_ by: Int) {
         guard let names = store?.instances.map(\.name), !names.isEmpty else { return }
-        guard let selection, let index = names.firstIndex(of: selection) else {
+        guard let selection, let index = names.firstIndex(of: selection.instance) else {
             open(names[0])
             return
         }
         open(names[(index + by + names.count) % names.count])
+    }
+
+    /// New Thread (⇧⌘N on a server with threads): one more beside the instance's others, shown once started.
+    func newThread() {
+        guard let store, let name = selection?.instance else { return }
+        Task {
+            if let ref = await store.newThread(name) { open(ChatSelection(name, ref)) }
+        }
     }
 
     /// Focus the composer ("/", New message).
@@ -50,10 +63,14 @@ final class MacState {
         screen.focusComposerRequest += 1
     }
 
-    /// Reload: the chat list, and the chat's feed asked for again at once.
+    /// Reload: the chat list and the shown instance's threads, and the chat's feed asked for again at once.
     func reload() {
         guard let store else { return }
-        Task { await store.refresh() }
+        let name = selection?.instance
+        Task {
+            await store.refresh()
+            if let name { await store.refreshThreads(name) }
+        }
         if let chat = screen?.chat, chat.isPolling {
             chat.stop()
             chat.start()
@@ -98,8 +115,11 @@ struct MacRoot: View {
         // The reading surface behind everything, the title bar's area too.
         .containerBackground(Color.canvas, for: .window)
         .onAppear { state.openWindow = openWindow }
-        // shaft://chat/<instance>: the chat a notification click opens, from a link too.
-        .onOpenURL { url in model.notificationTapped(instance: AppLinks.instance(in: url)) }
+        // shaft://chat/<instance>[/<cid>]: the chat a notification click opens, from a link too.
+        .onOpenURL { url in
+            let target = AppLinks.target(in: url)
+            model.notificationTapped(instance: target?.instance, cid: target?.cid)
+        }
     }
 }
 
@@ -119,8 +139,9 @@ struct MacChats: View {
     var body: some View {
         @Bindable var state = state
         NavigationSplitView(columnVisibility: $columns) {
-            InstancesList(selection: Binding(get: { state.selection }, set: { name in if let name { state.open(name) } }),
-                          settings: { openSettings() })
+            InstancesList(selection: Binding(get: { state.selection }, set: { chosen in
+                              if let chosen { state.open(chosen) }
+                          }), settings: { openSettings() })
                 .scrollContentBackground(.hidden)
                 .background(Color.elevated.ignoresSafeArea())
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
@@ -168,6 +189,8 @@ struct MacChats: View {
         .onChange(of: MacMenu.snapshot(state), initial: true) { _, now in state.menu.publish(now) }
         .onChange(of: store.instances.map(\.name)) { restore() }
         .onChange(of: model.openChat) { restore() }
+        // Threads read: the default named by its thread, an ended thread given way.
+        .onChange(of: store.threadStates) { settle() }
     }
 
     @ViewBuilder
@@ -175,10 +198,11 @@ struct MacChats: View {
         if !store.loaded, let error = store.error {
             InstancesLoadFailure(error: error, settings: { openSettings() })
         } else if let selection = state.selection {
-            ChatScreen(chat: store.chat(selection), openArchived: { summary in
-                state.path.append(ArchivedRoute(instance: selection, cid: summary.id))
-            })
-            .id(selection)
+            let chat = store.chat(selection)
+            ChatScreen(chat: chat, openArchived: { summary in
+                state.path.append(ArchivedRoute(instance: selection.instance, cid: summary.id))
+            }, openThread: { ref in state.open(ChatSelection(selection.instance, ref)) })
+            .id(ChatSelection(selection.instance, chat.ref))
             .toolbar(removing: .title)           // the header's own title is the name with its state
         } else if store.loaded {
             MarkMessage("No chat open", message: Text("Choose an instance to chat with."))
@@ -217,13 +241,14 @@ struct MacChats: View {
         state.screen?.showDocuments = false
     }
 
-    /// A notification's chat first, then the chat open last time, else the first instance.
+    /// A notification's chat (its thread when it names one) first, then the chat open last time, else the first
+    /// instance.
     private func restore() {
-        if let name = model.openChat {
+        if let target = model.openChat {
             model.openChat = nil
             state.screen?.dismissPresentations()
             state.path.removeAll()
-            state.open(name)
+            state.open(ChatSelection(target.instance, target.ref))
             state.bringForward()
             return
         }
@@ -231,6 +256,10 @@ struct MacChats: View {
         let names = store.instances.map(\.name)
         let last = UserDefaults.standard.string(forKey: "chat.last") ?? ""
         state.open(names.contains(last) ? last : names[0])
+    }
+
+    private func settle() {
+        if let settled = store.settle(state.selection) { state.selection = settled }
     }
 }
 
