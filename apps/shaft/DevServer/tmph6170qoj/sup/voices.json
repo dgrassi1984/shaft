@@ -1,0 +1,23 @@
+{
+  "platforms": {
+    "macos": {
+      "voices": [
+        {
+          "identifier": "fixture.voice.en",
+          "name": "Example English",
+          "language": "en-US",
+          "quality": "default"
+        },
+        {
+          "identifier": "fixture.voice.it",
+          "name": "Example Italian",
+          "language": "it-IT",
+          "quality": "default"
+        }
+      ],
+      "reported": "2026-11-10T16:55:37.019679+01:00"
+    }
+  },
+  "assignments": {},
+  "proposals": {}
+}

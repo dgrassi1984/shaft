@@ -282,12 +282,10 @@ def _stub_apns(base: Path) -> ModuleType:
         return {"on": bool(sub), "env": sub and sub["env"], "reason": "" if sub else "device has no APNs token"}
 
     def wake(native: dict, event: dict):
+        from supervisor import webpush
         from supervisor.web_seen import badge
-        parts = event["url"].split("/")
-        instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
         for device in native:
-            payload = {"aps": {"alert": {"title": event["title"]}, "badge": badge(device), "sound": "default",
-                               "thread-id": instance, "mutable-content": 1}, "instance": instance}
+            payload = webpush.apns_payload(event, badge(device))   # the real payload: instance and thread
             pushes.mkdir(parents=True, exist_ok=True)
             out = pushes / f"{time.time():.3f}-{device}.json"
             out.write_text(json.dumps(payload))
@@ -410,6 +408,11 @@ class _VoiceAPI:
 
     def getresponse(self):
         return self
+
+    def getheader(self, name, default=None):
+        """The one header the relay reads: the conversation id the real API answers with (X-Shaft-Talk), so the
+        thread records it as a real one does and its messages route to it."""
+        return f"api-{self.cid[4:14]}" if name.lower() == "x-shaft-talk" else default
 
     def shutdown(self, how):
         self.closed.set()
@@ -717,14 +720,16 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
     elif what in ("message", "question"):
         file = f"{datetime.now():%Y%m%d-%H%M%S-%f}-from-{name}.md"
         text = text or ("Should I archive the September notes?" if what == "question" else "The nightly report is ready.")
-        row = {"ts": now, "from": name, "to": "operator", "kind": what, "file": file, "text": text}
+        # a message from a cycle, as the broker records one: `talk` null (no conversation), so it shows in From
+        row = {"ts": now, "from": name, "to": "operator", "kind": what, "file": file, "text": text, "talk": None}
         with (base / "sup" / "messages.jsonl").open("a") as f:
             f.write(json.dumps(row) + "\n")
         box = base / "sup" / "operator-inbox"
         box.mkdir(parents=True, exist_ok=True)
         (box / file).write_text(text)
-        webpush.notify({"title": f"{name} asks" if what == "question" else f"{name} says", "body": text,
-                        "url": f"/i/{name}/chat", "tag": name}, skip=web_chat.watchers(name))
+        from supervisor import web_alerts             # the real event: it opens the thread or From the row belongs to
+        event = web_alerts.event(row)
+        webpush.notify(event, skip=web_chat.watchers(name, event["cid"]))
         with web_chat.chat_saved:
             web_chat.chat_saved.notify_all()
     elif what == "state":

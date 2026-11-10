@@ -1,0 +1,10 @@
+{
+ "pid": 11428,
+ "started": "2026-11-10T16:40:59.736785",
+ "commit": "fixture",
+ "describe": "fixture",
+ "fixture": true,
+ "settings": {
+  "drain": true
+ }
+}

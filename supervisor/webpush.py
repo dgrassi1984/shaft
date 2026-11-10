@@ -294,6 +294,16 @@ def _paired() -> set[str] | None:
     return set(data) if isinstance(data, dict) else None
 
 
+def apns_payload(event: dict, badge: int) -> dict:
+    """What APNs carries for `event` (apns.py sends it): the title, the badge, and which instance and thread it opens
+    (the notification extension fetches the body itself, /app/v1/push/latest). Here, not in apns.py, because the apps'
+    fixture server replaces apns.py with a stub and writes this same payload, so a simulator sees what a phone gets."""
+    parts = urllib.parse.urlsplit(event["url"]).path.split("/")
+    instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
+    return {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
+                    "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+
+
 def notify(event: dict, skip=frozenset()) -> list[str]:
     """Queue `event` ({title, body, url, tag, cid}: what the notification shows) for every Web Push or configured APNs device
     still paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
