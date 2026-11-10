@@ -1248,7 +1248,8 @@ class FixturesTest(AppTest):
         self.keep("sent", self.get("/app/v1/chat/wisp"))
         # from: an answer for a thread that had ended shows in From, linked to it (re)
         self.chat([turn("user", "2026-11-03T09:00:00", "Check the fees", shown="Check the fees")],
-                  state="ended", cid="web-00000000000000e1", created="2026-11-03T09:00:00", title="Fees")
+                  state="ended", cid="web-00000000000000e1", created="2026-11-03T09:00:00", title="Fees",
+                  ended="2026-11-03T09:30:00")                       # web_chat.end always stamps it
         self.message("2026-11-03T14:14:00", "20261103-141400-000001-from-wisp.md", "The fees match the contract.",
                      talk=None, re="web-00000000000000e1")
         self.keep("from", self.get("/app/v1/from/wisp"))
