@@ -7,7 +7,7 @@ from unittest import mock
 from supervisor.tests.test_autonomy_gaps_template import InstanceFixture
 from shaft import agent, commitments, corrections, exam, forecast, projects, prompts, recovery, surprises
 from shaft.llm import Reply
-from shaft.tools import Toolbox, _spec, completed
+from shaft.tools import STATE_CHANGING, Toolbox, _spec, completed
 
 
 def reply(name, *, same_turn=False):
@@ -99,6 +99,21 @@ class ReviewFollowupsTest(InstanceFixture, unittest.TestCase):
                         system = prompts.system_prompt(self.state, self.cfg, mode, tools)
                         for tool, ability in abilities:
                             self.assertEqual(ability in system, tool in tools)
+
+    def test_mail_drafts_line_only_with_the_tool_and_a_drafted_grant(self):
+        # the instance learns it may leave drafts (never sends) only when the broker offers mail_draft and a grant
+        # carries [drafts]; both draft tools count as state-changing for handoff evidence
+        operator = self.cfg.OPERATOR_NAME
+        line = prompts.MAIL_DRAFTS.format(operator=operator)
+        cases = [("work/L [drafts]", "mail_search, mail_draft", True), ("work/L", "mail_search, mail_draft", False),
+                 ("work/L [drafts]", "mail_search", False)]
+        for env, tools, shown in cases:
+            with self.subTest(env=env, tools=tools), mock.patch.dict("os.environ", {"SHAFT_MAIL": env}):
+                system = prompts.system_prompt(self.state, self.cfg, prompts.LIVE_MODE, tools)
+                self.assertEqual(line in system, shown)
+                self.assertIn(prompts.MAIL.format(operator=operator, grants=env), system)
+        self.assertNotIn("read-only", prompts.MAIL)
+        self.assertLessEqual({"mail_draft", "mail_draft_update"}, STATE_CHANGING)
 
     def test_describe_includes_extra_tools_without_changing_empty_extra_output(self):
         for box in (Toolbox(self.root), exam.ExamToolbox(self.root, "scratch")):
