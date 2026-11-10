@@ -94,6 +94,34 @@ class EffortChoicesTest(OpConfigTest):
 
 
 class SetTest(OpConfigTest):
+    def test_an_appended_key_starts_its_own_run_and_inherits_no_help_20261110(self):
+        from supervisor.broker import Broker
+        (self.root / "config.env").write_text('# Set your name here.\nOPERATOR_NAME="x"\n')
+        broker = Broker("wren", self.dir, {}, self.dir / "broker.log")
+        self.assertTrue(broker.call("set_config", {"key": "WATCH_GCHAT", "value": "wake"})["ok"])
+        self.assertEqual(self.text(), '# Set your name here.\nOPERATOR_NAME="x"\n\nWATCH_GCHAT="wake"\n')
+        field = next(f for f in opconfig.fields("wren") if f["key"] == "WATCH_GCHAT")
+        self.assertEqual(field["help"], opconfig.WATCH_HELP["WATCH_GCHAT"])
+
+    def test_replacing_a_key_is_byte_for_byte_and_appending_twice_adds_one_blank_line_each_20261110(self):
+        original = '# Shared help.\nX=old  # inline\nY=keep\n'
+        self.assertEqual(core.config_with(original, "X", 'X="new"'),
+                         '# Shared help.\nX="new"\nY=keep\n')
+        first = core.config_with(original, "A", 'A="1"')
+        self.assertEqual(core.config_with(first, "B", 'B="2"'),
+                         original + '\nA="1"\n\nB="2"\n')
+        self.assertEqual(core.config_with("", "A", 'A="1"'), 'A="1"\n')
+        for ending in ("\n", " \t\n"):
+            with self.subTest(ending=ending):
+                self.assertEqual(core.config_with(original + ending, "A", 'A="1"'),
+                                 original + ending + '\nA="1"\n')
+
+    def test_an_append_then_its_removal_gives_back_the_same_bytes_20261110(self):
+        for text in ("", "X=1\n", "X=1\n\n", "# c\nX=1\n \t\n", "\n", "X=1\n\n\n"):
+            with self.subTest(text=text):
+                appended = core.config_with(text, "A", 'A="1"')
+                self.assertEqual(core.config_with(appended, "A", None), text)
+
     def test_only_the_named_line_changes_byte_for_byte(self):
         r = opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "xhigh"})
         self.assertEqual(r["changed"], ["LLM_REASONING_EFFORT"])

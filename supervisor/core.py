@@ -535,13 +535,21 @@ def config_line(text: str, key: str) -> str | None:
 
 def config_with(text: str, key: str, line: str | None) -> str:
     """config.env text with the line that sets `key` replaced by `line` — appended if no line sets it,
-    removed if `line` is None. Every other line is kept as it is."""
+    removed if `line` is None. An appended line comes after one blank line: it starts a run of its own, so it never
+    shares the comment of the keys above it (opconfig._comments). Removing the last line also removes one blank line
+    directly above it, so an append followed by its undo gives back the same bytes. Every other line stays as it is."""
     lines = text.splitlines()
     at = max((i for i, l in enumerate(lines) if _config_key(l) == key), default=None)
     if at is None:
-        lines += [line] if line is not None else []
+        if line is not None:
+            if lines:                               # always, so removing it again (an undo) is exact
+                lines.append("")
+            lines.append(line)
     elif line is None:
-        del lines[at]
+        if at == len(lines) - 1 and at > 0 and not lines[at - 1].strip():
+            del lines[at - 1:]
+        else:
+            del lines[at]
     else:
         lines[at] = line
     return "\n".join(lines) + "\n" if lines else ""
