@@ -517,16 +517,26 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
             return "ERROR: task and why must be non-empty text"
         stamp = clock.now()
         inbox = toolbox.root / "inbox"
+        # The conversation it came from: the cycle answers there, after what was said since (the supervisor's
+        # send_message conversation=, refused until read_thread has read it). A talk with a named speaker has none.
+        conv = toolbox.commit_talk_id
         try:
             inbox.mkdir(parents=True, exist_ok=True)
             path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-{uuid.uuid4().hex[:8]}-from-self.md"
             path.write_text(f"From: {cfg.NAME}\nTo: {cfg.NAME}\nKind: queued from conversation\n"
-                            f"Date: {when:%Y-%m-%d %H:%M}\n\n{task.strip()}\n\nWhy: {why.strip()}\n"
-                            "Handle this in your next live cycle and report back to the operator.\n")
+                            + (f"Conversation: {conv} — answer in it: send_message(conversation={conv})\n" if conv
+                               else "")
+                            + f"Date: {when:%Y-%m-%d %H:%M}\n\n{task.strip()}\n\nWhy: {why.strip()}\n"
+                            + ("Handle this in your next live cycle and answer the operator in that conversation: "
+                               "read it first with read_thread (it may have moved on since), then send_message with "
+                               f"conversation={conv}, written as its next turn as it stands now — rephrase, shorten, "
+                               "or send nothing if it was settled there.\n" if conv else
+                               "Handle this in your next live cycle and report back to the operator.\n"))
         except OSError as e:
             return f"ERROR: could not queue task: {e}"
         plan["queued"] = True
-        return f"Queued in inbox/{path.name} for my next cycle."
+        return (f"Queued in inbox/{path.name} for my next cycle"
+                + ("; its answer will come back in this conversation." if conv else "."))
 
     controls = {"queue_for_next_cycle": agent.Control(_spec(
         "queue_for_next_cycle", "Queue unfinished conversation work for my next live cycle; sends no reply.",

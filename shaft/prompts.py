@@ -417,7 +417,8 @@ def reply_budget(cfg) -> str:
                "so queue it up front and do not start it. " if ceilings else "") +
             "plan_reply and queue_for_next_cycle do not count as calls. Once the budget is used, only "
             "queue_for_next_cycle(task, why) is offered: it puts the unfinished work in your inbox for your next "
-            "live cycle; then reply with what you did and what you will do next. A call already running finishes. "
+            "live cycle, which answers in this conversation; then reply with what you did and what you will do next. "
+            "A call already running finishes. "
             "Reading one page with a headless browser through run takes about 45 seconds. "
             "When the operator says to take your time, or anything that means the same, do it in your next cycle: "
             "reply briefly with what you will do and call queue_for_next_cycle with the full task.")
