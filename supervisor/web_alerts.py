@@ -36,8 +36,10 @@ def _write_cursor(offset: int) -> None:
 
 
 def _cid_of_message(row: dict) -> str:
-    """The single place to map talk to a thread when message routing lands; all rows use From for now."""
-    return "from"
+    """The thread a message to the operator shows in (web_chat.thread_of_talk), else "from": its push opens that, and
+    a device looking at exactly that feed is not pushed."""
+    from . import web_chat
+    return web_chat.thread_of_talk(row["from"], row.get("talk")) or "from"
 
 
 def event(m: dict) -> dict:

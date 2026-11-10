@@ -80,8 +80,6 @@ class AppTest(WebTest):
             return code == 0, out[-1] if out else ""
         for p in (mock.patch.object(web, "_names", return_value=["wisp"]),
                   mock.patch.object(web, "_next_cycle", return_value=NEXT),
-                  mock.patch.object(web_chat, "from_feed", create=True,
-                                    side_effect=lambda n: web_chat.build(n, None, [])),
                   mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(core, "SUP_DIR", self.sup),
                   mock.patch.object(core, "INSTANCES", self.inst),
                   mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "INSTANCES", self.inst),

@@ -303,11 +303,23 @@ def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[di
     return rows if chat or start else [m for m in rows if not m["read"]]
 
 
+def thread_of_talk(name: str, talk: str | None) -> str | None:
+    """The web thread whose replies ran as conversation `talk`, or None: a cycle (no talk), or a conversation that
+    is not a web thread (a terminal talk, Telegram). The one rule the From feed and its pushes (web_alerts) share."""
+    if not talk:
+        return None
+    return next((c["id"] for c in chats(name) if talk in (c.get("talks") or [])), None)
+
+
 def from_feed(name: str) -> dict:
-    """Cycle messages and next-cycle notes, with revisions over the whole feed."""
+    """What the instance sent outside any web thread — from a cycle, or during a terminal or Telegram conversation,
+    which has a talk id but no web thread (it showed nowhere on the web before this rule) — and the operator's
+    next-cycle notes, with revisions over the whole feed. Rows without the `talk` key are legacy: they keep showing by
+    time span in the chats (sent_during)."""
     from . import messages
+    own = {t for c in chats(name) for t in c.get("talks") or []}
     rows = sorted((m for m in messages.history() if "talk" in m and (
-        (m["from"] == name and m["to"] == "operator" and m["talk"] is None) or
+        (m["from"] == name and m["to"] == "operator" and m["talk"] not in own) or
         (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))),
         key=lambda m: m["ts"])
     model = build(name, None, rows)

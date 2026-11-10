@@ -86,13 +86,29 @@ class ServerThreadsTest(unittest.TestCase):
         self.assertEqual([m["file"] for m in web_chat.sent_during("example", c)], ["own", "legacy"])
         feed = web_chat.from_feed("example")
         self.assertIsNone(feed["chat"])
-        self.assertEqual([i["file"] for i in feed["items"]], ["cycle", "background"])
-        self.assertEqual((feed["last"], feed["last_count"]), ("2026-02-01", 1))
+        # "other" ran in a conversation no web thread holds (a terminal talk, Telegram): From shows it
+        self.assertEqual([i["file"] for i in feed["items"]], ["other", "cycle", "background"])
+        self.assertEqual((feed["last"], feed["last_count"]), ("2026-02-01", 2))
         self.patch(web_chat, "CHAT_WINDOW", 1)
         window = web_chat.from_feed("example")
         self.assertEqual([i["file"] for i in window["items"]], ["background"])
         self.assertEqual((window["last"], window["last_count"], window["version"]),
                          (feed["last"], feed["last_count"], feed["version"]))
+
+    def test_a_message_from_a_conversation_with_no_web_thread_shows_in_from_and_pushes_there(self):
+        """Integration review: a send_message during a terminal talk or a Telegram conversation carries a talk id that
+        no web thread holds, so it was in no thread and not in From either: on the web it showed nowhere."""
+        from supervisor import web_alerts
+        c = self.chat()
+        def row(file, **kw):
+            return dict({"file": file, "from": "example", "to": "operator", "ts": "2026-02-01",
+                         "kind": "note", "text": file, "read": False}, **kw)
+        rows = [row("own", talk="talk-a"), row("telegram", talk="api-telegram"), row("cycle", talk=None)]
+        self.patch(messages, "history", return_value=rows)
+        self.assertEqual([i["file"] for i in web_chat.from_feed("example")["items"]], ["telegram", "cycle"])
+        self.assertEqual([m["file"] for m in web_chat.sent_during("example", c)], ["own"])
+        self.assertEqual([web_alerts._cid_of_message(r) for r in rows], [c["id"], "from", "from"])
+        self.assertEqual(web_alerts.event(rows[0])["url"], f"/i/example/chat?id={c['id']}")
 
     def test_digest_lists_only_other_open_threads_newest_first(self):
         a = self.chat(turns=[dict(role="user", content="current", ts="2026-02-01")])
