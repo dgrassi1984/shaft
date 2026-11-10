@@ -28,8 +28,8 @@ public enum VoiceAudioError: Error, LocalizedError, Equatable, Sendable {
         case .transcriberModelMissing(let language):
             let name = language == .en ? "English" : "Italian"
             return "The on-device speech model for \(name) (\(language.localeIdentifier)) is not installed, so voice "
-                + "cannot hear you in \(name). Install it from Dictation in the system settings (pick \(name)); "
-                + "SHAFT does not download it by itself."
+                + "cannot hear you in \(name). Download it from the voice screen (a system download, only when you "
+                + "tap Download), or install it from Dictation in the system settings."
         case .transcriberUnavailable:
             return "On-device speech recognition is not available on this device."
         case .noAnalyzerFormat:

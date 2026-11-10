@@ -167,11 +167,9 @@ public final class MicTranscriber: TranscriptSource, @unchecked Sendable {
         if graph.silent { throw VoiceAudioError.silentGraphHasNoMicrophone }
         let pipeline = try await TranscriberPipeline.start(language: language, onResult: onResult)
         do {
-            let node = try graph.microphoneNode()
-            let format = node.outputFormat(forBus: 0)
-            node.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
-                pipeline.feed(buffer)
-            }
+            // Through the graph, which installs the tap again in the input's new format after a route or
+            // configuration change (AirPods in or out): a tap installed here directly would stop hearing then.
+            try graph.installMicrophoneTap { pipeline.feed($0) }
         } catch {
             await pipeline.stop()
             throw error
@@ -185,7 +183,7 @@ public final class MicTranscriber: TranscriptSource, @unchecked Sendable {
             return pipeline
         }
         guard let running else { return }
-        graph.engine.inputNode.removeTap(onBus: 0)
+        graph.removeMicrophoneTap()
         await running.stop()
     }
 }

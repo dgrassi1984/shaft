@@ -269,7 +269,12 @@ struct VoiceSetupState: View {
             }
         case .downloading(let language):
             HStack(spacing: Design.Space.s8) {
-                ProgressView().controlSize(compact ? .small : .regular)
+                // The system's own progress when it reports one (VoiceModelDownload), else a spinner.
+                if let fraction = VoiceModelDownload.shared.fraction, VoiceModelDownload.shared.language == language {
+                    ProgressView(value: fraction).frame(maxWidth: compact ? 80 : 160)
+                } else {
+                    ProgressView().controlSize(compact ? .small : .regular)
+                }
                 Text("Downloading the \(VoiceLabels.language(language)) speech model…")
                     .font(compact ? .footnote : .body)
                     .foregroundStyle(Color.textSecondary)
