@@ -2,9 +2,10 @@ import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// One chat on screen: the header (name, state, Documents, New chat, ⋯), the feed and the composer, with the
-/// documents beside it or over it. It long-polls while it is visible, says `away` when it
-/// leaves, marks the chat seen when the end of the newest item is on screen, announces a new reply, and takes files dropped on it.
+/// One chat on screen: the header (name, state, Talk, Documents, New chat, ⋯), the feed and the composer, with the
+/// documents beside it or over it, and voice mode over it (iPhone, iPad) or in the composer's place (Mac). It long-polls
+/// while it is visible, says `away` when it leaves, marks the chat seen when the end of the newest item is on screen,
+/// announces a new reply, and takes files dropped on it.
 struct ChatScreen: View {
     let chat: ChatStore
     /// Open an earlier chat (§5).
@@ -17,6 +18,9 @@ struct ChatScreen: View {
     @Environment(\.chatInFront) private var inFront
     @Environment(\.chatCovered) private var externallyCovered
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
     /// or on a phone, this screen presents them as a sheet.
     @Environment(ChatShell.self) private var shell: ChatShell?
@@ -45,6 +49,27 @@ struct ChatScreen: View {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
             || screen.showEarlierChats || screen.showInstanceSettings || preview.showing || preview.error != nil
             || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
+            || (screen.showVoice && Self.voiceCovers)
+    }
+    /// Voice mode covers the chat on an iPhone or iPad (a full-screen cover); on the Mac it takes the composer's place
+    /// and the feed stays in view.
+    #if os(iOS)
+    private static let voiceCovers = true
+    #else
+    private static let voiceCovers = false
+    #endif
+    /// Talk: voice mode is on for the instance (its row's `voiceMode`), and this is its current chat.
+    private var canTalk: Bool {
+        chat.cid == nil && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
+    }
+    /// On an iPhone's width, five header buttons left no room for the instance's name (M3, iPhone Simulator): with Talk
+    /// shown, Cycles moves into ⋯.
+    private var cyclesInMenu: Bool {
+        #if os(iOS)
+        canTalk && sizeClass == .compact
+        #else
+        false
+        #endif
     }
     private var covers: Bool { shell?.documentsCover ?? true }
     private var sheetsDocuments: Bool { shell?.sheetsDocuments ?? true }
@@ -75,7 +100,11 @@ struct ChatScreen: View {
                                         if chat.said == said { chat.dismissStatus() }
                                     }
                             }
-                            if !screen.archived {
+                            if screen.showVoice && !Self.voiceCovers {
+                                VoiceScreen(client: store.client, instance: chat.instance, style: .panel) {
+                                    screen.showVoice = false
+                                }
+                            } else if !screen.archived {
                                 ComposerView(maxHeight: max(80, geometry.size.height / 3))
                             }
                         }
@@ -112,6 +141,13 @@ struct ChatScreen: View {
         .sheet(isPresented: $screen.showEarlierChats) {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $screen.showVoice) {
+            VoiceScreen(client: store.client, instance: chat.instance, style: .fullScreen) {
+                screen.showVoice = false
+            }
+        }
+        #endif
         .filePreview(preview)
         .alert(screen.confirmRetry?.confirm ?? "", isPresented: Binding(
             get: { screen.confirmRetry != nil }, set: { if !$0 { screen.confirmRetry = nil } })) {
@@ -254,8 +290,9 @@ struct ChatScreen: View {
             ChatTitle(instance: chat.instance, archived: screen.archived)
                 .environment(screen)
                 #if os(macOS)
-                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
-                                                        earlier: chat.cid != nil))
+                // Talk is one button more at the right: the title, centred, gives up its width at both ends.
+                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth - (canTalk ? 2 * Design.Header.height : 0),
+                                                        sidebar: shell?.sidebarWidth ?? 0, earlier: chat.cid != nil))
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
@@ -274,10 +311,17 @@ struct ChatScreen: View {
 
     @ViewBuilder
     private var headerButtons: some View {
+        if canTalk {
+            Button { screen.showVoice = true } label: { Image(systemName: "waveform") }
+                .accessibilityLabel("Talk")
+                .accessibilityHint("Talk with \(chat.instance) by voice")
+        }
         Button { screen.togglePanel(.documents) } label: { Image(systemName: "doc.text") }
             .accessibilityLabel("Documents")
-        Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
-            .accessibilityLabel("Cycles")
+        if !cyclesInMenu {
+            Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
+                .accessibilityLabel("Cycles")
+        }
         if chat.cid == nil {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                 .disabled(chat.content?.canClear != true)
@@ -294,6 +338,9 @@ struct ChatScreen: View {
                 Button { screen.showInstanceSettings = true } label: {
                     Label("Settings for \(chat.instance)", systemImage: "gearshape")
                 }
+            }
+            if cyclesInMenu {
+                Button { screen.togglePanel(.cycles) } label: { Label("Cycles", systemImage: "clock.arrow.circlepath") }
             }
             Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
             if chat.content?.canStop == true {

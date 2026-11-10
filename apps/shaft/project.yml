@@ -69,7 +69,15 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
-        UIBackgroundModes: [remote-notification]
+        # audio: a voice session goes on with the iPhone locked or the app in the background.
+        UIBackgroundModes: [remote-notification, audio]
+        # Voice mode: asked when voice mode first opens.
+        NSMicrophoneUsageDescription: >-
+          SHAFT listens while voice mode is open, so you can talk with an instance. The audio stays on this iPhone:
+          only the transcript of what you say is sent, as your message.
+        NSSpeechRecognitionUsageDescription: >-
+          SHAFT turns what you say into text on this iPhone while voice mode is open. The audio stays on the device:
+          only the transcript is sent, as your message.
         # shaft://chat/<instance> opens that chat, as a notification tap does (SHAFTApp.onOpenURL).
         CFBundleURLTypes:
           - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
@@ -131,6 +139,13 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        # Voice mode: asked when voice mode first opens.
+        NSMicrophoneUsageDescription: >-
+          SHAFT listens while voice mode is open, so you can talk with an instance. The audio stays on this Mac: only
+          the transcript of what you say is sent, as your message.
+        NSSpeechRecognitionUsageDescription: >-
+          SHAFT turns what you say into text on this Mac while voice mode is open. The audio stays on the device: only
+          the transcript is sent, as your message.
         # shaft://chat/<instance> opens that chat, as a notification click does (MacRoot.onOpenURL).
         CFBundleURLTypes:
           - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
@@ -154,6 +169,8 @@ targets:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-write: true
+        # The microphone for voice mode, under the sandbox and the hardened runtime alike.
+        com.apple.security.device.audio-input: true
         com.apple.developer.aps-environment: development
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 

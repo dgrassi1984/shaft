@@ -18,6 +18,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Attachments/` | thumbnails and file chips (`FileViews.swift`); `FilePreviewView.swift` presents a Markdown file as a read-only page drawn as a document is, any other in a sheet with `QLPreviewView` on macOS and Quick Look on iOS; files coming in from Photos, a paste or a drop |
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
+| `Voice/` | voice mode: `VoiceScreen` (its model, the iPhone's full-screen cover and the Mac's panel where the composer was) and `VoiceControls`; `VoiceSetup` (this device's voice preferences, permissions, the speech model, the session from the engine's parts, the Debug hooks); `VoicePicker` (a voice per language, with Preview); `VoiceReporter` (this device's voices, for the instance's `propose_voice`). The engine itself is in SHAFTKit's `Voice/` |
 
 If the initial chat list cannot load, the chat area shows the error, Retry and Settings on all three devices.
 The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Appearance before pairing, plus Unpair

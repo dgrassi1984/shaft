@@ -64,6 +64,14 @@ def setup(base: Path, port: int):
     from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
                             opconfig, version, web, web_chat, webpush, web_settings)
 
+    # setup can be called again in the same test process after supervisor imports are cached.
+    for module_name, module in list(sys.modules.items()):
+        if module_name.startswith("supervisor.") and hasattr(module, "SUP_DIR"):
+            mock.patch.object(module, "SUP_DIR", base / "sup").start()
+
+    mock.patch.object(version, "SERVICES", base / "sup" / "services").start()
+    mock.patch.object(core, "SETTINGS_FILE", base / "sup" / "settings.env").start()
+
     inst = base / "instances"
     for name in INSTANCES:
         for d in ("shaft", ".git", "notes/docs", "inbox"):
@@ -185,12 +193,20 @@ def setup(base: Path, port: int):
                                 bool(version.service(name, stale=False))),
               mock.patch.object(version, "_alive", side_effect=alive),
               mock.patch.object(opconfig, "_commit", return_value=False),
+              mock.patch.object(web_chat, "_api_conn", side_effect=lambda timeout: _VoiceAPI(web_chat)),
+              mock.patch.object(web_chat, "_headers", side_effect=lambda chat: {"X-Shaft-Conversation": chat["id"]}),
               mock.patch.object(web_chat, "_start", side_effect=lambda cid: _start(web_chat, cid)),
               mock.patch.object(web_chat, "_post", side_effect=lambda chat, route, body, timeout=15: (202, {})),
               mock.patch.object(web_chat, "_sync_copies", lambda *a, **k: None),
               mock.patch.dict(sys.modules, {"supervisor.apns": apns}),
               mock.patch.object(supervisor, "apns", apns, create=True)):
         p.start()
+    from supervisor import voices
+    if "macos" not in voices.available():
+        voices.report("macos", [
+            {"identifier": "fixture.voice.en", "name": "Example English", "language": "en-US", "quality": "default"},
+            {"identifier": "fixture.voice.it", "name": "Example Italian", "language": "it-IT", "quality": "default"},
+        ])
     return web, web_chat, messages, webpush
 
 
@@ -374,10 +390,89 @@ Some `inline code`, a [link](https://example.com), **bold** and *emphasis* in on
 """
 
 
+VOICE_ANSWER = "The garden gate is open. The lantern is beside the door."
+VOICE_LONG = " ".join(f"Lantern number {i} lights the garden path." for i in range(1, 11))
+
+
+class _VoiceAPI:
+    """The fake upstream connection; the real web_chat._run reads its API-shaped SSE chunks."""
+
+    status = 200
+
+    def __init__(self, web_chat):
+        self.chat = web_chat
+        self.sock = self
+        self.closed = threading.Event()
+
+    def request(self, method, path, body, headers):
+        self.body = json.loads(body)
+        self.cid = headers["X-Shaft-Conversation"]
+
+    def getresponse(self):
+        return self
+
+    def shutdown(self, how):
+        self.closed.set()
+
+    def close(self):
+        self.closed.set()
+
+    def __iter__(self):
+        from supervisor.api import _chunk, _note
+
+        def chunk(delta=None, **extra):
+            return _chunk(self.cid, self.body["model"], delta or {}, **extra)
+
+        def event(kind, **fields):
+            return chunk(shaft_event={"type": kind, **fields})
+
+        def take_interjections():
+            # Like the agent, take messages at a step boundary, not while drafting its answer.
+            with self.chat._lock(self.cid):
+                reply = self.chat.load(self.cid)["reply"]
+                return reply.get("interjections", 0)
+
+        ask = next(m["content"] for m in reversed(self.body["messages"]) if m["role"] == "user").lower()
+        heard = take_interjections()
+        yield chunk({"role": "assistant", "content": ""})
+        yield chunk({"reasoning_content": "model · thinking\n"})
+        yield event("status", phase="model", detail="thinking")
+        if "tool" in ask:
+            narration = "I will check the garden notes."
+            yield event("draft", text=narration)
+            yield event("step_end", answer=False)
+            yield chunk({"reasoning_content": narration + "\n"})
+            for i, name in enumerate(("read_file", "web_search")):
+                if i and self.closed.wait(0.3):
+                    return
+                yield chunk({"reasoning_content": _note({"type": "tool_start", "name": name})})
+                yield event("tool_start", name=name)
+                if self.closed.wait(1.5):
+                    return
+                yield chunk({"reasoning_content": _note({"type": "tool_end", "name": name, "ok": True})})
+                yield event("tool_end", name=name, ok=True)
+            heard = take_interjections()
+        answer = VOICE_LONG if "long" in ask else VOICE_ANSWER
+        pieces = [answer[i:i + 8] for i in range(0, len(answer), 8)]
+        delay = 6 / (len(pieces) - 1) if "long" in ask else 0.08
+        for i, piece in enumerate(pieces):
+            if self.closed.is_set() or (i and self.closed.wait(delay)):
+                return
+            yield event("draft", text=piece)
+        yield event("step_end", answer=True)
+        yield chunk({"content": answer})
+        yield chunk(finish="stop", interjections_heard=heard)
+        yield b"data: [DONE]\n\n"
+
+
 def _start(web_chat, cid: str) -> None:
     relay = web_chat.Relay(cid)
-    web_chat._relays[cid] = relay
-    threading.Thread(target=_run, args=(web_chat, relay), daemon=True, name=f"fake-{cid}").start()
+    web_chat._relays[cid] = web_chat._streams[cid] = relay
+    if web_chat.spoken(web_chat.load(cid)):
+        target, args = web_chat._run, (relay,)
+    else:
+        target, args = _run, (web_chat, relay)
+    threading.Thread(target=target, args=args, daemon=True, name=f"fake-{cid}").start()
 
 
 def _run(web_chat, relay) -> None:

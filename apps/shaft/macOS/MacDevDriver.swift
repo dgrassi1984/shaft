@@ -47,6 +47,10 @@ import SwiftUI
 ///     blocks                        log each code block and table: its frame and how wide its text is
 ///     scrollblock <n> <x>           scroll the n-th block sideways to x
 ///     wheelblock <n> <dx> <dy>      a wheel gesture over the n-th block's text; logs where the block and the feed went
+///     voicestate                    log the voice session on screen (VoiceDebug.current): state, transcript, the
+///                                   sentence spoken, status line, substitution, last delay, muted
+///     voicewait <state> <seconds>   wait up to <seconds> for the voice session to reach <state> (listening,
+///                                   userTalking, thinking, speaking, ended, idle); logs it reached or timed out
 ///     wait <seconds>
 ///     quit
 @MainActor
@@ -79,6 +83,17 @@ enum MacDevDriver {
     private static func split(_ step: String) -> (String, String) {
         guard let space = step.firstIndex(of: " ") else { return (step, "") }
         return (String(step[..<space]), String(step[step.index(after: space)...]))
+    }
+
+    /// The voice session on screen, as `voicestate` logs it.
+    private static func voiceState() -> String {
+        guard let voice = VoiceDebug.current else { return "voice: no session on screen" }
+        let spoken = voice.speaking.map { "\(String(reflecting: $0.text))\($0.isStatus ? " (status)" : "")" } ?? "-"
+        let delay = voice.latency.map { String(format: "%.2f s", $0) } ?? "-"
+        return "voice: instance=\(voice.instance) language=\(voice.language.rawValue) state=\(voice.state.rawValue) "
+            + "transcript=\(String(reflecting: voice.transcript)) speaking=\(spoken) "
+            + "status=\(String(reflecting: voice.statusLine)) substitution=\(voice.voiceSubstitution.map { String(reflecting: $0) } ?? "-") "
+            + "latency=\(delay) muted=\(voice.muted)"
     }
 
     private static var window: NSWindow? {
@@ -144,6 +159,22 @@ enum MacDevDriver {
             log("chat=\(state.selection ?? "-") archived=\(state.screen?.archived ?? false) draft=\(String(reflecting: chat?.draft.text ?? "")) quotes=\(chat?.draft.quotes.map(\.quote) ?? []) answers=\(chat?.draft.quotes.map(\.answer) ?? []) files=\(chat?.draft.attachments.map(\.name) ?? []) first=\(window?.firstResponder.map { String(describing: type(of: $0)) } ?? "-") said=\(chat?.said ?? "-") error=\(chat?.actionError?.message ?? "-") visibleChat=\(model.visibleChat ?? "-") docs=\(state.screen?.showDocuments ?? false) dock=\(NSApp.dockTile.badgeLabel ?? "-") window=[key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] replying=\(chat?.feed?.reply != nil) feed=\(chat?.feed != nil) polling=\(chat?.isPolling ?? false) connection=\(String(describing: chat?.connection)) queued=\(chat?.content?.queued.count ?? -1) unsent=\(chat?.unsent.count ?? -1)")
         case "shot":
             shot(rest, dir: dir)
+        case "voicestate":
+            log(voiceState())
+        case "voicewait":
+            // `<state> <seconds>`: the voice session on screen reaching that state (the panel opens with `menu Talk`).
+            let parts = rest.split(separator: " ")
+            guard parts.count == 2, let wanted = VoiceState(rawValue: String(parts[0])),
+                  let seconds = Double(parts[1]) else {
+                return log("voicewait <state> <seconds>; states: \(VoiceState.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            let start = Date()
+            while VoiceDebug.current?.state != wanted, Date().timeIntervalSince(start) < seconds {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            let took = String(format: "%.2f", Date().timeIntervalSince(start))
+            log(VoiceDebug.current?.state == wanted ? "voice reached \(wanted.rawValue) after \(took) s"
+                : "voice did not reach \(wanted.rawValue) in \(parts[1]) s; \(voiceState())")
         case "updatemenus":
             // What opening each menu does: its owner brings its items up to date.
             for item in NSApp.mainMenu?.items ?? [] {

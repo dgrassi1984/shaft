@@ -154,6 +154,71 @@ A process started directly stays behind other apps: start the app with `open -n`
 for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
 `capture`, since another app may take it back; `capture` logs whether the window has the keys and where the pointer is.
 
+### Voice against the fixture server
+
+Voice mode asks for the microphone and speech recognition the first time it opens, and needs the
+on-device speech model of its language (English or Italian). A missing model is offered as Download on the voice
+screen, a system download that runs only on that tap. The Talk button shows for an instance whose `voice_mode` is `on`
+(its Settings → Voice). The fixture server's voice replies are scripted: a question containing "tool" runs two tools
+first (the working sound), one containing "long" gets a long answer (room for a barge-in), anything else a short one.
+
+Debug builds take two test hooks from the environment (`Shared/Voice/VoiceSetup.swift`, read when a session starts):
+
+| Variable | What |
+|---|---|
+| `SHAFT_DEV_VOICE_FILES=<path>@<seconds>[,<path>@<seconds>…]` | recorded speech instead of the microphone: each file is heard at its offset from the session's start, at real time, with silence between and after. No permission is asked. A relative path is taken from `SHAFT_DEV_DIR` (the Mac), else from the app's Documents folder |
+| `SHAFT_DEV_VOICE_SILENT=1` | the silent audio graph: nothing is played aloud and the microphone is never opened. Alone, the session hears silence |
+
+Use both together for a run that neither listens nor plays aloud. A value that cannot be used (a malformed item, a
+file that is not there) stops the session with what is wrong, shown on the voice screen; it never falls back to the
+microphone. The speech model must already be installed: a test run never downloads it. Make the speech with `say -o`
+(written to the file, never played):
+
+```bash
+mkdir -p /tmp/shaft-voice
+say -o /tmp/shaft-voice/tools.aiff "Could you use a tool to check the garden notes"
+say -o /tmp/shaft-voice/long.aiff "Tell me the long story of the lanterns"
+say -o /tmp/shaft-voice/barge.aiff "Wait, which lantern is by the door"
+```
+
+iPhone Simulator: `SIMCTL_CHILD_` passes a variable to the launched app. The Simulator reads the Mac's files; otherwise
+copy them into `$(xcrun simctl get_app_container booted <bundle id> data)/Documents/` and give the bare file name.
+
+```bash
+# Working directory: apps/shaft/
+xcrun simctl install booted build/dd/Build/Products/Debug-iphonesimulator/SHAFT.app
+SIMCTL_CHILD_SHAFT_DEV_VOICE_FILES=/tmp/shaft-voice/long.aiff@2,/tmp/shaft-voice/barge.aiff@14 \
+SIMCTL_CHILD_SHAFT_DEV_VOICE_SILENT=1 \
+  xcrun simctl launch --terminate-running-process booted <bundle id>
+```
+
+The Mac app (paired in `SHAFT_DEV_DIR` as above), with the files in that folder and a drive script: `menu Talk` opens
+the voice panel; `voicewait <state> <seconds>` waits for the session to reach `listening`, `userTalking`, `thinking`,
+`speaking` or `ended`; `voicestate` logs its state, your transcript, the sentence spoken (marked when it is a status
+line), the status line, the voice substitution, the last turn's delay and Mute.
+
+```bash
+# Working directory: apps/shaft/
+cp /tmp/shaft-voice/tools.aiff /tmp/shaft-mac/
+cat > /tmp/shaft-mac/voice.drive <<'DRIVE'
+open tundra
+menu Talk
+voicewait thinking 20
+voicewait speaking 30
+voicestate
+voicewait listening 60
+voicestate
+quit
+DRIVE
+SHAFT_DEV_DIR=/tmp/shaft-mac SHAFT_DEV_VOICE_FILES=tools.aiff@1 SHAFT_DEV_VOICE_SILENT=1 \
+  SHAFT_DEV_DRIVE=/tmp/shaft-mac/voice.drive /tmp/SHAFT.app/Contents/MacOS/SHAFT
+```
+
+The audio graph follows the system's changes by itself (`VoiceAudioGraph`): an engine configuration change (a device
+added or removed, another input picked) starts the engine again, and so does an iOS route change that adds or removes a
+device. An iOS interruption (a call, Siri) pauses it until the system says the app may resume. A session goes on with
+the iPhone locked (`UIBackgroundModes` `audio`). The hooks cannot show any of this: it needs a device.
+
 ## Tests
 
 ```bash
