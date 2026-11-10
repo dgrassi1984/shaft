@@ -287,7 +287,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `last` † | timestamp or null | the newest item from the instance (an answer or a message it sent): what unread compares (§12) |
 | `can_stop` † | bool | a reply runs and this is not an archived chat |
 | `can_end` † | bool | the chat is open, idle and has turns (the web's End button) |
-| `can_clear` † | bool | a chat is shown and not archived (New chat; refused while replying) |
+| `can_clear` † | bool | a chat is shown and not archived (Clear this thread; refused while replying) |
 
 `chat`:
 
@@ -743,7 +743,8 @@ Refused while it replies, or when it is already over.
 
 ### 7.4 `POST /app/v1/chat/<n>/clear`
 
-`{"cid": str}`: New chat. An open conversation is ended first; the chat is kept (Earlier chats, Transcripts).
+`{"cid": str}`: Clear this thread. An open conversation is ended first; the chat is kept (Earlier chats, Transcripts).
+A new thread is §7.7: it ends nothing.
 Only `cid` is cleared; other open threads stay open. Refused while it replies. An ended chat must still be the
 shown chat, else "that is not the chat on this page any more: reload it".
 
@@ -1083,7 +1084,9 @@ Every piece `web_views.chat_feed` and `live_activity` draw, and where it is in t
 | "✎ Your changes to … go to <n> with your next message" | `pend` | `pending_edits` |
 | End the conversation | `acts` | `can_end`, §7.3 |
 | The composer's sent ids (`data-sent-mids`) | | `mids` |
-| New chat (header) | | `can_clear`, §7.4 |
+| New thread (header) | | §7.7 |
+| Clear this thread (header ⋯) | | `can_clear`, §7.4 |
+| The thread's title, Rename (header) | | `chat.title`, §7.8 |
 | Earlier chats (header menu) | | §5 |
 | State and "what a message does now" (header) | | `/instances`: `state`, `since`, `busy_note` |
 | Next cycle's hint (composer) | | `/instances`: `next_cycle` |
