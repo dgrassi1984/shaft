@@ -69,72 +69,20 @@ final class TranscriberPipeline: @unchecked Sendable {
 
     private var isStopped: Bool { lock.withLock { stopped } }
 
-    /// Quiet this long after speech, and what was heard is finalized at once. The transcriber alone can hold its
-    /// final back for seconds (M2 end-to-end: 6 s once), and the end of your turn counts from the final. Measured on
-    /// the audio, never on the transcript: volatile text can stand still for a second while you are still talking,
-    /// and finalizing then cut a sentence in two ("to." / "…the land?", M2). M3 tunes it with a real voice.
-    static let finalizeAfterQuietS: TimeInterval = 0.5
-    /// A buffer is speech when it is this far above the noise floor, and above `speechFloorDB` whatever the floor.
-    static let speechAboveFloorDB: Float = 12
-    static let speechFloorDB: Float = -50
-
-    /// Voice activity, from the level of each buffer fed (under `lock`).
-    private var noiseFloorDB: Float = -60
-    private var heardSpeech = false
-    private var quietFor: TimeInterval = 0
-
     /// Feed one buffer of audio, in any PCM format (converted to the analyzer's). Call from one thread at a time.
+    ///
+    /// The analyzer decides when a result is final; nothing here asks it to finalize early. Asking it to (M2: after
+    /// 0.5 s of quiet) dropped words when you paused mid-sentence — "Wait, what about…" came back as ". what
+    /// about…" (M3, the Mac app and VoiceAudioTests). A final that comes late is VoiceTurn's to handle.
     func feed(_ buffer: AVAudioPCMBuffer) {
-        var finalizeNow = false
         let converted: AVAudioPCMBuffer? = lock.withLock {
             if stopped { return nil }
             if converter == nil || converter?.from != buffer.format {
                 converter = PCMStreamConverter(from: buffer.format, to: analyzerFormat)
             }
-            finalizeNow = hearQuiet(buffer)
             return converter?.convert(buffer)
         }
         if let converted { input.yield(AnalyzerInput(buffer: converted)) }
-        if finalizeNow {
-            Task { [analyzer] in try? await analyzer.finalize(through: nil) }
-        }
-    }
-
-    /// Track speech and quiet in `buffer`; true when the quiet after speech has just reached `finalizeAfterQuietS`.
-    private func hearQuiet(_ buffer: AVAudioPCMBuffer) -> Bool {
-        let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
-        let level = Self.levelDB(buffer)
-        // The floor follows the quietest level at once and rises slowly (3 dB a second), so steady noise stops
-        // counting as speech while speech never raises it much.
-        noiseFloorDB = min(level, noiseFloorDB + Float(seconds) * 3)
-        if level > max(Self.speechFloorDB, noiseFloorDB + Self.speechAboveFloorDB) {
-            heardSpeech = true
-            quietFor = 0
-            return false
-        }
-        guard heardSpeech else { return false }
-        quietFor += seconds
-        if quietFor >= Self.finalizeAfterQuietS {
-            heardSpeech = false
-            return true
-        }
-        return false
-    }
-
-    /// The buffer's RMS level in dBFS (first channel; -120 for digital silence).
-    static func levelDB(_ buffer: AVAudioPCMBuffer) -> Float {
-        let n = Int(buffer.frameLength)
-        guard n > 0 else { return -120 }
-        var sum: Double = 0
-        if let samples = buffer.floatChannelData?[0] {
-            for i in 0..<n { sum += Double(samples[i]) * Double(samples[i]) }
-        } else if let samples = buffer.int16ChannelData?[0] {
-            for i in 0..<n { let v = Double(samples[i]) / 32768; sum += v * v }
-        } else {
-            return 0                                     // a format with no level to read: count it as sound
-        }
-        let rms = (sum / Double(n)).squareRoot()
-        return rms > 1e-6 ? Float(20 * log10(rms)) : -120
     }
 
     /// Stop hearing now: input ends, the analysis is cancelled, and no result is delivered after this returns.

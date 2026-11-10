@@ -356,11 +356,10 @@ final class VoiceAudioTests: XCTestCase {
         XCTAssertEqual(results.values.count, count, "results came after stop returned")
     }
 
-    /// The bound the quiet-finalize keeps: each sentence's whole final text comes within 1.5 s of its end. Once, in the
-    /// first M2 end-to-end run, the transcriber held a second sentence's final back about 6 s and a stale partial was
-    /// sent as the turn; that hold-back did not recur in later runs with or without the quiet-finalize, so this test
-    /// pins the bound, not a reproduction. VoiceTurn's own test pins what happens if a late final comes anyway
-    /// (`aLateFinalThatExtendsATurnAlreadySentCountsOnlyItsNewWords`).
+    /// Each sentence's final is whole and comes within 1.5 s of its end. Bug (M3): finalizing early after 0.5 s of
+    /// quiet lost words at a pause mid-sentence — "Wait, what about the lantern by the door" came back as ". what
+    /// about the lantern by the door?", and the Mac app sent "to. Wait, …". The second sentence's final must start
+    /// with its first word.
     func testEachSentencesFinalComesSoonAfterItEndsWithTheWholeSentence() async throws {
         guard await TranscriberPipeline.isInstalled(.en) else {
             throw XCTSkip("The English (en_US) speech model is not installed on this Mac; not downloading it.")
@@ -389,17 +388,7 @@ final class VoiceAudioTests: XCTestCase {
         }
         let second_ = finals.filter { $0.at > zero + at[1] }.map(\.text).joined(separator: " ").lowercased()
         XCTAssertTrue(second_.contains("lantern") && second_.contains("door"), "split or partial: \(second_)")
-    }
-
-    func testTheLevelOfDigitalSilenceIsTheFloorAndAFullScaleToneIsNearZeroDB() throws {
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
-        buffer.frameLength = 1600
-        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
-        for i in 0..<1600 { samples[i] = 0 }
-        XCTAssertEqual(TranscriberPipeline.levelDB(buffer), -120)
-        for i in 0..<1600 { samples[i] = sin(Float(i) * 2 * .pi * 440 / 16_000) }
-        XCTAssertEqual(TranscriberPipeline.levelDB(buffer), -3.01, accuracy: 0.1)
+        XCTAssertTrue(second_.trimmingCharacters(in: .whitespaces).hasPrefix("wait"), "words lost or added: \(second_)")
     }
 
     func testAMissingTranscriberModelThrowsNamingTheLanguage() async throws {

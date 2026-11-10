@@ -398,6 +398,10 @@ struct VoiceControlStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            // One line, never squeezed: in the Mac's panel a squeezed row broke "Mute" and "End" mid-word (M3); unable
+            // to shrink, the panel's ViewThatFits puts the controls on their own row instead.
+            .lineLimit(1)
+            .fixedSize(horizontal: compact, vertical: false)
             .font(compact ? .callout.weight(.medium) : .body.weight(.semibold))
             .foregroundStyle(!enabled ? Color.textTertiary : tone == .danger ? Color.danger : Color.textPrimary)
             .padding(.horizontal, compact ? Design.Space.s12 : Design.Space.s20)

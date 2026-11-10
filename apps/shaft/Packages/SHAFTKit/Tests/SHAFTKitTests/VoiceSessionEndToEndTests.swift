@@ -225,7 +225,8 @@ final class VoiceSessionEndToEndTests: XCTestCase {
         XCTAssertEqual(turns.count, 2, "\(turns.map(\.text))")
         XCTAssertEqual(turns.map(\.via), ["voice", "voice"])
         XCTAssertTrue(turns.first?.text.lowercased().contains("long") ?? false)
-        XCTAssertTrue(turns.last?.text.lowercased().contains("what about") ?? false)
+        // Whole, nothing lost or added at its start (M3: "to. Wait, …" when the transcriber was asked to finalize early).
+        XCTAssertTrue(turns.last?.text.lowercased().hasPrefix("wait") ?? false, "\(turns.last?.text ?? "")")
 
         let stop = try XCTUnwrap(log.first("stopAll"), "the speech was never stopped")
         XCTAssertGreaterThan(stop - log.all[0].at, 10, "not before you spoke")
