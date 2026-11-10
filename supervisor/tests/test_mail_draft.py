@@ -82,7 +82,9 @@ class DraftTest(read.MailCase):
         self.assertEqual(str(msg['References']), '<first@example.com> <last@example.com>')
         self.assertIn('in thread work/aaa111', out)
         self.assertIn('work/draft/d1', out)
-        self.assertIn('https://mail.google.com/mail/u/operator@work.example/#drafts?compose=m1', out)
+        # bug guard: /mail/u/<address>/ links answered Gmail's 404; authuser= opens the draft
+        self.assertIn('https://mail.google.com/mail/?authuser=operator%40work.example#drafts?compose=m1', out)
+        self.assertNotIn('/mail/u/', out)
 
     def test_cross_account_and_overrides(self):
         core.set_mail_grants('wisp', [{**self.grants[0], 'draft': False}, self.grants[1]])

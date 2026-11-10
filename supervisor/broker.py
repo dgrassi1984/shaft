@@ -2729,7 +2729,8 @@ class Broker:
                     f'To: {", ".join(to)}\nCc: {", ".join(cc)}\nBcc: {", ".join(bcc)}\nSubject: {subject}\n'
                     + 'Attachments: ' + (', '.join(f'{n} ({size_text(len(d))})' for n, d in files) or 'none')
                     + f'\n{where}\nHandle: {account}/draft/{did}\n'
-                    + f'https://mail.google.com/mail/u/{acct.address}/#drafts?compose={mid}\n'
+                    # authuser= picks the signed-in account; /mail/u/<address>/ answers 404 (checked live 2026-11-10)
+                    + f'https://mail.google.com/mail/?authuser={urllib.parse.quote(acct.address)}#drafts?compose={mid}\n'
                     + 'The operator reviews it and presses Send.')
 
     def _mail_download(self, id: str, message, attachment) -> tuple[str, str, int, str, str, bytes]:   # noqa: A002
