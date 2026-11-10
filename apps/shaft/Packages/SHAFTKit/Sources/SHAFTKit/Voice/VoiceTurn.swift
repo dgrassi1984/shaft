@@ -24,16 +24,16 @@ import Foundation
 ///   ignored: that turn's reply is still to come.
 /// - **Latency is measured once per turn you send**: from the moment the turn ended (the input that sent it) to the
 ///   first spoken word of the instance's own text after it. One turn, one reply: exactly once per reply.
-/// - **The silence before any text is filled with sound, and with words only when they say something**: only while
-///   thinking and before the reply's first text (a narration counts: it already said what it is doing, and the
-///   working sound plays during its tools). After `fillerS` of silence the soft waiting sound loops (`.waitingSound`)
-///   until anything else is heard: the reply's text, a status line, a tool's working sound, you talking, the reply's
-///   end. Nobody says "<name> is thinking". A status line is read only when it tells something: a status with a
-///   `detail` other than "thinking" as "<name> is <detail>"; a waiting phase without one ("waiting: x is pausing its
-///   cycle for you (live)") as "<name> is pausing its cycle for you"; a tool running longer than three `fillerS` as
-///   "<name> is using web search" (spaces for underscores). The same line is never read twice in a row. In Italian
-///   the server's three waiting phrases are translated and any other status is not read, so the Italian voice never
-///   reads English.
+/// - **Waiting is heard as sound, as unobtrusive as can be, not as words.** The working sound plays only while a
+///   tool runs. The soft waiting sound (`.waitingSound`, one quiet tick every two seconds) plays while the reply
+///   keeps you waiting in silence: before its first text, from `fillerS` after your turn (a narration counts as text:
+///   it already said what it is doing); and at once while it waits for a cycle ("waiting: x is pausing its cycle
+///   for you", "pausing a cycle"), whose phrases are never read. It stops when anything else is heard: the reply's
+///   text, a status line, a tool's working sound, you talking, the reply's end. Nobody says "<name> is thinking". A
+///   status line is read only when it tells something, before the reply's first text: a `detail` other than
+///   "thinking" as "<name> is <detail>"; a tool running longer than three `fillerS` as "<name> is using web search"
+///   (spaces for underscores). The same line is never read twice in a row. The Italian voice reads only the tool
+///   line, so it never reads English.
 /// - **Muting while you talk drops what you were saying**: nothing is sent.
 public struct VoiceTurn: Sendable {
     /// What the screen shows.
@@ -380,8 +380,7 @@ public struct VoiceTurn: Sendable {
             reply.phase = event.phase ?? ""
             reply.detail = event.detail ?? ""
             reply.hasStatus = true
-            let said = (reply.phase + " " + reply.detail).lowercased()
-            reply.waiting = said.contains("waiting") || said.contains("pausing")
+            reply.waiting = Self.saysWaiting(phase: reply.phase, detail: reply.detail)
             syncWorking(at: at)
         case .toolStart:
             reply.tools += 1
@@ -478,7 +477,7 @@ public struct VoiceTurn: Sendable {
 
     private mutating func syncWorking(at: TimeInterval) {
         let grace = reply.graceUntil.map { at < $0 } ?? false
-        let on = tuning.workingSound && replyOpen && reply.running && (reply.tools > 0 || reply.waiting || grace)
+        let on = tuning.workingSound && replyOpen && reply.running && (reply.tools > 0 || grace)
         guard on != working else { return }
         working = on
         out.append(.workingSound(on))
@@ -521,32 +520,21 @@ public struct VoiceTurn: Sendable {
         }
     }
 
-    /// The status worth reading now, or nil: a status that only says it is thinking is left to the waiting sound.
+    /// The status worth reading now, or nil. A status that only says it is thinking, or that the reply waits for a
+    /// cycle, is left to the waiting sound; the Italian voice reads no status (the server writes them in English).
     private func statusLine() -> String? {
-        guard reply.running, reply.hasStatus else { return nil }      // never a past reply's status
+        guard reply.running, reply.hasStatus, language == .en else { return nil }      // never a past reply's status
+        // Judged from the status itself: a tool that started clears `reply.waiting`, not the wait's words.
+        guard !Self.saysWaiting(phase: reply.phase, detail: reply.detail) else { return nil }
         let detail = reply.detail.trimmingCharacters(in: .whitespaces)
-        guard !Self.saysOnlyThinking(detail) else { return nil }
-        var what = detail
-        if what.isEmpty, reply.phase.lowercased().hasPrefix("waiting:"),
-           let range = reply.phase.range(of: " is ") {
-            what = String(reply.phase[range.upperBound...])
-            if let open = what.range(of: " (", options: .backwards), what.hasSuffix(")") {
-                what = String(what[..<open.lowerBound])
-            }
-            what = what.trimmingCharacters(in: .whitespaces)
-        }
-        guard !what.isEmpty else { return nil }
-        switch language {
-        case .en:
-            return "\(instanceName) is \(what)"
-        case .it:
-            switch what.lowercased() {
-            case "pausing its cycle for you": return "\(instanceName) sta mettendo in pausa il suo ciclo per te"
-            case "finishing a run": return "\(instanceName) sta finendo un'esecuzione"
-            case "in another conversation": return "\(instanceName) è in un'altra conversazione"
-            default: return nil
-            }
-        }
+        guard !detail.isEmpty, !Self.saysOnlyThinking(detail) else { return nil }
+        return "\(instanceName) is \(detail)"
+    }
+
+    /// A status that says the reply waits for a cycle ("waiting: x is pausing its cycle for you", "pausing a cycle").
+    static func saysWaiting(phase: String, detail: String) -> Bool {
+        let said = (phase + " " + detail).lowercased()
+        return said.contains("waiting") || said.contains("pausing")
     }
 
     /// "thinking", "Thinking…": a status that tells nothing the waiting sound does not.
@@ -555,13 +543,14 @@ public struct VoiceTurn: Sendable {
         return word == "thinking" || word == "pensando"
     }
 
-    /// The waiting sound plays while the reply you wait for is silent: thinking, nothing of it heard yet, no working
-    /// sound, nothing queued to speak, and `fillerS` gone since the silence began. `at` nil (any input but a tick):
-    /// it can only stop.
+    /// The waiting sound plays while the reply keeps you waiting in silence: no working sound, nothing queued to
+    /// speak, you not talking, and either nothing of the reply heard yet with `fillerS` gone since the silence began,
+    /// or a wait for a cycle (at once). `at` nil (any input but a tick): only a cycle wait turns it on.
     private mutating func syncWaiting(at: TimeInterval?) {
-        let quiet = tuning.workingSound && state == .thinking && replyOpen && !textSinceSend && !working
-            && queued.isEmpty
-        let on = quiet && (waiting || (at.map { $0 - quietSince >= tuning.fillerS } ?? false))
+        let quiet = tuning.workingSound && (state == .thinking || state == .speaking) && replyOpen && !working
+            && queued.isEmpty && (!textSinceSend || reply.waiting)
+        let due = reply.waiting || (at.map { $0 - quietSince >= tuning.fillerS } ?? false)
+        let on = quiet && (waiting || due)
         guard on != waiting else { return }
         waiting = on
         out.append(.waitingSound(on))

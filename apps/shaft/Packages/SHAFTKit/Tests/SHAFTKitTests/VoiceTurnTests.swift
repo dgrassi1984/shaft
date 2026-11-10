@@ -477,14 +477,37 @@ struct VoiceTurnTests {
         #expect(workingAlternates(log))
     }
 
-    @Test func theWorkingSoundPlaysWhileTheReplyWaitsForACycle() {
+    /// A wait for a cycle is heard as the soft waiting sound, at once, never as the working hum (tools only).
+    @Test func theWaitingSoundNotTheWorkingSoundPlaysWhileTheReplyWaitsForACycle() {
         var turn = thinkingTurn()
-        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.workingSound(true)])
-        #expect(turn.handle(status("model", "thinking", 4.0)) == [.workingSound(false)])
-        #expect(turn.handle(status("queue", "pausing a cycle", 4.2)) == [.workingSound(true)])
-        #expect(turn.handle(toolStart("read_file", 4.5)) == [])
+        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.waitingSound(true)])
+        #expect(turn.handle(status("model", "thinking", 4.0)) == [])          // still silent: it goes on
+        #expect(turn.handle(status("queue", "pausing a cycle", 4.2)) == [])
+        #expect(turn.handle(toolStart("read_file", 4.5)) == [.workingSound(true), .waitingSound(false)])
         #expect(turn.handle(toolEnd("read_file", 5.0)) == [])
         #expect(turn.handle(tick(5.7)) == [.workingSound(false)])
+        #expect(turn.handle(tick(8.1)) == [.waitingSound(true)])              // fillerS after the tool
+    }
+
+    @Test func aWaitAfterTheReplyStartedSpeakingIsHeardToo() {
+        var turn = thinkingTurn()
+        _ = turn.run(draft("One. ", 3.0), started(1, 3.2))
+        #expect(turn.handle(finished(1, 4.0)) == [])
+        #expect(turn.state == .speaking)
+        #expect(turn.handle(status(waitingPhase, nil, 4.5)) == [.waitingSound(true)])
+        #expect(turn.handle(draft("Two. ", 6.0)) == [.waitingSound(false),
+                                                     .speak(id: 2, text: "Two.", isStatus: false)])
+    }
+
+    /// Bug: a tool that started cleared the wait, and its status ("pausing a cycle") was then read aloud.
+    @Test func aWaitsStatusIsNeverReadEvenAfterAToolEndedTheWait() {
+        var turn = thinkingTurn()
+        #expect(turn.handle(status("queue", "pausing a cycle", 2.8)) == [.waitingSound(true)])
+        #expect(turn.handle(toolStart("read_file", 3.0)) == [.workingSound(true), .waitingSound(false)])
+        #expect(turn.handle(toolEnd("read_file", 3.5)) == [])
+        #expect(turn.handle(tick(4.2)) == [.workingSound(false)])
+        #expect(turn.handle(tick(6.6)) == [.waitingSound(true)])
+        #expect(turn.handle(tick(20.0)) == [])
     }
 
     @Test func theWorkingSoundIsNeverTurnedOnTwiceWithoutAnOffBetween() {
@@ -495,8 +518,8 @@ struct VoiceTurnTests {
                                toolStart("read_file", 4.1), tick(4.3), toolEnd("read_file", 4.4), tick(5.1),
                                status(waitingPhase, nil, 5.2), draft("Done.", 5.3), status(waitingPhase, nil, 5.4),
                                end(nil, 5.5))
-        #expect(actions == [.workingSound(true), .workingSound(false), .workingSound(true), .workingSound(false),
-                            .speak(id: 1, text: "Done.", isStatus: false), .workingSound(true), .workingSound(false)])
+        #expect(actions == [.waitingSound(true), .workingSound(true), .waitingSound(false), .workingSound(false),
+                            .waitingSound(true), .waitingSound(false), .speak(id: 1, text: "Done.", isStatus: false)])
         #expect(workingAlternates(actions))
     }
 
@@ -626,11 +649,15 @@ struct VoiceTurnTests {
         #expect(turn.handle(tick(20.0)) == [])
     }
 
-    @Test func aWaitForACycleIsReadFromItsPhase() {
+    /// "Tundra is pausing its cycle for you" is never said: the waiting sound says it.
+    @Test func aWaitForACycleIsNeverRead() {
         var turn = thinkingTurn()
-        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.workingSound(true)])
-        #expect(turn.handle(tick(5.6)) == [.speak(id: 1, text: "Tundra is pausing its cycle for you",
-                                                  isStatus: true)])
+        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.waitingSound(true)])
+        #expect(turn.handle(tick(5.6)) == [])
+        #expect(turn.handle(tick(30.0)) == [])
+        var detailed = thinkingTurn()
+        #expect(detailed.handle(status("waiting: tundra", "finishing a run", 2.8)) == [.waitingSound(true)])
+        #expect(detailed.handle(tick(30.0)) == [])
     }
 
     /// Bug: the reply's first stream event restarted the silence clock, so a status arriving late pushed the first
@@ -666,9 +693,8 @@ struct VoiceTurnTests {
         #expect(tool.handle(tick(12.1)) == [.speak(id: 1, text: "Tundra sta usando web search", isStatus: true)])
 
         var waiting = thinkingTurn(.it)
-        _ = waiting.handle(status(waitingPhase, nil, 2.8))
-        #expect(waiting.handle(tick(5.6)) == [
-            .speak(id: 1, text: "Tundra sta mettendo in pausa il suo ciclo per te", isStatus: true)])
+        #expect(waiting.handle(status(waitingPhase, nil, 2.8)) == [.waitingSound(true)])
+        #expect(waiting.handle(tick(5.6)) == [])
 
         // An English detail is not read by the Italian voice: the waiting sound fills the silence.
         var english = thinkingTurn(.it)
@@ -760,10 +786,15 @@ struct VoiceTurnTests {
 
     @Test func aStreamFailureStopsTheWorkingSoundAndLeavesThatReply() {
         var turn = thinkingTurn()
-        #expect(turn.handle(status(waitingPhase, nil, 2.8)) == [.workingSound(true)])
+        #expect(turn.handle(toolStart("read_file", 2.8)) == [.workingSound(true)])
         #expect(turn.handle(.streamClosed(message: "the connection was lost", at: 3.0)) == [
             .showStatus("the connection was lost"), .workingSound(false), .state(.listening)])
         #expect(turn.handle(draft("Late text.", 3.2)) == [])
+
+        var waiting = thinkingTurn()
+        #expect(waiting.handle(status(waitingPhase, nil, 2.8)) == [.waitingSound(true)])
+        #expect(waiting.handle(.streamClosed(message: "the connection was lost", at: 3.0)) == [
+            .showStatus("the connection was lost"), .state(.listening), .waitingSound(false)])
     }
 
     @Test func aStreamFailureWhileSpeakingListensOnceTheQueuedSpeechIsDone() {

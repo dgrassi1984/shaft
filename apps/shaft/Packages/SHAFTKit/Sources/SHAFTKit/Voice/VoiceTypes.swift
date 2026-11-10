@@ -31,10 +31,11 @@ public struct VoiceTuning: Sendable, Equatable, Codable {
     public var endpointS: TimeInterval
     /// Words of yours, heard while the instance thinks or speaks, that stop its speech (barge-in).
     public var bargeWords: Int
-    /// No answer text and no tool for this long: one status line is read. A tool still running after
-    /// `fillerS × 3`: its status is read. At most one such line every `fillerS × 3`.
+    /// No answer text and no tool for this long: the waiting sound starts, and a status that tells something is read.
+    /// A tool still running after `fillerS × 3`: its name is read. At most one such line every `fillerS × 3`.
     public var fillerS: TimeInterval
-    /// The working sound while a tool runs or the reply waits for a cycle to pause.
+    /// The sounds: the working sound while a tool runs, the waiting sound while the reply keeps you waiting in silence
+    /// (before its first text, or for a cycle).
     public var workingSound: Bool
     /// Its volume, 0…1.
     public var workingVolume: Float
@@ -119,7 +120,7 @@ public enum VoiceAction: Sendable, Equatable {
     case stopSpeaking
     /// The working sound on or off.
     case workingSound(Bool)
-    /// The waiting sound on or off: a soft tick looping in the silence before the reply's first text.
+    /// The waiting sound on or off: a soft tick looping while the reply keeps you waiting in silence.
     case waitingSound(Bool)
     /// Lower the working sound while you talk (true), back to its volume after (false).
     case duckWorkingSound(Bool)

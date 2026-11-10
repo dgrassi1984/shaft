@@ -188,7 +188,7 @@ public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
     /// One loop of the working sound, seconds.
     static let loopSeconds: Double = 1.2
     /// One loop of the waiting sound, seconds: one tick, then quiet.
-    static let waitingLoopSeconds: Double = 1.5
+    static let waitingLoopSeconds: Double = 2.0
 
     enum Loop { case working, waiting }
     /// −12 dB while the operator talks.
@@ -322,7 +322,7 @@ public final class GeneratedVoiceSounds: VoiceSounds, @unchecked Sendable {
             let t = Double(frame) / sampleRate
             let envelope = min(1, t / 0.005) * exp(-t / 0.03) * (1 - Double(frame) / Double(tickFrames))
             let tone = sin(2 * Double.pi * 587.33 * t) + 0.2 * sin(2 * Double.pi * 1174.66 * t)
-            channel[frame] = Float(0.6 * envelope * tone / 1.2)
+            channel[frame] = Float(0.4 * envelope * tone / 1.2)
         }
         return buffer
     }
