@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .core import (TEMPLATE, UnsafePath, config_lock, config_set_line, config_values, config_with, instance_config,
                    instance_root, log, safe_read, safe_read_bytes, safe_write)
+from .watch import CONFIG_KEYS as WATCH_KEYS, MODES as WATCH_MODES
 
 # A key that holds a secret by its name: *_KEY, *_TOKEN, or SECRET/PASSWORD anywhere — not MAX_TOKENS_STEP or
 # LLM_CONTEXT_TOKENS, which a first, looser pattern hid as secrets (live, 2026-10-19).
@@ -125,10 +126,12 @@ def fields(name: str) -> list[dict]:
     root = instance_root(name)
     text = safe_read(root, "config.env", "")
     tmpl = _template_text()
-    values, defaults = config_values(text), {**VOICE_DEFAULTS, **config_values(tmpl)}
+    values = config_values(text)
+    defaults = {**dict.fromkeys(WATCH_KEYS.values(), "off"), **VOICE_DEFAULTS, **config_values(tmpl)}
     helps, tmpl_helps = _comments(text), _comments(tmpl)
     order = list(dict.fromkeys([k for l in text.splitlines() if (k := _key(l))] +
-                               [k for l in tmpl.splitlines() if (k := _key(l))] + list(VOICE_DEFAULTS)))
+                               [k for l in tmpl.splitlines() if (k := _key(l))] + list(VOICE_DEFAULTS) +
+                               list(WATCH_KEYS.values())))
     efforts = effort_choices(root)
     out = []
     for key in order:
@@ -146,13 +149,22 @@ def fields(name: str) -> list[dict]:
             f["choices"] = list(VOICE_MODES)
         elif key == "VOICE_REASONING_EFFORT" and efforts:
             f["choices"] = [""] + list(efforts)
-        f["help"] = f["help"] or VOICE_HELP.get(key, "")
+        elif key in WATCH_KEYS.values():
+            f["choices"] = list(WATCH_MODES)
+        f["help"] = f["help"] or VOICE_HELP.get(key, "") or WATCH_HELP.get(key, "")
         out.append(f)
     return out
 
 
 VOICE_HELP = {"VOICE_MODE": "Voice mode offered for this instance: on shows the Talk button in the apps (PLAN-voice).",
               "VOICE_REASONING_EFFORT": "Reasoning effort on spoken turns; empty: its LLM_REASONING_EFFORT."}
+
+
+_WAKE = "wake (the note also wakes it, at most once per SHAFT_WATCH_WAKE_MIN"
+WATCH_HELP = {"WATCH_MAIL": f"New mail on your granted labels: off, inbox (a note in its inbox) or {_WAKE}).",
+              "WATCH_CALENDAR": f"Changes on your granted calendars: off, inbox (a note in its inbox) or {_WAKE}).",
+              "WATCH_GCHAT": f"New messages in your granted Google Chat: off, inbox (a note with their text in its "
+                             f"inbox) or {_WAKE}; your own messages alone never wake it)."}
 
 
 def voice_mode(cfg: dict) -> str:
@@ -170,6 +182,8 @@ def _check(name: str, root: Path, key: str, value: str) -> None:
         raise Refused(f"LLM_REASONING_EFFORT must be one of {', '.join(efforts)} (its shaft/config.py), not {value!r}")
     if key == "VOICE_MODE" and value not in VOICE_MODES:
         raise Refused(f"VOICE_MODE is on or off, not {value!r}")
+    if key in WATCH_KEYS.values() and value not in WATCH_MODES:
+        raise Refused(f"{key} is {', '.join(WATCH_MODES[:-1])} or {WATCH_MODES[-1]}, not {value!r}")
     if key == "VOICE_REASONING_EFFORT" and value and (efforts := effort_choices(root)) and value not in efforts:
         raise Refused(f"VOICE_REASONING_EFFORT must be empty (its LLM_REASONING_EFFORT) or one of {', '.join(efforts)} "
                       f"(its shaft/config.py), not {value!r}")

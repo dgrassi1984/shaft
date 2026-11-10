@@ -126,7 +126,9 @@ class SetTest(OpConfigTest):
                                 ("X", "a\nLLM_MODEL=x", "one line"), ("LLM_MODEL", "gpt-9", "not a model"),
                                 ("LLM_REASONING_EFFORT", "max", "must be one of medium, xhigh, low"),
                                 ("WAKE_INTERVAL_MINUTES", "ten", "whole number"),
-                                ("LLM_API_KEY", "sk-new", "looks like a secret")):
+                                ("LLM_API_KEY", "sk-new", "looks like a secret"),
+                                ("WATCH_GCHAT", "wakeup", "off, inbox or wake"),
+                                ("WATCH_MAIL", "on", "off, inbox or wake")):
             with self.assertRaisesRegex(opconfig.Refused, why, msg=key):
                 opconfig.set_values("wren", {key: value})
         self.assertEqual(self.text(), CONFIG)
@@ -188,6 +190,38 @@ class FieldsTest(OpConfigTest):
         self.assertIn("(the operator, 2026-10-17 (floor 5))", fs["WAKE_INTERVAL_MINUTES"]["help"])
         self.assertTrue(fs["WAKE_INTERVAL_MINUTES"]["numeric"])
         self.assertTrue(fs["CUSTOM_KNOB"]["set"])                        # a key the template does not know
+
+    def test_watch_keys_are_dropdowns_with_help_even_when_unset_20261110(self):
+        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        keys = ["WATCH_MAIL", "WATCH_CALENDAR", "WATCH_GCHAT"]
+        self.assertEqual(list(fs)[-3:], keys)
+        for key in keys:
+            with self.subTest(key=key):
+                f = fs[key]
+                self.assertFalse(f["set"])
+                self.assertEqual(f["default"], "off")
+                self.assertEqual(f["choices"], ["off", "inbox", "wake"])
+                self.assertFalse(f["numeric"])
+                for value in ("off", "inbox", "wake"):
+                    self.assertIn(value, f["help"])
+
+    def test_a_set_watch_key_shows_its_value_and_an_unknown_one_stays_visible_20261110(self):
+        from supervisor.web_config import _field_form
+        (self.root / "config.env").write_text(
+            CONFIG + '\nWATCH_GCHAT="wake"\n\n# Keep this help.\nWATCH_MAIL="wakeup"\n')
+        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        for key, value in (("WATCH_GCHAT", "wake"), ("WATCH_MAIL", "wakeup")):
+            with self.subTest(key=key):
+                self.assertEqual(fs[key]["value"], value)
+                self.assertTrue(fs[key]["set"])
+                self.assertEqual(fs[key]["choices"], ["off", "inbox", "wake"])
+                self.assertFalse(fs[key]["numeric"])
+        self.assertEqual(fs["WATCH_MAIL"]["help"], "Keep this help.")
+        form = str(_field_form("wren", fs["WATCH_MAIL"]))
+        self.assertIn('<select name="value"', form)
+        self.assertIn('<option value="wakeup" selected>wakeup</option>', form)
+        for value in ("off", "inbox", "wake"):
+            self.assertIn(f'<option value="{value}">{value}</option>', form)
 
     def test_a_comment_block_after_keys_starts_afresh(self):
         fs = {f["key"]: f for f in opconfig.fields("wren")}

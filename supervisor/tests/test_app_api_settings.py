@@ -64,6 +64,9 @@ class SettingsTest(AppTest):
         got = json.loads(r.body)
         self.assertEqual(got, {
             "instance": "wren", "paused": False,
+            "watch_mail": {"value": "off", "choices": ["off", "inbox", "wake"]},
+            "watch_calendar": {"value": "off", "choices": ["off", "inbox", "wake"]},
+            "watch_gchat": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "model": {"value": "openrouter/xiaomi/mimo-v2.6-pro", "choices": [
                 {"model": "new-model", "label": "New model"},
                 {"model": "openrouter/xiaomi/mimo-v2.6-pro", "label": "openrouter/xiaomi/mimo-v2.6-pro"}]},
@@ -84,14 +87,17 @@ class SettingsTest(AppTest):
                 ("model", "new-model", "openrouter/xiaomi/mimo-v2.6-pro", "LLM_MODEL", "next run"),
                 ("effort", "low", "medium", "LLM_REASONING_EFFORT", "next run"),
                 ("operator_name", "Ada", "the operator", "OPERATOR_NAME", "next run"),
-                ("wake_interval", 0, 5, "WAKE_INTERVAL_MINUTES", "now")):
+                ("wake_interval", 0, 5, "WAKE_INTERVAL_MINUTES", "now"),
+                ("watch_mail", "inbox", "off", "WATCH_MAIL", "now"),
+                ("watch_calendar", "wake", "off", "WATCH_CALENDAR", "now"),
+                ("watch_gchat", "wake", "off", "WATCH_GCHAT", "now")):
             with self.subTest(field=field):
                 with mock.patch.object(opconfig, "set_values", wraps=opconfig.set_values) as writer:
                     r = self.save(field, value, expect)
                 self.assertEqual(r.status, 200, r.body)
                 got = json.loads(r.body)
                 self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
-                self.assertEqual(writer.call_args.args[2], {key: str(expect)})
+                self.assertEqual(writer.call_args.args[2], {key: None if field.startswith("watch_") else str(expect)})
                 self.assertNotIn(self.fake.encode(), r.body)
         self.assertEqual(core.instance_config("wren")["LLM_BASE_URL"], "broker")
         self.assertEqual(got["settings"]["wake_interval"]["effective"], 0)

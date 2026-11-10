@@ -35,6 +35,7 @@ from datetime import datetime
 from . import apns, web
 from .core import NAME_RE, log
 from .web import Request, Response
+from .watch import CONFIG_KEYS, MODES
 
 PREFIX = "/app/v1"
 WAIT_MAX = 25                       # a long-poll is held at most this long (s): under URLSession's 60 s timeout
@@ -724,7 +725,8 @@ def _latest(req: Request) -> Response:
 # -- instance settings and services (§15) -----------------------------------------------------------------------------
 CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
                  "wake_interval": "WAKE_INTERVAL_MINUTES", "operator_name": "OPERATOR_NAME",
-                 "voice_mode": "VOICE_MODE", "voice_effort": "VOICE_REASONING_EFFORT"}
+                 "voice_mode": "VOICE_MODE", "voice_effort": "VOICE_REASONING_EFFORT",
+                 **{f"watch_{kind}": key for kind, key in CONFIG_KEYS.items()}}
 
 
 def _who(req: Request) -> str:
@@ -747,6 +749,8 @@ def _settings(n: str, cfg: dict | None = None) -> dict:
     interval = autonomy.wake_interval(n, cfg)
     cap = core._tool_settings(n).get("cloud_daily_usd")
     return {"instance": n, "paused": core.paused(n), "model": {"value": model, "choices": choices},
+            **{f"watch_{kind}": {"value": cfg.get(key, "off"), "choices": list(MODES)}
+               for kind, key in CONFIG_KEYS.items()},
             "effort": {"value": cfg.get("LLM_REASONING_EFFORT"), "choices": list(efforts) if efforts is not None else None},
             "wake_interval": {"value": minutes, "floor": autonomy.wake_floor(n),
                               "effective": int(interval.total_seconds() // 60) if interval else 0},
