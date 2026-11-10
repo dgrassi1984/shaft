@@ -485,7 +485,7 @@ SPECS["trial"] = _spec(
 # The operator's mail: offered only to an instance they granted a label to, and only threads under it.
 SPECS["mail_search"] = _spec(
     "mail_search",
-    "Search the operator's mail they lets you read: only the threads that carry a label they granted you (read-only). "
+    "Search the operator's mail you may read: only the threads that carry a label they granted you (read-only). "
     "The label is applied for you: never add label: to the query. Leave query empty for the newest threads; with a "
     "query (Gmail search syntax, e.g. from:alice after:2026/10/01 has:attachment) Gmail picks threads by their "
     "matching messages, so a thread whose newest message does not match can rank lower. One row per thread, newest "
@@ -2456,7 +2456,7 @@ class Broker:
         names = sorted(p.name for p in base.iterdir() if (p / "shaft").is_dir() and p.name != self.name)
         return ("instances: " + ", ".join(names)) if names else "no other instances exist yet"
 
-    # -- the operator's mail: read-only, only threads under a label they granted -----------------------
+    # -- the operator's mail: reads only threads under a label they granted; drafts (never sent) need a draft grant --
     def mail_grants(self) -> list[dict]:
         """What this run may read now: the grant is read on every call, so a revoke holds from the next call."""
         from .core import mail_grants

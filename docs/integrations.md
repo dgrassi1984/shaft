@@ -89,11 +89,13 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 Mail, Calendar, Drive, and Google Chat share your Google accounts. An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
+for `gmail.readonly`, `gmail.compose`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
 `chat.messages.readonly`, and `chat.memberships.readonly` together and records the scopes Google actually granted
 (the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
-the login to run again; it never returns an empty result. The operator's mailbox access stays read-only; calendar
-writes require per-instance write grants (calendar write plan).
+the login to run again; it never returns an empty result. Mail drafts and calendar writes need per-instance grants
+on top (`grant-draft`, `grant-write`). `gmail.compose` is the only Gmail scope that writes drafts, and it could also
+send: no SHAFT code calls a send endpoint. An account logged in before drafts lacks it; its reads keep working, and
+drafting asks for Log in again after you add `https://www.googleapis.com/auth/gmail.compose` to Data Access.
 
 Before re-login, add `https://www.googleapis.com/auth/calendar.events` in Google Cloud → Google Auth Platform →
 Data Access for each OAuth project. Then run `shaft google login <alias> <address>` again for each operator account
@@ -133,8 +135,21 @@ Source: [Google account login](../supervisor/google.py).
 
 ## Mail (`shaft mail …`)
 
-These operator-mail tools remain read-only under the [action class model](safety.md#operator-action-classes).
-They still check the granted label on each thread. There is no operator mail-send broker tool.
+The read tools check the granted label on each thread. The draft tools are `reversible` under the
+[action class model](safety.md#operator-action-classes). There is no operator mail-send broker tool.
+
+**Drafts.** With a draft grant, `mail_draft` leaves a draft in the operator's Gmail and never sends it. The instance
+picks the account in `account` among those with a draft grant; the tool's description lists them with their
+addresses. `reply_to` (a thread handle) fills To (the last message's Reply-To or From; the operator's own last
+message keeps its To and Cc), `Re:` subject, `In-Reply-To` and `References`. From the thread's own account the draft
+goes into that thread, which needs a granted label with the draft flag; from another drafted account it is a draft in
+that account with the reply headers, outside the original thread. Without `reply_to`, `account`, `to` and `subject`
+are required. Attachments are paths in the instance's folder (its `mail/` and `gdrive/` downloads included; links and
+reserved paths refused), 25 MB in all. The result gives the draft's handle and its Gmail link. `mail_draft_update`
+replaces a draft the instance created, only while Gmail still holds the version it wrote (an edit by the operator, or
+a send, makes the draft theirs). There is no delete. Five draft calls per run, inside the 30 mail calls. The broker
+log keeps counts, never recipients, subject or body. A trial replay checks a draft and answers as a cycle would, and
+writes nothing. The supervisor's register of drafts is `.supervisor/mail-drafts/<name>.json`.
 
 An instance you pick may read the Gmail threads that carry a label you pick, on an
 account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,

@@ -1577,7 +1577,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", choices=["install"])
     p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
     p = sub.add_parser("google", help="your Google accounts, for mail, calendar and Drive: 'login <alias> <address> "
-                                      "[--client <name>]' (read-only scopes), 'migrate' (from .supervisor/mail/); "
+                                      "[--client <name>]' (reads, calendar writes and mail drafts), 'migrate' (from .supervisor/mail/); "
                                       "alone lists them with their clients and granted scopes")
     p.add_argument("action", nargs="?", choices=["login", "migrate"])
     p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work)")

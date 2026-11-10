@@ -231,7 +231,7 @@ call allowance.
 | Resource | Enforced limit |
 |---|---|
 | Messages | 10 per run, plus `SHAFT_OPERATOR_PER_DAY` for operator messages when nonzero. |
-| Mail | 30 calls and 100 MiB of attachments per run. |
+| Mail | 30 calls and 100 MiB of attachments per run; at most 5 of the calls are drafts. |
 | Drive | 30 calls and 100 MiB of downloads per run. |
 | Google Chat | 30 calls and 100 MiB of downloads per run; 25,000,000 bytes per uploaded file. |
 | Calendar | 30 calls per run; `SHAFT_CALENDAR_WRITES_PER_DAY`, default 20, counts write attempts and proposals per day. |
