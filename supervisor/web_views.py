@@ -1804,9 +1804,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         # Only a page opened on one thread (?id=) names it: the plain chat page follows the current thread, and after
         # End its next message starts a new one, as before threads.
         cid=h('<input type="hidden" name="cid" value="{c}">', c=chat["id"]) if pinned else Html(""),
-        # A note for its next cycle belongs to the thread it is written in, pinned or not (the cycle answers there)
-        thread=h('<input type="hidden" name="thread" value="{c}">', c=chat["id"])
-        if chat and not pinned and not read_only and chat.get("state") != "ended" and not chat.get("cleared") else Html(""),
+        # A note for its next cycle belongs to the thread it is written in, so the cycle answers there: the plain
+        # page follows the current thread (its first message may open it after this page was drawn), as a send does
+        thread=Html('<input type="hidden" name="thread" value="current">') if not pinned else Html(""),
         # A thread's draft is its own: written in one thread, it is not waiting in the composer of another
         draft=f"{name}/{chat['id']}" if pinned else name,
         attach=icon("attach"), send=icon("send"), up=icon("up"),

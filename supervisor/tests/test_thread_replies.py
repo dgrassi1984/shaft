@@ -160,13 +160,21 @@ class ThreadRepliesTest(unittest.TestCase):
         refused = self.send(b, CID)                        # the note is something the operator wrote there since
         self.assertIn("wrote there 1 more time(s)", refused["error"])
 
+    def test_a_note_from_the_plain_page_joins_the_thread_it_follows(self):
+        """The plain chat page's composer is drawn before its first message opens a thread: it names "current", so
+        a note sent from it after that message still belongs to the thread (found in the browser check)."""
+        self.thread()
+        file, _ = web_chat.background("wisp", ME, "and the second half", [], mid="m1", cid="current")
+        self.assertIn(f"Conversation: {CID} («CDP call»)", (self.f.root / "inbox" / file).read_text())
+        self.assertEqual(messages.history()[0]["thread"], CID)
+
     def test_a_note_from_from_or_for_an_ended_thread_stays_in_from(self):
         self.thread(state="ended")
-        for cid in ("", "from", CID):
-            file, _ = web_chat.background("wisp", ME, f"note {cid}", [], mid=f"m-{cid}", cid=cid)
+        for cid in ("", "from", CID, "current"):
+            file, _ = web_chat.background("wisp", ME, f"note {cid}", [], mid=f"m-{cid or 0}", cid=cid)
             self.assertNotIn("Conversation:", (self.f.root / "inbox" / file).read_text())
-        self.assertEqual([m.get("thread") for m in messages.history()], [None, None, None])
-        self.assertEqual(len(web_chat.from_feed("wisp")["items"]), 3)
+        self.assertEqual([m.get("thread") for m in messages.history()], [None, None, None, None])
+        self.assertEqual(len(web_chat.from_feed("wisp")["items"]), 4)
 
 
 class ThreadNoteRouteTest(WebTest):
@@ -183,18 +191,21 @@ class ThreadNoteRouteTest(WebTest):
         web_chat.save({"id": CID, "instance": "wisp", "login": ME, "created": "2026-11-10T21:08:48", "state": "idle",
                        "turns": [turn("user", "2026-11-10T21:11:33", "hi")], "reply": None, "talks": []})
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertIn(f'<input type="hidden" name="thread" value="{CID}">', page)
+        self.assertIn('<input type="hidden" name="thread" value="current">', page)
+        pinned = self.req(f"/i/wisp/chat?id={CID}", cookie=self.cookie).body.decode()
+        self.assertIn(f'<input type="hidden" name="cid" value="{CID}">', pinned)
+        self.assertNotIn('name="thread"', pinned)
         self.assertNotIn('name="cid"', page.split('class="composer"', 1)[1].split("</form>", 1)[0])
         body = (b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nlater\r\n'
                 b'--B\r\nContent-Disposition: form-data; name="background"\r\n\r\n1\r\n'
-                b'--B\r\nContent-Disposition: form-data; name="thread"\r\n\r\n' + CID.encode() + b'\r\n'
+                b'--B\r\nContent-Disposition: form-data; name="thread"\r\n\r\ncurrent\r\n'
                 b'--B\r\nContent-Disposition: form-data; name="mid"\r\n\r\nm9\r\n--B--\r\n')
         headers = {"content-type": "multipart/form-data; boundary=B", "sec-fetch-site": "same-origin",
                    "x-csrf-token": self.csrf(self.cookie)}
         with mock.patch.object(web_chat, "background", return_value=("f.md", "for wisp's next cycle")) as later:
             r = self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body, headers=headers)
         self.assertEqual(r.status, 200, r.body)
-        later.assert_called_once_with("wisp", ME, "later", [], mid="m9", cid=CID)
+        later.assert_called_once_with("wisp", ME, "later", [], mid="m9", cid="current")
 
 
 if __name__ == "__main__":

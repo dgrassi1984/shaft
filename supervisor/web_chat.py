@@ -1198,7 +1198,7 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
     its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
     in the chat. Files and a quoted question as send()'s. (inbox file, what to say). `cid`: the thread it was written
     in — while that thread is open the note shows there (not in From) and names it, so the cycle answers there too;
-    none (the From feed) or an ended one: From."""
+    "current": the thread the plain chat page follows (current); none (the From feed) or an ended one: From."""
     from . import autonomy, messages
     text = text.replace("\r\n", "\n").strip()        # a browser form's line ends: the inbox file is the instance's
     if not text and not files and not comment_block:
@@ -1218,7 +1218,7 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
                 raise Refused(str(e)) from None
         asked = messages.quoted_questions(name, text)
         body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
-        chat = load(cid) if cid and cid != "from" else None
+        chat = current(name) if cid == "current" else load(cid) if cid and cid != "from" else None
         thread = ((chat["id"], title(chat)) if chat and chat.get("instance") == name and chat.get("state") != "ended"
                   else None)
         try:
