@@ -247,6 +247,24 @@ struct ChatStoreUITests {
         #expect(chat.actionError == nil)
     }
 
+    /// Bug: a 'sent to <instance>' toast repeated what the timeline already shows.
+    @Test func aSuccessfulSendClearsTheStatusToast() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.path.hasSuffix("/send") ? .json(200, #"{"said":"sent to tundra","chat":"web-1","file":null}"#)
+                : .json(200, #"{"said":"Feedback kept.","id":"f-1"}"#)
+        }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("tundra")
+        await chat.unpend("f-1")                    // an earlier action's answer, which the send must not leave up
+        #expect(chat.said == "Feedback kept.")
+        chat.draft.text = "Rerun it"
+        let answer = try await chat.send().get()
+        #expect(answer.said == "sent to tundra")
+        #expect(chat.said == nil)
+    }
+
     /// Bug: queued showed its wording twice: the toast and the row.
     @Test func aQueuedMessageLeavesTheSayingToItsRow() async throws {
         let folder = try temporaryFolder("ui")
@@ -262,7 +280,7 @@ struct ChatStoreUITests {
         #expect(chat.said == nil)
         chat.draft.text = "Now"
         _ = await chat.send(mode: .now)
-        #expect(chat.said != nil)
+        #expect(chat.said == nil)
     }
 
     @Test func coveringTheChatAsksAgainAtOnceWithWatch0() async throws {

@@ -280,7 +280,8 @@ public final class ChatStore {
     // MARK: Sending
 
     /// Send what the composer holds (text, ↩ Reply cards, files) in `mode`. The outbox takes it first, so the draft
-    /// clears at once and a failed send stays in the chat as not sent.
+    /// clears at once and a failed send stays in the chat as not sent. Successful sends leave no toast because
+    /// the message's row in the timeline already shows it was sent.
     @discardableResult
     public func send(mode: SendMode = .now) async -> Result<SendResponse, APIError> {
         guard let owner else { return .failure(.notPaired) }
@@ -292,10 +293,7 @@ public final class ChatStore {
             return finish(.failure(error))
         }
         draft = Draft()
-        let result = finish(await owner.outbox.deliver(message.mid), inRow: true)
-        // Queued, its own row says the same words at once, with Cancel.
-        if mode == .queue, case .success = result { said = nil }
-        return result
+        return finish(await owner.outbox.deliver(message.mid), inRow: true)
     }
 
     /// Retry a failed reply (§4.4 `failure.retry`): its text, with `retry_of` when the server gave one.
@@ -515,11 +513,12 @@ public final class ChatStore {
         start()
     }
 
+    /// Successful sends and retries clear the toast because the message's row in the timeline already shows it was sent.
     /// `inRow`: the message stayed in the chat as not sent, and its row says why: a status line would say it again.
     private func finish(_ result: Result<SendResponse, APIError>, inRow: Bool = false) -> Result<SendResponse, APIError> {
         switch result {
-        case .success(let answer):
-            said = answer.said
+        case .success:
+            said = nil
             actionError = nil
             reconnectIfWaiting()
         case .failure(let error):
