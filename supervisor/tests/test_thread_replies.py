@@ -1,6 +1,6 @@
 """Later answers return to their thread, as the same conversation (the operator, 2026-11-10).
 
-The case it comes from (thelos): a reply out of budget queued "read the whole call, give him a frank verdict" at 21:12;
+The case it comes from (2026-11-10): a reply out of budget queued "finish reading, then give your view" at 21:12;
 a cycle sent the verdict at 21:15 — into the From feed, written blind to what the operator had said at 21:13, and the
 thread's later replies never knew it had been sent. Now: send_message(conversation=…) puts the answer in its thread,
 only after the cycle has read what was said there since (read_thread), and the thread's next reply reads it in its
@@ -17,7 +17,7 @@ from supervisor.tests.test_background_messages import Fixture
 from supervisor.tests.test_web import ME, WebTest
 
 CID = "web-c0ffee02"
-TALK = "api-5b90624ae4"
+TALK = "api-0a1b2c3d4e"
 
 
 def turn(role: str, ts: str, content: str) -> dict:
@@ -33,13 +33,13 @@ class ThreadRepliesTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def thread(self, cid=CID, state="idle", talks=(TALK,), title="CDP call") -> dict:
+    def thread(self, cid=CID, state="idle", talks=(TALK,), title="Report review") -> dict:
         chat = {"id": cid, "instance": "wisp", "login": ME, "created": "2026-11-10T21:08:48", "state": state,
                 "title": title, "reply": None, "talks": list(talks), "turns": [
-                    turn("user", "2026-11-10T21:11:33", "What do you make of the call?"),
-                    turn("assistant", "2026-11-10T21:12:22", "I still have to read the second half: I will first."),
-                    turn("user", "2026-11-10T21:13:47", "I no longer believe it can make it on its own."),
-                    turn("assistant", "2026-11-10T21:14:20", "That is not strange."),
+                    turn("user", "2026-11-10T21:11:33", "What do you make of the report?"),
+                    turn("assistant", "2026-11-10T21:12:22", "I still have to read the second half: I will, first."),
+                    turn("user", "2026-11-10T21:13:47", "Actually, the deadline moved to Friday."),
+                    turn("assistant", "2026-11-10T21:14:20", "Noted."),
                 ]}
         web_chat.save(chat)
         return chat
@@ -48,7 +48,7 @@ class ThreadRepliesTest(unittest.TestCase):
         """A cycle's broker: no conversation of its own (talk_id None)."""
         return broker.Broker("wisp", self.f.project, {}, self.f.project / "broker.log")
 
-    def send(self, b: broker.Broker, conversation: str, text: str = "I read the whole call: a conditional opening.",
+    def send(self, b: broker.Broker, conversation: str, text: str = "I read the whole report: two sections need work.",
              **extra) -> dict:
         return b.call("send_message", {"to": "operator", "text": text, "conversation": conversation, **extra})
 
@@ -58,19 +58,19 @@ class ThreadRepliesTest(unittest.TestCase):
         web_chat.save(chat)
 
     # -- the case ---------------------------------------------------------------------------------------------------
-    def test_the_thelos_case_an_answer_waits_for_a_read_then_joins_the_thread_as_its_next_turn(self):
+    def test_the_queued_answer_case_an_answer_waits_for_a_read_then_joins_the_thread_as_its_next_turn(self):
         self.thread()
         b = self.cycle()
         refused = self.send(b, TALK)                       # queued at 21:12, sent blind at 21:15: refused now
         self.assertFalse(refused["ok"], refused)
-        self.assertIn("read the thread «CDP call» first: read_thread(id='web-c0ffee02')", refused["error"])
+        self.assertIn("read the thread «Report review» first: read_thread(id='web-c0ffee02')", refused["error"])
         self.assertIn("you have not read it in this run", refused["error"])
         self.assertEqual(messages.history(), [])          # nothing delivered, nothing in the operator's inbox
         self.assertFalse((self.f.sup / "operator-inbox").exists() and any((self.f.sup / "operator-inbox").iterdir()))
 
         read = b.call("read_thread", {"id": TALK})         # the conversation id of the queued note resolves
         self.assertTrue(read["ok"], read)
-        self.assertIn("operator (2026-11-10T21:13:47): I no longer believe it can make it on its own.", read["result"])
+        self.assertIn("operator (2026-11-10T21:13:47): Actually, the deadline moved to Friday.", read["result"])
 
         self.operator_writes("So what can I do?", "2026-11-10T21:15:35")   # written after the read
         stale = self.send(b, TALK)
@@ -78,9 +78,9 @@ class ThreadRepliesTest(unittest.TestCase):
         self.assertIn("the operator wrote there 1 more time(s) since you read it, last at 21:15", stale["error"])
 
         b.call("read_thread", {"id": CID})
-        sent = self.send(b, TALK, "Having read it all, and with what you said: it does not change your choice.")
+        sent = self.send(b, TALK, "Having read it all, with Friday in mind: two sections need work.")
         self.assertTrue(sent["ok"], sent)
-        self.assertIn("delivered to the operator (note) as part of the thread «CDP call»", sent["result"])
+        self.assertIn("delivered to the operator (note) as part of the thread «Report review»", sent["result"])
         [row] = messages.history()
         self.assertEqual((row["thread"], row["talk"]), (CID, None))
         self.assertNotIn("re", row)
@@ -97,8 +97,8 @@ class ThreadRepliesTest(unittest.TestCase):
         api = web_chat._api_messages(chat)
         self.assertEqual([m["role"] for m in api], ["user", "assistant", "user", "assistant", "user", "assistant"])
         self.assertTrue(api[-1]["content"].startswith("[sent from my cycle at "))
-        self.assertIn("it does not change your choice", api[-1]["content"])
-        self.assertIn("it does not change your choice", b.call("read_thread", {"id": CID})["result"])
+        self.assertIn("with Friday in mind", api[-1]["content"])
+        self.assertIn("with Friday in mind", b.call("read_thread", {"id": CID})["result"])
 
     def test_the_thread_marks_lights_its_unread_and_not_froms(self):
         chat = self.thread()
@@ -113,12 +113,12 @@ class ThreadRepliesTest(unittest.TestCase):
         self.thread(state="ended")
         sent = self.send(self.cycle(), TALK)               # no read needed: it is not written into the thread
         self.assertTrue(sent["ok"], sent)
-        self.assertIn("in the From feed, linked to the thread «CDP call»: it has ended", sent["result"])
+        self.assertIn("in the From feed, linked to the thread «Report review»: it has ended", sent["result"])
         [row] = messages.history()
         self.assertEqual(row["re"], CID)
         self.assertNotIn("thread", row)
         [item] = web_chat.from_feed("wisp")["items"]
-        self.assertEqual(item["re"], {"cid": CID, "title": "CDP call"})
+        self.assertEqual(item["re"], {"cid": CID, "title": "Report review"})
         self.assertFalse(item["from_cycle"])
         self.assertIn('href="/i/wisp/chat?id=web-c0ffee02"', str(web_views._message_item("wisp", item, False)))
         self.assertEqual(web_chat.sent_during("wisp", web_chat.load(CID), archived=True), [])
@@ -141,7 +141,7 @@ class ThreadRepliesTest(unittest.TestCase):
         self.thread()
         b = self.cycle()
         b.as_of = datetime(2026, 11, 10, 21, 15)           # read_thread is not offered in a replay
-        self.assertEqual(b._conversation_target(TALK), (CID, None, " as part of the thread «CDP call»"))
+        self.assertEqual(b._conversation_target(TALK), (CID, None, " as part of the thread «Report review»"))
 
     # -- the operator's note for the next cycle, written in a thread -----------------------------------------------
     def test_a_note_for_the_next_cycle_shows_in_its_thread_names_it_and_needs_a_new_read(self):
@@ -150,7 +150,7 @@ class ThreadRepliesTest(unittest.TestCase):
         b.call("read_thread", {"id": CID})
         file, _ = web_chat.background("wisp", ME, "Look at the second half too.", [], mid="m1", cid=CID)
         text = (self.f.root / "inbox" / file).read_text()
-        self.assertIn("Conversation: web-c0ffee02 («CDP call»)\n", text)
+        self.assertIn("Conversation: web-c0ffee02 («Report review»)\n", text)
         [row] = messages.history()
         self.assertEqual(row["thread"], CID)
         [later] = [web_chat.message_item("wisp", m, {}) for m in web_chat.sent_during("wisp", chat)]
@@ -165,7 +165,7 @@ class ThreadRepliesTest(unittest.TestCase):
         a note sent from it after that message still belongs to the thread (found in the browser check)."""
         self.thread()
         file, _ = web_chat.background("wisp", ME, "and the second half", [], mid="m1", cid="current")
-        self.assertIn(f"Conversation: {CID} («CDP call»)", (self.f.root / "inbox" / file).read_text())
+        self.assertIn(f"Conversation: {CID} («Report review»)", (self.f.root / "inbox" / file).read_text())
         self.assertEqual(messages.history()[0]["thread"], CID)
 
     def test_a_note_from_from_or_for_an_ended_thread_stays_in_from(self):

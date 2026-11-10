@@ -111,15 +111,15 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
         names the conversation (header and instruction), and the reply is told its answer comes back there."""
         seen = self.respond([Reply("", tool_calls=[tool("queue_for_next_cycle", {
             "task": "Read the whole call", "why": "Budget used"})]), Reply("I will come back here.")],
-            talk_id="api-5b90624ae4")
+            talk_id="api-0a1b2c3d4e")
         [(_, body)] = live.read_inbox(self.state)
-        self.assertIn("Conversation: api-5b90624ae4 — answer in it: send_message(conversation=api-5b90624ae4)\n",
+        self.assertIn("Conversation: api-0a1b2c3d4e — answer in it: send_message(conversation=api-0a1b2c3d4e)\n",
                       body)
         self.assertIn("read it first with read_thread", body)
         self.assertNotIn("report back to the operator", body)
         result = next(m["content"] for m in seen[-1][0] if m.get("role") == "tool")
         self.assertIn("its answer will come back in this conversation", result)
-        self.assertIn("Conversation: api-5b90624ae4", live.inbox_line(*live.read_inbox(self.state)[0]))
+        self.assertIn("Conversation: api-0a1b2c3d4e", live.inbox_line(*live.read_inbox(self.state)[0]))
 
     def test_talk_and_api_prompts_show_defaults_and_disabled_budgets(self):
         self.assertEqual(config.FIELDS["TALK_REPLY_CALLS"], (int, 6))

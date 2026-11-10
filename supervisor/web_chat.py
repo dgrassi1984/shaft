@@ -748,7 +748,7 @@ def dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, s
     """The thread as one conversation, oldest first: (ts, role, text) — its turns (without a try that failed and was
     retried) and, in time order among them, what was routed into it from outside its replies: the instance's answers
     from a cycle (assistant) and the operator's notes for the next cycle (user), each saying so. What a reply's API call
-    and read_thread both read, so the thread never has two voices (thelos, 2026-11-10: a cycle's verdict sent at 21:15
+    and read_thread both read, so the thread never has two voices (2026-11-10: a cycle's answer sent at 21:15
     that the replies after it never knew about)."""
     name = chat["instance"]
     items = [(t.get("ts", ""), 0, t["role"], t["content"]) for t in chat.get("turns") or []

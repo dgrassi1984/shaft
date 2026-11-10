@@ -1699,7 +1699,7 @@ class Broker:
         """Where send_message's `conversation` puts a message to the operator: (thread, re, what to tell the
         instance). An open thread takes it as part of the conversation — only when this run read the thread after the
         last thing the operator wrote there (read_thread), so an answer from a cycle is written knowing what was said
-        since it was queued (thelos, 2026-11-10: a verdict queued at 21:12 was sent at 21:15 blind to the operator's
+        since it was queued (2026-11-10: an answer queued at 21:12 was sent at 21:15 blind to the operator's
         21:13 turn). An ended thread: From, linked to it (re). A conversation with no web thread: From. A replay
         cannot read threads (read_thread), so it is not asked to."""
         from . import messages, web_chat
