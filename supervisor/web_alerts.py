@@ -1,6 +1,6 @@
 """The web UI's half of channel.py: every message an instance sends the operator
 that is routed to the web (`alert` "web" in .supervisor/messages.jsonl) wakes the operator's devices with a push that
-opens the instance's chat, where the message shows. Telegram's half is telegram.forward_new; both read the one log,
+opens the instance's From feed, where the message shows. Telegram's half is telegram.forward_new; both read the one log,
 each with its own cursor. Runs in the web service (a thread of web.serve): it is the process that knows which devices have the
 instance's chat on screen (web_chat.watchers), and the one a push is sent from. Digests reach Web Push and APNs
 subscribers, including operators with only native devices.
@@ -35,13 +35,19 @@ def _write_cursor(offset: int) -> None:
     path.write_text(json.dumps({"offset": offset}))
 
 
+def _cid_of_message(row: dict) -> str:
+    """The single place to map talk to a thread when message routing lands; all rows use From for now."""
+    return "from"
+
+
 def event(m: dict) -> dict:
-    """What the notification shows: who, whether it asks, its first line; it opens the instance's chat."""
-    name = m["from"]
+    """What the notification shows: who, whether it asks, its first line; it opens the instance's From feed."""
+    name, cid = m["from"], _cid_of_message(m)
     from .web_md import first_line
     first = first_line(m["text"]) or "(a file)"                       # the text, not its Markdown
     return {"title": f"{name} {'asks' if m.get('kind') == 'question' else 'says'}", "body": first[:160],
-            "url": f"/i/{name}/chat", "tag": f"{name}-{m['file']}"}   # its own: a second never replaces it
+            "url": f"/i/{name}/from" if cid == "from" else f"/i/{name}/chat?id={cid}",
+            "cid": cid, "tag": f"{name}-{m['file']}"}   # its own: a second never replaces it
 
 
 def forward_new() -> int:
@@ -52,7 +58,7 @@ def forward_new() -> int:
     pushed = 0
     for m, after in rows:
         if m.get("to") == "operator" and m.get("alert") == "web" and not m.get("push_due"):
-            looking = web_chat.watchers(m["from"])   # a device with its chat on screen sees the message there now
+            looking = web_chat.watchers(m["from"], _cid_of_message(m))   # a device with its chat on screen sees the message there now
             if looking:
                 log(f"web: {m['from']}'s message {m['file']} not pushed to {', '.join(sorted(looking))}: its chat is "
                     "on screen there")

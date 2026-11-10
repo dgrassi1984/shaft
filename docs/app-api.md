@@ -182,8 +182,9 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
   | `usd_today` | number | cloud spend today, 0 when none |
   | `line` | str | the rail's last line: `"you: …"` for the operator's own, the instance's first line otherwise; at most 80 characters plus "…" when cut; `""` when none (`web_chat.summary`) |
   | `last` | timestamp or null | when it last answered or sent the operator a message |
-  | `replying` | bool | a reply is running in its web chat |
-  | `unread` | bool | it has something this device has not seen (§12) |
+  | `threads` | int | number of open threads |
+  | `replying` | bool | a reply is running in any open thread |
+  | `unread` | bool | any thread or the From feed has something this device has not seen (§12) |
   | `next_cycle` | str | what Next cycle does now (`autonomy.next_cycle`): the composer's Next cycle hint; `""` when it cannot be read |
   | `voice_mode` | str | `"on"`: offer voice for this instance (the chat's Talk button, §6.1); `"off"` otherwise, also when its `config.env` has no `VOICE_MODE` or anything but `on` (`opconfig.voice_mode`) |
 
@@ -193,26 +194,44 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
     {"name": "example", "state": "in a cycle", "since": "14:01", "model": "cloud claude-sonnet-5",
      "busy_note": "Your message pauses its cycle; the cycle resumes after the reply.", "usd_today": 0.42,
      "line": "Merged the ledger fix; the nightly report is in notes/docs/ledger.md.",
-     "last": "2026-11-03T14:06:40+01:00", "replying": false, "unread": true,
+     "last": "2026-11-03T14:06:40+01:00", "replying": false, "threads": 1, "unread": true,
      "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends",
      "voice_mode": "on"},
     {"name": "example2", "state": "idle", "since": "", "model": "qwen3.6-35b", "busy_note": null, "usd_today": 0,
-     "line": "you: thanks", "last": "2026-11-02T22:10:05+01:00", "replying": false, "unread": false,
+     "line": "you: thanks", "last": "2026-11-02T22:10:05+01:00", "replying": false, "threads": 1, "unread": false,
      "next_cycle": "for example2's next cycle, which this starts now", "voice_mode": "off"}
   ],
   "badge": 1
 }
 ```
 
+### 3.1 `GET /app/v1/threads/<n>`
+
+Returns `{"threads": [...], "from": {"line": str, "last": timestamp or null, "unread": bool}}`.
+Threads are open conversations, most recently active first. Each row has:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | The chat id used by feed and action routes |
+| `title` | str | The chosen title, or first-message title |
+| `created` | timestamp or null | When the thread opened |
+| `last` | timestamp or null | Newest instance item in this thread's feed |
+| `line` | str | First line of the newest text item, at most 80 characters |
+| `state` | str | `idle` or `replying` |
+| `waiting` | str or null | The running reply's waiting text |
+| `unread` | bool | This device has unseen instance items in this feed |
+
+The From row uses the same preview and unread rules. Unknown instances return `404 not_found`.
+
 ## 4. The feed
 
 ### `GET /app/v1/chat/<n>` — the current chat
 
-### `GET /app/v1/chat/<n>/<cid>` — an earlier chat
+### `GET /app/v1/chat/<n>/<cid>` — a selected thread
 
-The current chat is the one the web chat page shows (`web_chat.shown`): the open one, else the last one, unless the
+The current chat is the one the web chat page shows (`web_chat.shown`): the most recently active open thread, else the last one, unless the
 operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`; an ended one is read-only
-(`archived: true`), the open one reads as the current chat does.
+(`archived: true`), an open thread reads as the current chat does.
 
 - **Auth:** §1.2.
 - **Query:**
@@ -231,8 +250,8 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
   - Else it holds the request up to `wait` seconds, looking every 0.5 s, and answers within 0.5 s of either revision
     moving. Nothing moved: `304`, empty body. The app asks again at once.
   - The app's request timeout must exceed `wait` (URLSession's default 60 s does).
-- **Watching:** a request for the current chat (`/chat/<n>`, not `/<cid>`) marks this device as having that chat on screen by default unless
-  `watch=0` is supplied (`web_chat.watching(name, device, at)`), and refreshes it every 2 s while held only if `at` is supplied.
+- **Watching:** a request for an open thread, with or without an explicit cid, marks this device as having that thread on screen unless
+  `watch=0` is supplied (`web_chat.watching(name, device, at, cid=cid)`), and refreshes it every 2 s while held only if `at` is supplied.
   Without `at`, it marks watching initially but does not refresh it while held. A watching
   device gets no push for that chat (`web_chat.watchers`, `WATCH_S` 6 s). `watch=0` unmarks it, as the web's covering
   sheet does. `at` orders it against `away` (§7.6): a poll sent before the app went away does not mark it again.
@@ -529,6 +548,15 @@ A second later, only the streamed answer moved (`?since=41d07be2c95a8f13&live=c0
            "answer": "October's report is running; so far 214 accounts reconciled."}}
 ```
 
+### 4.10 `GET /app/v1/from/<n>`
+
+Returns the From feed from `web_chat.from_feed`, serialized as the full feed in §4.2, with `chat: null`.
+Times and attachment URLs use the same serializer as thread feeds. This route returns a full snapshot;
+it does not long-poll. `watch=0` and `at` have the same meaning as for a thread feed, scoped to `cid: "from"`.
+Unknown instances return `404 not_found`.
+Send to this feed through `/app/v1/chat/<n>/send` with `mode=background` (§6).
+Use `cid: "from"` for seen and away (§7.5, §7.6).
+
 ## 5. Earlier chats
 
 ### `GET /app/v1/chats/<n>`
@@ -616,6 +644,7 @@ The feed (§4) still carries the reply for clients not on the stream.
 
   | Param | Type | |
   |---|---|---|
+  | `cid` | str | optional thread id; absent, the current thread |
   | `after` | int | the `seq` of the last event the app has; default 0. A `Last-Event-ID` header stands for it when `after` is absent. Not a whole number ≥ 0: `400` |
   | `reply` | str | the `reply` of the events the app has. When it is not the buffered reply's (a newer one began), `after` is ignored and the whole reply comes |
   | `at` | int | as the feed's (§4): orders the watching mark against `away` |
@@ -720,8 +749,11 @@ shown chat, else "that is not the chat on this page any more: reload it".
 
 ### 7.5 `POST /app/v1/chat/<n>/seen`
 
-`{"version": str}`: this device has shown the current chat up to that version (the app sends it when the newest item's end is
+`{"version": str, "cid"?: str}`: this device has shown the selected feed up to that version (the app sends it when the newest item's end is
 on screen in a window that shows the chat: on the Mac also one beside another app's window in front).
+
+`cid` is a chat id or `"from"`. Omitted, it means the shown chat, as in older builds.
+Only that feed is marked. An unknown chat or one belonging to another instance returns `404 not_found`.
 
 - **Response 200:** `{"unread": false, "badge": int}`: the badge to set now.
 - **`409 stale_version`**, with the current `version` in `error`, when `version` is not the feed's current one: the
@@ -732,9 +764,10 @@ on screen in a window that shows the chat: on the Mac also one beside another ap
 
 ### 7.6 `POST /app/v1/chat/<n>/away`
 
-`{"at": int}` (Unix ms on the device): the chat left the screen (the app went to the background, the phone locked, the
+`{"at": int, "cid"?: str}` (Unix ms on the device): the selected feed left the screen (the app went to the background, the phone locked, the
 operator opened another chat). Pushes for it reach this device again at once rather than after `WATCH_S`
-(`web_chat.unwatch`). A held long-poll sent before `at` stops marking it watching. `{"ok": true}`.
+(`web_chat.unwatch`). `cid` is a chat id or `"from"`; omitted, it means the shown chat.
+Only that feed loses its watching mark. An unknown or foreign chat returns `404 not_found`. A held long-poll sent before `at` stops marking it watching. `{"ok": true}`.
 
 ### 7.7 `POST /app/v1/chat/<n>/new`
 
@@ -927,7 +960,7 @@ app reads the document again (§10.2).
 ## 11. Push
 
 Native push goes through APNs (`supervisor/apns.py`). The notification carries only the title ("example
-replied", "example's reply failed", "example asks"), the badge and the instance; the app's notification extension fetches
+replied", "example's reply failed", "example asks"), the badge, instance and `cid`; the app's notification extension fetches
 the body from `/app/v1/push/latest` with the device bearer, over the tailnet.
 
 ### 11.1 `POST /app/v1/push/register`
@@ -961,25 +994,34 @@ What the notification shows: the events queued for this device (`webpush.take`),
 With nothing queued, the last one shown again; with nothing ever, a plain one.
 
 The notification extension sends `?instance=<n>` from the push payload. This takes only events whose URL is
-`/i/<n>/chat`, leaving other instances queued. With none queued for that instance, only its own last event is
+`/i/<n>/chat`, `/i/<n>/chat?id=<cid>` or `/i/<n>/from`, leaving other instances queued. With none queued for that instance, only its own last event is
 shown again, or the plain one if it has none. `instance` must be a valid instance name (a lowercase letter followed
 by at most 30 lowercase letters, digits or hyphens); otherwise `400 bad_request`. Without it, all queued events
 are taken as before.
 
 | Field | Type | |
 |---|---|---|
-| `events` | list | `{title, body, url, tag, instance}` |
+| `events` | list | `{title, body, url, tag, instance, cid}` |
 | `title` | str | "example replied", "example's reply failed", "example asks", "example says" |
 | `body` | str | its first line, at most 160 characters |
-| `url` | str | the web path it opens (`/i/example/chat`) |
+| `url` | str | the web path it opens (`/i/example/chat?id=web-abc` or `/i/example/from`) |
 | `tag` | str | replaces an earlier notification with the same tag |
-| `instance` | str or null | the chat to open: parsed from `url` (`/i/<n>/chat`); null for the plain one |
+| `instance` | str or null | the instance to open: parsed from either chat or From URL; null for the plain one |
+| `cid` | str or null | Thread id, `"from"`, or null for an untargeted or legacy event |
 | `badge` | int | as §12 |
 
 ```json
 {"events": [{"title": "example replied", "body": "October's report is ready: 214 accounts reconciled.",
-             "url": "/i/example/chat", "tag": "example", "instance": "example"}], "badge": 1}
+             "url": "/i/example/chat?id=web-abc", "tag": "example", "instance": "example", "cid": "web-abc"}], "badge": 1}
 ```
+
+The APNs payload has top-level `instance` and `cid`; `aps.thread-id` remains the instance name.
+The notification extension fetches by instance, preserves each fetched event's `cid`, and opens that thread
+or the From feed. If fetching fails, the payload still identifies the destination. Older builds ignore `cid`
+and open the shown chat. Legacy queued events without `cid` return null.
+A reply skips only devices watching that reply's thread. From messages skip only devices watching From.
+`web_alerts._cid_of_message` is the single mapping point for message talk ids. Until talk routing is integrated,
+every instance message uses `cid: "from"`, including a row with a non-null talk id.
 
 It does not mark the device as watching, and it is a `GET` with an effect (it takes the events): only the bearer
 reaches it, so no other page can spend them.
@@ -987,13 +1029,15 @@ reaches it, so no other page can spend them.
 ## 12. Unread and the badge
 
 - The PWA keeps its unread marks in the browser; the apps need the server to know, for the badge. The PWA keeps its own.
-- `.supervisor/web/seen.json` holds, per device and instance, the version it last marked seen and the instance's `last`
-  stamp and count of instance items at that stamp at that version.
-- An instance is **unread** on a device when the instance's `last` (`web_chat.summary(n)["last"]`: its newest answer or
-  message to the operator) is newer than the stamp the device marked, or the same stamp has more instance items.
-  New answers and messages in the same second therefore make it unread again. Old marks without the count keep
-  their timestamp-only comparison until the next seen. The operator's own messages never make it unread.
-- An instance the device never marked counts from the device's pairing time: what came before it is not unread.
+- `.supervisor/web/seen.json` holds `{device: {instance: {cid: mark}}}`. `"from"` is a feed key.
+  Each mark contains `version`, `last`, `last_count` and `at`.
+- Each thread compares its own `web_chat.feed` last stamp and count with its mark. From compares
+  `web_chat.from_feed` last stamp and count. A newer stamp, or more instance items at the same stamp, is unread.
+  Marks without a count keep timestamp-only comparison. The operator's own messages do not make a feed unread.
+- A legacy per-instance mark is migrated on read to the shown chat and From. Other devices' marks stay intact.
+  New seen writes affect only the requested feed. An unmarked feed counts from the device's pairing time.
+- An instance is unread when any open thread or From is unread. With no open threads, the shown ended chat
+  still counts until cleared, preserving the older single-chat behavior.
 - The badge is the number of unread instances (`web_seen.badge(device)`), sent with `/instances`, `seen`,
   `/app/v1/push/latest` and every APNs push.
 - The native apps mark a chat seen when the newest item's end is on screen in a window that shows the chat (on the Mac
@@ -1328,6 +1372,7 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - The stream (§6.1): `web_chat.Relay` keeps the reply's events (`emit`, `events_after`, `close_stream`) under a
   `threading.Condition`; the relay thread appends each `shaft_event` as its chunk arrives, and `answer` and `end` once
   the final turn is saved. `web_chat.stream_of(cid)` is the chat's latest relay, kept `STREAM_KEEP_S` after it ended.
+  The stream query accepts optional `cid` to select a thread; absent, it follows the current thread.
   `app_api._stream` answers a `web.Response` with `stream` (an iterator of bytes) set. `web.Handler._pour` writes each
   piece and flushes it on the request's own thread, with no `Content-Length` and `Connection: close`. After each piece
   it checks whether the client closed the socket (readable with nothing to read), then closes the iterator. A
@@ -1353,11 +1398,11 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 
 ### A.4 `supervisor/web_seen.py`
 
-- `seen(device: str, name: str, version: str) -> bool`: True when `version` is the current feed's (`web_chat.feed(name)`);
-  then it records `{version, last, last_count, at}` for the device and instance. False otherwise, recording nothing (the route
+- `seen(device: str, name: str, version: str, cid: str | None = None) -> bool`: True when `version` is the selected feed's (`web_chat.feed` or `web_chat.from_feed`);
+  then it records `{version, last, last_count, at}` for the device, instance and feed. False otherwise, recording nothing (the route
   answers `409 stale_version`).
-- `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` (each
-  instance's `web_chat.summary`) when the caller has them already (`/app/v1/instances`).
+- `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` supplies the instance names when the caller already has them (`/app/v1/instances`);
+  unread always reads each feed's own last stamp and count.
 - `badge(device: str) -> int`: how many are unread. The APNs lane calls it for each push.
 - `forget(device: str) -> None`: drops the device's marks.
 - The store `.supervisor/web/seen.json`, written atomically (mode 600) under a lock, as `web._write` does.

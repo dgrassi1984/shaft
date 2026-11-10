@@ -132,7 +132,7 @@ def _send_one(device: str, sub: dict, event: dict) -> str:
         parts = urllib.parse.urlsplit(event["url"]).path.split("/")
         instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
         payload = {"aps": {"alert": {"title": event["title"]}, "badge": badge(device), "sound": "default",
-                           "thread-id": instance, "mutable-content": 1}, "instance": instance}
+                           "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
         host = "api.sandbox.push.apple.com" if sub["env"] == "sandbox" else "api.push.apple.com"
         r = subprocess.run([CURL, "--http2", "--silent", "--show-error", "--max-time", "15", "--request", "POST",
                             "--header", f"authorization: bearer {provider_token()}",

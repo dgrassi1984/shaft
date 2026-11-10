@@ -793,19 +793,19 @@ def _get(req: Request, csrf: str) -> Response | None:
             return None
         from . import web_chat
         if qs.get("away"):                          # its page went hidden on this device: push to it again (W9)
-            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")))
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid=qs.get("id"))
             return Response(204, b"")
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
-        if not qs.get("id"):
+        if not chat or chat.get("state") != "ended":
             # A covering sheet still polls the feed, but must not silence push. Stamp both paths so a late
             # poll sent before the sheet opened cannot restore watching (as with the page's away signal).
             at = _page_ms(req.headers.get("x-shaft-at"))
             if req.headers.get("x-shaft-watching") == "0":
-                web_chat.unwatch(m[1], req.device, at)
+                web_chat.unwatch(m[1], req.device, at, cid=(chat or {}).get("id"))
             else:
-                web_chat.watching(m[1], req.device, at)
+                web_chat.watching(m[1], req.device, at, cid=(chat or {}).get("id"))
         archived = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, archived),
                                       archived=archived, whole=qs.get("all") == "1"))

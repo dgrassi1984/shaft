@@ -234,12 +234,13 @@ def _instances(req: Request) -> Response:
     for n in names:
         live, s = web._live(n), summaries[n]
         state = live.get("state") or "?"
-        replying = bool(s.get("replying"))
+        threads = web_chat.threads(n)
+        replying = any(c.get("state") == "replying" for c in threads)
         rows.append({"name": n, "state": state, "since": live.get("since") or "",
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
                      "line": s.get("line") or "", "last": stamp(s.get("last")), "replying": replying,
-                     "unread": unread.get(n, False), "next_cycle": web._next_cycle(n),
+                     "threads": len(threads), "unread": unread.get(n, False), "next_cycle": web._next_cycle(n),
                      "voice_mode": opconfig.voice_mode(core.instance_config(n))})
     return _etagged(req, {"instances": rows, "badge": sum(unread.values())})
 
@@ -332,12 +333,12 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
     if (since is None) != (live is None):
         raise Refusal(400, "bad_request", "Send since and live together, from the same answer, or neither.")
     whole, at = qs.get("all") == "1", web._page_ms(qs.get("at"))
-    watch = cid is None and qs.get("watch") != "0"
-    if cid is None:                                # the chat on screen: no push for it reaches this device meanwhile
-        (web_chat.watching if watch else web_chat.unwatch)(n, req.device, at)
     model = web_chat.feed(n, cid, whole)
     if model is None:
         raise Refusal(404, "not_found", f"{n} has no chat {cid}.")
+    watch_cid = (model.get("chat") or {}).get("id")
+    watch = not model["archived"] and qs.get("watch") != "0"
+    (web_chat.watching if watch else web_chat.unwatch)(n, req.device, at, cid=watch_cid)
     if since is None:
         return _json(200, to_json(model))
     end = marked = time.monotonic()
@@ -351,12 +352,41 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
         if left <= 0:
             return Response(304, b"", {"Cache-Control": "no-store"})
         if watch and at is not None and time.monotonic() - marked >= WATCH_EVERY_S:
-            web_chat.watching(n, req.device, at)  # not after the app said it went away (`at` older than its away)
+            web_chat.watching(n, req.device, at, cid=watch_cid)  # not after the app said it went away (`at` older than its away)
             marked = time.monotonic()
         web_chat.wait_change(min(LOOK_S, left))
         model = web_chat.feed(n, cid, whole)
         if model is None:                         # cannot happen to a chat that existed: chats are never deleted
             raise Refusal(404, "not_found", f"{n} has no chat {cid}.")
+
+
+def _threads(req: Request, n: str) -> Response:
+    from . import web_chat, web_seen
+    from .web_md import first_line
+    chats = web_chat.threads(n)
+    feeds = {c["id"]: web_chat.feed(n, c["id"]) for c in chats}
+    feeds["from"] = web_chat.from_feed(n)
+    unread = web_seen.unread_feeds(req.device, n, feeds)
+
+    def preview(cid):
+        model = feeds[cid]
+        item = next((i for i in reversed(model["items"]) if i.get("text") or i.get("content")), {})
+        return {"line": first_line(item.get("text", item.get("content", "")))[:80], "last": stamp(model["last"]),
+                "unread": unread[cid]}
+
+    return _json(200, {"threads": [
+        {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
+         "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
+         **preview(c["id"])} for c in chats], "from": preview("from")})
+
+
+def _from(req: Request, n: str) -> Response:
+    from . import web_chat
+    model = web_chat.from_feed(n)
+    at = web._page_ms(req.query.get("at"))
+    (web_chat.unwatch if req.query.get("watch") == "0" else web_chat.watching)(
+        n, req.device, at, cid="from")
+    return _json(200, to_json(model))
 
 
 def _chats(req: Request, n: str) -> Response:
@@ -451,10 +481,14 @@ def _action(req: Request, n: str, act: str) -> Response:
             if cid:
                 _chat_of(n, cid)
             return _said(web_chat.unqueue(n, _str(data, "mid"), cid=cid))
+        if act in ("seen", "away"):
+            cid = _str(data, "cid", "") or None
+            if cid and cid != "from":
+                _chat_of(n, cid)
         if act == "seen":
             version = _str(data, "version")
-            if not web_seen.seen(req.device, n, version):
-                now = web_chat.feed(n)
+            if not web_seen.seen(req.device, n, version, cid):
+                now = web_chat.from_feed(n) if cid == "from" else web_chat.feed(n, cid)
                 raise Refusal(409, "stale_version", "The chat moved since it was drawn: mark it seen once the new "
                                                     "version is on screen.", version=now["version"])
             return _json(200, {"unread": False, "badge": web_seen.badge(req.device)})
@@ -462,7 +496,7 @@ def _action(req: Request, n: str, act: str) -> Response:
             at = data.get("at")
             if at is not None and not isinstance(at, (int, float)):
                 raise Refusal(400, "bad_request", "at is the device's clock in Unix ms.")
-            web_chat.unwatch(n, req.device, at)
+            web_chat.unwatch(n, req.device, at, cid=cid)
             return _json(200, {"ok": True})
         cid = _str(data, "cid")
         _chat_of(n, cid)
@@ -503,14 +537,14 @@ def _stream(req: Request, n: str) -> Response:
     if not raw.isdigit():
         raise Refusal(400, "bad_request", "after is the seq of the last event the app has, 0 for none.")
     after, reply, at = int(raw), qs.get("reply"), web._page_ms(qs.get("at"))
-    chat = web_chat.current(n)
+    chat = _chat_of(n, qs["cid"]) if qs.get("cid") else web_chat.current(n)
     relay = web_chat.stream_of(chat["id"]) if chat else None
     if relay is not None and reply is not None and reply != relay.id:
         after = 0                                  # a newer reply than the app's: all of it
     if relay is None or (relay.ended is not None and len(relay.events) <= after):
         raise Refusal(409, "not_replying", f"{n} is not replying: nothing to stream.")
     dev = req.device
-    web_chat.watching(n, dev, at)                  # listening to it: no push for this chat reaches this device
+    web_chat.watching(n, dev, at, cid=chat["id"])                  # listening to it: no push for this chat reaches this device
 
     def pour():
         sent, marked = after, time.monotonic()
@@ -521,7 +555,7 @@ def _stream(req: Request, n: str) -> Response:
             while True:
                 events = relay.events_after(sent, KEEPALIVE_S)
                 if time.monotonic() - marked >= WATCH_EVERY_S:
-                    web_chat.watching(n, dev, at)
+                    web_chat.watching(n, dev, at, cid=chat["id"])
                     marked = time.monotonic()
                 if not events:
                     yield b": keepalive\n\n"
@@ -725,7 +759,8 @@ def _latest(req: Request) -> Response:
     instance = query.get("instance", [None])[0]
     if instance is not None and not NAME_RE.fullmatch(instance):
         raise Refusal(400, "bad_request", "instance must be an instance name.")
-    events = [{**e, "instance": m[1] if (m := re.fullmatch(r"/i/([A-Za-z0-9_-]+)/chat", e.get("url", ""))) else None}
+    events = [{**e, "instance": m[1] if (m := re.fullmatch(r"/i/([A-Za-z0-9_-]+)/(?:chat|from)",
+                                                       urllib.parse.urlsplit(e.get("url", "")).path)) else None}
               for e in webpush.take(req.device, instance=instance)]
     return _json(200, {"events": events, "badge": web_seen.badge(req.device)})
 
@@ -998,6 +1033,8 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}/(?P<act>new|rename|unqueue|stop|end|clear|seen|away)", {"POST": _action}),
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
+    (rf"/threads/{N}", {"GET": _threads}),
+    (rf"/from/{N}", {"GET": _from}),
     (rf"/file/chat/{CID}/(?P<k>\d+)/(?P<j>\d+)", {"GET": _chat_file}),
     (r"/file/message/(?P<file>[^/]+)/(?P<j>\d+)", {"GET": _message_file}),
     (rf"/feedback/{N}", {"POST": _feedback}),

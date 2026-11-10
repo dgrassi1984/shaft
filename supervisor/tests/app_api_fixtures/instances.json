@@ -10,6 +10,7 @@
       "line": "Answered question?",
       "last": "2026-11-03T14:12:00+01:00",
       "replying": false,
+      "threads": 2,
       "unread": true,
       "next_cycle": "for wisp's next cycle, which this starts now",
       "voice_mode": "off"

@@ -1338,13 +1338,13 @@ class PushWhenTest(ChatTest):
     def test_a_failed_reply_is_not_pushed_as_replied_20261029(self):
         # Regression (2026-10-29 10:39): tundra's reply ended on "stream error: Upstream idle timeout exceeded" and the
         # phone was told "tundra replied".
-        failed = {"instance": "tundra", "turns": [
+        failed = {"id": "web-test", "instance": "tundra", "turns": [
             {"role": "user", "content": "q"},
             {"role": "assistant", "content": "", "note": "error: stream error: Upstream idle timeout exceeded"}]}
         event = web_chat.reply_event(failed)
         self.assertEqual(event["title"], "tundra's reply failed")
         self.assertIn("Upstream idle timeout", event["body"])
-        done = {"instance": "tundra", "turns": [{"role": "assistant", "content": "Done", "note": ""}]}
+        done = {"id": "web-test", "instance": "tundra", "turns": [{"role": "assistant", "content": "Done", "note": ""}]}
         self.assertEqual(web_chat.reply_event(done)["title"], "tundra replied")
 
     def test_a_reply_that_ends_unwatched_wakes_the_phone_and_a_watched_one_does_not(self):
@@ -1354,7 +1354,7 @@ class PushWhenTest(ChatTest):
             self.wait_idle(chat["id"])
             time.sleep(0.2)
         (event,), kw = notify.call_args                          # what this push shows: this reply (issue #23)
-        self.assertEqual((event["title"], event["url"]), ("wisp replied", "/i/wisp/chat"))
+        self.assertEqual((event["title"], event["url"]), ("wisp replied", f"/i/wisp/chat?id={chat['id']}"))
         self.assertEqual(kw, {"skip": set()})
         notify.assert_called_once()
         web_chat.watching("wisp", "laptop")                      # its page is open and refreshing there
