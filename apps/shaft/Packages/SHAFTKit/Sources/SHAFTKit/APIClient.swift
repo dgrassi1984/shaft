@@ -60,9 +60,13 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
     public var files: [OutgoingFile]
     /// Spoken in voice mode and transcribed on the device: sent as `voice=1` (§6). False for a typed message.
     public var voice: Bool
+    /// The conversation it was written in (`ChatRef.draftKey`): a thread's id, sent as `cid` with `now` and `queue`;
+    /// `"from"` for the From feed (a Next-cycle message, sent without one); nil for the current chat (a server before
+    /// threads, or a send that lets the server pick the most recently active thread).
+    public var cid: String?
 
     public init(mid: String = OutgoingMessage.newMid(), text: String, mode: SendMode = .now, quotes: [Quote] = [],
-                retryOf: Int? = nil, files: [OutgoingFile] = [], voice: Bool = false) {
+                retryOf: Int? = nil, files: [OutgoingFile] = [], voice: Bool = false, cid: String? = nil) {
         self.mid = mid
         self.text = text
         self.mode = mode
@@ -70,13 +74,22 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
         self.retryOf = retryOf
         self.files = files
         self.voice = voice
+        self.cid = cid
     }
 
     private enum CodingKeys: String, CodingKey {
-        case mid, text, mode, quotes, retryOf, files, voice
+        case mid, text, mode, quotes, retryOf, files, voice, cid
     }
 
-    /// A message stored before `voice` existed has no such key: it was typed.
+    /// The `cid` the send carries (§6): a thread's id for `now` and `queue`. A Next-cycle message goes to the inbox,
+    /// whatever thread it was written in, and the From feed is no thread.
+    public var sentCid: String? {
+        guard mode != .background, let cid, !cid.isEmpty, cid != ChatRef.fromID else { return nil }
+        return cid
+    }
+
+    /// A message stored before `voice` existed has no such key: it was typed. One stored before threads has no `cid`:
+    /// it was for the current chat.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
@@ -86,6 +99,7 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
         retryOf = try container.decodeIfPresent(Int.self, forKey: .retryOf)
         files = try container.decode([OutgoingFile].self, forKey: .files)
         voice = try container.decodeIfPresent(Bool.self, forKey: .voice) ?? false
+        cid = try container.decodeIfPresent(String.self, forKey: .cid)
     }
 
     /// A new message id: a lowercase UUID (§1.3).
@@ -137,6 +151,15 @@ public final class APIClient: Sendable {
     public func feed(_ instance: String, cid: String? = nil, since: String? = nil, live: String? = nil,
                      wait: Int = 0, all: Bool = false, watch: Bool = true,
                      at: Date = Date()) async throws -> Conditional<Feed> {
+        try await feed(instance, ref: cid.map(ChatRef.earlier) ?? .current, since: since, live: live, wait: wait,
+                       all: all, watch: watch, at: at)
+    }
+
+    /// The feed of `ref`: the current chat, a thread or an earlier chat by its id (both `/chat/<n>/<cid>`), or the From
+    /// feed (`/from/<n>`, §4's shape).
+    public func feed(_ instance: String, ref: ChatRef, since: String? = nil, live: String? = nil,
+                     wait: Int = 0, all: Bool = false, watch: Bool = true,
+                     at: Date = Date()) async throws -> Conditional<Feed> {
         var query = [URLQueryItem]()
         if let since, let live {
             query.append(URLQueryItem(name: "since", value: since))
@@ -146,7 +169,7 @@ public final class APIClient: Sendable {
         if all { query.append(URLQueryItem(name: "all", value: "1")) }
         query.append(URLQueryItem(name: "at", value: String(Int64(at.timeIntervalSince1970 * 1000))))
         query.append(URLQueryItem(name: "watch", value: watch ? "1" : "0"))
-        let path = cid.map { "/app/v1/chat/\(instance)/\($0)" } ?? "/app/v1/chat/\(instance)"
+        let path = Self.feedPath(instance, ref)
         var request = makeRequest("GET", path, query: query)
         // The server holds the request up to `wait` s (§4): the timeout must outlast it.
         request.timeoutInterval = TimeInterval(wait + 30)
@@ -155,8 +178,33 @@ public final class APIClient: Sendable {
         return .value(try Self.decode(data, path: path), etag: nil)
     }
 
+    static func feedPath(_ instance: String, _ ref: ChatRef) -> String {
+        switch ref {
+        case .current: "/app/v1/chat/\(instance)"
+        case .thread(let cid), .earlier(let cid): "/app/v1/chat/\(instance)/\(cid)"
+        case .from: "/app/v1/from/\(instance)"
+        }
+    }
+
     public func chats(_ instance: String) async throws -> ChatsResponse {
         try await get("/app/v1/chats/\(instance)")
+    }
+
+    // MARK: Threads (§3.1)
+
+    /// The instance's open threads and its From feed. `404 not_found` from a server before threads.
+    public func threads(_ instance: String) async throws -> ThreadsResponse {
+        try await get("/app/v1/threads/\(instance)")
+    }
+
+    /// A new open thread (§7.7); it ends no other. A nil or blank title takes the first message's line once sent.
+    public func newThread(_ instance: String, title: String? = nil) async throws -> NewThreadResponse {
+        try await post("/app/v1/chat/\(instance)/new", json: title.map { ["title": $0] } ?? [:])
+    }
+
+    /// Rename an open thread (§7.8).
+    public func rename(_ instance: String, cid: String, title: String) async throws -> SaidResponse {
+        try await post("/app/v1/chat/\(instance)/rename", json: ["cid": cid, "title": title])
     }
 
     // MARK: Sending and actions (§6, §7)
@@ -175,6 +223,7 @@ public final class APIClient: Sendable {
         if let target = message.inReplyTo { form.addField("in_reply_to", target) }
         if let retryOf = message.retryOf { form.addField("retry_of", String(retryOf)) }
         if message.voice { form.addField("voice", "1") }
+        if let cid = message.sentCid { form.addField("cid", cid) }
         for file in message.files {
             let data: Data
             do {
@@ -192,8 +241,11 @@ public final class APIClient: Sendable {
         return try Self.decode(data, path: path)
     }
 
-    public func unqueue(_ instance: String, mid: String) async throws -> SaidResponse {
-        try await post("/app/v1/chat/\(instance)/unqueue", json: ["mid": mid])
+    /// Cancel a queued message; `cid` the thread it is queued in (without it, the server's most recently active one).
+    public func unqueue(_ instance: String, mid: String, cid: String? = nil) async throws -> SaidResponse {
+        var body = ["mid": mid]
+        if let cid { body["cid"] = cid }
+        return try await post("/app/v1/chat/\(instance)/unqueue", json: body)
     }
 
     public func stop(_ instance: String, cid: String) async throws -> SaidResponse {
@@ -208,14 +260,23 @@ public final class APIClient: Sendable {
         try await post("/app/v1/chat/\(instance)/clear", json: ["cid": cid])
     }
 
-    /// Mark the chat seen up to `version` (§7.5). `409 stale_version` means the feed moved since it was drawn.
-    public func seen(_ instance: String, version: String) async throws -> SeenResponse {
-        try await post("/app/v1/chat/\(instance)/seen", json: ["version": version])
+    /// Mark the chat seen up to `version` (§7.5). `409 stale_version` means the feed moved since it was drawn. `cid`:
+    /// the thread shown, or `"from"`; nil for the shown chat (a server before threads).
+    public func seen(_ instance: String, version: String, cid: String? = nil) async throws -> SeenResponse {
+        var body = ["version": version]
+        if let cid { body["cid"] = cid }
+        return try await post("/app/v1/chat/\(instance)/seen", json: body)
     }
 
-    /// The chat left the screen (§7.6).
-    public func away(_ instance: String, at: Date = Date()) async throws -> OkResponse {
-        try await post("/app/v1/chat/\(instance)/away", json: ["at": Int64(at.timeIntervalSince1970 * 1000)])
+    /// The chat left the screen (§7.6). `cid` as `seen`'s.
+    public func away(_ instance: String, at: Date = Date(), cid: String? = nil) async throws -> OkResponse {
+        try await post("/app/v1/chat/\(instance)/away", json: AwayBody(at: Int64(at.timeIntervalSince1970 * 1000), cid: cid))
+    }
+
+    private struct AwayBody: Encodable {
+        var at: Int64
+        /// Left out when nil: a server before threads reads the body as `{"at"}`.
+        var cid: String?
     }
 
     // MARK: Files (§8)

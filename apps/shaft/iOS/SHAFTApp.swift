@@ -15,7 +15,10 @@ struct SHAFTApp: App {
             IOSRoot(model: delegate.model)
                 .preferredColorScheme(AppTheme.stored(rawTheme).colorScheme)
                 // shaft://chat/<instance>: the chat a notification tap opens, from a link or a shortcut.
-                .onOpenURL { url in delegate.model.notificationTapped(instance: AppLinks.instance(in: url)) }
+                .onOpenURL { url in
+                    let target = AppLinks.target(in: url)
+                    delegate.model.notificationTapped(instance: target?.instance, cid: target?.cid)
+                }
         }
     }
 }
@@ -49,14 +52,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     // reply itself: no banner for it.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
         async -> UNNotificationPresentationOptions {
-        let instance = NotificationContent.instance(from: notification.request.content.userInfo)
+        let userInfo = notification.request.content.userInfo
+        let instance = NotificationContent.instance(from: userInfo)
+        let cid = NotificationContent.cid(from: userInfo)
         let model = model
-        return await MainActor.run { AppModel.presentation(for: instance, visibleChat: model.visibleChat) }
+        return await MainActor.run { AppModel.presentation(for: instance, cid: cid, visibleChat: model.visibleChat) }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse) async {
-        let instance = NotificationContent.instance(from: response.notification.request.content.userInfo)
-        await MainActor.run { model.notificationTapped(instance: instance) }
+        let userInfo = response.notification.request.content.userInfo
+        let instance = NotificationContent.instance(from: userInfo)
+        let cid = NotificationContent.cid(from: userInfo)
+        await MainActor.run { model.notificationTapped(instance: instance, cid: cid) }
     }
 }

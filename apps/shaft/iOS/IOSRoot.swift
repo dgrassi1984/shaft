@@ -4,7 +4,8 @@ import SwiftUI
 /// The iPhone and iPad layouts over the shared views. A phone shows the chat full screen with a chat switcher. An iPad
 /// shows the instances in a sidebar beside the chat, at every window size: one layout, so a resize or a turn keeps the
 /// chat and the open document where they are (spec §5). The chat last open comes back at launch, and a notification tap
-/// opens its chat.
+/// opens its chat, its thread when it names one. An instance's threads are listed under it, in the switcher and the
+/// sidebar alike.
 struct IOSRoot: View {
     let model: AppModel
 
@@ -22,7 +23,7 @@ struct ChatsLayout: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("chat.last") private var last = ""
-    @State private var selection: String?
+    @State private var selection: ChatSelection?
     @State private var path: [ArchivedRoute] = []
     @State private var switching = false
     @State private var settings = false
@@ -57,10 +58,14 @@ struct ChatsLayout: View {
         .onChange(of: shell.screen?.openDocument) { inspectorRestore?.cancel() }
         .onChange(of: shell.screen?.showDocuments) { inspectorRestore?.cancel() }
         .onChange(of: store.instances.map(\.name)) { restore() }
-        .onChange(of: model.openChat) { _, name in
-            guard let name else { return }
-            openNotification(name)
+        .onChange(of: model.openChat) { _, target in
+            guard let target else { return }
+            openNotification(target)
             model.openChat = nil
+        }
+        // Threads read: the default named by its thread, an ended thread given way.
+        .onChange(of: store.threadStates) {
+            if let settled = store.settle(selection) { selection = settled }
         }
     }
 
@@ -85,8 +90,8 @@ struct ChatsLayout: View {
         }
         .sheet(isPresented: $switching) {
             NavigationStack {
-                InstancesList(switcher: true, selection: Binding(get: { selection }, set: { name in
-                    if let name { open(name) }
+                InstancesList(switcher: true, selection: Binding(get: { selection }, set: { chosen in
+                    if let chosen { open(chosen) }
                     switching = false
                 }), settings: {
                     switching = false
@@ -123,7 +128,7 @@ struct ChatsLayout: View {
 
     private var pad: some View {
         NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $compactColumn) {
-            InstancesList(selection: Binding(get: { selection }, set: { name in if let name { open(name) } }),
+            InstancesList(selection: Binding(get: { selection }, set: { chosen in if let chosen { open(chosen) } }),
                           settings: { settings = true })
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
         } detail: {
@@ -218,10 +223,11 @@ struct ChatsLayout: View {
         if !store.loaded, let error = store.error {
             InstancesLoadFailure(error: error, settings: { settings = true })
         } else if let selection {
-            ChatScreen(chat: store.chat(selection), openArchived: { summary in
-                path.append(ArchivedRoute(instance: selection, cid: summary.id))
-            })
-            .id(selection)
+            let chat = store.chat(selection)
+            ChatScreen(chat: chat, openArchived: { summary in
+                path.append(ArchivedRoute(instance: selection.instance, cid: summary.id))
+            }, openThread: { ref in open(ChatSelection(selection.instance, ref)) })
+            .id(ChatSelection(selection.instance, chat.ref))
         } else if store.loaded {
             MarkMessage("No chat open", message: Text("Choose an instance to chat with."))
         } else {
@@ -229,33 +235,33 @@ struct ChatsLayout: View {
         }
     }
 
-    private func openNotification(_ name: String) {
+    private func openNotification(_ target: ChatTarget) {
         shell.screen?.dismissPresentations()
         switching = false
         settings = false
         path.removeAll()
-        open(name)
+        open(ChatSelection(target.instance, target.ref))
     }
 
-    private func open(_ name: String) {
+    private func open(_ chosen: ChatSelection) {
         inspectorRestore?.cancel()
-        if selection != name { path.removeAll() }
-        selection = name
-        last = name
+        if selection != chosen { path.removeAll() }
+        selection = chosen
+        last = chosen.instance
         compactColumn = .detail
         if documentsTakeSidebar { columns = .detailOnly }       // the sidebar laid over the chat goes with the choice
     }
 
     /// The chat open last time, else the first instance; a tap's chat wins.
     private func restore() {
-        if let name = model.openChat {
-            openNotification(name)
+        if let target = model.openChat {
+            openNotification(target)
             model.openChat = nil
             return
         }
         guard selection == nil, !store.instances.isEmpty else { return }
         let names = store.instances.map(\.name)
-        open(names.contains(last) ? last : names[0])
+        open(ChatSelection(names.contains(last) ? last : names[0]))
     }
 }
 

@@ -134,8 +134,10 @@ struct ComposerView: View {
 
     private func field(_ text: Binding<String>) -> some View {
         ComposerTextView(text: text, height: $textHeight,
-                         placeholder: chat.draft.quotes.isEmpty ? String(localized: "Message \(screen.instance)")
-                                                                : String(localized: "Anything else…"),
+                         placeholder: !chat.draft.quotes.isEmpty ? String(localized: "Anything else…")
+                             // The From feed's composer writes for the next cycle only (ChatStore.send).
+                             : chat.ref.isFrom ? String(localized: "For \(screen.instance)'s next cycle")
+                             : String(localized: "Message \(screen.instance)"),
                          maxHeight: maxHeight, focusRequest: screen.focusComposerRequest,
                          onKey: { key in send(key == .send ? .now : .queue) },
                          onPaste: { providers in

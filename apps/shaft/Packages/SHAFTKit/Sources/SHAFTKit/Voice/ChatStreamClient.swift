@@ -20,12 +20,17 @@ extension APIClient {
     /// - The connection closing before `end`: `APIError.transport` (`followReply` reconnects on it).
     ///
     /// One reply per stream: the next reply is a new stream (its `seq` starts at 1 again).
-    public func replyStream(_ instance: String, after: Int = 0,
-                            reply: String? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+    ///
+    /// `cid`: the thread whose reply to follow, sent as `?cid=`; nil for the current chat (a server before threads
+    /// ignores the parameter and streams its one chat).
+    public func replyStream(_ instance: String, after: Int = 0, reply: String? = nil,
+                            cid: String? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    try await self.pourReplyStream(instance, after: after, reply: reply) { continuation.yield($0) }
+                    try await self.pourReplyStream(instance, after: after, reply: reply, cid: cid) {
+                        continuation.yield($0)
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -41,13 +46,13 @@ extension APIClient {
     /// A refusal (4xx) or an unreadable event is thrown at once: asking again gets the same answer.
     ///
     /// An interjection continues the reply already running: pass the `reply` and `after` the app holds.
-    public func followReply(_ instance: String, after: Int = 0,
-                            reply: String? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
-        followReply(instance, after: after, reply: reply, reconnects: 3, delay: .milliseconds(500))
+    public func followReply(_ instance: String, after: Int = 0, reply: String? = nil,
+                            cid: String? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        followReply(instance, after: after, reply: reply, cid: cid, reconnects: 3, delay: .milliseconds(500))
     }
 
     /// `followReply` with its retry policy open, for tests.
-    func followReply(_ instance: String, after: Int, reply: String?, reconnects: Int,
+    func followReply(_ instance: String, after: Int, reply: String?, cid: String? = nil, reconnects: Int,
                      delay: Duration) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -56,7 +61,8 @@ extension APIClient {
                 while true {
                     var progressed = false
                     do {
-                        for try await event in self.replyStream(instance, after: held.after, reply: held.reply) {
+                        for try await event in self.replyStream(instance, after: held.after, reply: held.reply,
+                                                                cid: cid) {
                             if event.reply != held.reply {
                                 held = (event.reply, 0)       // a newer reply than the one held: all of it is new
                             }
@@ -93,11 +99,12 @@ extension APIClient {
 
     /// Open the stream and hand each event to `yield` as its blank line arrives. Returns after `end` or on `409
     /// not_replying`; throws `APIError` (or `CancellationError`) otherwise.
-    private func pourReplyStream(_ instance: String, after: Int, reply: String?,
+    private func pourReplyStream(_ instance: String, after: Int, reply: String?, cid: String?,
                                  yield: (ChatStreamEvent) -> Void) async throws {
         let path = "/app/v1/chat/\(instance)/stream"
         var query = [URLQueryItem(name: "after", value: String(after))]
         if let reply { query.append(URLQueryItem(name: "reply", value: reply)) }
+        if let cid { query.append(URLQueryItem(name: "cid", value: cid)) }
         var request = makeRequest("GET", path, query: query)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = Self.streamIdleTimeout

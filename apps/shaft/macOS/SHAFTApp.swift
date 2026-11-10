@@ -97,17 +97,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // window in front shows its reply itself: no banner for it.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
         async -> UNNotificationPresentationOptions {
-        let instance = NotificationContent.instance(from: notification.request.content.userInfo)
+        let userInfo = notification.request.content.userInfo
+        let instance = NotificationContent.instance(from: userInfo)
+        let cid = NotificationContent.cid(from: userInfo)
         let model = model
-        return await MainActor.run { AppModel.presentation(for: instance, visibleChat: model.visibleChat) }
+        return await MainActor.run { AppModel.presentation(for: instance, cid: cid, visibleChat: model.visibleChat) }
     }
 
     /// A notification clicked: the window comes forward (opened again if it was closed) on that chat.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse) async {
-        let instance = NotificationContent.instance(from: response.notification.request.content.userInfo)
+        let userInfo = response.notification.request.content.userInfo
+        let instance = NotificationContent.instance(from: userInfo)
+        let cid = NotificationContent.cid(from: userInfo)
         await MainActor.run {
-            model.notificationTapped(instance: instance)
+            model.notificationTapped(instance: instance, cid: cid)
             state.bringForward()
         }
     }

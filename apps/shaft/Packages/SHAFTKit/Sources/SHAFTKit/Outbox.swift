@@ -17,6 +17,9 @@ public struct OutboxEntry: Codable, Sendable, Equatable, Identifiable {
     }
 
     public var instance: String
+    /// The conversation it was written in (`ChatRef.draftKey`): a thread's id, `"from"`, or nil for the current chat
+    /// (also every entry a build before threads kept). It shows there and nowhere else, and goes there when sent.
+    public var cid: String?
     public var mid: String
     public var text: String
     public var mode: SendMode
@@ -66,8 +69,22 @@ public final class Outbox {
         try Outbox(directory: try LocalFiles.outbox(), sender: sender)
     }
 
-    public func entries(for instance: String) -> [OutboxEntry] {
-        entries.filter { $0.instance == instance }
+    /// The entries of `instance`'s conversation `cid` (nil: the current chat).
+    public func entries(for instance: String, cid: String? = nil) -> [OutboxEntry] {
+        entries.filter { $0.instance == instance && $0.cid == cid }
+    }
+
+    /// The current chat's entries (kept by a build before threads) move to the thread `cid`, the one a send without
+    /// `cid` reaches (§6): on a server with threads the app shows threads, and they would be out of sight. Not-sent
+    /// entries only; one being sent goes as it was asked.
+    public func adoptCurrent(_ instance: String, into cid: String) {
+        var moved = false
+        for index in entries.indices where entries[index].instance == instance && entries[index].cid == nil
+            && entries[index].state == .notSent {
+            entries[index].cid = cid
+            moved = true
+        }
+        if moved { savePersisting() }
     }
 
     public func fileURL(of file: DraftAttachment, in entry: OutboxEntry) -> URL {
@@ -89,7 +106,8 @@ public final class Outbox {
     /// Put a message in the outbox, its files copied into the outbox's storage, without sending it yet: `deliver`
     /// sends it. The composer enqueues, clears its draft, then delivers.
     public func enqueue(_ message: OutgoingMessage, to instance: String) throws(APIError) {
-        var entry = OutboxEntry(instance: instance, mid: message.mid, text: message.text, mode: message.mode,
+        var entry = OutboxEntry(instance: instance, cid: message.cid, mid: message.mid, text: message.text,
+                                mode: message.mode,
                                 quotes: message.quotes, retryOf: message.retryOf, files: [], created: Date(),
                                 state: .sending, reason: nil)
         do {
@@ -195,7 +213,8 @@ public final class Outbox {
         }
         let message = OutgoingMessage(
             mid: entry.mid, text: entry.text, mode: entry.mode, quotes: entry.quotes, retryOf: entry.retryOf,
-            files: entry.files.map { OutgoingFile(name: $0.name, mimeType: $0.mimeType, fileURL: fileURL(of: $0, in: entry)) })
+            files: entry.files.map { OutgoingFile(name: $0.name, mimeType: $0.mimeType, fileURL: fileURL(of: $0, in: entry)) },
+            cid: entry.cid)
         do {
             let answer = try await sender.send(entry.instance, message)
             entries.removeAll { $0.mid == mid }

@@ -154,6 +154,7 @@ enum FixtureShape {
         if has("instance", "partial", "version", "live") { return roundTrip(Feed.self) }
         if has("seq", "type", "reply") { return roundTrip(ChatStreamEvent.self) }
         if has("instances", "badge") { return roundTrip(InstancesResponse.self) }
+        if has("threads", "from") { return roundTrip(ThreadsResponse.self) }
         if has("now", "check", "queue") { return roundTrip(CyclePlan.self) }
         if has("days", "next", "judge_error") { return roundTrip(CycleDaysResponse.self) }
         if has("id", "at", "did") { return roundTrip(CycleDetail.self) }
@@ -190,6 +191,7 @@ enum FixtureShape {
         if has("said", "path", "sha") { return roundTrip(DocSaveResponse.self) }
         if has("said", "chat", "file") { return roundTrip(SendResponse.self) }
         if has("said", "id") { return roundTrip(FeedbackResponse.self) }
+        if keys == ["chat", "said"] { return roundTrip(NewThreadResponse.self) }
         if keys == ["said"] { return roundTrip(SaidResponse.self) }
         if keys == ["removed"] { return roundTrip(RemovedResponse.self) }
         if keys == ["ok"] { return roundTrip(OkResponse.self) }
@@ -247,6 +249,13 @@ struct DecodingTests {
         return try Data(contentsOf: url)
     }
 
+    /// A feed fixture's `version` and `live`, read from the fixture: the server regenerates them whenever the feed's
+    /// shape changes, so a test compares against the fixture rather than a copy of its hash.
+    static func revision(_ name: String) throws -> (version: String, live: String) {
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: fixture(name))
+        return (feed.version, feed.live)
+    }
+
     @Test func timestampsKeepTheirOffset() throws {
         // 14:02:11 at +01:00 is 13:02:11 UTC; a July stamp at +02:00 is two hours ahead of UTC (§1.6).
         let winter = try #require(SHAFTJSON.parseStamp("2026-11-03T14:02:11+01:00"))
@@ -285,8 +294,9 @@ struct DecodingTests {
         #expect(partial.partial)
         #expect(partial.content == nil)
         let merged = full.merging(partial)
-        #expect(merged.version == "04cdc1f9bb08b132")
-        #expect(merged.live == "fb7597261efc6cb5")
+        #expect(merged.version == partial.version)
+        #expect(merged.live == partial.live)
+        #expect(merged.version != full.version)
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(merged.content == full.content)
         #expect(merged.content?.queued.first?.mid == "9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f")

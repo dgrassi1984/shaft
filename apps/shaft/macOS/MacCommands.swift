@@ -2,7 +2,7 @@ import AppKit
 import SHAFTKit
 import SwiftUI
 
-/// The menu bar's commands: File → New Message and New Chat; a Chat menu with Stop, End,
+/// The menu bar's commands: File → New Message and New Thread (New Chat on a server before threads); a Chat menu with Stop, End,
 /// Queue after reply, Next cycle, Talk (voice mode, ⇧⌘T), Documents, Earlier chats, the next and previous chat
 /// (Option-↓/↑) and Reload. Each acts on the chat on display and is off when it cannot (an earlier chat, nothing to
 /// send, no reply to stop, voice mode off for the instance).
@@ -20,9 +20,16 @@ struct MacCommands: Commands {
             Button("New Message") { state.focusComposer() }
                 .keyboardShortcut("n")
                 .disabled(!now.current)
-            Button("New Chat…") { screen?.confirmingNewChat = true }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(!now.canClear)
+            // A thread more ends nothing, so it asks nothing; New Chat ends the open chat first, so it asks.
+            if now.threads {
+                Button("New Thread") { state.newThread() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(!now.chat)
+            } else {
+                Button("New Chat…") { screen?.confirmingNewChat = true }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(!now.canClear)
+            }
         }
         CommandMenu("Chat") {
             Button("Stop the Reply") { if let chat = screen?.chat { Task { await chat.stopReply() } } }
@@ -79,6 +86,8 @@ final class MacMenu: ObservableObject {
         var canStop = false
         var canEnd = false
         var canClear = false
+        /// The instance shown has threads (a server with them): New Thread in place of New Chat.
+        var threads = false
         /// The composer holds something to send (and shows: the voice panel takes its place).
         var canSend = false
         /// Voice mode is on for the current chat's instance.
@@ -96,6 +105,7 @@ final class MacMenu: ObservableObject {
         let content = screen?.chat.content
         return Snapshot(chat: state.screen != nil, current: screen != nil, canStop: content?.canStop == true,
                         canEnd: content?.canEnd == true, canClear: content?.canClear == true,
+                        threads: state.selection.map { state.store?.threads($0.instance) != nil } ?? false,
                         canSend: screen.map { !$0.chat.draft.isEmpty && !$0.showVoice } ?? false,
                         canTalk: screen.map { state.store?.row($0.instance)?.voiceMode == "on" } ?? false,
                         replying: screen?.chat.feed?.reply != nil,

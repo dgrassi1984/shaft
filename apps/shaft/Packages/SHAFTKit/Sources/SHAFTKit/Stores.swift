@@ -25,7 +25,15 @@ public final class InstancesStore {
     @ObservationIgnored private var seenGeneration = 0
     @ObservationIgnored private var settingsStores: [String: InstanceSettingsStore] = [:]
     public let services: ServicesStore
-    @ObservationIgnored private var chats: [String: ChatStore] = [:]
+    @ObservationIgnored private var chats: [ChatKey: ChatStore] = [:]
+    /// Each instance's open threads, as `GET /app/v1/threads/<n>` last answered (§3.1).
+    public private(set) var threadStates: [String: ThreadsState] = [:]
+    /// Why an instance's threads could not be read the last time (the list keeps what it had).
+    public private(set) var threadsError: [String: APIError] = [:]
+    /// The rail row each instance's threads were last read at: a row that moved since asks for them again.
+    @ObservationIgnored private var threadsReadAt: [String: InstanceRow] = [:]
+    /// The newest request per instance: an older answer arriving after a newer one is dropped.
+    @ObservationIgnored private var threadsGeneration: [String: Int] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored let sleep: @Sendable (Duration) async throws -> Void
 
@@ -61,13 +69,14 @@ public final class InstancesStore {
         }
     }
 
-    /// Poll the list while it is on screen (§3: "every few seconds").
+    /// Poll the list while it is on screen (§3: "every few seconds"), and the threads of each instance whose row moved.
     public func start(every interval: Duration = .seconds(4)) {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self, sleep] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
+                await self.refreshMovedThreads()
                 do { try await sleep(interval) } catch { return }
             }
         }
@@ -83,11 +92,13 @@ public final class InstancesStore {
         instances.first { $0.name == name }
     }
 
-    /// The store of `name`'s current chat (one per instance, kept while the app runs).
-    public func chat(_ name: String) -> ChatStore {
-        if let store = chats[name] { return store }
-        let store = ChatStore(instance: name, owner: self)
-        chats[name] = store
+    /// The store of `name`'s conversation `ref` (one per conversation, kept while the app runs); `.current` is the one
+    /// chat of a server before threads. An earlier chat's is `archivedChat`.
+    public func chat(_ name: String, _ ref: ChatRef = .current) -> ChatStore {
+        let key = ChatKey(instance: name, ref: ref)
+        if let store = chats[key] { return store }
+        let store = ChatStore(instance: name, ref: ref, owner: self)
+        if !ref.isEarlier { chats[key] = store }
         return store
     }
 
@@ -101,19 +112,148 @@ public final class InstancesStore {
 
     /// A store for an earlier chat (`cid`), not kept.
     public func archivedChat(_ name: String, cid: String) -> ChatStore {
-        ChatStore(instance: name, cid: cid, owner: self)
+        ChatStore(instance: name, ref: .earlier(cid), owner: self)
     }
 
-    /// Mark `name` seen up to `version`, the feed version on screen (§7.5). False when the feed moved since
-    /// (`409 stale_version`: send it again once the new version is shown) or the request failed.
-    @discardableResult
-    public func markSeen(_ name: String, version: String) async -> Bool {
+    // MARK: Threads (§3.1)
+
+    /// What the app knows of an instance's threads.
+    public enum ThreadsState: Equatable, Sendable {
+        /// Not read yet (or every read failed): the app shows the current chat meanwhile.
+        case unknown
+        /// The server answered `404` for `/threads`: a server before threads, one chat per instance, as before.
+        case unsupported
+        case loaded(ThreadsResponse)
+    }
+
+    public func threadsState(_ name: String) -> ThreadsState { threadStates[name] ?? .unknown }
+
+    /// The instance's open threads and From feed, once read; nil before, and from a server before threads.
+    public func threads(_ name: String) -> ThreadsResponse? {
+        if case .loaded(let answer) = threadsState(name) { return answer }
+        return nil
+    }
+
+    /// What an instance opens when no thread is named (its row, a notification without one, the first launch): its
+    /// most recently active open thread — where a send without `cid` goes (§6) — else its current chat (a server
+    /// before threads, threads not read yet, or no thread open: the first message starts one).
+    public func defaultRef(_ name: String) -> ChatRef {
+        threads(name)?.newest.map { .thread($0.id) } ?? .current
+    }
+
+    /// The conversation to show for `ref` (nil: the instance's default). A thread no longer open (ended, here or on
+    /// another device) gives way to the default; a server before threads has only the current chat.
+    public func resolve(_ name: String, _ ref: ChatRef?) -> ChatRef {
+        guard let ref else { return defaultRef(name) }
+        switch (ref, threadsState(name)) {
+        case (.earlier, _), (.current, _): return ref
+        case (.thread, .unsupported), (.from, .unsupported): return .current
+        case (.thread(let cid), .loaded(let answer)):
+            return answer.threads.contains { $0.id == cid } ? ref : defaultRef(name)
+        case (.thread, .unknown), (.from, _): return ref
+        }
+    }
+
+    /// Read `name`'s threads now. A `404` from a server that lists the instance means a server before threads: the app
+    /// falls back to one chat per instance for it. Once read, what the current chat held (a draft, messages not sent)
+    /// moves to the most recently active thread, where a send without `cid` would have gone (§6).
+    public func refreshThreads(_ name: String) async {
+        let generation = (threadsGeneration[name] ?? 0) + 1
+        threadsGeneration[name] = generation
+        let row = row(name)
         do {
-            let answer = try await client.seen(name, version: version)
+            let answer = try await client.threads(name)
+            guard threadsGeneration[name] == generation else { return }
+            if let newest = answer.newest {
+                adoptCurrent(name, into: newest.id)
+            }
+            threadStates[name] = .loaded(answer)
+            threadsError[name] = nil
+            threadsReadAt[name] = row
+        } catch {
+            guard let apiError = APIError.from(error), threadsGeneration[name] == generation else { return }
+            if apiError.status == 404, apiError.code == "not_found", row != nil {
+                threadStates[name] = .unsupported
+                threadsError[name] = nil
+                threadsReadAt[name] = row
+            } else {
+                threadsError[name] = apiError
+                if apiError.isUnpaired { report(apiError) }
+            }
+        }
+    }
+
+    /// Read the threads of each instance whose rail row moved since its threads were read (a reply, a new line, a
+    /// thread more or less), or that were never read; `all`: of every instance (pull to refresh). A server before
+    /// threads is asked once per instance.
+    public func refreshMovedThreads(all: Bool = false) async {
+        for row in instances {
+            if threadsState(row.name) == .unsupported { continue }
+            if !all, threadsReadAt[row.name] == row, threadsError[row.name] == nil { continue }
+            await refreshThreads(row.name)
+        }
+    }
+
+    /// Something moved in one of `name`'s conversations (a send, a reply, a thread ended or renamed): read its threads
+    /// again, when it has them.
+    func threadsMoved(_ name: String) {
+        guard case .loaded = threadsState(name) else { return }
+        Task { await refreshThreads(name) }
+    }
+
+    /// Start a thread (§7.7): it ends no other. Returns the new thread once the list holds it; nil when refused (the
+    /// list's error says why).
+    @discardableResult
+    public func newThread(_ name: String, title: String? = nil) async -> ChatRef? {
+        do {
+            let answer = try await client.newThread(name, title: title)
+            await refreshThreads(name)
+            return .thread(answer.chat.id)
+        } catch {
+            guard let apiError = APIError.from(error) else { return nil }
+            report(apiError)
+            return nil
+        }
+    }
+
+    /// The current chat's draft and not-sent messages move to the thread `cid`. The current chat's store lets go of
+    /// the draft it held (its file is gone): the thread's store reads it from now on, and two stores never write one
+    /// draft.
+    private func adoptCurrent(_ name: String, into cid: String) {
+        let moved: Bool
+        do {
+            moved = try drafts.adoptCurrent(name, into: cid)
+        } catch {
+            moved = false
+            report(.transport(code: (error as NSError).code,
+                              message: "Could not move \(name)'s draft to its thread: \(error.localizedDescription)"))
+        }
+        outbox.adoptCurrent(name, into: cid)
+        if moved, let store = chats[ChatKey(instance: name, ref: .current)] { store.draft = Draft() }
+    }
+
+    /// Mark `name`'s conversation `cid` (a thread's id, `"from"`, nil for the current chat) seen up to `version`, the
+    /// feed version on screen (§7.5). False when the feed moved since (`409 stale_version`: send it again once the new
+    /// version is shown) or the request failed.
+    @discardableResult
+    public func markSeen(_ name: String, version: String, cid: String? = nil) async -> Bool {
+        do {
+            let answer = try await client.seen(name, version: version, cid: cid)
             seenGeneration += 1
             reportBadge(answer.badge)
+            var unread = answer.unread
+            if let cid, case .loaded(var threads) = threadsState(name) {
+                if cid == ChatRef.fromID {
+                    threads.from.unread = false
+                } else if let index = threads.threads.firstIndex(where: { $0.id == cid }) {
+                    threads.threads[index].unread = false
+                }
+                threadStates[name] = .loaded(threads)
+                // The row is unread while any other thread, or the From feed, is.
+                unread = unread || threads.from.unread || threads.threads.contains(where: \.unread)
+            }
             if let index = instances.firstIndex(where: { $0.name == name }) {
-                instances[index].unread = answer.unread
+                instances[index].unread = unread
             }
             return true
         } catch {
@@ -133,6 +273,12 @@ public final class InstancesStore {
         self.error = error
         if error.isUnpaired { onUnpaired?() }
     }
+}
+
+/// A conversation's place in the store's cache.
+struct ChatKey: Hashable {
+    let instance: String
+    let ref: ChatRef
 }
 
 /// Lets the feed loop read, off the main actor, whether its chat is on screen (`watch`, §4).
@@ -161,8 +307,8 @@ public final class ChatStore {
     }
 
     public let instance: String
-    /// An earlier chat; nil for the current one.
-    public let cid: String?
+    /// The conversation: the current chat, an open thread, the From feed, or an earlier chat (read-only).
+    public let ref: ChatRef
     /// The feed on screen: always full (a partial answer is laid over it).
     public private(set) var feed: Feed?
     public private(set) var connection: Connection = .idle
@@ -181,18 +327,27 @@ public final class ChatStore {
     @ObservationIgnored private let watchFlag = WatchFlag()
     @ObservationIgnored private var pollTask: Task<Void, Never>?
 
-    init(instance: String, cid: String? = nil, owner: InstancesStore) {
+    init(instance: String, ref: ChatRef = .current, owner: InstancesStore) {
         self.instance = instance
-        self.cid = cid
+        self.ref = ref
         self.owner = owner
-        draft = (try? owner.drafts.load(instance)) ?? Draft()
+        draft = ref.isEarlier ? Draft() : (try? owner.drafts.load(instance, cid: ref.draftKey)) ?? Draft()
     }
 
     var client: APIClient? { owner?.client }
 
-    /// Messages of this chat that are on their way or did not get there, oldest first.
+    /// An earlier chat: read-only, with no draft, no unsent messages, no seen marks.
+    public var isEarlier: Bool { ref.isEarlier }
+
+    /// The chat id actions name (§7): the thread's own, else the one the feed shows (the current chat's). Nil for the
+    /// From feed, and before the feed came.
+    public var chatID: String? { ref.cid ?? (ref.isFrom ? nil : feed?.content?.chat?.id) }
+
+    /// Messages of this conversation that are on their way or did not get there, oldest first. Only its own: another
+    /// thread's never show here.
     public var unsent: [OutboxEntry] {
-        owner?.outbox.entries(for: instance) ?? []
+        guard !isEarlier else { return [] }
+        return owner?.outbox.entries(for: instance, cid: ref.draftKey) ?? []
     }
 
     public var content: FeedContent? { feed?.content }
@@ -226,7 +381,7 @@ public final class ChatStore {
         guard pollTask == nil, let client else { return }
         connection = .connecting
         let flag = watchFlag
-        let poll = FeedPoll(client: client, instance: instance, cid: cid, all: showingAll,
+        let poll = FeedPoll(client: client, instance: instance, ref: ref, all: showingAll,
                             watching: { flag.isOn })
         pollTask = Task { [weak self] in
             do {
@@ -261,11 +416,14 @@ public final class ChatStore {
     func apply(_ event: FeedEvent) {
         switch event {
         case .feed(let feed):
+            let moved = self.feed != nil && self.feed?.version != feed.version
             self.feed = feed
             connection = .live
-            if let mids = feed.content?.mids, cid == nil {
+            if let mids = feed.content?.mids, !isEarlier {
                 owner?.outbox.reconcile(instance: instance, mids: mids)
             }
+            // A turn, a title from the first message, a reply starting or ending: the thread list says so too.
+            if moved, !isEarlier { owner?.threadsMoved(instance) }
         case .failed(let error, let delay):
             connection = .retrying(error, retryAt: Date().addingTimeInterval(delay.seconds))
         }
@@ -284,23 +442,27 @@ public final class ChatStore {
     /// the message's row in the timeline already shows it was sent.
     @discardableResult
     public func send(mode: SendMode = .now) async -> Result<SendResponse, APIError> {
-        guard let owner else { return .failure(.notPaired) }
-        let message = OutgoingMessage(text: draft.text, mode: mode, quotes: draft.quotes,
-                                      files: owner.drafts.outgoingFiles(draft, for: instance))
+        guard let owner, !isEarlier else { return .failure(.notPaired) }
+        // The From feed's composer writes for the next cycle only (§3.4).
+        let message = OutgoingMessage(text: draft.text, mode: ref.isFrom ? .background : mode, quotes: draft.quotes,
+                                      files: owner.drafts.outgoingFiles(draft, for: instance, cid: ref.draftKey),
+                                      cid: ref.draftKey)
         do {
             try owner.outbox.enqueue(message, to: instance)
         } catch {
             return finish(.failure(error))
         }
         draft = Draft()
-        return finish(await owner.outbox.deliver(message.mid), inRow: true)
+        let result = finish(await owner.outbox.deliver(message.mid), inRow: true)
+        if case .success = result { owner.threadsMoved(instance) }
+        return result
     }
 
     /// Retry a failed reply (§4.4 `failure.retry`): its text, with `retry_of` when the server gave one.
     @discardableResult
     public func retryReply(_ retry: FailureRetry) async -> Result<SendResponse, APIError> {
         guard let owner else { return .failure(.notPaired) }
-        let message = OutgoingMessage(text: retry.text, mode: .now, retryOf: retry.retryOf)
+        let message = OutgoingMessage(text: retry.text, mode: .now, retryOf: retry.retryOf, cid: ref.draftKey)
         return finish(await owner.outbox.send(message, to: instance), inRow: true)
     }
 
@@ -321,7 +483,7 @@ public final class ChatStore {
         restored.quotes += entry.quotes
         for file in entry.files {
             if let copy = try? owner.drafts.attach(owner.outbox.fileURL(of: file, in: entry), name: file.name,
-                                                   for: instance) {
+                                                   for: instance, cid: ref.draftKey) {
                 restored.attachments.append(copy)
             }
         }
@@ -341,7 +503,7 @@ public final class ChatStore {
     public func attach(fileAt url: URL, name: String? = nil) -> Bool {
         guard let owner else { return false }
         do {
-            let file = try owner.drafts.attach(url, name: name, for: instance)
+            let file = try owner.drafts.attach(url, name: name, for: instance, cid: ref.draftKey)
             draft.attachments.append(file)
             return true
         } catch {
@@ -356,7 +518,7 @@ public final class ChatStore {
     public func attach(data: Data, name: String) -> Bool {
         guard let owner else { return false }
         do {
-            draft.attachments.append(try owner.drafts.attach(data: data, name: name, for: instance))
+            draft.attachments.append(try owner.drafts.attach(data: data, name: name, for: instance, cid: ref.draftKey))
             return true
         } catch {
             actionError = .transport(code: (error as NSError).code,
@@ -371,7 +533,7 @@ public final class ChatStore {
 
     /// Where a draft attachment's copy is, for a preview.
     public func fileURL(of attachment: DraftAttachment) -> URL? {
-        owner?.drafts.fileURL(of: attachment, for: instance)
+        owner?.drafts.fileURL(of: attachment, for: instance, cid: ref.draftKey)
     }
 
     /// A ↩ Reply card: `quote` with an empty answer (`doc`: the document it came from). Returns its index.
@@ -394,7 +556,7 @@ public final class ChatStore {
         let body: FeedbackRequest
         if let file {
             body = .rateMessage(file: file, thumb: thumb, reason: reason)
-        } else if let k, let cid = cid ?? feed?.content?.chat?.id {
+        } else if let k, let cid = ref.cid ?? feed?.content?.chat?.id {
             body = .rateChat(cid: cid, k: k, thumb: thumb, reason: reason)
         } else {
             return nil
@@ -444,40 +606,62 @@ public final class ChatStore {
 
     public func unqueue(_ mid: String) async {
         let name = instance
-        await act { try await $0.unqueue(name, mid: mid) }
+        let cid = ref.cid
+        await act { try await $0.unqueue(name, mid: mid, cid: cid) }
     }
 
     public func stopReply() async {
-        guard let cid = feed?.content?.chat?.id else { return }
+        guard let cid = chatID else { return }
         let name = instance
         await act { try await $0.stop(name, cid: cid) }
     }
 
+    /// End this conversation (§7.3): on a server with threads, this thread only.
     public func end() async {
-        guard let cid = feed?.content?.chat?.id else { return }
+        guard let cid = chatID else { return }
         let name = instance
         await act { try await $0.end(name, cid: cid) }
+        owner?.threadsMoved(instance)
     }
 
-    /// New chat (§7.4).
+    /// New chat (§7.4): a server before threads ends the open chat and starts another. With threads it is
+    /// `InstancesStore.newThread`, which ends nothing.
     public func clear() async {
-        guard let cid = feed?.content?.chat?.id else { return }
+        guard let cid = chatID else { return }
         let name = instance
         await act { try await $0.clear(name, cid: cid) }
+    }
+
+    /// Rename this thread (§7.8). False when refused (a blank title, an ended thread): `actionError` says why.
+    @discardableResult
+    public func rename(_ title: String) async -> Bool {
+        guard case .thread(let cid) = ref, let owner else { return false }
+        let name = instance
+        guard await act({ try await $0.rename(name, cid: cid, title: title) }) else { return false }
+        await owner.refreshThreads(instance)
+        return true
+    }
+
+    /// The thread's title: the list's (current after a rename), else the feed's, else nil (a server before threads).
+    public var title: String? {
+        if case .thread(let cid) = ref, let row = owner?.threads(instance)?.threads.first(where: { $0.id == cid }) {
+            return row.title
+        }
+        return feed?.content?.chat?.title
     }
 
     /// The feed's end is on screen in a window that shows the chat: mark the version shown seen (§7.5).
     @discardableResult
     public func markSeen() async -> Bool {
-        guard cid == nil, let version = feed?.version, let owner else { return false }
-        return await owner.markSeen(instance, version: version)
+        guard !isEarlier, let version = feed?.version, let owner else { return false }
+        return await owner.markSeen(instance, version: version, cid: ref.seenID)
     }
 
     /// Retry seen with the current feed version, backing off until it succeeds or the caller cancels.
     public func markSeenUntilDone() async -> Bool {
         var delay = 2
         while !Task.isCancelled {
-            guard cid == nil, feed != nil, let sleep = owner?.sleep else { return false }
+            guard !isEarlier, feed != nil, let sleep = owner?.sleep else { return false }
             if await markSeen() { return !Task.isCancelled }
             guard !Task.isCancelled, feed != nil, owner != nil else { return false }
             do { try await sleep(.seconds(delay)) } catch { return false }
@@ -488,20 +672,23 @@ public final class ChatStore {
 
     /// The chat left the screen (§7.6): pushes for it reach this device again at once.
     public func away() async {
-        guard cid == nil, let client else { return }
-        _ = try? await client.away(instance)
+        guard !isEarlier, let client else { return }
+        _ = try? await client.away(instance, cid: ref.seenID)
     }
 
-    private func act(_ action: @escaping @Sendable (APIClient) async throws -> SaidResponse) async {
-        guard let client else { return }
+    @discardableResult
+    private func act(_ action: @escaping @Sendable (APIClient) async throws -> SaidResponse) async -> Bool {
+        guard let client else { return false }
         do {
             said = try await action(client).said
             actionError = nil
             reconnectIfWaiting()
+            return true
         } catch {
-            guard let error = APIError.from(error) else { return }
+            guard let error = APIError.from(error) else { return false }
             actionError = error
             owner?.report(error)
+            return false
         }
     }
 
@@ -529,9 +716,9 @@ public final class ChatStore {
     }
 
     private func saveDraft() {
-        guard cid == nil, let owner else { return }
+        guard !isEarlier, let owner else { return }
         do {
-            try owner.drafts.save(draft, for: instance)
+            try owner.drafts.save(draft, for: instance, cid: ref.draftKey)
         } catch {
             actionError = .transport(code: (error as NSError).code,
                                      message: "Could not keep the draft: \(error.localizedDescription)")
