@@ -280,7 +280,7 @@
     form.setAttribute("aria-label", "Document comment");
     form._returnFocus = document.activeElement;
     form.innerHTML = '<p class="comment-quote"></p><label>Comment<textarea name="text" rows="4" required></textarea></label>' +
-      // When it goes: now (a chat message, answered now), in its next cycle (its inbox: PLAN-background-messages.md),
+      // When it goes: now (a chat message, answered now), in its next cycle (its inbox),
       // or not sent (no reply starts, but the instance's copy holds it: it can read it).
       '<fieldset class="comment-send"><legend></legend>' +
       '<label><input type="radio" name="when" value="now" checked> now</label>' +

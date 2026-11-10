@@ -55,7 +55,7 @@ class TranscriptData(unittest.TestCase):
         panel._memo.clear()
 
     def test_cycles_and_conversations_newest_first_turns_grouped(self):
-        es = panel.transcripts("wren")
+        es = panel.transcripts("wisp")
         self.assertEqual([e["kind"] for e in es], ["cycle", "conversation", "sleep"])
         talk = es[1]
         self.assertEqual(len(talk["turns"]), 2)
@@ -66,8 +66,8 @@ class TranscriptData(unittest.TestCase):
         self.assertTrue(panel.transcript_summary(es[0]).startswith("yes"))
 
     def test_a_cycle_in_full(self):
-        cycle = panel.transcripts("wren")[0]
-        text = "\n".join(l for l, _ in panel.transcript_lines("wren", cycle))
+        cycle = panel.transcripts("wisp")[0]
+        text = "\n".join(l for l, _ in panel.transcript_lines("wisp", cycle))
         for part in ("Verify the template changes", "notes/how-i-work.md names all three", "▸ 1. read_file",
                      "\"path\": \"shaft/tools.py\"", "▸ 2. run", "exit 0", "Finish · what happened", "verified all three",
                      "Finish · criterion met", "check the source"):
@@ -76,14 +76,14 @@ class TranscriptData(unittest.TestCase):
         self.assertNotIn(BIG, text)
 
     def test_a_conversation_in_full_with_thinking_on_request(self):
-        talk = panel.transcripts("wren")[1]
-        text = "\n".join(l for l, _ in panel.transcript_lines("wren", talk))
+        talk = panel.transcripts("wisp")[1]
+        text = "\n".join(l for l, _ in panel.transcript_lines("wisp", talk))
         self.assertIn("── 12:56:01 the operator via Telegram", text)
-        self.assertIn("── 12:58:07 wren via Telegram", text)
+        self.assertIn("── 12:58:07 wisp via Telegram", text)
         self.assertIn("▸ 1. send_message", text)
         self.assertIn("shared my notes with shaft", text)                   # the write-up
         self.assertNotIn("keep it short", text)
-        thinking = "\n".join(l for l, _ in panel.transcript_lines("wren", talk, thinking=True))
+        thinking = "\n".join(l for l, _ in panel.transcript_lines("wisp", talk, thinking=True))
         self.assertIn("(thinking) he is on a smaller model, keep it short", thinking)
 
 
@@ -91,7 +91,7 @@ class TranscriptData(unittest.TestCase):
 class TranscriptView(TranscriptData):
     def snap(self):
         return {"at": "15:00:00", "services": [], "events": [], "messages": [], "alerts": [], "spend": 0.0,
-                "instances": [{"name": "wren", "state": "in a cycle", "since": "15:00"}]}
+                "instances": [{"name": "wisp", "state": "in a cycle", "since": "15:00"}]}
 
     def text(self, ui, width=100, height=30):
         c = Console(width=width, record=True, file=io.StringIO())

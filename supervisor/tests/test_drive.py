@@ -1,7 +1,7 @@
-"""drive.md: what an instance is for, written by the operator (docs/plans/PLAN-thelos.md).
+"""drive.md: what an instance is for, written by the operator.
 
 Before it, the drive was one paragraph of the template's IDENTITY prompt ("one innate drive: to improve yourself"),
-the same for every instance: Thelos — Wren's genes, the drive "be the best possible assistant to the operator" — would
+the same for every instance: Tundra — Wisp's genes, the drive "be the best possible assistant to the operator" — would
 have had to edit its own prompts.py, and every template update near those lines would then conflict with it.
 Now the paragraph comes from the instance's drive.md; without one, the default — byte for byte what every instance
 had. Only the operator writes drive.md: the sandbox denies the instance, and his edit is committed as his."""
@@ -32,7 +32,7 @@ DEFAULT = ("You were created with one innate drive: to improve yourself. That me
            "and decide what would show you have overcome it. Your prompts, code, skills and plugins are yours to "
            "change for this — the supervisor keeps only changes that pass its tests.")
 AFTER = "\n\nBe honest about uncertainty."
-THELOS = ("You were created with one drive: to be the best possible assistant to the operator.\n"
+TUNDRA = ("You were created with one drive: to be the best possible assistant to the operator.\n"
           "- Know him from evidence.\n- Finish things for him.\n")
 
 
@@ -63,9 +63,9 @@ class DrivePromptTest(unittest.TestCase):
         self.assertIn(BEFORE + DEFAULT + AFTER, self.prompt())
 
     def test_an_instance_s_drive_md_replaces_the_default_paragraph(self):
-        (self.root / "drive.md").write_text("\n" + THELOS + "\n\n")
+        (self.root / "drive.md").write_text("\n" + TUNDRA + "\n\n")
         prompt = self.prompt()
-        self.assertIn(BEFORE + THELOS.strip() + AFTER, prompt)              # exactly, its lines and bullets kept
+        self.assertIn(BEFORE + TUNDRA.strip() + AFTER, prompt)              # exactly, its lines and bullets kept
         self.assertNotIn("innate drive", prompt)
 
 
@@ -82,13 +82,13 @@ class DriveSandboxTest(unittest.TestCase):
                               capture_output=True, text=True).returncode
 
     def test_the_instance_cannot_change_its_drive_by_any_path(self):
-        (self.root / "drive.md").write_text(THELOS)
+        (self.root / "drive.md").write_text(TUNDRA)
         for code in ["open('drive.md', 'w').write('improve')", "open('drive.md', 'a').write('x')",
                      "os.unlink('drive.md')", "os.rename('drive.md', 'x')",
                      "open('t', 'w').write('improve'); os.replace('t', 'drive.md')",
                      "os.link('drive.md', 'h'); open('h', 'a').write('x')"]:
             self.assertNotEqual(self.attempt(code), 0, code)
-        self.assertEqual((self.root / "drive.md").read_text(), THELOS)
+        self.assertEqual((self.root / "drive.md").read_text(), TUNDRA)
         self.assertEqual(self.attempt("open('notes.md', 'w').write('fine')"), 0)   # the rest of its folder still is
 
     def test_nor_give_itself_one(self):
@@ -110,12 +110,12 @@ class DriveCommitTest(test_commit.UpdateCase):
             runner._commit_outside_drive("x", self.root)
 
     def test_a_new_drive_does_not_block_an_update_and_is_committed_as_the_operator_s(self):
-        (self.root / "drive.md").write_text(THELOS)                         # untracked: the operator's new file
+        (self.root / "drive.md").write_text(TUNDRA)                         # untracked: the operator's new file
         self.template_change("template: fine change")
         code, out = self.update()
         self.assertEqual(code, 0, out)
         self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 'template: fine change'\n")
-        self.assertEqual(git(self.root, "show", "HEAD:drive.md"), THELOS)
+        self.assertEqual(git(self.root, "show", "HEAD:drive.md"), TUNDRA)
         commit = git(self.root, "log", "--format=%an|%B", "-1", "--", "drive.md")
         self.assertTrue(commit.startswith("SHAFT supervisor|x: drive.md changed by the operator"), commit)
         self.assertIn("Know him from evidence", commit)
@@ -125,11 +125,11 @@ class DriveCommitTest(test_commit.UpdateCase):
         self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=all", "--", "drive.md"), "")
 
     def test_an_edit_and_a_removal_are_each_committed_once(self):
-        (self.root / "drive.md").write_text(THELOS)
+        (self.root / "drive.md").write_text(TUNDRA)
         self.commit()
         self.commit()                                                       # nothing new: no second commit
         self.assertEqual(len(git(self.root, "log", "--format=%H", "--", "drive.md").split()), 1)
-        (self.root / "drive.md").write_text(THELOS + "- Say so when he is wrong.\n")
+        (self.root / "drive.md").write_text(TUNDRA + "- Say so when he is wrong.\n")
         self.commit()
         self.assertIn("Say so when he is wrong", git(self.root, "show", "HEAD:drive.md"))
         (self.root / "drive.md").unlink()
@@ -142,7 +142,7 @@ class DriveCommitTest(test_commit.UpdateCase):
     def test_not_committed_over_other_staged_changes(self):
         (self.root / "shaft" / "agent.py").write_text("v = 'staged'\n")
         git(self.root, "add", "shaft/agent.py")
-        (self.root / "drive.md").write_text(THELOS)
+        (self.root / "drive.md").write_text(TUNDRA)
         self.commit()
         self.assertEqual(git(self.root, "ls-files", "drive.md"), "")
         self.assertNotIn("My drive was changed", (self.root / "memory" / "journal.md").read_text())
@@ -153,12 +153,12 @@ class DriveDuringACycleTest(test_config_writers.ConfigWritersTest):
     as his, apart from the instance's change, and never counted as its code."""
 
     def test_an_operator_drive_written_mid_cycle_is_committed_apart_from_the_instance_s_change(self):
-        self.cycle(PASSING, lambda broker: (self.root / "drive.md").write_text(THELOS))
-        self.assertEqual(git(self.root, "show", "HEAD:drive.md"), THELOS)
+        self.cycle(PASSING, lambda broker: (self.root / "drive.md").write_text(TUNDRA))
+        self.assertEqual(git(self.root, "show", "HEAD:drive.md"), TUNDRA)
         mine = [c for c in self.commits() if "made by the instance" in c]
         self.assertEqual(len(mine), 1)
         self.assertNotIn("drive.md", mine[0])
-        self.assertEqual(len([c for c in self.commits() if c.strip().startswith("SHAFT supervisor|kant: drive.md changed by "
+        self.assertEqual(len([c for c in self.commits() if c.strip().startswith("SHAFT supervisor|kiln: drive.md changed by "
                                                                           "the operator")]), 1)
         self.assertIn("My drive was changed by the operator", (self.root / "memory" / "journal.md").read_text())
 

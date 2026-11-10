@@ -1,4 +1,4 @@
-"""An instance's own Drive, Sheets, Docs and Slides (docs/plans/PLAN-own-drive.md): a `drive` bundle for its own Google key,
+"""An instance's own Drive, Sheets, Docs and Slides: a `drive` bundle for its own Google key,
 every scope in it granted or nothing saved, the address checked through Drive's `about` (no Gmail scope to read a
 profile with); and http_request's binary bodies (`body_file`, `save_to`), which a Drive upload or download needs."""
 from __future__ import annotations
@@ -16,7 +16,7 @@ from unittest import mock
 from supervisor import broker as broker_mod
 from supervisor import core, google
 from supervisor.tests import test_own_mail as own_mail
-from supervisor.tests.test_own_mail import OPERATOR, THELOS
+from supervisor.tests.test_own_mail import OPERATOR, TUNDRA
 
 DRIVE_SCOPES = " ".join((google.DRIVE, google.SHEETS, google.DOCS, google.SLIDES))
 DRIVE_HOSTS = ["www.googleapis.com", "sheets.googleapis.com", "docs.googleapis.com", "slides.googleapis.com"]
@@ -28,7 +28,7 @@ class FakeDriveTokens(own_mail.FakeTokens):
     """FakeTokens for a Drive-only login: the address is in Drive's `about`; Gmail's profile is not reachable with
     this token (as on Google), so a login that still asked Gmail fails the test."""
 
-    def __init__(self, address: str = THELOS, granted: str = DRIVE_SCOPES):
+    def __init__(self, address: str = TUNDRA, granted: str = DRIVE_SCOPES):
         super().__init__(address, granted)
 
     def __call__(self, req: urllib.request.Request, timeout: float = 0):
@@ -78,8 +78,8 @@ class FakeDrive:
         self.server.server_close()
 
 
-def drive_key(address: str = THELOS, hosts=("127.0.0.1",)) -> dict:
-    return {"kind": "google", "client": "personal", "address": address, "refresh_token": "1//refresh-thelos-drive",
+def drive_key(address: str = TUNDRA, hosts=("127.0.0.1",)) -> dict:
+    return {"kind": "google", "client": "personal", "address": address, "refresh_token": "1//refresh-tundra-drive",
             "scope": DRIVE_SCOPES, "hosts": list(hosts)}
 
 
@@ -91,7 +91,7 @@ class DriveCase(own_mail.OwnMailCase):
 
 
 class DriveLoginTest(own_mail.LoginTest):
-    """`shaft secret thelos google drive … --scope drive`, through the real CLI and the real loopback."""
+    """`shaft secret tundra google drive … --scope drive`, through the real CLI and the real loopback."""
     def setUp(self):
         super().setUp()
         self.tokens = FakeDriveTokens()
@@ -107,12 +107,12 @@ class DriveLoginTest(own_mail.LoginTest):
     test_usage_names_the_clients_in_env = None
 
     def test_drive_bundle_asks_all_four_scopes_and_binds_four_hosts(self):
-        code, out, err = self.cli("google", "drive", THELOS, "--client", "personal", "--scope", "drive")
+        code, out, err = self.cli("google", "drive", TUNDRA, "--client", "personal", "--scope", "drive")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.asked[0]["scope"].split(), DRIVE_SCOPES.split())   # the four, nothing of the operator's
         self.assertEqual(self.asked[0]["include_granted_scopes"], "false")
         entry = core.read_secrets(self.root)["drive"]
-        self.assertEqual((entry["kind"], entry["address"], entry["hosts"]), ("google", THELOS, sorted(DRIVE_HOSTS)))
+        self.assertEqual((entry["kind"], entry["address"], entry["hosts"]), ("google", TUNDRA, sorted(DRIVE_HOSTS)))
         self.assertIn("http_request(auth='drive') to docs.googleapis.com, sheets.googleapis.com, "
                       "slides.googleapis.com, www.googleapis.com", out)
         self.assertNotIn("1//refresh", out)
@@ -121,17 +121,17 @@ class DriveLoginTest(own_mail.LoginTest):
                       listing)
 
     def test_drive_signed_in_as_reads_drive_about(self):
-        # Before docs/plans/PLAN-own-drive, _signed_in_as knew only Gmail and Calendar: a Drive-only login was refused with
+        # Before an instance's own Drive, _signed_in_as knew only Gmail and Calendar: a Drive-only login was refused with
         # "Google granted no Gmail or Calendar scope". Here the address comes from Drive's `about` and is checked.
         self.tokens.address = "someone.else@example.com"
-        code, _, err = self.cli("google", "drive", THELOS, "--client", "personal", "--scope", "drive")
+        code, _, err = self.cli("google", "drive", TUNDRA, "--client", "personal", "--scope", "drive")
         self.assertEqual(code, 2)
         self.assertIn("signed in as someone.else@example.com, not assistant@example.com: nothing saved", err)
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_drive_bundle_partial_grant_saves_nothing(self):
         self.tokens.granted = google.DRIVE                                        # three boxes unticked
-        code, _, err = self.cli("google", "drive", THELOS, "--client", "personal", "--scope", "drive")
+        code, _, err = self.cli("google", "drive", TUNDRA, "--client", "personal", "--scope", "drive")
         self.assertEqual(code, 2)
         self.assertIn("Google did not grant spreadsheets, documents, presentations", err)
         self.assertIn("drive needs all of drive, spreadsheets, documents, presentations", err)
@@ -144,7 +144,7 @@ class DriveLoginTest(own_mail.LoginTest):
         self.assertEqual(self.asked, [])                                          # the browser never opened
 
     def test_unknown_bundle_refused_naming_the_bundles(self):
-        code, _, err = self.cli("google", "drive", THELOS, "--client", "personal", "--scope", "drive.file")
+        code, _, err = self.cli("google", "drive", TUNDRA, "--client", "personal", "--scope", "drive.file")
         self.assertEqual(code, 2)
         self.assertIn("may be granted gmail.modify, drive, not 'drive.file'", err)
         self.assertEqual(self.asked, [])

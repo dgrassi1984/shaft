@@ -32,9 +32,9 @@ struct FeedRowsTests {
     @Test func theReplyQueuedMessagesAndNotSentOnesFollowTheItems() throws {
         let feed = try feed("queued")                              // a reply going on, with a message queued after it
         let content = try #require(feed.content)
-        let held = OutboxEntry(instance: "thelos", mid: content.mids[0], text: "arrived", mode: .now, quotes: [],
+        let held = OutboxEntry(instance: "tundra", mid: content.mids[0], text: "arrived", mode: .now, quotes: [],
                                retryOf: nil, files: [], created: Date(), state: .sending, reason: nil)
-        let lost = OutboxEntry(instance: "thelos", mid: "lost-1", text: "lost", mode: .now, quotes: [], retryOf: nil,
+        let lost = OutboxEntry(instance: "tundra", mid: "lost-1", text: "lost", mode: .now, quotes: [], retryOf: nil,
                                files: [], created: Date(), state: .notSent, reason: "offline")
         let ids = FeedRows.rows(feed, unsent: [held, lost]).map(\.id)
         let live = try #require(ids.firstIndex(of: "live"))
@@ -128,19 +128,19 @@ struct DocumentsStoreTests {
     @Test func aStaleSaveComesBackWithTheDiffAndSavingAgainWithItsShaReplacesIt() async throws {
         let server = StubServer { request in
             switch (request.path, request.json?["sha"] as? String) {
-            case ("/app/v1/docs/thelos/save", "old"):
+            case ("/app/v1/docs/tundra/save", "old"):
                 return .json(409, #"{"error": {"code": "stale", "message": "It changed since you opened it.", "sha": "new", "diff": "-yours\n+theirs"}}"#)
-            case ("/app/v1/docs/thelos/save", "new"):
-                return .json(200, #"{"said": "saved · thelos gets the change with your next message", "path": "ledger.md", "sha": "newer"}"#)
-            case ("/app/v1/docs/thelos/doc", _):
+            case ("/app/v1/docs/tundra/save", "new"):
+                return .json(200, #"{"said": "saved · tundra gets the change with your next message", "path": "ledger.md", "sha": "newer"}"#)
+            case ("/app/v1/docs/tundra/doc", _):
                 return .json(200, fixtureText(try DecodingTests.fixture("doc-comments")))
-            case ("/app/v1/docs/thelos", _):
+            case ("/app/v1/docs/tundra", _):
                 return .json(200, #"{"dir": "notes/docs", "max_bytes": 262144, "docs": []}"#)
             default:
                 return .json(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
             }
         }
-        let store = DocumentsStore(client: server.client, instance: "thelos")
+        let store = DocumentsStore(client: server.client, instance: "tundra")
         let stale = await store.save(path: "ledger.md", text: "mine", sha: "old")
         guard case .stale(let conflict) = stale else { Issue.record("not stale: \(stale)"); return }
         #expect(conflict.sha == "new")
@@ -158,9 +158,9 @@ struct DocumentsStoreTests {
     @Test func aCommentReadsTheDocumentAgainAndARefusalIsSaid() async throws {
         let server = StubServer { request in
             switch request.path {
-            case "/app/v1/docs/thelos/doc":
+            case "/app/v1/docs/tundra/doc":
                 return .json(200, fixtureText(try DecodingTests.fixture("doc-comments")))
-            case "/app/v1/docs/thelos/comment":
+            case "/app/v1/docs/tundra/comment":
                 return request.json?["text"] as? String == ""
                     ? .json(409, #"{"error": {"code": "refused", "message": "a comment needs text"}}"#)
                     : .json(200, #"{"said": "kept, not sent", "thread": "c4"}"#)
@@ -168,15 +168,15 @@ struct DocumentsStoreTests {
                 return .json(200, #"{"dir": "notes/docs", "max_bytes": 262144, "docs": []}"#)
             }
         }
-        let store = DocumentsStore(client: server.client, instance: "thelos")
+        let store = DocumentsStore(client: server.client, instance: "tundra")
         await store.load("ledger.md")
         let doc = try #require(store.open)
         #expect(await store.comment(anchor: nil, text: "Whole thing?", send: .keep))
-        let posted = try #require(server.requests.first { $0.path == "/app/v1/docs/thelos/comment" }?.json)
+        let posted = try #require(server.requests.first { $0.path == "/app/v1/docs/tundra/comment" }?.json)
         #expect(posted["sha"] as? String == doc.sha)
         #expect(posted["send"] as? String == "")
         #expect(posted.keys.contains("anchor") && posted["anchor"] is NSNull)
-        #expect(server.requests.filter { $0.path == "/app/v1/docs/thelos/doc" }.count == 2)
+        #expect(server.requests.filter { $0.path == "/app/v1/docs/tundra/doc" }.count == 2)
         #expect(await store.comment(anchor: nil, text: "", send: .now) == false)
         #expect(store.error?.message == "a comment needs text")
     }
@@ -194,7 +194,7 @@ struct ChatStoreUITests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in .json(200, #"{"said": "Feedback kept.", "id": "f-1"}"#) }
         let store = try makeStore(server, folder: folder)
-        let chat = store.archivedChat("thelos", cid: "web-3f9a1c0d7e2b4a65")
+        let chat = store.archivedChat("tundra", cid: "web-3f9a1c0d7e2b4a65")
         #expect(await chat.rate(k: 3, thumb: "down", reason: "wrong month") == "f-1")
         #expect(await chat.rate(file: "m.md", thumb: "up") == "f-1")
         await chat.unpend("f-1")
@@ -208,7 +208,7 @@ struct ChatStoreUITests {
         #expect(bodies[2]["op"] as? String == "unpend")
         #expect(bodies[3]["reason"] as? String == "better")
         #expect(chat.said == "Feedback kept.")
-        #expect(server.requests.allSatisfy { $0.path == "/app/v1/feedback/thelos" })
+        #expect(server.requests.allSatisfy { $0.path == "/app/v1/feedback/tundra" })
     }
 
     @Test func aNotSentMessageGoesBackToTheComposerWithItsFilesAndLeavesTheOutbox() async throws {
@@ -216,7 +216,7 @@ struct ChatStoreUITests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("thelos")
+        let chat = store.chat("tundra")
         #expect(chat.attach(data: Data("x".utf8), name: "note.txt"))
         chat.draft.text = "Rerun it"
         chat.addQuote("Ship it?")
@@ -231,7 +231,7 @@ struct ChatStoreUITests {
         #expect(try Data(contentsOf: try #require(chat.fileURL(of: file))) == Data("x".utf8))
         chat.removeAttachment(file.id)
         chat.removeQuote(at: 0)
-        #expect(try store.drafts.load("thelos") == Draft(text: "also\n\nRerun it"))
+        #expect(try store.drafts.load("tundra") == Draft(text: "also\n\nRerun it"))
     }
 
     /// Bug: offline said the same thing three times: the not-sent row, the offline banner and a red status line.
@@ -240,7 +240,7 @@ struct ChatStoreUITests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("thelos")
+        let chat = store.chat("tundra")
         chat.draft.text = "Rerun it"
         _ = await chat.send()
         #expect(chat.unsent.first?.reason?.isEmpty == false)
@@ -256,7 +256,7 @@ struct ChatStoreUITests {
                 : .json(200, "{}")
         }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("thelos")
+        let chat = store.chat("tundra")
         chat.draft.text = "After that"
         _ = await chat.send(mode: .queue)
         #expect(chat.said == nil)
@@ -275,7 +275,7 @@ struct ChatStoreUITests {
             return .json(200, idle)
         }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("thelos")
+        let chat = store.chat("tundra")
         chat.start()
         try await waitUntil { chat.feed != nil }
         chat.setWatching(false)
@@ -288,10 +288,10 @@ struct ChatStoreUITests {
 
 struct NotificationPolicyTests {
     @Test func theChatOnScreenGetsNoBanner() {
-        #expect(AppModel.presentation(for: "thelos", visibleChat: "thelos") == [.badge])
-        #expect(AppModel.presentation(for: "thelos", visibleChat: "wren").contains(.banner))
-        #expect(AppModel.presentation(for: "thelos", visibleChat: nil).contains(.banner))
-        #expect(AppModel.presentation(for: nil, visibleChat: "thelos").contains(.banner))
+        #expect(AppModel.presentation(for: "tundra", visibleChat: "tundra") == [.badge])
+        #expect(AppModel.presentation(for: "tundra", visibleChat: "wisp").contains(.banner))
+        #expect(AppModel.presentation(for: "tundra", visibleChat: nil).contains(.banner))
+        #expect(AppModel.presentation(for: nil, visibleChat: "tundra").contains(.banner))
     }
 }
 
@@ -307,12 +307,12 @@ func waitUntil(timeout: Duration = .seconds(5), _ condition: @MainActor () -> Bo
 
 struct AppLinksTests {
     @Test func aChatLinkNamesItsInstanceAndNothingElseDoes() throws {
-        #expect(AppLinks.instance(in: try #require(AppLinks.chat("thelos"))) == "thelos")
-        #expect(AppLinks.instance(in: URL(string: "shaft://chat/wren-2")!) == "wren-2")
+        #expect(AppLinks.instance(in: try #require(AppLinks.chat("tundra"))) == "tundra")
+        #expect(AppLinks.instance(in: URL(string: "shaft://chat/wisp-2")!) == "wisp-2")
         #expect(AppLinks.instance(in: URL(string: "shaft://chat/")!) == nil)
         #expect(AppLinks.instance(in: URL(string: "shaft://chat/../etc")!) == nil)
-        #expect(AppLinks.instance(in: URL(string: "https://chat/thelos")!) == nil)
-        #expect(AppLinks.instance(in: URL(string: "shaft://docs/thelos")!) == nil)
+        #expect(AppLinks.instance(in: URL(string: "https://chat/tundra")!) == nil)
+        #expect(AppLinks.instance(in: URL(string: "shaft://docs/tundra")!) == nil)
     }
 }
 
@@ -325,7 +325,7 @@ struct ReconnectTests {
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "o")),
                                    drafts: DraftStore(directory: folder.appending(path: "d")))
-        let chat = store.chat("thelos")
+        let chat = store.chat("tundra")
         chat.start()
         // Long enough into the backoff that the next try is seconds away.
         try await waitUntil(timeout: .seconds(20)) {
@@ -333,7 +333,7 @@ struct ReconnectTests {
         }
         // The server is back: the send gets through, and the feed is asked for now, not after the backoff.
         server.setAnswer { request in
-            request.path.hasSuffix("/send") ? .json(200, #"{"said": "sent to thelos", "chat": "web-1", "file": null}"#)
+            request.path.hasSuffix("/send") ? .json(200, #"{"said": "sent to tundra", "chat": "web-1", "file": null}"#)
                                             : .json(200, idle)
         }
         chat.draft.text = "back online"

@@ -1,4 +1,4 @@
-"""Template regressions for the second Thelos review (PLAN-thelos-review-2 M3): self-knowledge feeds.
+"""Template regressions for the second Tundra review: self-knowledge feeds.
 
 Each test names the bug it guards. Briefing shapes are synthetic: nothing from an instance's record is copied here."""
 from __future__ import annotations
@@ -22,8 +22,8 @@ def call(name, args, cid="1"):
     return {"id": cid, "name": name, "arguments": json.dumps(args)}
 
 
-def thelos_shaped_briefing() -> tuple[str, str]:
-    """67 KB in Thelos's shape (2026-10-31): a title and a Generated line, calendar, mail, a 66 KB section of
+def tundra_shaped_briefing() -> tuple[str, str]:
+    """67 KB in Tundra's shape (2026-10-31): a title and a Generated line, calendar, mail, a 66 KB section of
     open commitments, and the operator's corrections last. Synthetic text; returns (file text, corrections section)."""
     top = ("# Briefing - the operator's next 48 hours\n"
            "Generated 2026-10-31 21:42 | window 2026-10-31 21:42 -> 2026-11-02 21:42 | by plugins/briefing\n\n")
@@ -44,7 +44,7 @@ def thelos_shaped_briefing() -> tuple[str, str]:
 
 
 class BriefingBySectionTest(InstanceFixture, unittest.TestCase):
-    """The briefing's 3,000-character head cut showed 3,000 of Thelos's 67.5 KB: its corrections, last in the file,
+    """The briefing's 3,000-character head cut showed 3,000 of Tundra's 67.5 KB: its corrections, last in the file,
     never reached a cycle (2026-10-31)."""
 
     def setUp(self):
@@ -58,8 +58,8 @@ class BriefingBySectionTest(InstanceFixture, unittest.TestCase):
         self.path.write_text(text)
         return prompts.briefing(self.root, self.cfg)
 
-    def test_a_67kb_briefing_shaped_like_thelos_keeps_its_corrections_whole_within_the_budget(self):
-        text, fixes = thelos_shaped_briefing()
+    def test_a_67kb_briefing_shaped_like_tundra_keeps_its_corrections_whole_within_the_budget(self):
+        text, fixes = tundra_shaped_briefing()
         self.assertGreater(len(text), 67000)
         shown = self.show(text)
         self.assertEqual(self.cfg.BRIEFING_CHARS, 6000)
@@ -112,7 +112,7 @@ class BriefingBySectionTest(InstanceFixture, unittest.TestCase):
 
 class ForecastWrapUpTest(InstanceFixture, unittest.TestCase):
     def test_a_finished_steps_wrap_up_is_not_running_out(self):
-        """The forecast counted a steps wrap-up that still finished as "ran out": 23% of Thelos's cycles against the
+        """The forecast counted a steps wrap-up that still finished as "ran out": 23% of Tundra's cycles against the
         5% its judge attributed to cut-offs (2026-10-31; template/shaft/forecast.py summarise)."""
         finished = {"ended_by": "control", "wrapped_up": "steps", "finish": {"criterion_met": "yes"}}
         self.assertEqual(forecast.summarise([finished], self.root)["ran_out"], 0)
@@ -123,7 +123,7 @@ class ForecastWrapUpTest(InstanceFixture, unittest.TestCase):
 
 
 class CorrectionLedgerTest(InstanceFixture, unittest.TestCase):
-    """On mimo (2026-10-28..30) Thelos called record_correction 44 times and memory/corrections.jsonl got no row:
+    """On mimo (2026-10-28..30) Tundra called record_correction 44 times and memory/corrections.jsonl got no row:
     the model sent reopens as the text "null" (and sometimes when as "[<ts>]", copied from the transcript label),
     record() refused every call, the refusals were never logged, and a writeup that ended on a repeated call
     journaled the call's text ("<tool_call><function=record_correction>…") as its entry."""

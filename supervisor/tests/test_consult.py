@@ -31,7 +31,7 @@ class ConsultTest(unittest.TestCase):
             "endpoints": [{"model_id": self.model.removeprefix("openrouter/"), "tag": "bedrock",
                            "pricing": {"prompt": "0.000004", "completion": "0.00002"}}]}
         self.cache()
-        self.b = broker.Broker("wren", self.sup, {"OPENROUTER_API_KEY": "fake"}, self.sup / "broker.log",
+        self.b = broker.Broker("wisp", self.sup, {"OPENROUTER_API_KEY": "fake"}, self.sup / "broker.log",
                                root=self.sup / "copy", share=False, network=False)
         self.b.run_kind, self.b.run_started = "live", "2026-10-27T12:00:00"
 
@@ -45,7 +45,7 @@ class ConsultTest(unittest.TestCase):
         return {"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}], "usage": usage}
 
     def complete(self, body=None):
-        return consult.complete("wren", body or self.body, self.b.secrets, "plugin", "live", self.b.run_started)
+        return consult.complete("wisp", body or self.body, self.b.secrets, "plugin", "live", self.b.run_started)
 
     def upstream(self, data):
         self.urlopen.side_effect = lambda *a, **k: io.BytesIO(json.dumps(data).encode())
@@ -76,7 +76,7 @@ class ConsultTest(unittest.TestCase):
     def test_no_zdr_provider_refuses_with_reason(self):
         self.catalogue["endpoints"] = []
         self.cache()
-        self.assertFalse(consult.menu("wren")[0]["available"])
+        self.assertFalse(consult.menu("wisp")[0]["available"])
         with self.assertRaisesRegex(consult.ConsultError, "no qualifying zero-retention provider"):
             self.complete()
 
@@ -96,7 +96,7 @@ class ConsultTest(unittest.TestCase):
         self.urlopen.assert_not_called()
 
     def test_replay_and_battery_refused(self):
-        for billed in ("wren@trial:t-1", "battery-wren"):
+        for billed in ("wisp@trial:t-1", "battery-wisp"):
             self.b.usage_name = billed
             status, reply = self.http()
             self.assertEqual(status, 403)
@@ -159,7 +159,7 @@ class ConsultTest(unittest.TestCase):
             {"model_id": cheap, "tag": "wafer", "pricing": {"prompt": "0.00000007", "completion": "0.0000014"}},
             {"model_id": cheap, "tag": "dear", "pricing": {"prompt": "0.000007429", "completion": "0.000008144"}}]
         self.cache()
-        item = consult.menu("wren")[0]
+        item = consult.menu("wisp")[0]
         self.assertEqual((round(item["in_per_m"], 4), round(item["out_per_m"], 4)), (0.07, 1.4))
         self.assertEqual((round(item["reserve_in_per_m"], 3), round(item["reserve_out_per_m"], 3)), (7.429, 8.144))
         self.upstream(self.reply(None))                 # no cost back: the worst case is what is recorded
@@ -216,7 +216,7 @@ class ConsultTest(unittest.TestCase):
         self.urlopen.assert_not_called()
 
     def test_concurrent_reservation_blocks_second_call(self):
-        core._update_tool_settings("wren", consult_daily_usd=0.004)
+        core._update_tool_settings("wisp", consult_daily_usd=0.004)
         entered, release = threading.Event(), threading.Event()
         def blocking(*a, **k):
             entered.set()
@@ -248,13 +248,13 @@ class ConsultTest(unittest.TestCase):
     def test_spent_and_stale_reservations(self):
         self.upstream(self.reply(0.002))
         self.complete()
-        core._update_tool_settings("wren", consult_daily_usd=0.003)
+        core._update_tool_settings("wisp", consult_daily_usd=0.003)
         with self.assertRaisesRegex(consult.ConsultError, "spent"):
             self.complete()
-        core._update_tool_settings("wren", consult_daily_usd=0.005)
-        consult._save_reservations([{"id": "old", "instance": "wren", "usd": 10, "created": time.time() - 1801}])
+        core._update_tool_settings("wisp", consult_daily_usd=0.005)
+        consult._save_reservations([{"id": "old", "instance": "wisp", "usd": 10, "created": time.time() - 1801}])
         self.complete()
-        self.assertEqual(consult.spent_today("wren"), 0.004)
+        self.assertEqual(consult.spent_today("wisp"), 0.004)
         self.assertEqual(consult.spent_today("other"), 0)
 
     def test_envelope(self):
@@ -263,7 +263,7 @@ class ConsultTest(unittest.TestCase):
         self.assertEqual(env["models"][0]["model"], self.model)
         self.assertTrue(env["models"][0]["available"])
         self.b._envelope = None
-        self.b.usage_name = "battery-wren"
+        self.b.usage_name = "battery-wisp"
         self.assertIsNone(self.b.envelope()["consult"])
 
     def test_the_envelope_never_waits_on_the_catalogue(self):
@@ -282,7 +282,7 @@ class ConsultTest(unittest.TestCase):
         self.assertTrue(started.wait(5))          # the refresh ran, in the background
         stale = {**self.catalogue, "fetched": time.time() - 2 * 86400}
         (self.sup / "consult_catalogue.json").write_text(json.dumps(stale))
-        self.assertTrue(consult.menu("wren", fetch=False)[0]["available"])   # stale prices beat none
+        self.assertTrue(consult.menu("wisp", fetch=False)[0]["available"])   # stale prices beat none
 
     def test_delete_rows_and_reservations(self):
         self.upstream(self.reply())
@@ -291,8 +291,8 @@ class ConsultTest(unittest.TestCase):
         with consult.USAGE.open("a") as f:
             f.write(json.dumps(other) + "\n")
         consult._save_reservations([{"id": n, "instance": n, "usd": 1, "created": time.time()}
-                                    for n in ("wren", "other")])
-        for edit in delete.shared_edits("wren"):
+                                    for n in ("wisp", "other")])
+        for edit in delete.shared_edits("wisp"):
             delete._edit(edit, apply=True)
         self.assertEqual(self.rows(), [other])
         self.assertEqual([r["instance"] for r in consult._reservations()], ["other"])
@@ -301,14 +301,14 @@ class ConsultTest(unittest.TestCase):
         self.catalogue["fetched"] = time.time() - 86401
         self.cache()
         self.urlopen.side_effect = OSError("offline")
-        self.assertTrue(consult.menu("wren")[0]["available"])
+        self.assertTrue(consult.menu("wisp")[0]["available"])
         self.assertEqual(self.urlopen.call_count, 1)
         self.urlopen.side_effect = [io.BytesIO(json.dumps({"data": self.catalogue["models"]}).encode()),
                                   io.BytesIO(json.dumps({"data": self.catalogue["endpoints"]}).encode())]
-        self.assertTrue(consult.menu("wren")[0]["available"])
+        self.assertTrue(consult.menu("wisp")[0]["available"])
         self.assertGreater(json.loads((self.sup / "consult_catalogue.json").read_text())["fetched"], time.time() - 60)
         self.urlopen.reset_mock()
-        consult.menu("wren")
+        consult.menu("wisp")
         self.urlopen.assert_not_called()
 
     def test_no_cache_refuses(self):
@@ -334,9 +334,9 @@ class ConsultTest(unittest.TestCase):
 
 class ConsultLimitsTest(test_limits.LimitsTest):
     def test_consult_cap_sets_shows_resets(self):
-        self.assertEqual(self.cli("wren", "consult-cap", "5")[0], 0)
-        self.assertEqual(core._tool_settings("wren")["consult_daily_usd"], 5)
-        self.assertIn("consult cap $5.00 (yours)", self.cli("wren")[1])
-        self.assertEqual(self.cli("wren", "consult-cap", "off")[0], 0)
-        self.assertNotIn("consult_daily_usd", core._tool_settings("wren"))
-        self.assertEqual(self.cli("wren", "consult-cap", "-1")[0], 2)
+        self.assertEqual(self.cli("wisp", "consult-cap", "5")[0], 0)
+        self.assertEqual(core._tool_settings("wisp")["consult_daily_usd"], 5)
+        self.assertIn("consult cap $5.00 (yours)", self.cli("wisp")[1])
+        self.assertEqual(self.cli("wisp", "consult-cap", "off")[0], 0)
+        self.assertNotIn("consult_daily_usd", core._tool_settings("wisp"))
+        self.assertEqual(self.cli("wisp", "consult-cap", "-1")[0], 2)

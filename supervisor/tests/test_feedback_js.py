@@ -41,7 +41,7 @@ const fetch = async (url, opts) => {
   return {headers:{get:()=> 'f-new'},ok:!fail,status:fail?409:200,text:async()=>fail?'bad target':'Feedback kept.'};
 };
 function controls(pressed='false') {
-  const group = {dataset:{feedbackName:'wren',feedbackTarget:JSON.stringify({kind:'chat',cid:'web-abc',k:1}),
+  const group = {dataset:{feedbackName:'wisp',feedbackTarget:JSON.stringify({kind:'chat',cid:'web-abc',k:1}),
     feedbackId:'f-1',feedbackReason:'earlier reason'},querySelectorAll(){return [up,down];}};
   const button = thumb=>({dataset:{thumb},getAttribute(){return pressed;},closest(){return group;},
     isConnected:true,focus(){focused++;}});
@@ -58,7 +58,7 @@ eval(process.argv[1]);
   assert.match(modal.innerHTML,/What was wrong\? \(optional\)/);
   assert.match(modal.innerHTML,/Just keep it/);
   assert.match(modal.innerHTML,/Cancel/);
-  assert.match(modal.innerHTML,/Send to wren/);
+  assert.match(modal.innerHTML,/Send to wisp/);
   assert.equal(modal.reason.value,'earlier reason');
   assert.equal(requests.length,0,'opening the sheet stores nothing');
   modal.handlers.cancel();
@@ -71,7 +71,7 @@ eval(process.argv[1]);
   await dialog.handlers.submit({preventDefault(){},submitter:{value:"keep"}});
   assert.equal(requests.length,1,'double submit produces one post');
   assert.equal(dialog.save.disabled,true);
-  assert.equal(requests[0].url,'/feedback/wren');
+  assert.equal(requests[0].url,'/feedback/wisp');
   assert.equal(requests[0].opts.headers['X-CSRF-Token'],'token');
   assert.equal(requests[0].opts.body.get('thumb'),'down');
   assert.equal(requests[0].opts.body.get('reason'),'wrong answer');
@@ -107,7 +107,7 @@ eval(process.argv[1]);
   const sendLink={dataset:{feedbackSend:''},closest:()=>lit.group,isConnected:true,focus(){}};
   click(sendLink);
   assert.match(modal.innerHTML,/What was good\? \(optional\)/);
-  assert.match(modal.innerHTML,/Send to wren/);
+  assert.match(modal.innerHTML,/Send to wisp/);
   assert.doesNotMatch(modal.innerHTML,/Just keep it/);
   assert.equal(modal.reason.value,'earlier reason');
   let count=requests.length;

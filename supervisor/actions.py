@@ -3,7 +3,7 @@
 Every panel action runs the same CLI subcommand an operator would type (`python -m supervisor …`), so neither panel has
 authority of its own and both inherit each command's refusals. Each is logged as `<who>: operator …` (who = top or
 web); one that takes longer than a moment runs detached in its own session — it outlives the panel — with its output
-in .supervisor/<who>-actions.log. The guards here are the ones taken from incidents (docs/plans/PLAN-control-panel.md §1).
+in .supervisor/<who>-actions.log. The guards here are the ones taken from incidents.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _names(raw):
 
 
 ACTION_INSTANCES, _ = core.knob(
-    "SHAFT_ACTION_INSTANCES", "thelos", _names, 'instances using the conservative action classes (#142)',
+    "SHAFT_ACTION_INSTANCES", "", _names, 'instances using the conservative action classes (#142)',
     group='Runs and conversations', services=('runs', 'api', 'web', 'scheduler'))
 CLASSES = ('reversible', 'staged', 'irreversible')
 # #142: the complete operator-tool table. Reads retain their existing per-call grants. There are no operator
@@ -221,7 +221,7 @@ def service_guard(service: str, action: str, busy=None) -> str:
 def guard_reason(service: str, action: str, scheduled: list[str], busy: list[str]) -> str:
     """service_guard from what is running now (panel.scheduled_runs, busy_instances): for a page that shows every
     service's buttons at once and asks the system once. `autonomy on` counts too: on a running scheduler it is a
-    restart (it killed shaft's sleep and wren's cycle from a terminal, 2026-10-27)."""
+    restart (it killed shaft's sleep and wisp's cycle from a terminal, 2026-10-27)."""
     if service in ("scheduler", "autonomy") and scheduled:
         return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}."
                 + LATER)

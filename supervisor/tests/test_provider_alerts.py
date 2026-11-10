@@ -32,7 +32,7 @@ class ProviderAlertsTest(unittest.TestCase):
         error = urllib.error.HTTPError("https://openrouter.ai", status, "failed", {}, io.BytesIO(body.encode()))
         with mock.patch.object(cloudllm.urllib.request, "urlopen", side_effect=error):
             with self.assertRaises(cloudllm.CloudError):
-                cloudllm._openrouter("wren", self.body, "key")
+                cloudllm._openrouter("wisp", self.body, "key")
 
     def test_a_fault_older_than_a_day_raises_nothing(self):
         # a 402 from weeks ago, with the provider unused since, must not stand as an open alert forever
@@ -43,7 +43,7 @@ class ProviderAlertsTest(unittest.TestCase):
     def success(self):
         data = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {"cost": 0}}
         with mock.patch.object(cloudllm.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(data).encode())):
-            cloudllm._openrouter("wren", self.body, "key")
+            cloudllm._openrouter("wisp", self.body, "key")
 
     def test_403_key_limit_streak_alerts_and_pushes_once_then_success_clears(self):
         for _ in range(3):
@@ -102,10 +102,10 @@ class ProviderAlertsTest(unittest.TestCase):
             error = urllib.error.HTTPError("https://openrouter.ai", 403, "failed", {}, io.BytesIO(b"key limit"))
             with mock.patch.object(cloudllm.urllib.request, "urlopen", side_effect=error):
                 with self.assertRaises(cloudllm.CloudError):
-                    cloudllm.openrouter_stream("wren", self.body, {"OPENROUTER_API_KEY": "key"})
+                    cloudllm.openrouter_stream("wisp", self.body, {"OPENROUTER_API_KEY": "key"})
             self.assertEqual([a["id"] for a in panel.provider_alerts()], ["provider:openrouter:limit"])
             chunk = {"choices": [{"finish_reason": "stop"}], "usage": {"cost": 0}}
             response = io.BytesIO(("data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n").encode())
             with mock.patch.object(cloudllm.urllib.request, "urlopen", return_value=response):
-                list(cloudllm.openrouter_stream("wren", self.body, {"OPENROUTER_API_KEY": "key"}))
+                list(cloudllm.openrouter_stream("wisp", self.body, {"OPENROUTER_API_KEY": "key"}))
         self.assertEqual(panel.provider_alerts(), [])

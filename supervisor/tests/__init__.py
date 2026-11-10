@@ -6,7 +6,7 @@ from pathlib import Path
 os.environ.setdefault("SHAFT_SUPERVISOR_DIR", tempfile.mkdtemp(prefix="shaft-sup-test-"))
 
 # And out of the real instances: a test that patched one module's INSTANCES while the code under it read
-# core.INSTANCES checked wren's 575 real facts against its real episodes, 72 s in the main checkout (test_judge2,
+# core.INSTANCES checked wisp's 575 real facts against its real episodes, 72 s in the main checkout (test_judge2,
 # 2026-10-29). Set before any supervisor module copies the path with `from .core import INSTANCES`.
 import socketserver   # noqa: E402
 
@@ -31,7 +31,7 @@ def _import_the_supervisor() -> None:
     """Every supervisor module, now: one first imported inside a test that patched core.SUP_DIR kept that test's
     temporary folder in its own `from .core import SUP_DIR` for the rest of the run. Alphabetical order hid it; with
     the gate's workers, trial.SUP_DIR froze on test_browser's folder and test_kill_delete's trials vanished
-    (2026-10-29, docs/plans/PLAN-gate-5min.md). The terminal clients' optional libraries may be missing
+    (2026-10-29). The terminal clients' optional libraries may be missing
     (CONTRIBUTING.md): only such a module is left out."""
     import importlib
     import pkgutil

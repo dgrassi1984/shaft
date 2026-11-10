@@ -1,4 +1,4 @@
-"""An instance's own Google account as a key (docs/plans/PLAN-own-mail.md: Thelos's Gmail, gmail.modify). The operator signs it
+"""An instance's own Google account as a key (Tundra's Gmail, gmail.modify). The operator signs it
 in once (`shaft secret <name> google`); the broker makes an access token from its refresh token per run and adds it
 to http_request like any key, only to its hosts. It is never one of the operator's accounts, never minted in a
 battery exam, never sent from a trial replay; and a battery exam never writes with any of an instance's keys."""
@@ -22,7 +22,7 @@ from supervisor import broker as broker_mod
 from supervisor import core, google
 from supervisor.broker import Broker, ReplayBroker
 
-THELOS = "assistant@example.com"
+TUNDRA = "assistant@example.com"
 OPERATOR = "operator@example.com"
 SECRETS = {"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "psecret"}
 
@@ -30,7 +30,7 @@ SECRETS = {"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "p
 class FakeTokens:
     """Google's token endpoint and Gmail's profile, behind google.urlopen. Each refresh gives a new access token."""
 
-    def __init__(self, address: str = THELOS, granted: str = google.GMAIL_MODIFY):
+    def __init__(self, address: str = TUNDRA, granted: str = google.GMAIL_MODIFY):
         self.address, self.granted, self.refused = address, granted, False
         self.minted: list[str] = []
 
@@ -44,7 +44,7 @@ class FakeTokens:
             self.minted.append(token)
             body = {"access_token": token, "expires_in": 3599}
             if form.get("grant_type") == "authorization_code":
-                body.update(refresh_token="1//refresh-thelos", scope=self.granted)
+                body.update(refresh_token="1//refresh-tundra", scope=self.granted)
             return io.BytesIO(json.dumps(body).encode())
         if req.full_url == google.GMAIL_PROFILE:
             return io.BytesIO(json.dumps({"emailAddress": self.address}).encode())
@@ -85,8 +85,8 @@ class FakeGmail:
         self.server.server_close()
 
 
-def key(address: str = THELOS, hosts=("127.0.0.1",)) -> dict:
-    return {"kind": "google", "client": "personal", "address": address, "refresh_token": "1//refresh-thelos",
+def key(address: str = TUNDRA, hosts=("127.0.0.1",)) -> dict:
+    return {"kind": "google", "client": "personal", "address": address, "refresh_token": "1//refresh-tundra",
             "scope": google.GMAIL_MODIFY, "hosts": list(hosts)}
 
 
@@ -94,7 +94,7 @@ class OwnMailCase(unittest.TestCase):
     def setUp(self):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-own-mail-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
-        self.root = self.project / "instances" / "thelos"
+        self.root = self.project / "instances" / "tundra"
         self.root.mkdir(parents=True)
         self.tokens, self.gmail = FakeTokens(), FakeGmail()
         self.addCleanup(self.gmail.close)
@@ -108,7 +108,7 @@ class OwnMailCase(unittest.TestCase):
                                       "scope": f"{google.GMAIL} {google.CALENDAR}"})
 
     def broker(self, **kw) -> Broker:
-        return Broker("thelos", self.project, SECRETS, self.project / "broker.log", **kw)
+        return Broker("tundra", self.project, SECRETS, self.project / "broker.log", **kw)
 
     def ok(self, b: Broker, tool: str, **args) -> str:
         out = b.call(tool, args)
@@ -151,8 +151,8 @@ class TokenTest(OwnMailCase):
         self.assertNotIn("ya29.access-1", out)
         log = (self.project / "broker.log").read_text()
         self.assertNotIn("ya29", log)
-        self.assertNotIn("1//refresh-thelos", log)
-        self.assertNotIn("1//refresh-thelos", self.gmail.seen[0]["auth"] + self.gmail.seen[0]["body"])
+        self.assertNotIn("1//refresh-tundra", log)
+        self.assertNotIn("1//refresh-tundra", self.gmail.seen[0]["auth"] + self.gmail.seen[0]["body"])
 
     def test_google_key_only_to_its_hosts(self):
         core.store_google_key(self.root, "gmail", key(hosts=["gmail.googleapis.com"]))
@@ -166,12 +166,12 @@ class TokenTest(OwnMailCase):
         self.tokens.refused = True
         err = self.refused(self.broker(), "http_request", url=self.gmail.base + "/messages", auth="gmail")
         self.assertIn("your Google key 'gmail' (assistant@example.com): Google refused its login", err)
-        self.assertIn("shaft secret thelos google gmail assistant@example.com --client personal", err)
+        self.assertIn("shaft secret tundra google gmail assistant@example.com --client personal", err)
         self.assertEqual(self.gmail.seen, [])                                    # no request without a token
 
     def test_google_key_cannot_be_operator_account_at_use(self):
         # Hand-written into the key file: an instance holding the operator's mailbox would read it whole, with no
-        # label check (docs/plans/PLAN-mail). Refused on every use, before a token is made.
+        # label check. Refused on every use, before a token is made.
         core.store_google_key(self.root, "gmail", key(address=OPERATOR.upper()))
         err = self.refused(self.broker(), "http_request", url=self.gmail.base + "/messages", auth="gmail")
         self.assertIn("the operator's own Google account", err)
@@ -213,7 +213,7 @@ class ExamAndReplayTest(OwnMailCase):
         self.assertEqual(self.gmail.seen, [])
 
     def test_battery_keyed_write_not_sent(self):
-        # Found while planning docs/plans/PLAN-own-mail (D5): an exam's broker reads the instance's real keys (root = its
+        # An exam's broker reads the instance's real keys (root = its
         # folder) and network=False only closed the proxy, so a keyed POST reached the real API.
         core.store_secret(self.root, "github", "ghp_TEST", ["127.0.0.1"])
         exam = self.broker(root=self.root, network=False)
@@ -226,9 +226,9 @@ class ExamAndReplayTest(OwnMailCase):
 
     def replay(self, cache, lock) -> ReplayBroker:
         state = Path(tempfile.mkdtemp(dir=self.project, prefix="copy-"))
-        return ReplayBroker("thelos", self.project, SECRETS, self.project / "broker.log", state_root=state,
+        return ReplayBroker("tundra", self.project, SECRETS, self.project / "broker.log", state_root=state,
                             start_commit="0", as_of=datetime(2026, 10, 18, 8, 0), cache=cache, cache_lock=lock,
-                            billed="thelos@trial:t", tools_log=self.project / "t.log")
+                            billed="tundra@trial:t", tools_log=self.project / "t.log")
 
     def test_replay_does_not_send_mail(self):
         core.store_google_key(self.root, "gmail", key())
@@ -266,18 +266,18 @@ class LoginTest(OwnMailCase):
              mock.patch.object(core, "secrets_env", return_value=SECRETS), \
              mock.patch("webbrowser.open", self.browser), mock.patch("supervisor.__main__.log"), \
              redirect_stdout(out), redirect_stderr(err):
-            code = cli.main(["secret", "thelos", *argv])
+            code = cli.main(["secret", "tundra", *argv])
         return code, out.getvalue(), err.getvalue()
 
     def test_shaft_secret_google_stores_the_key_with_its_scope_and_hosts(self):
-        code, out, err = self.cli("google", "gmail", THELOS, "--client", "personal")
+        code, out, err = self.cli("google", "gmail", TUNDRA, "--client", "personal")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.asked[0]["scope"], google.GMAIL_MODIFY)            # only what the key needs
         self.assertEqual(self.asked[0]["include_granted_scopes"], "false")
-        self.assertEqual(self.asked[0]["login_hint"], THELOS)
+        self.assertEqual(self.asked[0]["login_hint"], TUNDRA)
         entry = core.read_secrets(self.root)["gmail"]
         self.assertEqual({k: entry[k] for k in ("kind", "client", "address", "hosts")},
-                         {"kind": "google", "client": "personal", "address": THELOS, "hosts": ["gmail.googleapis.com"]})
+                         {"kind": "google", "client": "personal", "address": TUNDRA, "hosts": ["gmail.googleapis.com"]})
         self.assertNotIn("1//refresh", out)
         self.assertIn("http_request(auth='gmail') to gmail.googleapis.com", out)
         code, listing, _ = self.cli("list")
@@ -292,20 +292,20 @@ class LoginTest(OwnMailCase):
 
     def test_signed_in_as_another_account_saves_nothing(self):
         self.tokens.address = "someone.else@example.com"
-        code, _, err = self.cli("google", "gmail", THELOS, "--client", "personal")
+        code, _, err = self.cli("google", "gmail", TUNDRA, "--client", "personal")
         self.assertEqual(code, 2)
         self.assertIn("not assistant@example.com: nothing saved", err)
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_scope_unticked_saves_nothing(self):
         self.tokens.granted = google.GMAIL
-        code, _, err = self.cli("google", "gmail", THELOS, "--client", "personal")
+        code, _, err = self.cli("google", "gmail", TUNDRA, "--client", "personal")
         self.assertEqual(code, 2)
         self.assertIn("Google did not grant gmail.modify", err)
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_usage_names_the_clients_in_env(self):
-        code, _, err = self.cli("google", "gmail", THELOS)
+        code, _, err = self.cli("google", "gmail", TUNDRA)
         self.assertEqual(code, 2)
         self.assertIn("the OAuth clients in .env: personal", err)
 

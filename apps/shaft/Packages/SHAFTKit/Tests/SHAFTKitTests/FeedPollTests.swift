@@ -24,11 +24,11 @@ struct FeedPollTests {
             case 2: return .notModified
             case 3: return .json(200, fixtureText(APIClientTests.live))
             case 4: return .json(200, fixtureText(APIClientTests.livePartial))
-            case 5: return .json(500, #"{"error": {"code": "internal", "message": "/app/v1/chat/thelos failed: OSError: disk"}}"#)
-            default: return .json(404, #"{"error": {"code": "not_found", "message": "no instance thelos"}}"#)
+            case 5: return .json(500, #"{"error": {"code": "internal", "message": "/app/v1/chat/tundra failed: OSError: disk"}}"#)
+            default: return .json(404, #"{"error": {"code": "not_found", "message": "no instance tundra"}}"#)
             }
         }
-        let poll = FeedPoll(client: server.client, instance: "thelos", random: { 0 },
+        let poll = FeedPoll(client: server.client, instance: "tundra", random: { 0 },
                             sleep: { steps.sleep($0) })
         var events = [FeedEvent]()
         let error = await #expect(throws: APIError.self) {
@@ -43,8 +43,8 @@ struct FeedPollTests {
               case .failed(let failure, let retryIn) = events[3] else {
             Issue.record("unexpected events: \(events)"); return
         }
-        #expect(idle.version == "4749b203e1101494")
-        #expect(live.version == "2d764345726b89c0")
+        #expect(idle.version == "55edd8cc46b944f6")
+        #expect(live.version == "04cdc1f9bb08b132")
         #expect(merged.partial == false)
         #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.content == live.content)
@@ -58,17 +58,17 @@ struct FeedPollTests {
         #expect(requests.count == 6)
         #expect(requests[0].query("since") == nil)
         #expect(requests[0].query("wait") == "0")
-        #expect(requests[1].query("since") == "4749b203e1101494")
+        #expect(requests[1].query("since") == "55edd8cc46b944f6")
         #expect(requests[1].query("live") == "")
         #expect(requests[1].query("wait") == "25")
-        #expect(requests[2].query("since") == "4749b203e1101494")
-        #expect(requests[3].query("since") == "2d764345726b89c0")
+        #expect(requests[2].query("since") == "55edd8cc46b944f6")
+        #expect(requests[3].query("since") == "04cdc1f9bb08b132")
         #expect(requests[3].query("live") == "cc72a715f5f61774")
         // After a failure the loop asks again with what it held.
-        #expect(requests[5].query("since") == "2d764345726b89c0")
+        #expect(requests[5].query("since") == "04cdc1f9bb08b132")
         #expect(requests[5].query("live") == "fb7597261efc6cb5")
         for request in requests {
-            #expect(request.path == "/app/v1/chat/thelos")
+            #expect(request.path == "/app/v1/chat/tundra")
             #expect(request.query("watch") == "1")
             #expect(request.query("at") != nil)
             #expect(request.header("Authorization") == "Bearer 8c1f4e2a9b07d3e5.s3cret")
@@ -77,12 +77,12 @@ struct FeedPollTests {
 
     @Test func allAndWatchGoOnEveryRequest() async throws {
         let server = StubServer { _ in .json(200, fixtureText(APIClientTests.idle)) }
-        let poll = FeedPoll(client: server.client, instance: "thelos", cid: "web-3f9a1c0d7e2b4a65", all: true,
+        let poll = FeedPoll(client: server.client, instance: "tundra", cid: "web-3f9a1c0d7e2b4a65", all: true,
                             watching: { false })
         var iterator = poll.makeAsyncIterator()
         _ = try await iterator.next()
         let request = try #require(server.requests.first)
-        #expect(request.path == "/app/v1/chat/thelos/web-3f9a1c0d7e2b4a65")
+        #expect(request.path == "/app/v1/chat/tundra/web-3f9a1c0d7e2b4a65")
         #expect(request.query("all") == "1")
         #expect(request.query("watch") == "0")
     }
@@ -94,7 +94,7 @@ struct FeedPollTests {
             if step <= 3 { throw StubServer.NetworkDown() }
             return .json(200, fixtureText(APIClientTests.idle))
         }
-        let poll = FeedPoll(client: server.client, instance: "thelos", random: { 0.999_999 }, sleep: { steps.sleep($0) })
+        let poll = FeedPoll(client: server.client, instance: "tundra", random: { 0.999_999 }, sleep: { steps.sleep($0) })
         var iterator = poll.makeAsyncIterator()
         for _ in 0..<3 {
             guard case .failed(let error, _) = try await iterator.next() else { Issue.record("not a failure"); return }
@@ -107,7 +107,7 @@ struct FeedPollTests {
 
     @Test func cancellingTheConsumerEndsTheLoop() async throws {
         let server = StubServer { _ in throw StubServer.NetworkDown() }
-        let poll = FeedPoll(client: server.client, instance: "thelos", backoff: Backoff(base: .seconds(60)))
+        let poll = FeedPoll(client: server.client, instance: "tundra", backoff: Backoff(base: .seconds(60)))
         let task = Task {
             var count = 0
             for try await _ in poll { count += 1 }

@@ -43,7 +43,7 @@ still running). `POST /v1/chat/end` requests that write-up now;
 its 202 response confirms the request, not a completed journal entry. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
-(`interjections_heard`), and 409 means no reply is running there ([docs/plans/PLAN-interject.md](../docs/plans/PLAN-interject.md)).
+(`interjections_heard`), and 409 means no reply is running there.
 A non-streamed chat request may carry `X-Shaft-Request-Id: <id>` (1-64 letters, digits, - or _): asked again with the
 same id, the API gives the answer it gave, without running the reply again (`.supervisor/api-answered.json`, the
 newest 500 kept). Telegram sends each message's update id, so a message answered just before the service restarted is
@@ -190,8 +190,8 @@ Source: `supervisor/api.py`, `Handler`, `_chunk`, and `Conversations`.
 
 ## The web UI (`shaft web on`)
 
-`shaft top` in a browser, with a chat-first interface on the tailnet. See [web UI design](../docs/plans/PLAN-webui.md)
-and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk to the same service through a JSON API,
+`shaft top` in a browser, with a chat-first interface on the tailnet. See web UI design
+and chat design. The native chat apps talk to the same service through a JSON API,
 `/app/v1` ([below](#the-native-chat-apps-api-appv1)).
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
@@ -278,7 +278,7 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
   on-screen keyboard leaves the page its height and is not taken for one), Return sends as on a computer, after its
   autocorrection, and Shift/Alt-Return is a new line;
   the shortcuts line under the field then shows (on a screen at least 600 px wide).
-  **Next cycle** ([docs/plans/PLAN-background-messages](../docs/plans/PLAN-background-messages.md)) is not answered now: the message,
+  **Next cycle** is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
   (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
@@ -386,7 +386,7 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
   hears a short deletion notice with your next message, or immediately while replying. A pending edit followed by
   deletion becomes one deletion notice. Comment threads and their copies are kept; old chat links show that the
   document is gone. Its next run commits the deletion with its notes; earlier committed versions remain in git.
-- **Comments on a document** ([docs/plans/PLAN-comments](../docs/plans/PLAN-comments.md)), as on a Claude artifact: select text in it
+- **Comments on a document**, as on a Claude artifact: select text in it
   and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send to <instance>** has three
   choices. **now** (the default): it gets the comment at once (a message of its own, or an interjection while it
   replies) and answers under `### c7`, which lands in the thread. **in its next cycle**: the comment goes to its
@@ -455,7 +455,7 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
 - **Kill** (last and apart from the other actions: in the ⋯ menu and on Summary; not on the overview's cards) pauses the instance and stops what it runs
   now, as `shaft kill`. **Delete…** is on its Summary page only, enabled once it runs nothing: you type its name to
   confirm (the server checks it again), it runs `shaft delete <name> --yes` with the archive, and the page goes back
-  to the overview ([kill and delete](../docs/plans/PLAN-kill-delete.md)).
+  to the overview (kill and delete).
 - Settings and Config saves update only the saved row, including its next save's comparison value. Use the default,
   Unset, Drive saves and removal, and Access switches update their control in place too. Other rows keep unsaved
   edits. Adding a Config key adds its editable row. A save still refuses a value changed by another writer.
@@ -467,7 +467,7 @@ and [chat design](../docs/plans/PLAN-webui-chat.md). The native chat apps talk t
 2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
    and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
 
-**On your iPhone** ([docs/plans/PLAN-pwa.md](../docs/plans/PLAN-pwa.md)): open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
+**On your iPhone**: open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
 paste it into the app's "not paired" page. Expired links show the same paste box for a new link. Pairing and notice
 pages are centred without a sidebar and link back to the app. If pairing is revoked while you use the app, the
@@ -549,7 +549,7 @@ Sources: [terminal selection](../supervisor/__main__.py),
 Browser and phone instructions describe the intended client workflow; device behavior
 has not been exercised as part of this documentation check.
 
-### Reply feedback (docs/plans/PLAN-feedback.md)
+### Reply feedback
 
 Thumbs up and down beside a reply's Copy/Reply actions, and in its long-press or
 right-click menu, keep a rating in the supervisor. They also appear on messages an instance sent you and their
@@ -586,7 +586,7 @@ target wins. Feedback changes no grades. Fine-tuning changes belong to milestone
 
 ## The native chat apps' API (`/app/v1`)
 
-The iPhone, iPad and Mac apps ([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md)) use a JSON API on the web service
+The iPhone, iPad and Mac apps use a JSON API on the web service
 itself, same port, tailnet only. Its contract, every route, field, status code and example, is
 [app-api.md](app-api.md); the JSON the server gives for representative chats is checked in under
 `supervisor/tests/app_api_fixtures/`, the only fixture source. It includes pairing, chats, send and feedback
@@ -614,7 +614,7 @@ set by `SHAFT_APP_API_FIXTURES`.
   Retry, quotes (made into the message text on the server, exactly as the web composer writes them), files. Each
   message carries the app's id for it (`mid`): sent again while that chat is open, or after it went for the next
   cycle, it is not sent twice.
-- **Voice** (PLAN-voice). A send with `voice=1` (the web's `/chat/<n>/send` form takes the same field) is a spoken
+- **Voice**. A send with `voice=1` (the web's `/chat/<n>/send` form takes the same field) is a spoken
   message: the turn is recorded `via: "voice"` ("· spoken" in the feed), and the web chat's request to the API carries
   `"voice": true` whenever the operator's last message was spoken, an interjection included. `GET
   /app/v1/chat/<name>/stream` is Server-Sent Events of the running reply, from the web server's memory as the API's
@@ -630,7 +630,7 @@ set by `SHAFT_APP_API_FIXTURES`.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
   and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
-  logic. Push to the apps (APNs) is set up separately ([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md) §2.2).
+  logic. Push to the apps (APNs) is set up separately.
 - **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat
   full screen with a chat switcher on a phone, the instances beside it on an iPad with the documents as a third
   column; the same feed, composer (quote cards with answers, Send now, Queue after reply, Next cycle, the keyboard

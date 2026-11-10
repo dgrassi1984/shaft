@@ -425,7 +425,7 @@ class Chat:
             text = "> " + "\n> ".join(quoted["text"].splitlines()) + "\n\n" + text
             answer_question(self.name, quoted.get("message_id"))
         with self.mu:
-            if self.inflight is not None:            # a reply is running: this message joins it (docs/plans/PLAN-interject.md)
+            if self.inflight is not None:            # a reply is running: this message joins it
                 self.inflight.append(text)
                 self.inflight_ids.append(update_id)
                 if update_id is not None and self.key is not None:

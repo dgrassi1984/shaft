@@ -17,8 +17,8 @@ from supervisor import apns, core, pushes, web, web_alerts, webpush
 
 TOKEN = "ab" * 32
 TOPIC = "io.example.shaft"
-EVENT = {"title": "thelos replied", "body": "private reply only over the tailnet", "url": "/i/thelos/chat",
-         "tag": "thelos"}
+EVENT = {"title": "tundra replied", "body": "private reply only over the tailnet", "url": "/i/tundra/chat",
+         "tag": "tundra"}
 
 
 def unb64(s: str) -> bytes:
@@ -102,9 +102,9 @@ class APNsTest(unittest.TestCase):
                                       f"apns-expiration: {1_800_000_000 + webpush.TTL_S}",
                                       "content-type: application/json"])
             self.assertEqual(argv[argv.index("--data-binary") + 1], "@-")
-            self.assertEqual(json.loads(kwargs["input"]), {"aps": {"alert": {"title": "thelos replied"},
-                              "badge": 3, "sound": "default", "thread-id": "thelos", "mutable-content": 1},
-                              "instance": "thelos"})
+            self.assertEqual(json.loads(kwargs["input"]), {"aps": {"alert": {"title": "tundra replied"},
+                              "badge": 3, "sound": "default", "thread-id": "tundra", "mutable-content": 1},
+                              "instance": "tundra"})
             self.assertNotIn(EVENT["body"], repr(curl.call_args))
             self.seen.badge.assert_called_with("phone")
 
@@ -179,19 +179,19 @@ class APNsTest(unittest.TestCase):
                         mock.patch.object(apns.time, "sleep", side_effect=sleep), \
                         mock.patch.object(apns.threading, "Thread", side_effect=thread):
                     apns._wake({"phone": sub}, EVENT)
-                self.assertEqual(attempts, [] if change == "already-unpaired" else [("phone", TOKEN, "thelos replied")])
+                self.assertEqual(attempts, [] if change == "already-unpaired" else [("phone", TOKEN, "tundra replied")])
 
     def test_digest_reaches_apns_only_operator(self):
         """The alert loop skipped due digests for APNs-only operators."""
         from supervisor import messages
         self.register()
-        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "tundra", "to": "operator", "text": "held",
             "file": "held.md", "ts": "2020-01-01T00:00:00", "push_due": "2020-01-01T07:15:00"}) + "\n")
         with mock.patch.object(messages, "appended", return_value=([], 0)), \
                 mock.patch.object(web, "devices", return_value={"phone": {}}), \
                 mock.patch.object(apns, "_wake"):
             self.assertEqual(web_alerts.forward_new(), 1)
-            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "thelos: held",
+            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "tundra: held",
                 "url": "/overview", "tag": "shaft-digest-held.md"}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
@@ -199,7 +199,7 @@ class APNsTest(unittest.TestCase):
         """The live gate failed at 22:05 when an APNs delivery test used the wall clock."""
         from supervisor import messages
         self.register()
-        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "tundra", "to": "operator", "text": "held",
             "file": "held.md", "ts": "2026-11-05T23:00:00", "push_due": "2026-11-06T07:15:00"}) + "\n")
         with mock.patch.object(pushes, "QUIET_HOURS", (22, 7)), \
                 mock.patch.object(pushes, "datetime", wraps=datetime) as clock, \
@@ -212,7 +212,7 @@ class APNsTest(unittest.TestCase):
             self.assertFalse((self.sup / "push-digest.json").exists())
             clock.now.return_value = datetime(2026, 11, 7, 12)
             self.assertEqual(web_alerts.forward_new(), 1)
-            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "thelos: held",
+            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "tundra: held",
                 "url": "/overview", "tag": "shaft-digest-held.md"}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
@@ -227,7 +227,7 @@ class APNsTest(unittest.TestCase):
         from supervisor import messages
         self.register()
         (self.sup / "web" / "devices.json").write_text(json.dumps({"phone": {}}))
-        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "tundra", "to": "operator", "text": "held",
             "file": "held.md", "ts": "2020-01-01T00:00:00", "push_due": "2020-01-01T07:15:00"}) + "\n")
         claim = self.sup / "push-digest.json"
         for dispatch in (lambda: pushes.digest(webpush.notify), web_alerts.forward_new):

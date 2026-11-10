@@ -29,7 +29,7 @@ class MessageLogTest(unittest.TestCase):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
         self.sup = self.project / ".supervisor"
-        for name in ("wren", "shaft"):
+        for name in ("wisp", "shaft"):
             (self.project / "instances" / name / "shaft").mkdir(parents=True)
             (self.project / "instances" / name / ".git").write_text("gitdir: x")
         for p in (mock.patch.object(messages, "SUP_DIR", self.sup),
@@ -44,19 +44,19 @@ class MessageLogTest(unittest.TestCase):
 
     def test_broker_logs_the_full_text_of_every_delivery(self):
         long = "Two things.\n" + "x" * 3000
-        b = Broker("wren", self.project, {}, self.project / "broker.log")
+        b = Broker("wisp", self.project, {}, self.project / "broker.log")
         self.assertTrue(b.call("send_message", {"to": "shaft", "text": long})["ok"])
         self.assertTrue(b.call("send_message", {"to": "operator", "text": "a question?", "kind": "question"})["ok"])
         h = messages.history()
         self.assertEqual([(m["from"], m["to"], m["kind"]) for m in h],
-                         [("wren", "shaft", "note"), ("wren", "operator", "question")])
+                         [("wisp", "shaft", "note"), ("wisp", "operator", "question")])
         self.assertEqual(h[0]["text"], long)                       # not the 160-char broker.log line
         b.call("send_message", {"to": "shaft", "text": "x", "kind": "\x1b[2J anything"})
         self.assertEqual(messages.history()[-1]["kind"], "note")
         self.assertEqual([m["read"] for m in h], [False, False])
 
     def test_read_once_the_recipient_moved_it_out_of_its_inbox(self):
-        b = Broker("wren", self.project, {}, self.project / "broker.log")
+        b = Broker("wisp", self.project, {}, self.project / "broker.log")
         b.call("send_message", {"to": "shaft", "text": "hello"})
         inbox = self.project / "instances" / "shaft" / "inbox"
         (f,) = inbox.glob("*.md")
@@ -66,15 +66,15 @@ class MessageLogTest(unittest.TestCase):
         self.assertTrue(messages.history()[0]["read"])
 
     def test_operator_messages_are_logged_too(self):
-        messages.send("wren", "please look at X")
+        messages.send("wisp", "please look at X")
         (m,) = messages.history()
-        self.assertEqual((m["from"], m["to"], m["kind"], m["text"]), ("operator", "wren", "message", "please look at X"))
+        self.assertEqual((m["from"], m["to"], m["kind"], m["text"]), ("operator", "wisp", "message", "please look at X"))
 
     def test_a_torn_line_does_not_hide_the_rest(self):
-        messages.record(self.sup, Path("a.md"), "wren", "shaft", "note", datetime(2026, 10, 13, 9), "one")
+        messages.record(self.sup, Path("a.md"), "wisp", "shaft", "note", datetime(2026, 10, 13, 9), "one")
         with (self.sup / messages.LOG_NAME).open("a") as f:
             f.write('{"broken\n')
-        messages.record(self.sup, Path("b.md"), "shaft", "wren", "note", datetime(2026, 10, 13, 10), "two")
+        messages.record(self.sup, Path("b.md"), "shaft", "wisp", "note", datetime(2026, 10, 13, 10), "two")
         self.assertEqual([m["text"] for m in messages.history()], ["one", "two"])
 
 
@@ -83,13 +83,13 @@ class StartWakeTest(unittest.TestCase):
         with mock.patch.object(autonomy, "paused", return_value=True), \
                 mock.patch.object(autonomy.subprocess, "Popen") as popen:
             with self.assertRaisesRegex(RuntimeError, "paused"):
-                autonomy.start_wake("wren")
+                autonomy.start_wake("wisp")
             popen.assert_not_called()
         with mock.patch.object(autonomy, "paused", return_value=False), \
                 mock.patch.object(autonomy, "_awake", return_value="live since 13:47"), \
                 mock.patch.object(autonomy.subprocess, "Popen") as popen:
             with self.assertRaisesRegex(RuntimeError, "already awake"):
-                autonomy.start_wake("wren")
+                autonomy.start_wake("wisp")
             popen.assert_not_called()
 
     def test_an_idle_instance_gets_a_detached_scheduled_style_wake(self):
@@ -97,20 +97,20 @@ class StartWakeTest(unittest.TestCase):
                 mock.patch.object(autonomy, "_awake", return_value=""), \
                 mock.patch.object(autonomy, "log"), \
                 mock.patch.object(autonomy.subprocess, "Popen") as popen:
-            self.assertEqual(autonomy.start_wake("wren"), "started a cycle for wren")
+            self.assertEqual(autonomy.start_wake("wisp"), "started a cycle for wisp")
         args, kw = popen.call_args
-        self.assertEqual(args[0][-4:], ["-m", "supervisor", "wake", "wren"])   # skip-if-awake, records the wake
+        self.assertEqual(args[0][-4:], ["-m", "supervisor", "wake", "wisp"])   # skip-if-awake, records the wake
         self.assertTrue(kw["start_new_session"])                               # outlives the TUI
 
 
 def _snap(states=("idle", "in a cycle"), msgs=None):
     inst = [{"name": n, "state": s, "since": "", "doing": "", "goal": "", "model": "m", "every": "30 min",
              "next_wake": "due", "conversations": 0, "calls_today": 0, "tokens_today": 0, "usd_today": 0.0,
-             "judged": 0, "success": None, "tools_off": []} for n, s in zip(("shaft", "wren"), states)]
+             "judged": 0, "success": None, "tools_off": []} for n, s in zip(("shaft", "wisp"), states)]
     ms = msgs if msgs is not None else [
         {"ts": f"2026-10-13T1{k}:00:00", "from": f, "to": t, "kind": "note", "file": f"{k}.md",
          "text": f"message {k}\nmore", "read": k < 2}
-        for k, (f, t) in enumerate([("wren", "shaft"), ("shaft", "wren"), ("operator", "wren")])]
+        for k, (f, t) in enumerate([("wisp", "shaft"), ("shaft", "wisp"), ("operator", "wisp")])]
     return {"at": "15:00:00", "services": [], "instances": inst, "events": [], "messages": ms}
 
 
@@ -130,7 +130,7 @@ class TopKeysTest(unittest.TestCase):
         top.handle(ui, "y", snap, 10, start)
         self.assertEqual((ui.confirm, started, ui.flash), ("", ["shaft"], "started a cycle for shaft"))
         top.handle(ui, "down", snap, 10, start)
-        top.handle(ui, "c", snap, 10, start)                        # wren is in a cycle
+        top.handle(ui, "c", snap, 10, start)                        # wisp is in a cycle
         self.assertEqual((ui.confirm, started), ("", ["shaft"]))
         self.assertIn("only when it is idle", ui.flash)
         ui.inst = 0
@@ -170,7 +170,7 @@ class TopKeysTest(unittest.TestCase):
 
     def test_instance_written_text_cannot_drive_the_terminal(self):
         evil = "hi\x1b]52;c;cGF5bG9hZA==\x07\x1b[2J there"
-        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wren", "to": "shaft", "kind": "note",
+        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wisp", "to": "shaft", "kind": "note",
                             "file": "x.md", "text": evil, "read": False}])
         snap["instances"][0]["model"] = "[red]x"
         for ui in (top.UI(), top.UI(view="list"), top.UI(view="message")):
@@ -183,7 +183,7 @@ class TopKeysTest(unittest.TestCase):
         self.assertNotIn("\x1b", top.plain({**snap, "events": ["13:00 x\x1b[2J"]}))
 
     def test_reading_view_scrolls_a_long_message(self):
-        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wren", "to": "shaft", "kind": "note",
+        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wisp", "to": "shaft", "kind": "note",
                             "file": "x.md", "text": "\n".join(f"line {k}" for k in range(100)), "read": True}])
         ui = top.UI(view="message")
         top.handle(ui, "pgdn", snap, 20, None)
@@ -198,7 +198,7 @@ class TopKeysTest(unittest.TestCase):
     def test_list_and_reading_views_fit_the_screen_even_when_narrow(self):
         # the footer once wrapped at 80 columns, pushing the screen one line past its height
         from rich.console import Console
-        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wren", "to": "shaft", "kind": "note",
+        snap = _snap(msgs=[{"ts": "2026-10-13T10:00:00", "from": "wisp", "to": "shaft", "kind": "note",
                             "file": f"{k}.md", "text": "word " * 400, "read": False} for k in range(60)])
         for width in (50, 80, 140):
             for view in ("list", "message"):

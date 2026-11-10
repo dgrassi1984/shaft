@@ -15,33 +15,32 @@ is behind the code, regenerate it.**
 
 |  |  |
 |---|---|
-| Tracked files | 574 |
-| Languages | 315 Python, 105 Swift, 80 Markdown, 44 JSON, 2 YAML, 2 JavaScript, 1 CSS |
-| Tests | 234 |
-| Python files | 315 |
-| Python modules with public symbols | 310 |
+| Tracked files | 538 |
+| Languages | 331 Python, 107 Swift, 44 JSON, 24 Markdown, 3 YAML, 2 JavaScript, 1 CSS |
+| Tests | 250 |
+| Python files | 331 |
+| Python modules with public symbols | 327 |
 
 ## Layout
 
 | Path | Files |
 |---|---|
-| `supervisor/` | 347 |
-| `apps/` | 142 |
-| `docs/` | 75 |
-| `(root)` | 8 |
+| `supervisor/` | 366 |
+| `apps/` | 144 |
+| `docs/` | 14 |
+| `(root)` | 9 |
+| `.github/` | 3 |
 | `.claude/` | 1 |
 | `bin/` | 1 |
 
 ## Python
 
-310 modules expose a public class or function. Full list:
+327 modules expose a public class or function. Full list:
 [codemap/python.md](codemap/python.md).
-
-Operator Google reads: `supervisor/gdrive.py` (Drive) and `supervisor/gchat.py` (Google Chat).
 
 ## Tests
 
 | Path | Files |
 |---|---|
 | `apps/` | 1 |
-| `supervisor/` | 233 |
+| `supervisor/` | 249 |

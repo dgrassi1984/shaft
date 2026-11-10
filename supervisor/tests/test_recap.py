@@ -28,7 +28,7 @@ def _at(minutes_ago: float, sep: str = "T") -> str:
     return (datetime.fromtimestamp(NOW) - timedelta(minutes=minutes_ago)).strftime(f"%Y-%m-%d{sep}%H:%M:%S")
 
 
-def _inst(name="wren", **kw) -> dict:
+def _inst(name="wisp", **kw) -> dict:
     return {"name": name, "state": "in a cycle", "since": "14:35", "doing": "thinking (step 2) · 4s",
             "goal": "Prepare the planning task brief", **kw}
 
@@ -68,17 +68,17 @@ class Context(RecapCase):
                 {"ts": _at(80), "role": "user", "content": "too old to show"},
                 {"ts": _at(30), "role": "user", "speaker": "the operator", "content": "do not work on sample-project"}]},
             {"kind": "cycle", "ts": _at(90), "record": {"intent": {"goal": "an old cycle"}, "finish": {}}}]
-        self.history = [{"ts": _at(5), "from": "wren", "to": "operator", "text": "planning brief ready", "kind": "note"},
-                        {"ts": _at(5), "from": "shaft", "to": "kant", "text": "not wren's", "kind": "note"},
-                        {"ts": _at(70), "from": "wren", "to": "operator", "text": "too old", "kind": "note"}]
+        self.history = [{"ts": _at(5), "from": "wisp", "to": "operator", "text": "planning brief ready", "kind": "note"},
+                        {"ts": _at(5), "from": "shaft", "to": "kiln", "text": "not wisp's", "kind": "note"},
+                        {"ts": _at(70), "from": "wisp", "to": "operator", "text": "too old", "kind": "note"}]
         c = recap.context(_inst(), NOW)
         self.assertIn("State now: in a cycle since 14:35", c)
         self.assertIn("Current cycle goal: Prepare the planning task brief", c)
         self.assertIn("the operator: do not work on sample-project", c)
         self.assertIn("tools run×2, github_app", c)
         self.assertIn("criterion met: yes", c)
-        self.assertIn("wren → operator: planning brief ready", c)
-        for gone in ("too old to show", "an old cycle", "not wren's", "too old"):
+        self.assertIn("wisp → operator: planning brief ready", c)
+        for gone in ("too old to show", "an old cycle", "not wisp's", "too old"):
             self.assertNotIn(gone, c)
         # oldest first, and each entry's details under its own header (2026-10-16: a whole-list reversal put
         # "what happened" above the cycle it belonged to)
@@ -89,12 +89,12 @@ class Context(RecapCase):
     def test_broker_calls_cover_a_running_cycle_without_model_calls_or_other_instances(self):
         (self.sup / "broker.log").write_text("\n".join([
             "[header line, cut by the tail read]",
-            f"[{_at(90, ' ')}] wren calendar_events {{}} -> ok (5 ms)",
-            f"[{_at(3, ' ')}] wren calendar_events {{\"query\": \"planning\"}} -> ok (700 ms)",
-            f"[{_at(3, ' ')}] wren llm openrouter/xiaomi/mimo -> tool_calls (in 4000, out 100)",
-            f"[{_at(2, ' ')}] wren@trial:t-1:1A web_search {{}} -> ok (5 ms)",
+            f"[{_at(90, ' ')}] wisp calendar_events {{}} -> ok (5 ms)",
+            f"[{_at(3, ' ')}] wisp calendar_events {{\"query\": \"planning\"}} -> ok (700 ms)",
+            f"[{_at(3, ' ')}] wisp llm openrouter/xiaomi/mimo -> tool_calls (in 4000, out 100)",
+            f"[{_at(2, ' ')}] wisp@trial:t-1:1A web_search {{}} -> ok (5 ms)",
             f"[{_at(2, ' ')}] shaft fetch_page {{}} -> ok (5 ms)"]) + "\n")
-        lines = recap._broker("wren", _at(60))
+        lines = recap._broker("wisp", _at(60))
         self.assertEqual(len(lines), 1)
         self.assertIn('calendar_events {"query": "planning"} -> ok', lines[0])
 
@@ -102,9 +102,9 @@ class Context(RecapCase):
         """http_request log lines may carry the start of bearer tokens and JWTs."""
         (self.sup / "broker.log").write_text(
             "[x]\n"
-            f'[{_at(3, " ")}] wren http_request {{"url": "https://api.github.com/x", "headers": {{"Authorization": '
+            f'[{_at(3, " ")}] wisp http_request {{"url": "https://api.github.com/x", "headers": {{"Authorization": '
             f'"Bearer ghs_test_only -> ok (300 ms)\n'
-            f'[{_at(2, " ")}] wren http_request {{"api_key": "sk-FAKE000000000000", "note": "eyJFAKEFAKEFAKEFAKE.x"}} '
+            f'[{_at(2, " ")}] wisp http_request {{"api_key": "sk-FAKE000000000000", "note": "eyJFAKEFAKEFAKEFAKE.x"}} '
             f"-> ok (3 ms)\n")
         c = recap.context(_inst(), NOW)
         for secret in ("ghs_test_only", "eyJFAKE", "sk-FAKE000000000000", "Bearer ghs"):
@@ -160,27 +160,27 @@ class Ask(RecapCase):
 class Store(RecapCase):
     def test_a_failure_is_stored_with_its_reason_beside_the_previous_recap(self):
         with mock.patch("urllib.request.urlopen", return_value=_reply("Idle", "Nothing recorded")):
-            first = recap.write(_inst("kant", state="idle"), NOW)
+            first = recap.write(_inst("kiln", state="idle"), NOW)
         self.assertEqual(first["text"], "Idle · last hour: Nothing recorded")
         with mock.patch("urllib.request.urlopen", side_effect=OSError("no route")):
-            second = recap.write(_inst("kant", state="idle"), NOW + 60)
+            second = recap.write(_inst("kiln", state="idle"), NOW + 60)
         self.assertEqual(second["text"], first["text"])
         self.assertIn("no route", second["error"])
-        self.assertEqual(recap.load()["kant"], second)
+        self.assertEqual(recap.load()["kiln"], second)
 
     def test_start_writes_every_instance_in_the_background_once(self):
         done = []
         with mock.patch.object(recap, "write", side_effect=lambda inst: done.append(inst["name"]) or time.sleep(0.2)):
-            said = recap.start([_inst("wren"), _inst("shaft")])
-            self.assertTrue(recap.running("wren"))
-            self.assertEqual(recap.start([_inst("wren")]), "a recap is already being written")
+            said = recap.start([_inst("wisp"), _inst("shaft")])
+            self.assertTrue(recap.running("wisp"))
+            self.assertEqual(recap.start([_inst("wisp")]), "a recap is already being written")
             for _ in range(50):
-                if not (recap.running("wren") or recap.running("shaft")):
+                if not (recap.running("wisp") or recap.running("shaft")):
                     break
                 time.sleep(0.05)
-        self.assertIn("wren, shaft", said)
-        self.assertEqual(sorted(done), ["shaft", "wren"])
-        self.assertFalse(recap.running("wren"))
+        self.assertIn("wisp, shaft", said)
+        self.assertEqual(sorted(done), ["shaft", "wisp"])
+        self.assertFalse(recap.running("wisp"))
 
 
 class Costs(RecapCase):
@@ -199,7 +199,7 @@ class Costs(RecapCase):
 @unittest.skipIf(top is None, "needs rich")
 class Panel(RecapCase):
     def _snap(self, rec=None):
-        inst = {"name": "wren", "state": "in a cycle", "since": "14:35", "doing": "", "goal": "", "model": "m",
+        inst = {"name": "wisp", "state": "in a cycle", "since": "14:35", "doing": "", "goal": "", "model": "m",
                 "every": "10 min", "next_wake": "due", "conversations": 0, "calls_today": 0, "tokens_today": 0,
                 "usd_today": 0.0, "judged": 0, "success": None, "achieved": None, "tools_off": [], "recap": rec}
         return {"at": "15:00:00", "services": [], "instances": [inst], "events": [], "messages": [], "alerts": []}
@@ -229,10 +229,10 @@ class Panel(RecapCase):
 
     def test_a_starts_the_recaps_and_extras_attaches_them(self):
         snap = self._snap()
-        with mock.patch.object(recap, "start", return_value="recapping wren with claude-haiku-5-5…") as start:
+        with mock.patch.object(recap, "start", return_value="recapping wisp with claude-haiku-5-5…") as start:
             top.dispatch(top.UI(), "a", snap, 10, None)
         start.assert_called_once_with(snap["instances"])
-        (self.sup / "recaps.json").write_text(json.dumps({"wren": {"ts": _at(1), "text": "t"}}))
+        (self.sup / "recaps.json").write_text(json.dumps({"wisp": {"ts": _at(1), "text": "t"}}))
         with mock.patch.object(panel, "costs", return_value={"today": {"total": 0.0}}), \
                 mock.patch.object(panel, "alerts", return_value=[]), mock.patch.object(panel, "dismissed", return_value=set()):
             out = top.extras(self._snap())

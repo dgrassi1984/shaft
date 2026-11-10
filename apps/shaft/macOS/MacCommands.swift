@@ -2,7 +2,7 @@ import AppKit
 import SHAFTKit
 import SwiftUI
 
-/// The menu bar's commands (PLAN-native-apps.md M5): File → New Message and New Chat; a Chat menu with Stop, End,
+/// The menu bar's commands: File → New Message and New Chat; a Chat menu with Stop, End,
 /// Queue after reply, Next cycle, Documents, Earlier chats, the next and previous chat (Option-↓/↑) and Reload. Each
 /// acts on the chat on display and is off when it cannot (an earlier chat, nothing to send, no reply to stop).
 struct MacCommands: Commands {

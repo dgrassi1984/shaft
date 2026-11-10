@@ -1,6 +1,6 @@
 """An instance's own Python environment (the operator, 2026-10-14): .venv/ and .uv/ in its folder, driven by uv in `run`.
 
-Regression for the gap that made wren plan a pure-stdlib RS256 signer: every process of an instance ran on the
+Regression for the gap that made wisp plan a pure-stdlib RS256 signer: every process of an instance ran on the
 system Python with `-E -s` and nothing could be installed. Now its plugins, its tests and `python3` in `run` use its
 own environment; copies of it (coder hand-offs, trial gates, replays) read that environment read-only.
 """
@@ -19,7 +19,7 @@ from unittest import mock
 from supervisor import broker, core, gate, pyenv, runner, sandbox
 from supervisor.core import HOME, PROJECT, PYTHON, TEMPLATE
 
-NAME = "wren"
+NAME = "wisp"
 HAS_SANDBOX = Path(sandbox.SANDBOX_EXEC).exists()
 
 

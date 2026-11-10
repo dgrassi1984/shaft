@@ -79,8 +79,8 @@ OPERATOR_FILES = ("config.env", "drive.md")
 def _no_operator_file_writes(root: Path) -> str:
     """config.env has two writers: the operator, and the instance through the broker's set_config, which records
     each change. Writing it directly would make its changes indistinguishable from the operator's (the gate
-    reverted an operator's mid-run model switch as the instance's, kant 2026-10-13). drive.md, what the instance is
-    for (docs/plans/PLAN-thelos.md), has one writer: the operator — the instance changes how it pursues its drive, not the
+    reverted an operator's mid-run model switch as the instance's, kiln 2026-10-13). drive.md, what the instance is
+    for, has one writer: the operator — the instance changes how it pursues its drive, not the
     drive. This also stops creating, renaming, unlinking or hard-linking either file."""
     return "(deny file-write* " + " ".join(f"(literal {_q(root / f)})" for f in OPERATOR_FILES) + ")"
 
@@ -161,7 +161,7 @@ RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv",
 
 
 def _browser_reads(home: Path) -> list[str]:
-    """The shared Chromium (supervisor/browser.py, docs/plans/PLAN-browser.md), read-only — only in the sandboxes that may
+    """The shared Chromium (supervisor/browser.py), read-only — only in the sandboxes that may
     browse: `run` (nothing but the egress proxy) and jobs. The agent's own sandbox, which its plugins inherit, carries
     the broker token and reaches the model ports, and the gate's has no network: neither reads it, so a browser
     started there fails to launch."""
@@ -182,11 +182,11 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
 def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egress_port: int = 0,
                 env_root: Path | None = None, job_state: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
-    writes only to its working areas, its Python environment and its browser profile (.browser/, docs/plans/PLAN-browser.md;
+    writes only to its working areas, its Python environment and its browser profile (.browser/;
     never self/, memory/, inbox/, config.env, .git), reads only its own folder in the home directory (and the
     operator's shared folder, if any, and the shared Chromium), and no network but the run's egress proxy (the
     public internet, nothing local). `job_state`: the `run` of a scheduled job confined to the job's own write set
-    (SHAFT_JOB_RUN_CONFINED, docs/plans/PLAN-thelos-review-2.md S1) — until then a job's plugin called `run` and wrote
+    (SHAFT_JOB_RUN_CONFINED) — until then a job's plugin called `run` and wrote
     notes/ through it, and the job's write limit protected nothing."""
     from .pyenv import DECLARED
     root = Path(instance_root).resolve()
@@ -204,7 +204,7 @@ def _job_writes(root: Path, state_dir: Path) -> str:
 
 def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path | None = None, egress_port: int = 0,
                 broker_port: int = 0, env_root: Path | None = None) -> str:
-    """For a scheduled job (docs/plans/PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
+    """For a scheduled job: the `run` sandbox, but writes only to the job's own state folder
     (.jobs/<plugin>/), .tmp/ and its browser profile — a cycle running at the same time works on the code, notes and
     mind, and nothing of the job's may be mistaken for its change (the profile is never code and never committed) —
     and the network adds the job's own broker (its supervisor tools). What it means for notes/ goes through its

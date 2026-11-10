@@ -1,4 +1,4 @@
-"""The web UI's half of channel.py (docs/plans/PLAN-operator-channel.md): every message an instance sends the operator
+"""The web UI's half of channel.py: every message an instance sends the operator
 that is routed to the web (`alert` "web" in .supervisor/messages.jsonl) wakes the operator's devices with a push that
 opens the instance's chat, where the message shows. Telegram's half is telegram.forward_new; both read the one log,
 each with its own cursor. Runs in the web service (a thread of web.serve): it is the process that knows which devices have the

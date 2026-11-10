@@ -169,7 +169,7 @@ assert.deepEqual(p.children.map(n => n.dataset.k || n.dataset.mid), ['u0', 'u1',
         refresh (a new reply began) has to start, and one gone from the page has to stop."""
         self.run_js(r'''
 const p = panel(); let inner;
-p.rebuild = () => { inner = part('poll', {poll: '/fragment/chat/wren/live', every: '1500'}); inner.isConnected = true;
+p.rebuild = () => { inner = part('poll', {poll: '/fragment/chat/wisp/live', every: '1500'}); inner.isConnected = true;
   p.parts = [inner]; };
 poll(p); await p._tick();
 assert.equal(typeof inner._tick, 'function', 'the poll that came with the refresh runs');
@@ -235,19 +235,19 @@ ended = true; response.body = 'ended'; await live._tick(); assert.equal(asked, 1
 
     def test_issue_27_manage_collapse_and_link_focus_survive(self):
         """Reverting #27's rendered Manage key reopens the collapsed menu during a rail refresh."""
-        rail = str(web_pages.rail(["wren"]))
+        rail = str(web_pages.rail(["wisp"]))
         self.run_js('const railHTML = ' + json.dumps(rail) + r''';
 const key = /<details class="manage"[^>]*data-key="([^"]+)"/.exec(railHTML)?.[1];
 const p = panel(); let menu, link;
 p.rebuild = () => {menu = part('details', {key}); menu.open = true;
-  link = part('control', {}); link.href = '/i/wren/chat'; p.parts = [menu, link];};
+  link = part('control', {}); link.href = '/i/wisp/chat'; p.parts = [menu, link];};
 p.rebuild(); menu.open = false; link.focus(); poll(p); await p._tick();
 assert.equal(p.innerHTML, 'new'); assert.equal(menu.open, false); assert.equal(document.activeElement, link);
 ''')
 
     def test_issue_27_save_focus_survives_document_refresh(self):
         """Reverting #27's Edit focus key loses focus when Save refreshes the document panel."""
-        html = str(web_views.docs_panel("wren", [], "note.md", "hello", "sha", set()))
+        html = str(web_views.docs_panel("wisp", [], "note.md", "hello", "sha", set()))
         self.run_js('const docHTML = ' + json.dumps(html) + r''';
 const key = /data-edit-doc data-focus="([^"]+)"/.exec(docHTML)?.[1];
 const p = panel(); ids.docs = p; let edit;
@@ -257,7 +257,7 @@ view.querySelector = s => s === '[data-edit-doc]' ? edit : s === 'textarea.raw' 
 // the editor docSaved reads since #5/#22: the saved revision, the draft note, the box (unchanged during Save)
 const fields = {'input[name=sha]': {value: 'old'}, '[data-doc-draft]': {textContent: ''},
   'textarea': {value: 'hello'}, 'input[name=path]': {value: 'note.md'}};
-const form = {closest: () => view, dataset: {post: '/docs/wren/save'}, querySelector: s => fields[s] || {}};
+const form = {closest: () => view, dataset: {post: '/docs/wisp/save'}, querySelector: s => fields[s] || {}};
 // Wait for the actual poll started by Save.
 const tick = p._tick; let refreshed; p._tick = () => refreshed = tick();
 docSaved(form, null, 'hello', 'new-sha'); await refreshed;
@@ -296,7 +296,7 @@ for (const f of handlers.load || []) f({target: img}); assert.equal(box.scrollTo
         chat = {"id": "c1", "state": "idle", "turns": [
             {"role": "user", "content": "photo", "ts": "2026-10-20T10:00", "attachments": [{"name": "a.png"}]}]}
         parser = Images()
-        parser.feed(str(web_views.chat_feed("wren", chat, [
+        parser.feed(str(web_views.chat_feed("wisp", chat, [
             {"file": "f", "ts": "2026-10-20T10:01", "text": "photo", "attachments": [{"name": "b.png"}]}])))
         self.assertEqual([(i.get("width"), i.get("height")) for i in parser.images], [("192", "144"), ("192", "144")])
 

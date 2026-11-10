@@ -304,7 +304,7 @@ class IncrementalMemoryTest(InstanceFixture, unittest.TestCase):
 
 class RanOutByModelTest(unittest.TestCase):
     def test_i9_cut_off_rate_shown_per_model(self):
-        """Review I9: wren's cut-offs went 13% -> 54% after a model switch and nothing it read showed it."""
+        """Review I9: wisp's cut-offs went 13% -> 54% after a model switch and nothing it read showed it."""
         from supervisor import metrics
         eps = [{"kind": "live", "ts": f"t{i}", "finish": "done"} for i in range(4)] + \
               [{"kind": "live", "ts": f"u{i}", "finish": None} for i in range(3)] + \
@@ -313,8 +313,8 @@ class RanOutByModelTest(unittest.TestCase):
         js = [{"episode_ts": f"t{i}", "model": "old"} for i in range(4)] + \
              [{"episode_ts": f"u{i}", "model": "new"} for i in range(5)]
         with mock.patch.object(metrics, "live_episodes", return_value=eps):
-            line, = metrics.ran_out_by_model("wren", js)
+            line, = metrics.ran_out_by_model("wisp", js)
         self.assertIn("old 0% of 4", line)
         self.assertIn("new 80% of 5", line)            # 3 unfinished + 1 deadline wrap-up; x is unjudged
         with mock.patch.object(metrics, "live_episodes", return_value=[]):
-            self.assertEqual(metrics.ran_out_by_model("wren", js), [])
+            self.assertEqual(metrics.ran_out_by_model("wisp", js), [])

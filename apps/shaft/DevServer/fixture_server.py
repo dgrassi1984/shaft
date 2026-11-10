@@ -48,7 +48,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 ME = "operator@example.com"
 TOPIC = os.environ.get("SHAFT_APNS_TOPIC", "")
-INSTANCES = ("thelos", "wren", "ada")
+INSTANCES = ("tundra", "wisp", "ada")
 
 
 def setup(base: Path, port: int):
@@ -310,7 +310,7 @@ def net_daily(rows):
 The summary is in `notes/docs/ledger.md`."""
 
 
-# What must scroll and never widen the column (docs/plans/PLAN-native-design-build.md, Review Focus 1), and every language that gets
+# What must scroll and never widen the column (Review Focus 1), and every language that gets
 # syntax colours, in one answer. Ask for "wide" to have it streamed; the seed has it as a finished answer too.
 WIDE_LINE = "totals = " + " + ".join(f"account_{i:02d}.net_daily(rounded=True)" for i in range(12))
 WIDE = f"""A table of twelve columns scrolls inside its block, and so does a long line of code.
@@ -433,8 +433,8 @@ def _png(path: Path) -> int:
 
 
 def _seed_cycles(base: Path, now: datetime) -> None:
-    """Only Thelos has cycle records; Wren keeps the Cycles empty states."""
-    root = base / "instances" / "thelos"
+    """Only Tundra has cycle records; Wisp keeps the Cycles empty states."""
+    root = base / "instances" / "tundra"
     episodes = root / "memory" / "episodes"
     episodes.mkdir(parents=True, exist_ok=True)
     end = now.replace(hour=9, minute=0, second=0)
@@ -485,7 +485,7 @@ def _seed_cycles(base: Path, now: datetime) -> None:
         "*Consolidation actions:* nessuna.\n")
     judgments = base / "sup" / "judgments"
     judgments.mkdir(exist_ok=True)
-    (judgments / "thelos.jsonl").write_text(json.dumps({
+    (judgments / "tundra.jsonl").write_text(json.dumps({
         "episode_ts": end.isoformat(), "criterion_met": "partial", "claim_supported": False,
         "first_error": "Manca la verifica di novembre.",
         "reasoning": "Manca la verifica di novembre.", "judge": "fixture judge",
@@ -513,22 +513,22 @@ def seed(base: Path, web, web_chat, messages) -> None:
 
     _seed_cycles(base, now)
 
-    size = _png(inst / "thelos" / "attachments" / "ci-run.png")
-    (inst / "thelos" / "attachments" / "totals.csv").write_text("account,total\noperating,12401.19\nreserve,3050.00\n")
+    size = _png(inst / "tundra" / "attachments" / "ci-run.png")
+    (inst / "tundra" / "attachments" / "totals.csv").write_text("account,total\noperating,12401.19\nreserve,3050.00\n")
     report = "# October report\n\n**Net** totals, rounded *once*.\n\n- [x] operating\n- [ ] reserve\n\n| account | total |\n" \
              "| --- | ---: |\n| operating | 12401.19 |\n\n```python\nprint(sum(totals))\n```\n"
-    (inst / "thelos" / "attachments" / "report.md").write_text(report)
-    docs_dir = inst / "thelos" / "notes" / "docs"
+    (inst / "tundra" / "attachments" / "report.md").write_text(report)
+    docs_dir = inst / "tundra" / "notes" / "docs"
     (docs_dir / "ledger.md").write_text(
         "# Ledger\n\nNet daily totals are rounded once, at the end.\n\n## October\n\n| Account | Total |\n|---|---:|\n"
         "| Operating | 12,401.19 |\n| Reserve | 3,050.00 |\n\n- [x] reconcile\n- [ ] publish\n")
     (docs_dir / "plans").mkdir(exist_ok=True)
     (docs_dir / "plans" / "q4.md").write_text("# Q4 plan\n\nShip the nightly report.\n")
-    (inst / "wren" / "notes" / "docs" / "garden.md").write_text("# Garden\n\nWater the basil.\n")
+    (inst / "wisp" / "notes" / "docs" / "garden.md").write_text("# Garden\n\nWater the basil.\n")
 
     cid = "web-3f9a1c0d7e2b4a65"
     yesterday = "web-77ab02c4e9d15f30"
-    web_chat.save({"id": yesterday, "instance": "thelos", "login": ME, "created": ts(60 * 26), "state": "ended",
+    web_chat.save({"id": yesterday, "instance": "tundra", "login": ME, "created": ts(60 * 26), "state": "ended",
                    "ended": ts(60 * 25), "reply": None, "turns": [
                        {"role": "user", "ts": ts(60 * 26), "content": "What did the October close look like?",
                         "shown": "What did the October close look like?\nAnd September?"},
@@ -541,7 +541,7 @@ def seed(base: Path, web, web_chat, messages) -> None:
          "activity": ["run tests: 412 passed"]},
         {"role": "user", "ts": ts(30), "content": "x",
          "shown": "> Ship the ledger fix today?\n\nYes, once the tests pass. This is the failing run:",
-         "mid": "seed-1", "attachments": [{"name": "ci-run.png", "path": "instances/thelos/attachments/ci-run.png",
+         "mid": "seed-1", "attachments": [{"name": "ci-run.png", "path": "instances/tundra/attachments/ci-run.png",
                                             "bytes": size}]},
         {"role": "assistant", "ts": ts(28), "content": ANSWER.format(ask="the failing run"),
          "activity": ["read_file notes/docs/ledger.md", "run tests: 412 passed"],
@@ -560,46 +560,46 @@ def seed(base: Path, web, web_chat, messages) -> None:
         {"role": "assistant", "ts": ts(9.5), "content": "", "note": "error: CloudError: OpenRouter HTTP 502",
          "note_kind": "model", "note_retry": True, "retry_text": "And November?"},
     ]
-    web_chat.save({"id": cid, "instance": "thelos", "login": ME, "created": ts(60 * 24), "state": "idle",
+    web_chat.save({"id": cid, "instance": "tundra", "login": ME, "created": ts(60 * 24), "state": "idle",
                    "reply": None, "turns": turns})
-    msg(ts(15), "seed-from-thelos-q.md", "Should the nightly report keep the **per-account** lines?", "thelos",
+    msg(ts(15), "seed-from-tundra-q.md", "Should the nightly report keep the **per-account** lines?", "tundra",
         "operator", False, kind="question")
     # Spaces distinguish the raw sent.file identity from the URL-encoded feed key.
-    msg(ts(14), "seed from thelos m.md", "The totals, as a file:", "thelos", "operator", True,
-        attachments=[{"name": "totals.csv", "path": "instances/thelos/attachments/totals.csv", "bytes": 51},
-                     {"name": "report.md", "path": "instances/thelos/attachments/report.md", "bytes": len(report)}])
+    msg(ts(14), "seed from tundra m.md", "The totals, as a file:", "tundra", "operator", True,
+        attachments=[{"name": "totals.csv", "path": "instances/tundra/attachments/totals.csv", "bytes": 51},
+                     {"name": "report.md", "path": "instances/tundra/attachments/report.md", "bytes": len(report)}])
     msg(ts(12), "seed-from-operator-b.md", "Look at the March reconciliation when you have time.", "operator",
-        "thelos", False, via=messages.BACKGROUND, mid="seed-b")
+        "tundra", False, via=messages.BACKGROUND, mid="seed-b")
     with feedback.FILE.open("a") as f:
-        f.write(json.dumps({"ts": ts(17), "event": "rated", "id": "f-" + "6a0c2e4b8d1f3a5c7e9b0d2f", "instance": "thelos",
+        f.write(json.dumps({"ts": ts(17), "event": "rated", "id": "f-" + "6a0c2e4b8d1f3a5c7e9b0d2f", "instance": "tundra",
                             "login": ME, "target": {"kind": "chat", "chat": cid, "k": 7}, "thumb": "up",
                             "reason": "Exactly the summary I wanted", "reply_ts": turns[7]["ts"],
                             "reply_sha": "0" * 64}) + "\n")
-    doc_comments.add_thread("thelos", "p-1e2d3c4b5a697887", "ledger.md",
+    doc_comments.add_thread("tundra", "p-1e2d3c4b5a697887", "ledger.md",
                             {"exact": "rounded once, at the end", "prefix": "Net daily totals are ", "suffix": ".",
                              "start": 28},
                             __import__("hashlib").sha256((docs_dir / "ledger.md").read_bytes()).hexdigest(),
                             "Per account or overall?")
-    doc_comments.mark_sent("thelos", "p-1e2d3c4b5a697887", f"{cid}#2")
-    doc_comments.reply("thelos", "p-9a8b7c6d5e4f3021", "c1", "Per account, then summed.", "thelos")
+    doc_comments.mark_sent("tundra", "p-1e2d3c4b5a697887", f"{cid}#2")
+    doc_comments.reply("tundra", "p-9a8b7c6d5e4f3021", "c1", "Per account, then summed.", "tundra")
 
-    web_chat.save({"id": "web-00000000000000a1", "instance": "wren", "login": ME, "created": ts(90), "state": "idle",
+    web_chat.save({"id": "web-00000000000000a1", "instance": "wisp", "login": ME, "created": ts(90), "state": "idle",
                    "reply": None, "turns": [
                        {"role": "user", "ts": ts(90), "content": "Water the basil?", "shown": "Water the basil?",
-                        "mid": "seed-wren"},
+                        "mid": "seed-wisp"},
                        {"role": "assistant", "ts": ts(89), "content": "Watered. The soil was *dry*."}]})
     (base / "state.json").write_text(json.dumps({
-        "thelos": {"state": "in a cycle", "since": now.strftime("%H:%M"), "model": "cloud claude-sonnet-5",
+        "tundra": {"state": "in a cycle", "since": now.strftime("%H:%M"), "model": "cloud claude-sonnet-5",
                    "usd_today": 0.42, "goal": "Controllare novembre", "next_check": "18:30",
                    "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends"},
-        "wren": {"state": "idle", "model": "qwen3.6-35b", "next_cycle": "for wren's next cycle, which this starts now"},
+        "wisp": {"state": "idle", "model": "qwen3.6-35b", "next_cycle": "for wisp's next cycle, which this starts now"},
         "ada": {"state": "sleeping", "since": "until 18:30", "model": "qwen3.6-35b"}}, indent=1))
     (base / "seeded").write_text(now.isoformat())
 
 
 # -- the commands -------------------------------------------------------------------------------------------------------
 def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]) -> None:
-    name = args[0] if args else "thelos"
+    name = args[0] if args else "tundra"
     text = " ".join(args[1:])
     now = datetime.now().replace(microsecond=0).isoformat()
     if what == "services":

@@ -1,4 +1,4 @@
-"""An instance's documents (docs/plans/PLAN-webui-chat.md §3): Markdown files in its notes/docs/, which the web chat shows beside the
+"""An instance's documents: Markdown files in its notes/docs/, which the web chat shows beside the
 conversation, live, and the operator can edit. Stdlib only.
 
 No supervisor tool writes them for the instance: it writes them with the write_file it has, as any note. The operator's

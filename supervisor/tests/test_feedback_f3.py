@@ -18,7 +18,7 @@ class FeedbackF3Test(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix="shaft-feedback-f3-")
         self.addCleanup(tmp.cleanup)
         self.project = Path(tmp.name)
-        self.root = self.project / "test-roots" / "wren"
+        self.root = self.project / "test-roots" / "wisp"
         (self.root / "shaft").mkdir(parents=True)
         (self.root / ".git").touch()
         self.episodes = self.root / "memory" / "episodes"
@@ -46,14 +46,14 @@ class FeedbackF3Test(unittest.TestCase):
     def write_episodes(self, rows):
         (self.episodes / "test.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
 
-    def rate(self, text, thumb="down", cid="web-abc", k=1, name="wren", reason="wrong"):
+    def rate(self, text, thumb="down", cid="web-abc", k=1, name="wisp", reason="wrong"):
         return feedback.rate(name, "operator", {"kind": "chat", "chat": cid, "k": k}, thumb,
                              reason, "2026-10-29T12:00:00", text)
 
     def dataset(self):
         out = io.StringIO()
         with redirect_stdout(out):
-            path, count = finetune.build_dataset("wren")
+            path, count = finetune.build_dataset("wisp")
         rows = [json.loads(line)["messages"][1:] for fname in ("train.jsonl", "valid.jsonl")
                 for line in (path / fname).read_text().splitlines()]
         self.assertEqual(count, len(rows))
@@ -106,7 +106,7 @@ class FeedbackF3Test(unittest.TestCase):
         for streamed, episode in [("  answer \n", "  answer \n"),
                                   ("leaked thought</think>  answer \n", "answer \n")]:
             with self.subTest(streamed=streamed):
-                chat = {"id": "web-abc", "instance": "wren", "state": "replying", "turns": [],
+                chat = {"id": "web-abc", "instance": "wisp", "state": "replying", "turns": [],
                         "reply": {"interjections": 0}}
                 web_chat.save(chat)
                 relay = web_chat.Relay("web-abc")
@@ -148,7 +148,7 @@ class FeedbackF3Test(unittest.TestCase):
     def test_dataset_and_finetune_print_cut_counts(self):
         self.write_episodes(self.talk("talk", "one", "bad"))
         self.rate("bad")
-        for run in (lambda: finetune.cmd_dataset("wren"), lambda: finetune.cmd_finetune("wren")):
+        for run in (lambda: finetune.cmd_dataset("wisp"), lambda: finetune.cmd_finetune("wisp")):
             with mock.patch.object(finetune, "_prereqs", return_value=[]), redirect_stdout(io.StringIO()) as out:
                 run()
             self.assertIn("1 conversations cut, 1 turns dropped", out.getvalue())
@@ -159,19 +159,19 @@ class FeedbackF3Test(unittest.TestCase):
         return result, out.getvalue(), err.getvalue()
 
     def test_cli_table_rows_kept_sent_and_gone(self):
-        web_chat.save({"id": "web-abc", "instance": "wren", "turns": [
+        web_chat.save({"id": "web-abc", "instance": "wisp", "turns": [
             {"role": "user", "content": "question"}, {"role": "assistant", "content": "First line\nSecond line"}]})
         self.rate("First line\nSecond line", reason="bad facts\nplease fix")
-        sent = feedback.rate("wren", "operator", {"kind": "message", "file": "note.md"}, "up", "useful", "", "A note")
+        sent = feedback.rate("wisp", "operator", {"kind": "message", "file": "note.md"}, "up", "useful", "", "A note")
         feedback.mark_sent(sent["id"], "inbox", "feedback.md")
-        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "wren", "to": "operator", "file": "note.md",
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "wisp", "to": "operator", "file": "note.md",
                                                             "ts": "2026-10-29T12:00:00", "text": "A note\nHidden"}) + "\n")
         self.rate("missing", cid="web-gone")
-        result, output, error = self.run_cli("wren")
+        result, output, error = self.run_cli("wisp")
         self.assertEqual((result, error), (0, ""))
         self.assertIn("When | Instance | Thumb | Sent | Reply | Reason", output)
-        self.assertIn("| wren | 👎 | kept | First line | bad facts please fix", output)
-        self.assertIn("| wren | 👍 | inbox ", output)
+        self.assertIn("| wisp | 👎 | kept | First line | bad facts please fix", output)
+        self.assertIn("| wisp | 👍 | inbox ", output)
         self.assertIn("| A note | useful", output)
         self.assertNotIn("Second line", output)
         self.assertNotIn("Hidden", output)
@@ -185,8 +185,8 @@ class FeedbackF3Test(unittest.TestCase):
         self.rate("recent", reason="recent reason")
         self.rate("other", cid="web-other", name="other", reason="other reason")
         self.assertEqual(self.run_cli()[1].count("| 👎 |"), 3)
-        self.assertEqual(self.run_cli("wren")[1].count("| 👎 |"), 2)
-        result, output, _ = self.run_cli("wren", "--days", "2")
+        self.assertEqual(self.run_cli("wisp")[1].count("| 👎 |"), 2)
+        result, output, _ = self.run_cli("wisp", "--days", "2")
         self.assertEqual(result, 0)
         self.assertEqual(output.count("| 👎 |"), 1)
         self.assertIn("recent reason", output)

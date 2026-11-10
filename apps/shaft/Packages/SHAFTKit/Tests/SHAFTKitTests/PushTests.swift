@@ -67,14 +67,14 @@ struct PushTests {
 
 struct NotificationContentTests {
     static let latest = PushLatest(events: [
-        PushEvent(title: "thelos replied", body: "October's report is ready.", url: "/i/thelos/chat", tag: "thelos", instance: "thelos"),
-        PushEvent(title: "wren asks", body: "Keep the per-account lines?", url: "/i/wren/chat", tag: "wren", instance: "wren"),
-        PushEvent(title: "thelos says", body: "Totals sent.", url: "/i/thelos/chat", tag: "thelos", instance: "thelos"),
+        PushEvent(title: "tundra replied", body: "October's report is ready.", url: "/i/tundra/chat", tag: "tundra", instance: "tundra"),
+        PushEvent(title: "wisp asks", body: "Keep the per-account lines?", url: "/i/wisp/chat", tag: "wisp", instance: "wisp"),
+        PushEvent(title: "tundra says", body: "Totals sent.", url: "/i/tundra/chat", tag: "tundra", instance: "tundra"),
     ], badge: 2)
 
     @Test func theNewestEventForTheInstanceIsShown() {
-        let filled = NotificationContent.choose(Self.latest, instance: "thelos")
-        #expect(filled == NotificationContent.Filled(title: "thelos says", body: "Totals sent.", badge: 2, instance: "thelos"))
+        let filled = NotificationContent.choose(Self.latest, instance: "tundra")
+        #expect(filled == NotificationContent.Filled(title: "tundra says", body: "Totals sent.", badge: 2, instance: "tundra"))
     }
 
     @Test func noEventForTheInstanceLeavesTheTitleAlone() {
@@ -87,33 +87,33 @@ struct NotificationContentTests {
             .json(200, String(decoding: try DecodingTests.fixture("push-latest"), as: UTF8.self))
         }
         let store = MemoryCredentialStore(server.credential)
-        let instance = NotificationContent.instance(from: ["instance": "wren"])
+        let instance = NotificationContent.instance(from: ["instance": "wisp"])
         let filled = try #require(await NotificationContent.fetch(instance: instance, store: store, session: server.session))
         let content = UNMutableNotificationContent()
-        content.title = "wren replied"
+        content.title = "wisp replied"
         filled.apply(to: content)
         #expect(content.body == "Should the nightly report keep the per-account lines?")
         #expect(content.badge == 1)
-        #expect(content.threadIdentifier == "wren")
+        #expect(content.threadIdentifier == "wisp")
         #expect(server.requests.first?.path == "/app/v1/push/latest")
-        #expect(server.requests.first?.query("instance") == "wren")
+        #expect(server.requests.first?.query("instance") == "wisp")
         #expect(server.requests.first?.header("Authorization") == "Bearer 8c1f4e2a9b07d3e5.s3cret")
     }
 
     @Test func notPairedOrOfflineGivesNothingAndDeliversTheTitleOnce() async throws {
-        #expect(await NotificationContent.fetch(instance: "thelos", store: MemoryCredentialStore()) == nil)
+        #expect(await NotificationContent.fetch(instance: "tundra", store: MemoryCredentialStore()) == nil)
         let unreachable = ServerCredential(baseURL: URL(string: "https://127.0.0.1:9")!, device: "d", secret: "s",
                                            name: "n", login: "l")
-        #expect(await NotificationContent.fetch(instance: "thelos", store: MemoryCredentialStore(unreachable),
+        #expect(await NotificationContent.fetch(instance: "tundra", store: MemoryCredentialStore(unreachable),
                                                 timeout: 2) == nil)
 
         let content = UNMutableNotificationContent()
-        content.title = "thelos replied"
+        content.title = "tundra replied"
         let delivered = Delivered()
         let delivery = NotificationDelivery(content: content) { delivered.add($0) }
         delivery.expire()
-        delivery.deliver(NotificationContent.Filled(title: "late", body: "too late", badge: 1, instance: "thelos"))
-        #expect(delivered.titles == ["thelos replied"])
+        delivery.deliver(NotificationContent.Filled(title: "late", body: "too late", badge: 1, instance: "tundra"))
+        #expect(delivered.titles == ["tundra replied"])
         #expect(delivered.bodies == [""])
     }
 }

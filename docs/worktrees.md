@@ -13,7 +13,7 @@ suite fails in ways that look like real breakage.
    For a change to the template itself, branch it: `git -C template switch -c <branch> origin/template`.
 2. **A `.supervisor/` directory**, which is gitignored. Sandbox tests create their temp folders under it (for example
    `test_shared_folder`, `test_browser`, `test_pyenv`, `test_keys_and_http` and `test_egress`). Without it they error
-   with `FileNotFoundError: …/.supervisor/shaft-…` (seen 2026-10-20, #45).
+   with `FileNotFoundError: …/.supervisor/shaft-…`.
 
    ```bash
    mkdir -p .supervisor

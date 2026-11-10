@@ -1,7 +1,7 @@
 {
-  "instance": "wren",
+  "instance": "wisp",
   "partial": false,
-  "version": "2d3dd2267baa7c91",
+  "version": "a0dc1ea2ac2d3f47",
   "live": "fb7597261efc6cb5",
   "reply": {
     "started": "2026-11-03T14:07:02+01:00",
@@ -79,9 +79,9 @@
       "last": true
     },
     {
-      "key": "s20261103-140230-118204-from-wren.md",
+      "key": "s20261103-140230-118204-from-wisp.md",
       "type": "sent",
-      "file": "20261103-140230-118204-from-wren.md",
+      "file": "20261103-140230-118204-from-wisp.md",
       "ts": "2026-11-03T14:02:30+01:00",
       "kind": "question",
       "read": false,

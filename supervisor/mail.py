@@ -1,4 +1,4 @@
-"""The operator's Gmail, read for an instance they granted one label to (docs/plans/PLAN-mail.md).
+"""The operator's Gmail, read for an instance they granted one label to.
 
 No Gmail credential can be limited to one label: gmail.readonly opens the whole mailbox. So the instance never
 holds one. The account and its token are google.py's (.supervisor/google/<alias>.json, shared with Calendar); this

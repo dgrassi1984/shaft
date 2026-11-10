@@ -64,7 +64,7 @@ class KeysAndHttpTest(unittest.TestCase):
     def setUp(self):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
-        self.root = self.project / "instances" / "wren"
+        self.root = self.project / "instances" / "wisp"
         self.root.mkdir(parents=True)
         for p in (mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"),
                   mock.patch.object(broker_mod, "resolve_public", lambda host, port: ["127.0.0.1"])):   # a local fake API
@@ -72,7 +72,7 @@ class KeysAndHttpTest(unittest.TestCase):
             self.addCleanup(p.stop)
         self.api = FakeAPI()
         self.addCleanup(self.api.close)
-        self.b = Broker("wren", self.project, {}, self.project / "broker.log")
+        self.b = Broker("wisp", self.project, {}, self.project / "broker.log")
 
     def call(self, tool, **args):
         return self.b.call(tool, args)
@@ -88,7 +88,7 @@ class KeysAndHttpTest(unittest.TestCase):
         self.assertTrue(missing["result"].startswith("HTTP 404"))
 
     def test_post_goes_out_without_an_operator_allowlist(self):
-        # the operator, 2026-10-14: writes are not gated per host any more (wren needed POST to api.github.com to mint
+        # the operator, 2026-10-14: writes are not gated per host any more (wisp needed POST to api.github.com to mint
         # a GitHub App token). A POST to a host nobody allowed must be sent, not refused.
         out = self.call("http_request", url=self.api.base + "/issues", method="POST", body={"title": "hi"})
         self.assertTrue(out["ok"], out)
@@ -142,7 +142,7 @@ class TailnetGrantTest(unittest.TestCase):
     def setUp(self):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
-        (self.project / "instances" / "wren").mkdir(parents=True)
+        (self.project / "instances" / "wisp").mkdir(parents=True)
         self.api = FakeAPI()
         self.addCleanup(self.api.close)
         self.port = self.api.server.server_address[1]
@@ -163,10 +163,10 @@ class TailnetGrantTest(unittest.TestCase):
                   mock.patch.object(broker_mod.socket, "getaddrinfo", resolve),
                   mock.patch.object(broker_mod.socket, "create_connection", connect),
                   mock.patch.object(broker_mod, "TAILNET_GRANTS",
-                                    broker_mod.tailnet_grants(json.dumps({"wren": [f"{self.HOST}:{self.port}"]})))):
+                                    broker_mod.tailnet_grants(json.dumps({"wisp": [f"{self.HOST}:{self.port}"]})))):
             p.start()
             self.addCleanup(p.stop)
-        self.b = Broker("wren", self.project, {}, self.project / "broker.log")
+        self.b = Broker("wisp", self.project, {}, self.project / "broker.log")
         self.assertTrue(self.b.call("secret_set", {"name": "service", "value": TOKEN, "hosts": [self.HOST]})["ok"])
 
     def request(self, url=None, **args):
@@ -188,7 +188,7 @@ class TailnetGrantTest(unittest.TestCase):
         self.assertEqual(self.api.seen, [])
 
     def test_the_grant_is_closed_again_after_a_failing_request(self):
-        (self.project / "instances" / "wren" / "body.txt").write_text("hello")
+        (self.project / "instances" / "wisp" / "body.txt").write_text("hello")
         out = self.request(auth="service", body_file="body.txt")
         self.assertFalse(out["ok"])
         self.assertIn("give body or body_file, not both", out["error"])
@@ -198,8 +198,8 @@ class TailnetGrantTest(unittest.TestCase):
         self.assertIn("non-public address", out["error"])
 
     def test_another_instance_is_still_refused(self):
-        other = Broker("thelos", self.project, {}, self.project / "broker.log")
-        (self.project / "instances" / "thelos").mkdir()
+        other = Broker("tundra", self.project, {}, self.project / "broker.log")
+        (self.project / "instances" / "tundra").mkdir()
         other.call("secret_set", {"name": "service", "value": TOKEN, "hosts": [self.HOST]})
         out = other.call("http_request", {"url": self.url, "auth": "service"})
         self.assertFalse(out["ok"])
@@ -239,12 +239,12 @@ class TailnetGrantTest(unittest.TestCase):
             egress.public_address(self.HOST, self.port)
 
     def test_bad_grants_are_refused_when_set(self):
-        for bad in ('["x"]', '{"Bad Name": ["a:1"]}', '{"wren": "a:443"}', '{"wren": ["a"]}', '{"wren": ["a:0"]}',
-                    '{"wren": [":443"]}', '{"wren": ["box..:443"]}', '{"wren": ["[fd7a::1]:443"]}',
-                    '{"wren": ["a b:443"]}', '{"wren": ["-x.ts.net:443"]}', '{"wren": [443]}'):
+        for bad in ('["x"]', '{"Bad Name": ["a:1"]}', '{"wisp": "a:443"}', '{"wisp": ["a"]}', '{"wisp": ["a:0"]}',
+                    '{"wisp": [":443"]}', '{"wisp": ["box..:443"]}', '{"wisp": ["[fd7a::1]:443"]}',
+                    '{"wisp": ["a b:443"]}', '{"wisp": ["-x.ts.net:443"]}', '{"wisp": [443]}'):
             with self.assertRaises(ValueError, msg=bad):
                 broker_mod.tailnet_grants(bad)
-        self.assertEqual(broker_mod.tailnet_grants('{"wren": ["Box.TS.net.:443"]}'), {"wren": {("box.ts.net", 443)}})
+        self.assertEqual(broker_mod.tailnet_grants('{"wisp": ["Box.TS.net.:443"]}'), {"wisp": {("box.ts.net", 443)}})
 
 
 class KeyStoreDurabilityTest(unittest.TestCase):
@@ -255,7 +255,7 @@ class KeyStoreDurabilityTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-keys-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.root = self.tmp / "wren"
+        self.root = self.tmp / "wisp"
         self.root.mkdir()
         for p in (mock.patch.object(core, "SUP_DIR", self.tmp / ".supervisor"), mock.patch.object(core, "log")):
             p.start()
@@ -310,21 +310,21 @@ class KeyStoreDurabilityTest(unittest.TestCase):
 
 class ThroughTheInstancesClientTest(unittest.TestCase):
     def test_secret_set_as_the_instance_calls_it(self):
-        # Regression (wren, 2026-10-13): "ERROR: TypeError: call() got multiple values for argument 'name'" — the
+        # Regression (wisp, 2026-10-13): "ERROR: TypeError: call() got multiple values for argument 'name'" — the
         # instance's broker.call(name, **args) took secret_set's own `name` argument as the tool name. The
         # broker-level tests above called the broker directly and never went through the instance's client.
         project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
         self.addCleanup(shutil.rmtree, project, True)
-        (project / "instances" / "wren").mkdir(parents=True)
+        (project / "instances" / "wisp").mkdir(parents=True)
         with mock.patch.object(core, "SUP_DIR", project / ".supervisor"):
-            b = Broker("wren", project, {}, project / "broker.log")
+            b = Broker("wisp", project, {}, project / "broker.log")
             base = b.start()
             self.addCleanup(b.stop)
             template = Path(__file__).resolve().parents[2] / "template"
             sys.path.insert(0, str(template))
             from shaft.tools import Toolbox
             with mock.patch.dict(os.environ, {"SHAFT_BROKER_URL": base, "SHAFT_BROKER_TOKEN": b.token}):
-                box = Toolbox(project / "instances" / "wren")
+                box = Toolbox(project / "instances" / "wisp")
                 out = box.run("secret_set", json.dumps({"name": "github", "value": TOKEN, "hosts": ["api.github.com"]}))
                 listing = box.run("secret_list", "{}")
                 gone = box.run("secret_delete", json.dumps({"name": "github"}))
@@ -395,14 +395,14 @@ class OperatorCommandTest(unittest.TestCase):
     def test_shaft_secret_set_from_stdin_never_prints_the_value(self):
         tmp = Path(tempfile.mkdtemp(prefix="shaft-sec-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, True)
-        root = tmp / "wren"
+        root = tmp / "wisp"
         root.mkdir()
         with mock.patch("supervisor.__main__.instance_root", return_value=root), \
              mock.patch("sys.stdin", new=__import__("io").StringIO(TOKEN + "\n")), \
              mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as out, \
              mock.patch("supervisor.__main__.log"):
             from supervisor import __main__ as cli
-            code = cli.main(["secret", "wren", "set", "github", "--hosts", "api.github.com"])
+            code = cli.main(["secret", "wisp", "set", "github", "--hosts", "api.github.com"])
         self.assertEqual(code, 0)
         self.assertNotIn(TOKEN, out.getvalue())
         self.assertEqual(core.read_secrets(root)["github"]["value"], TOKEN)

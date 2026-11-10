@@ -49,7 +49,7 @@ def fake_run_agent(name, kind, args, interactive, driver=None, **kw):
 class ApiTest(unittest.TestCase):
     def setUp(self):
         patches = [mock.patch.object(api, "secrets_env", return_value={"SHAFT_API_KEY": KEY, "SHAFT_API_LOGINS": ME}),
-                   mock.patch.object(api, "instance_names", return_value=["shaft", "wren"]),
+                   mock.patch.object(api, "instance_names", return_value=["shaft", "wisp"]),
                    mock.patch.object(api, "run_agent", fake_run_agent),
                    mock.patch.object(api, "busy_with", return_value=None),
                    mock.patch.object(api, "instance_root", lambda n: self.roots / n),
@@ -60,7 +60,7 @@ class ApiTest(unittest.TestCase):
         from pathlib import Path
         self.roots = Path(tempfile.mkdtemp(prefix="shaft-api-")).resolve()
         self.addCleanup(shutil.rmtree, self.roots, True)
-        for n in ("shaft", "wren"):
+        for n in ("shaft", "wisp"):
             (self.roots / n).mkdir()
         patches.append(mock.patch.object(api.tom, "SUP_DIR", self.roots / ".supervisor"))
         for p in patches:
@@ -96,13 +96,13 @@ class ApiTest(unittest.TestCase):
                 self.assertIn("planned · " + detail, notes)
             planned.assert_not_called()
             req = urllib.request.Request(self.base + "/chat/completions",
-                data=json.dumps({"model": "wren", "messages": [
+                data=json.dumps({"model": "wisp", "messages": [
                     {"role": "user", "content": "Read sources"}]}).encode(),
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
                          "Tailscale-User-Login": ME, "X-Shaft-Channel": "telegram"})
             with urllib.request.urlopen(req, timeout=10) as response:
                 self.assertIn("planned · " + detail, json.loads(response.read())["choices"][0]["message"]["reasoning_content"])
-            planned.assert_called_once_with("wren", detail)
+            planned.assert_called_once_with("wisp", detail)
 
     def test_chat_and_interject_record_operator_text_and_channel(self):
         for channel in ("web", "telegram", "api"):
@@ -125,9 +125,9 @@ class ApiTest(unittest.TestCase):
     def test_empty_chat_and_rejected_interject_are_not_recorded(self):
         self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "  "}]}).read()
         with self.assertRaises(urllib.error.HTTPError):
-            self.req("/chat/interject", {"model": "wren", "messages": [{"role": "user", "content": "hi"}]})
+            self.req("/chat/interject", {"model": "wisp", "messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(api.tom._rows("shaft", "-operator-said"), [])
-        self.assertEqual(api.tom._rows("wren", "-operator-said"), [])
+        self.assertEqual(api.tom._rows("wisp", "-operator-said"), [])
 
     def test_only_the_owner_with_the_key_gets_in(self):
         for key, login, code in ((None, ME, 401), ("wrong", ME, 401), (KEY, "someone@example.com", 403), (KEY, None, 403)):
@@ -136,7 +136,7 @@ class ApiTest(unittest.TestCase):
                     self.req("/models", key=key, login=login)
                 self.assertEqual(ctx.exception.code, code)
         models = json.load(self.req("/models"))
-        self.assertEqual([m["id"] for m in models["data"]], ["shaft", "wren"])
+        self.assertEqual([m["id"] for m in models["data"]], ["shaft", "wisp"])
 
     def test_streamed_chat_is_openai_shaped(self):
         body = {"model": "shaft", "stream": True, "messages": [{"role": "system", "content": "be nice"},
@@ -183,7 +183,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(again["choices"][0]["message"]["content"], first["choices"][0]["message"]["content"])
         self.assertEqual(other["choices"][0]["message"]["content"], "Teal is blue-green.")
 
-    NARRATED = [{"type": "ready", "name": "wren"}, {"type": "status", "phase": "waiting for the model"},
+    NARRATED = [{"type": "ready", "name": "wisp"}, {"type": "status", "phase": "waiting for the model"},
                 {"type": "content", "text": "Let me check my notes "}, {"type": "content", "text": "on teal first."},
                 {"type": "usage", "prompt_tokens": 9, "completion_tokens": 3},
                 {"type": "tool_start", "name": "search_memory", "args": '{"query": "teal"}'},
@@ -195,7 +195,7 @@ class ApiTest(unittest.TestCase):
         # Regression (the operator, 2026-10-14: "on Telegram I get more than what he actually says"): every step's text
         # was joined into the reply, so what the instance wrote before calling a tool reached Telegram as if said.
         with mock.patch(f"{__name__}.EVENTS", self.NARRATED):
-            out = json.load(self.req("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "teal?"}]}))
+            out = json.load(self.req("/chat/completions", {"model": "wisp", "messages": [{"role": "user", "content": "teal?"}]}))
         msg = out["choices"][0]["message"]
         self.assertEqual(msg["content"], "Teal is blue-green.")             # what Telegram sends: the answer only
         self.assertNotIn("Let me check", msg["content"])
@@ -204,7 +204,7 @@ class ApiTest(unittest.TestCase):
 
     def test_streamed_narration_is_reasoning_and_the_answer_is_content(self):
         with mock.patch(f"{__name__}.EVENTS", self.NARRATED):
-            raw = self.req("/chat/completions", {"model": "wren", "stream": True,
+            raw = self.req("/chat/completions", {"model": "wisp", "stream": True,
                                                  "messages": [{"role": "user", "content": "teal?"}]}).read().decode()
         chunks = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
         text = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
@@ -216,7 +216,7 @@ class ApiTest(unittest.TestCase):
         # Regression (2026-10-22/23, "your message got cut off"): never told the rule above, instances wrote the answer
         # alongside a tool call (remember, append_file) and ended with "Stored." or "." — all the operator got.
         system = [{"role": "system", "content": "be nice"}]
-        body = {"model": "wren", "messages": [*system, {"role": "user", "content": "teal?"}]}
+        body = {"model": "wisp", "messages": [*system, {"role": "user", "content": "teal?"}]}
         self.req("/chat/completions", body).read()
         first = fake_run_agent.request
         rules = [m["content"] for m in first["messages"] if m["role"] == "system"]
@@ -232,23 +232,23 @@ class ApiTest(unittest.TestCase):
     def test_a_reply_that_stops_before_answering_says_so(self):
         steps = [e for e in self.NARRATED[:7]] + [{"type": "turn_end", "steps": 30, "ended_by": "steps"}]
         with mock.patch(f"{__name__}.EVENTS", steps):
-            out = json.load(self.req("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "teal?"}]}))
+            out = json.load(self.req("/chat/completions", {"model": "wisp", "messages": [{"role": "user", "content": "teal?"}]}))
         content = out["choices"][0]["message"]["content"]
         self.assertEqual(content, "(no answer: the reply stopped after 30 steps — steps)")
         self.assertNotIn("Let me check", content)                           # the narration is not passed off as one
 
-    CUT_THEN_ASKED_AGAIN = [{"type": "ready", "name": "wren"}, {"type": "content", "text": "Teal is a dark cy"},
+    CUT_THEN_ASKED_AGAIN = [{"type": "ready", "name": "wisp"}, {"type": "content", "text": "Teal is a dark cy"},
                             {"type": "retry", "old": 16384, "new": 32768},
                             {"type": "content", "text": "Teal is "}, {"type": "content", "text": "blue-green."},
                             {"type": "turn_end", "steps": 1, "ended_by": "answer"}]
 
     def test_a_reply_cut_off_and_asked_again_answers_with_the_second_call_only(self):
-        """Bug guarded (found 2026-11-09 for PLAN-voice): llm._answer discards a call cut off at max_tokens and asks
+        """Bug guarded (found 2026-11-09): llm._answer discards a call cut off at max_tokens and asks
         again, and the agent records only the second call's text; the API kept the cut call's text in the step, so
         the operator got "Teal is a dark cyTeal is blue-green." while the instance's record said "Teal is blue-green."."""
         for stream in (False, True):
             with self.subTest(stream=stream), mock.patch(f"{__name__}.EVENTS", self.CUT_THEN_ASKED_AGAIN):
-                with self.req("/chat/completions", {"model": "wren", "stream": stream,
+                with self.req("/chat/completions", {"model": "wisp", "stream": stream,
                                                      "messages": [{"role": "user", "content": "teal?"}]}) as r:
                     raw = r.read().decode()
                 if stream:
@@ -258,7 +258,7 @@ class ApiTest(unittest.TestCase):
                     text = json.loads(raw)["choices"][0]["message"]["content"]
                 self.assertEqual(text, "Teal is blue-green.")
 
-    def test_thelos_error_overwrite_2026_10_28(self):
+    def test_tundra_error_overwrite_2026_10_28(self):
         message = "talk: reply cut off at max_tokens=16384 twice (completion_tokens=16384); nothing saved"
 
         def run_agent(name, kind, args, interactive, driver=None, **kw):
@@ -368,7 +368,7 @@ class ApiTest(unittest.TestCase):
 class InterjectTest(unittest.TestCase):
     """the operator, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
     message, it should be injected immediately into it." Before, the second message waited for the whole first reply
-    and then got a reply of its own; the reply in progress never saw it (docs/plans/PLAN-interject.md)."""
+    and then got a reply of its own; the reply in progress never saw it."""
 
     WAIT = object()
 
@@ -410,11 +410,11 @@ class InterjectTest(unittest.TestCase):
                        {"type": "content", "text": "Both done."}, {"type": "turn_end", "steps": 2, "ended_by": "answer"}]
 
     def chat(self, out):
-        body = {"model": "wren", "messages": [{"role": "user", "content": "check my calendar"}]}
+        body = {"model": "wisp", "messages": [{"role": "user", "content": "check my calendar"}]}
         out.append(json.load(self.req("/chat/completions", body)))
 
     def interject(self, text):
-        return self.req("/chat/interject", {"model": "wren", "messages": [
+        return self.req("/chat/interject", {"model": "wisp", "messages": [
             {"role": "user", "content": "check my calendar"}, {"role": "user", "content": text}]})
 
     def test_a_message_during_the_reply_reaches_the_running_agent_in_order(self):
@@ -431,7 +431,7 @@ class InterjectTest(unittest.TestCase):
         self.assertTrue(self.mid.wait(10))
         self.assertEqual(self.interject("two").status, 202)        # written while it runs
         talk_id = next(iter(api.Handler.live.replies))
-        lines = (self.roots / "wren" / ".tmp" / f"interject-{talk_id}.jsonl").read_text().splitlines()
+        lines = (self.roots / "wisp" / ".tmp" / f"interject-{talk_id}.jsonl").read_text().splitlines()
         self.assertEqual([json.loads(l)["text"] for l in lines], ["one", "two"])
         self.go.set()
         t.join(10)
@@ -439,7 +439,7 @@ class InterjectTest(unittest.TestCase):
         self.assertEqual(msg["content"], "Both done.")
         self.assertEqual(out[0]["interjections_heard"], 2)          # Telegram puts both before the answer
         self.assertIn("read your new message: one", msg["reasoning_content"])
-        self.assertEqual(list((self.roots / "wren" / ".tmp").glob("interject-*")), [])   # removed with the reply
+        self.assertEqual(list((self.roots / "wisp" / ".tmp").glob("interject-*")), [])   # removed with the reply
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.interject("three")                                 # nothing running: the client sends it anew
         self.assertEqual(ctx.exception.code, 409)
@@ -455,9 +455,9 @@ class InterjectTest(unittest.TestCase):
     def test_a_crashed_runs_leftover_file_is_not_read_by_the_next_reply(self):
         self.pre.set()
         self.go.set()
-        body = {"model": "wren", "messages": [{"role": "user", "content": "check my calendar"}]}
-        talk_id = api.Handler.conversations.talk_id("wren", body["messages"])
-        stale = self.roots / "wren" / ".tmp" / f"interject-{talk_id}.jsonl"
+        body = {"model": "wisp", "messages": [{"role": "user", "content": "check my calendar"}]}
+        talk_id = api.Handler.conversations.talk_id("wisp", body["messages"])
+        stale = self.roots / "wisp" / ".tmp" / f"interject-{talk_id}.jsonl"
         stale.parent.mkdir(parents=True, exist_ok=True)
         stale.write_text(json.dumps({"text": "from a reply that crashed"}) + "\n")
         json.load(self.req("/chat/completions", body))
@@ -476,24 +476,24 @@ class LongReplyTest(unittest.TestCase):
         from pathlib import Path
         tmp = Path(tempfile.mkdtemp(prefix="shaft-api-long-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, True)
-        (tmp / "wren" / ".tmp").mkdir(parents=True)
+        (tmp / "wisp" / ".tmp").mkdir(parents=True)
         self.recovered = []
         for p in (mock.patch.object(api, "TALKS", tmp / "api_talks.json"),
-                  mock.patch.object(api, "instance_names", return_value=["wren"]),
+                  mock.patch.object(api, "instance_names", return_value=["wisp"]),
                   mock.patch.object(api, "instance_root", lambda n: tmp / n),
                   mock.patch.object(api, "spawn_recover", self.recovered.append),
                   mock.patch.object(api, "log", lambda *_: None)):
             p.start()
             self.addCleanup(p.stop)
-        self.file = tmp / "wren" / ".tmp"
+        self.file = tmp / "wisp" / ".tmp"
         self.conversations, self.live = api.Conversations(), api.Live()
 
     def talk(self) -> dict:
         return next(iter(self.conversations.talks.values()))
 
     def test_a_reply_longer_than_the_idle_time_is_not_written_up_under_it(self):
-        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
-        entry = self.live.begin("wren", talk_id)
+        talk_id = self.conversations.talk_id("wisp", self.MESSAGES)
+        entry = self.live.begin("wisp", talk_id)
         self.talk()["last"] -= api.IDLE_MINUTES * 60 + 5             # the request came in longer ago than that
         self.conversations.write_up_idle(self.live.running)
         self.assertFalse(self.talk()["written"], "written up while its reply was still running")
@@ -505,18 +505,18 @@ class LongReplyTest(unittest.TestCase):
         self.talk()["ended"] -= api.IDLE_MINUTES * 60 + 5            # then quiet for SHAFT_IDLE_MINUTES: written up
         self.conversations.write_up_idle(self.live.running)
         self.assertTrue(self.talk()["written"])
-        self.assertEqual(self.recovered, ["wren"])
+        self.assertEqual(self.recovered, ["wisp"])
 
     def lines(self, talk_id: str) -> list[str]:
         f = self.file / f"interject-{talk_id}.jsonl"
         return [json.loads(l)["text"] for l in f.read_text().splitlines()] if f.exists() else []
 
     def test_overlapping_requests_in_one_talk_keep_each_others_messages(self):
-        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
-        first = self.live.begin("wren", talk_id)
+        talk_id = self.conversations.talk_id("wisp", self.MESSAGES)
+        first = self.live.begin("wisp", talk_id)
         self.live.started(first)
         self.assertTrue(self.live.interject(talk_id, "one"))
-        second = self.live.begin("wren", talk_id)                   # waits for the instance while the first replies
+        second = self.live.begin("wisp", talk_id)                   # waits for the instance while the first replies
         self.assertEqual(self.lines(talk_id), ["one"], "the second request deleted them")
         self.assertTrue(self.live.interject(talk_id, "two"))         # the reply running now hears it
         self.assertEqual(self.lines(talk_id), ["one", "two"])
@@ -531,11 +531,11 @@ class LongReplyTest(unittest.TestCase):
         """Codex on e77d5e5: A replies; B, a retry in the same talk, waits and its client hangs up. end(B) removed the
         registration (B was the newest) and the file while A still ran: running() was empty, the janitor could
         close A's conversation, and A's interjections were gone."""
-        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
-        first = self.live.begin("wren", talk_id)
+        talk_id = self.conversations.talk_id("wisp", self.MESSAGES)
+        first = self.live.begin("wisp", talk_id)
         self.live.started(first)
         self.assertTrue(self.live.interject(talk_id, "one"))
-        second = self.live.begin("wren", talk_id)
+        second = self.live.begin("wisp", talk_id)
         self.live.end(second)                                       # cancelled while it waited
         self.assertEqual(self.live.running(), {talk_id})
         self.assertEqual(self.lines(talk_id), ["one"])
@@ -548,15 +548,15 @@ class LongReplyTest(unittest.TestCase):
         self.assertEqual((self.live.running(), self.lines(talk_id)), (set(), []))
 
     def test_messages_sent_before_any_agent_starts_reach_the_one_that_does(self):
-        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
-        first, second = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)
+        talk_id = self.conversations.talk_id("wisp", self.MESSAGES)
+        first, second = self.live.begin("wisp", talk_id), self.live.begin("wisp", talk_id)
         self.assertTrue(self.live.interject(talk_id, "x"))
         self.live.end(first)                                        # cancelled before it started: "x" is not lost
         self.assertTrue(self.live.interject(talk_id, "y"))
         self.live.started(second)
         self.assertEqual(self.lines(talk_id), ["x", "y"])
         self.live.end(second)
-        older, newer = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)   # twins, equal as dicts
+        older, newer = self.live.begin("wisp", talk_id), self.live.begin("wisp", talk_id)   # twins, equal as dicts
         self.live.end(newer)                                        # the newer one cancelled, not the older
         self.live.started(older)
         self.live.end(older)
@@ -567,7 +567,7 @@ INBOX_KEY = "sk-shaft-inbox-test"
 
 
 class InboxDoorbellTest(unittest.TestCase):
-    """POST /v1/inbox/<instance> (wren's "doorbell", the operator 2026-10-13): anything that can POST on the tailnet
+    """POST /v1/inbox/<instance> (wisp's "doorbell", the operator 2026-10-13): anything that can POST on the tailnet
     drops a message in an instance's inbox, marked as outside content, rate-limited, optionally waking it."""
 
     def setUp(self):
@@ -579,12 +579,12 @@ class InboxDoorbellTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.project, True)
         self.sup = self.project / ".supervisor"
         self.sup.mkdir()
-        for n in ("shaft", "wren"):
+        for n in ("shaft", "wisp"):
             (self.project / "instances" / n / "inbox").mkdir(parents=True)
         self.wakes = []
         env = {"SHAFT_API_KEY": KEY, "SHAFT_API_LOGINS": ME, "SHAFT_INBOX_KEY": INBOX_KEY}
         patches = [mock.patch.object(api, "secrets_env", return_value=env),
-                   mock.patch.object(api, "instance_names", return_value=["shaft", "wren"]),
+                   mock.patch.object(api, "instance_names", return_value=["shaft", "wisp"]),
                    mock.patch.object(api, "SUP_DIR", self.sup),
                    mock.patch.object(messages, "SUP_DIR", self.sup),
                    mock.patch.object(messages, "INSTANCES", self.project / "instances"),
@@ -618,20 +618,20 @@ class InboxDoorbellTest(unittest.TestCase):
         return json.load(urllib.request.urlopen(urllib.request.Request(f"{self.base}/inbox/{name}", data=data,
                                                                        headers=h), timeout=10))
 
-    def inbox(self, name="wren"):
+    def inbox(self, name="wisp"):
         return [p.read_text() for p in sorted((self.project / "instances" / name / "inbox").glob("*.md"))]
 
     def test_the_inbox_key_drops_a_marked_message_and_nothing_else(self):
-        r = self.post("wren", {"text": "CI on main is red", "source": "ci"})
-        self.assertEqual((r["instance"], r["source"]), ("wren", "ci"))
+        r = self.post("wisp", {"text": "CI on main is red", "source": "ci"})
+        self.assertEqual((r["instance"], r["source"]), ("wisp", "ci"))
         (msg,) = self.inbox()
         self.assertIn("From: ci (outside SHAFT", msg)
         self.assertIn("Trust: outside content", msg)
         self.assertIn("CI on main is red", msg)
         from supervisor import messages
-        self.assertEqual([(m["from"], m["to"], m["kind"]) for m in messages.history()], [("ci", "wren", "external")])
+        self.assertEqual([(m["from"], m["to"], m["kind"]) for m in messages.history()], [("ci", "wisp", "external")])
         # the inbox key cannot chat with or list the instances
-        for path, body in (("/models", None), ("/chat/completions", {"model": "wren", "messages": [
+        for path, body in (("/models", None), ("/chat/completions", {"model": "wisp", "messages": [
                 {"role": "user", "content": "x"}]})):
             r = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body else None,
                                        headers={"Authorization": f"Bearer {INBOX_KEY}", "Content-Type": "application/json"})
@@ -643,24 +643,24 @@ class InboxDoorbellTest(unittest.TestCase):
         for key in (None, "wrong", KEY):            # the chat key needs an allowed tailnet login as well
             with self.subTest(key=key):
                 with self.assertRaises(urllib.error.HTTPError) as ctx:
-                    self.post("wren", {"text": "hi"}, key=key)
+                    self.post("wisp", {"text": "hi"}, key=key)
                 self.assertIn(ctx.exception.code, (401, 403))
         self.assertEqual(self.inbox(), [])
-        r = self.post("wren", {"text": "from me"}, key=KEY, headers={"Tailscale-User-Login": ME})
+        r = self.post("wisp", {"text": "from me"}, key=KEY, headers={"Tailscale-User-Login": ME})
         self.assertEqual(r["source"], "outside")
 
     def test_any_body_is_kept_and_github_names_itself(self):
-        self.post("wren", {"action": "opened", "issue": {"title": "Crash on start"}},
+        self.post("wisp", {"action": "opened", "issue": {"title": "Crash on start"}},
                   headers={"X-GitHub-Event": "issues"})
-        self.post("wren", "plain text from a shortcut", raw=True, headers={"X-Shaft-Source": "phone"})
+        self.post("wisp", "plain text from a shortcut", raw=True, headers={"X-Shaft-Source": "phone"})
         a, b = self.inbox()
         self.assertIn("From: github:issues", a)
         self.assertIn('"title": "Crash on start"', a)
         self.assertIn("From: phone", b)
 
     def test_bad_requests(self):
-        for name, body, code in (("nobody", {"text": "x"}, 404), ("wren", {"text": "  "}, 400),
-                                 ("wren", {"text": "x", "source": "../../etc"}, 400)):
+        for name, body, code in (("nobody", {"text": "x"}, 404), ("wisp", {"text": "  "}, 400),
+                                 ("wisp", {"text": "x", "source": "../../etc"}, 400)):
             with self.subTest(name=name, body=body):
                 with self.assertRaises(urllib.error.HTTPError) as ctx:
                     self.post(name, body)
@@ -669,28 +669,28 @@ class InboxDoorbellTest(unittest.TestCase):
 
     def test_a_long_message_is_cut(self):
         from supervisor import messages
-        self.post("wren", {"text": "x" * (messages.EXTERNAL_MAX_CHARS + 500)})
+        self.post("wisp", {"text": "x" * (messages.EXTERNAL_MAX_CHARS + 500)})
         self.assertIn(f"[… cut at {messages.EXTERNAL_MAX_CHARS} characters]", self.inbox()[0])
 
     def test_wake_now_if_idle_and_within_the_hourly_limit(self):
-        self.assertEqual(self.post("wren", {"text": "a"})["wake"][:15], "not asked to wa")
-        self.assertEqual(self.post("wren", {"text": "b", "wake": True})["wake"], "started a cycle for wren")
+        self.assertEqual(self.post("wisp", {"text": "a"})["wake"][:15], "not asked to wa")
+        self.assertEqual(self.post("wisp", {"text": "b", "wake": True})["wake"], "started a cycle for wisp")
         self.busy = "live since 21:00"
-        self.assertIn("already awake", self.post("wren", {"text": "c", "wake": True})["wake"])
+        self.assertIn("already awake", self.post("wisp", {"text": "c", "wake": True})["wake"])
         self.busy = ""
         with mock.patch.object(api, "INBOX_WAKES_PER_HOUR", 2):
-            self.assertEqual(self.post("wren", {"text": "d"}, headers={"X-Shaft-Wake": "1"})["wake"],
-                             "started a cycle for wren")
-            self.assertIn("2 doorbell wakes in the last hour", self.post("wren", {"text": "e", "wake": True})["wake"])
-        self.assertEqual(self.wakes, ["wren", "wren"])
+            self.assertEqual(self.post("wisp", {"text": "d"}, headers={"X-Shaft-Wake": "1"})["wake"],
+                             "started a cycle for wisp")
+            self.assertIn("2 doorbell wakes in the last hour", self.post("wisp", {"text": "e", "wake": True})["wake"])
+        self.assertEqual(self.wakes, ["wisp", "wisp"])
         self.assertEqual(len(self.inbox()), 5)                  # every message delivered, woken or not
 
     def test_messages_per_hour_are_limited(self):
         with mock.patch.object(api, "INBOX_PER_HOUR", 2):
-            self.post("wren", {"text": "1"})
-            self.post("wren", {"text": "2"})
+            self.post("wisp", {"text": "1"})
+            self.post("wisp", {"text": "2"})
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                self.post("wren", {"text": "3"})
+                self.post("wisp", {"text": "3"})
             self.assertEqual(ctx.exception.code, 429)
             self.post("shaft", {"text": "other instance, own limit"})
         self.assertEqual(len(self.inbox()), 2)
@@ -710,7 +710,7 @@ class InboxDoorbellTest(unittest.TestCase):
 
 
 class ConversationIdTest(unittest.TestCase):
-    """X-Shaft-Conversation and /v1/chat/end (docs/plans/PLAN-webui.md M4): a client that names its conversations never has two
+    """X-Shaft-Conversation and /v1/chat/end: a client that names its conversations never has two
     merged because they opened the same way, and can close one now."""
     setUp = ApiTest.setUp                                        # its server, not its tests
 
@@ -726,7 +726,7 @@ class ConversationIdTest(unittest.TestCase):
             return e.code, json.load(e)
 
     def chat(self, cid=None, text="hi"):
-        status, _ = self.post("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": text}]},
+        status, _ = self.post("/chat/completions", {"model": "wisp", "messages": [{"role": "user", "content": text}]},
                               cid)
         self.assertEqual(status, 200)
         return fake_run_agent.request["talk_id"]
@@ -740,26 +740,26 @@ class ConversationIdTest(unittest.TestCase):
     def test_end_closes_that_conversation_and_writes_it_up(self):
         a, b = self.chat("web-a"), self.chat("web-b")
         with mock.patch.object(api, "spawn_recover") as recover:
-            status, body = self.post("/chat/end", {"model": "wren"}, "web-a")
+            status, body = self.post("/chat/end", {"model": "wisp"}, "web-a")
         self.assertEqual((status, body["ended"]), (202, a))
-        recover.assert_called_once_with("wren")
+        recover.assert_called_once_with("wisp")
         self.assertNotEqual(self.chat("web-a"), a)               # its next message starts a new conversation
         self.assertEqual(self.chat("web-b"), b)                  # the other is untouched
         with mock.patch.object(api, "spawn_recover"):
-            self.assertEqual(self.post("/chat/end", {"model": "wren"}, "nobody")[0], 404)
+            self.assertEqual(self.post("/chat/end", {"model": "wisp"}, "nobody")[0], 404)
 
     def test_end_is_refused_while_it_replies(self):
         a = self.chat("web-a")
-        api.Handler.live.replies[a] = {"model": "wren", "talk_id": a, "held": [], "started": True}
+        api.Handler.live.replies[a] = {"model": "wisp", "talk_id": a, "held": [], "started": True}
         self.addCleanup(api.Handler.live.replies.pop, a, None)
         with mock.patch.object(api, "spawn_recover") as recover:
-            status, body = self.post("/chat/end", {"model": "wren"}, "web-a")
+            status, body = self.post("/chat/end", {"model": "wisp"}, "web-a")
         self.assertEqual(status, 409)
         self.assertIn("still replying", body["error"]["message"])
         recover.assert_not_called()
 
     def test_a_malformed_name_is_refused(self):
-        status, _ = self.post("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "x"}]},
+        status, _ = self.post("/chat/completions", {"model": "wisp", "messages": [{"role": "user", "content": "x"}]},
                               "../../etc")
         self.assertEqual(status, 400)
 
@@ -768,7 +768,7 @@ class StreamHeardTest(unittest.TestCase):
     setUp = ApiTest.setUp
 
     def test_the_last_stream_chunk_says_how_many_interjections_were_heard(self):
-        body = {"model": "wren", "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+        body = {"model": "wisp", "stream": True, "messages": [{"role": "user", "content": "hi"}]}
         r = urllib.request.Request(self.base + "/chat/completions", data=json.dumps(body).encode(),
                                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
                                             "Tailscale-User-Login": ME})

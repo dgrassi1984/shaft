@@ -3,7 +3,7 @@ import Testing
 @testable import SHAFTKit
 
 private let settingsExample = #"""
-{"instance":"wren","paused":false,
+{"instance":"wisp","paused":false,
  "model":{"value":"new-model","choices":[{"model":"new-model","label":"New model"}]},
  "effort":{"value":"medium","choices":["medium","xhigh","low"]},
  "wake_interval":{"value":5,"floor":10,"effective":10},
@@ -18,7 +18,7 @@ private func serviceExample(pid: Int = 123, running: Bool = true, drain: String 
     #"{"services":[{"name":"api","running":\#(running),"pid":\#(pid),"started":"2026-11-05T10:00:00+01:00","commit":"abc","busy":""},{"name":"scheduler","running":true,"pid":\#(pid),"started":null,"commit":null,"busy":"","drain":\#(drain)}]}"#
 }
 
-private let pendingDrain = #"{"state":"draining","waiting":["wren is replying"],"deadline":"2026-11-05T11:00:00+01:00"}"#
+private let pendingDrain = #"{"state":"draining","waiting":["wisp is replying"],"deadline":"2026-11-05T11:00:00+01:00"}"#
 
 /// Virtual time advances only when the store calls its injected sleep.
 private final class RestartClock: @unchecked Sendable {
@@ -44,7 +44,7 @@ struct SettingsTests {
 
     @Test func section15SettingsAndServicesDecodeWithTheirWireTypes() throws {
         let settings = try SHAFTJSON.decoder().decode(InstanceSettings.self, from: Data(settingsExample.utf8))
-        #expect(settings.instance == "wren")
+        #expect(settings.instance == "wisp")
         #expect(settings.paused == false)
         #expect(settings.model.value == "new-model")
         #expect(settings.model.choices.map(\.model) == ["new-model"])
@@ -93,7 +93,7 @@ struct SettingsTests {
         #expect(scheduler.name == "scheduler" && scheduler.running && scheduler.pid == 123)
         #expect(scheduler.started == nil && scheduler.commit == nil && scheduler.busy == "")
         #expect(scheduler.drain?.pending == true)
-        #expect(scheduler.drain?.waiting == ["wren is replying"])
+        #expect(scheduler.drain?.waiting == ["wisp is replying"])
         #expect(scheduler.drain?.deadline == SHAFTJSON.parseStamp("2026-11-05T11:00:00+01:00"))
     }
 
@@ -114,8 +114,8 @@ struct SettingsTests {
                 : .json(200, #"{"settings":\#(fresh),"applies":"next run"}"#)
         }
         let owner = try makeOwner(server, folder: folder)
-        let store = owner.settings("wren")
-        #expect(store === owner.settings("wren"))
+        let store = owner.settings("wisp")
+        #expect(store === owner.settings("wisp"))
         #expect(owner.services === owner.services)
         await store.load()
         await store.save(.operatorName, value: .string("typed spelling"))
@@ -123,7 +123,7 @@ struct SettingsTests {
         #expect(store.notice == "Applies from the next run")
         #expect(store.saving == nil && store.saveError == nil)
         let request = try #require(server.requests.last)
-        #expect(request.path == "/app/v1/settings/wren")
+        #expect(request.path == "/app/v1/settings/wisp")
         #expect(request.json?["field"] as? String == "operator_name")
         #expect(request.json?["value"] as? String == "typed spelling")
         #expect(request.json?["expect"] as? String == "the operator")
@@ -137,7 +137,7 @@ struct SettingsTests {
                 : .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
         }
         let owner = try makeOwner(server, folder: folder)
-        let store = owner.settings("wren")
+        let store = owner.settings("wisp")
         await store.load()
         await store.save(.wakeInterval, value: .int(0))
         #expect(server.requests.last?.json?["field"] as? String == "wake_interval")
@@ -162,7 +162,7 @@ struct SettingsTests {
                 : .json(409, #"{"error":{"code":"stale","message":"changed","settings":\#(fresh)}}"#)
         }
         let owner = try makeOwner(server, folder: folder)
-        let store = owner.settings("wren")
+        let store = owner.settings("wisp")
         await store.load()
         await store.save(.operatorName, value: .string("Mine"))
         #expect(store.settings?.operatorName.value == "Elsewhere")
@@ -179,7 +179,7 @@ struct SettingsTests {
                 : .json(409, #"{"error":{"code":"refused","message":"Choose a listed model."}}"#)
         }
         let owner = try makeOwner(server, folder: folder)
-        let store = owner.settings("wren")
+        let store = owner.settings("wisp")
         await store.load()
         await store.save(.model, value: .string("invalid"))
         #expect(store.settings?.model.value == "new-model")
@@ -192,7 +192,7 @@ struct SettingsTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in .json(404, #"{"error":{"code":"not_found","message":"old server"}}"#) }
         let owner = try makeOwner(server, folder: folder)
-        let settings = owner.settings("wren")
+        let settings = owner.settings("wisp")
         await settings.load()
         await owner.services.load()
         #expect(settings.unsupported && settings.loadError?.status == 404)
@@ -215,16 +215,16 @@ struct SettingsTests {
             return .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
         }
         let client = server.client
-        _ = try await client.saveSetting("wren", field: .cloudCap, value: .null, expect: .double(2.5))
+        _ = try await client.saveSetting("wisp", field: .cloudCap, value: .null, expect: .double(2.5))
         let save = try #require(server.requests.last)
         #expect(save.json?["value"] is NSNull)
         #expect(save.json?["expect"] as? Double == 2.5)
         #expect(save.timeout == URLRequest(url: server.baseURL).timeoutInterval)
-        _ = try await client.setPaused("wren", paused: true)
-        #expect(server.requests.last?.path == "/app/v1/settings/wren/pause")
+        _ = try await client.setPaused("wisp", paused: true)
+        #expect(server.requests.last?.path == "/app/v1/settings/wisp/pause")
         #expect(server.requests.last?.timeout == 70)
-        _ = try await client.setPaused("wren", paused: false)
-        #expect(server.requests.last?.path == "/app/v1/settings/wren/resume")
+        _ = try await client.setPaused("wisp", paused: false)
+        #expect(server.requests.last?.path == "/app/v1/settings/wisp/resume")
         #expect(server.requests.last?.timeout == 70)
         _ = try await client.restart(service: "api")
         #expect(server.requests.last?.timeout == 100)
@@ -239,7 +239,7 @@ struct SettingsTests {
                 : .json(200, #"{"settings":\#(paused)}"#)
         }
         let owner = try makeOwner(server, folder: folder)
-        let store = owner.settings("wren")
+        let store = owner.settings("wisp")
         await store.load()
         await store.setPaused(true)
         #expect(store.settings?.paused == true)
@@ -288,14 +288,14 @@ struct SettingsTests {
         let server = StubServer { request in
             if request.method == "POST" {
                 return .json(200, serviceExample(drain:
-                    #"{"state":"cancelled","waiting":["wren"],"deadline":null}"#))
+                    #"{"state":"cancelled","waiting":["wisp"],"deadline":null}"#))
             }
             return .json(200, serviceExample())
         }
         let store = ServicesStore(client: server.client)
         await store.load()
         await store.cancel()
-        #expect(store.outcome["scheduler"] == .failed("Scheduler restart cancelled; waiting for wren."))
+        #expect(store.outcome["scheduler"] == .failed("Scheduler restart cancelled; waiting for wisp."))
         #expect(server.requests.last?.path == "/app/v1/services/scheduler/cancel")
         #expect(server.requests.filter { $0.method == "POST" }.count == 1)
     }
@@ -367,12 +367,12 @@ struct SettingsTests {
         for code in ["busy", "restarting"] {
             let server = StubServer { request in
                 request.method == "GET" ? .json(200, serviceExample())
-                    : .json(409, #"{"error":{"code":"\#(code)","message":"wren is replying"}}"#)
+                    : .json(409, #"{"error":{"code":"\#(code)","message":"wisp is replying"}}"#)
             }
             let store = ServicesStore(client: server.client, sleep: { _ in Issue.record("must not poll") })
             await store.load()
             await store.restart("api")
-            #expect(store.outcome["api"] == .failed("wren is replying"))
+            #expect(store.outcome["api"] == .failed("wisp is replying"))
             #expect(server.requests.count == 2)
             #expect(store.restarting.isEmpty)
         }
@@ -464,7 +464,7 @@ struct SettingsTests {
             request.method == "GET" ? .json(200, settingsExample)
                 : .json(409, #"{"error":{"code":"refused","message":"Keep this edit"}}"#)
         }
-        let store = try makeOwner(server, folder: folder).settings("wren")
+        let store = try makeOwner(server, folder: folder).settings("wisp")
         await store.load()
         let saved = await store.save(.operatorName, value: .string("Mine"))
         #expect(!saved)
@@ -484,7 +484,7 @@ struct SettingsTests {
             _ = release.wait(timeout: .now() + 3)
             return .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
         }
-        let store = try makeOwner(server, folder: folder).settings("wren")
+        let store = try makeOwner(server, folder: folder).settings("wisp")
         await store.load()
         let first = Task { await store.save(.operatorName, value: .string("First")) }
         var iterator = entered.stream.makeAsyncIterator()
@@ -501,12 +501,12 @@ struct SettingsTests {
         let server = StubServer { request in
             if request.method == "POST" { return .json(200, serviceExample(drain: pendingDrain)) }
             return .json(200, serviceExample(drain: steps.next() == 1 ? "null" :
-                #"{"state":"abandoned","waiting":["wren is replying"],"deadline":null}"#))
+                #"{"state":"abandoned","waiting":["wisp is replying"],"deadline":null}"#))
         }
         let store = ServicesStore(client: server.client, sleep: { _ in })
         await store.load()
         await store.restart("scheduler")
-        #expect(store.outcome["scheduler"] == .failed("Scheduler restart abandoned; waiting for wren is replying."))
+        #expect(store.outcome["scheduler"] == .failed("Scheduler restart abandoned; waiting for wisp is replying."))
         #expect(store.restarting.isEmpty)
     }
 }

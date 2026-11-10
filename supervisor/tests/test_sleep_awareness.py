@@ -89,7 +89,7 @@ if __name__ == "__main__":
 class SleepEntryTest(unittest.TestCase):
     def test_entry_has_one_heading_and_named_actions(self):
         # Regressions from the first real sleeps (2026-10-13): shaft's entry began with its own heading
-        # under the journal's ("Sleep" then "Sleep cycle (first sleep)"); wren's long write_file showed no path.
+        # under the journal's ("Sleep" then "Sleep cycle (first sleep)"); wisp's long write_file showed no path.
         import json
         from supervisor.tests.fakellm import FakeLLM
         fake = FakeLLM([{"tool_calls": [("write_file", {"path": "notes/long.md", "content": "y" * 3000})]},

@@ -1,4 +1,4 @@
-"""Stop what an instance is running now (`shaft kill <name>`, docs/plans/PLAN-kill-delete.md).
+"""Stop what an instance is running now (`shaft kill <name>`).
 
 A kill pauses the instance first (nothing new starts: wakes, the nightly sleep, jobs, battery, trial replays all skip
 a paused instance), then stops the instance's OWN processes — never the supervisor process that holds the run. The
@@ -304,5 +304,5 @@ def kill(name: str, wait_s: float = 120, say=print) -> int:
 
 
 def _short(command: str) -> str:
-    """'shaft live', 'battery run wren', 'shaft.plugin_runner news' — the part after the interpreter's -m."""
+    """'shaft live', 'battery run wisp', 'shaft.plugin_runner news' — the part after the interpreter's -m."""
     return command.split(" -m ", 1)[-1].strip()[:60] if " -m " in command else command.split("/")[-1][:60]

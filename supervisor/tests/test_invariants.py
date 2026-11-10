@@ -26,11 +26,11 @@ TARGET = Path(os.environ.get("SHAFT_UNDER_TEST") or PROJECT / "template")
 HOME = Path.home()
 # Whom the target's write-ups name: its own config.env, as the agent reads it (template/shaft/config.py's default when
 # unset). Regression: the gate runs these against an instance whose config names the operator, so a test that
-# expected the template's "the operator" failed every instance's code change (thelos's gdrive fix, 2026-10-20).
+# expected the template's "the operator" failed every instance's code change (tundra's gdrive fix, 2026-10-20).
 OPERATOR = config_values((TARGET / "config.env").read_text()).get("OPERATOR_NAME") or "the operator"
 UNDER_TEST = bool(os.environ.get("SHAFT_UNDER_TEST"))
 # Every CONFIDENCE_MODE the template accepts (CHOICES in template/shaft/config.py). Regression: the scripted cycles here
-# declared one confidence, which only some modes accept, so thelos's trial of "clauses" (#137, 2026-10-29) failed the
+# declared one confidence, which only some modes accept, so tundra's trial of "clauses" (#137, 2026-10-29) failed the
 # gate on these tests ("call declare_intent first") instead of being replayed.
 CONFIDENCE_MODES = ast.literal_eval(re.search(r'"CONFIDENCE_MODE": (\("[^)]*\))',
                                               (PROJECT / "template" / "shaft" / "config.py").read_text()).group(1))
@@ -167,7 +167,7 @@ class ReflectInvariants(InstanceCase):
     def test_empty_answer_saves_nothing(self):
         # Empty every time it is asked, nothing is saved. Two empty replies: the template asks once more (llm.py,
         # 2026-10-30), an instance's own client may not. How often it asks is not this invariant: pinned here, it
-        # failed thelos's gate on 2026-10-30 09:59 (its llm.py not yet updated) and reverted a good plugin change.
+        # failed tundra's gate on 2026-10-30 09:59 (its llm.py not yet updated) and reverted a good plugin change.
         before = self.journal()
         r = self.run_agent([{"content": "", "reasoning": "I thought a lot"},
                             {"content": "", "reasoning": "and again"}], "reflect")
@@ -323,7 +323,7 @@ class LiveInvariants(InstanceCase):
 
 
     def test_near_deadline_the_cycle_wraps_up_with_a_report(self):
-        # Regression: wren's sleep was killed at its time budget mid-thought, leaving no journal entry.
+        # Regression: wisp's sleep was killed at its time budget mid-thought, leaving no journal entry.
         import time
         r = self.run_agent([{"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "ran out of time",
                                                               "criterion_met": "no", "learned": "start smaller"})]}],
@@ -363,7 +363,7 @@ class TemplateMeasurement(InstanceCase):
         self.assertIn("cite the message", self.live_episode()["tools"][0]["result"])
 
     def test_a_long_message_and_claim_are_kept_whole_for_the_judge(self):
-        # Regression: wren's 2026-10-13 14:23 cycle was graded 'partial' because the send_message it was judged
+        # Regression: wisp's 2026-10-13 14:23 cycle was graded 'partial' because the send_message it was judged
         # on was cut at 2,000 characters in its episode (and at 1,500 by the judge's case).
         long_claim = "I checked every source. " * 150   # ~3,600 characters
         replies = [
@@ -440,7 +440,7 @@ class SandboxInvariants(InstanceCase):
                 self.assertFalse(target.exists())
 
     def test_cannot_read_home_outside_own_root(self):
-        r = self.probe(f"print(open({str(PROJECT / 'docs/plans/PLAN.md')!r}).read()[:10])")
+        r = self.probe(f"print(open({str(PROJECT / 'README.md')!r}).read()[:10])")
         self.assertNotEqual(r.returncode, 0)
 
     def test_cannot_read_supervisor_secrets(self):

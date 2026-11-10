@@ -1,4 +1,4 @@
-"""Instances see images (docs/plans/PLAN-vision.md): native images for models that accept them, describe_image for every
+"""Instances see images: native images for models that accept them, describe_image for every
 instance. Against fakes: OpenRouter's model list behind vision.urlopen, the cloud model behind cloudllm.complete."""
 from __future__ import annotations
 
@@ -172,7 +172,7 @@ class PrepareTest(Case):
 class DescribeTest(Case):
     def setUp(self):
         super().setUp()
-        self.root = Path(tempfile.mkdtemp(prefix="shaft-vision-wren-")).resolve()
+        self.root = Path(tempfile.mkdtemp(prefix="shaft-vision-wisp-")).resolve()
         (self.root / "attachments" / "from-operator" / "20261016-091200").mkdir(parents=True)
         self.photo = self.root / "attachments" / "from-operator" / "20261016-091200" / "photo-1.png"
         self.photo.write_bytes(png(64, 48))
@@ -190,17 +190,17 @@ class DescribeTest(Case):
         self.addCleanup(p.stop)
 
     def broker(self, **kw):
-        return broker.Broker("wren", self.root.parent, {}, self.root / "b.log", root=self.root, **kw)
+        return broker.Broker("wisp", self.root.parent, {}, self.root / "b.log", root=self.root, **kw)
 
     def test_describe_image_confined_and_billed(self):
-        b = self.broker(usage_name="wren")
+        b = self.broker(usage_name="wisp")
         r = b.call("describe_image", {"path": "attachments/from-operator/20261016-091200/photo-1.png",
                                       "question": "what colour?"})
         self.assertTrue(r["ok"], r)
         self.assertIn("[described by claude-haiku-5-5, not seen by you", r["result"])
         self.assertIn("A red rectangle.", r["result"])
         instance, body = self.calls[0]
-        self.assertEqual(instance, "wren")                                   # billed to the instance, in its cap
+        self.assertEqual(instance, "wisp")                                   # billed to the instance, in its cap
         self.assertEqual(body["model"], broker.DESCRIBE_MODEL)
         self.assertIn("what colour?", body["messages"][0]["content"][1]["text"])
         outside = Path(tempfile.mkdtemp(prefix="shaft-vision-out-")) / "o.png"
@@ -239,14 +239,14 @@ class DescribeTest(Case):
             state = Path(tempfile.mkdtemp(prefix="copy-")).resolve()
             (state / "a").mkdir()
             (state / "a" / "p.png").write_bytes(self.photo.read_bytes())
-            return broker.ReplayBroker("wren", self.root.parent, {}, state / "b.log", state_root=state,
+            return broker.ReplayBroker("wisp", self.root.parent, {}, state / "b.log", state_root=state,
                                        start_commit="0", as_of=datetime.now(), cache=cache, cache_lock=lock,
-                                       billed="wren@trial:t", tools_log=state / "t.log")
+                                       billed="wisp@trial:t", tools_log=state / "t.log")
         a, b = replay(), replay()
         self.assertEqual(a.call("describe_image", {"path": "a/p.png"})["result"],
                          b.call("describe_image", {"path": "a/p.png"})["result"])
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.calls[0][0], "wren@trial:t")
+        self.assertEqual(self.calls[0][0], "wisp@trial:t")
 
     def test_battery_has_no_image_tools(self):
         self.assertIn("describe_image", battery.EXAM_OFF)

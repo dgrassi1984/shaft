@@ -26,12 +26,12 @@ def contrast(a, b):
 class FieldNamesTest(unittest.TestCase):
     def test_issue_12_new_document_label(self):
         """Reverting the label leaves the name field dependent on its disappearing placeholder."""
-        body = str(web_views.docs_panel('wren', [], '', None, 'none', set()))
+        body = str(web_views.docs_panel('wisp', [], '', None, 'none', set()))
         self.assertRegex(body, r'<label>Document name\s*<input name="path"[^>]+></label>')
 
     def test_issue_12_document_editor_label(self):
         """Reverting the editor label loses the persistent document name and accessible context."""
-        body = str(web_views.docs_panel('wren', [], 'sub/a&b.md', 'hello', 'sha', set()))
+        body = str(web_views.docs_panel('wisp', [], 'sub/a&b.md', 'hello', 'sha', set()))
         self.assertIn('<label>Markdown of sub/a&amp;b.md<textarea', body)
         self.assertIn('aria-label="Markdown of sub/a&amp;b.md"', body)
 
@@ -41,15 +41,15 @@ class FieldNamesTest(unittest.TestCase):
             with self.subTest(choices=choices):
                 field = dict(key='LLM_MODEL', value='bonsai', set=True, default='bonsai',
                              help='', secret=False, numeric=False, choices=choices)
-                body = str(web_config.config_row('wren', field))
+                body = str(web_config.config_row('wisp', field))
                 self.assertIn('<code>LLM_MODEL</code>', body)
                 self.assertRegex(body, r'<(?:input|select) name="value"[^>]*aria-label="LLM_MODEL value"')
 
     def test_issue_25_drive_label(self):
         """Reverting the Drive label leaves no field name identifying the instance being edited."""
-        body = str(web_config.drive_page('wren', 'hello', 'sha', Html('<p>hello</p>')))
-        self.assertIn('<label>drive.md for wren<textarea', body)
-        self.assertIn('aria-label="drive.md for wren"', body)
+        body = str(web_config.drive_page('wisp', 'hello', 'sha', Html('<p>hello</p>')))
+        self.assertIn('<label>drive.md for wisp<textarea', body)
+        self.assertIn('aria-label="drive.md for wisp"', body)
 
 
 class StylesTest(unittest.TestCase):

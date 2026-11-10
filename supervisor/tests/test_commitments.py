@@ -32,7 +32,7 @@ FOLD_ROWS = [
      "at": "2026-10-26T16:00:00"},
     {"event": "settled", "id": CID, "status": "broken", "evidence": "Already settled", "at": "2026-10-26T17:00:00"},
     {**MADE, "id": "c1026-1412-3", "due": "2026-10-26T16:00:00", "made_to": "self"},
-    {**MADE, "id": "c1026-1412-4", "due": "2026-11-26T16:00:00", "source": "talk", "made_to": "wren"},
+    {**MADE, "id": "c1026-1412-4", "due": "2026-11-26T16:00:00", "source": "talk", "made_to": "wisp"},
     {**MADE, "id": "c1026-1412-5", "promise": []},
     {**MADE, "id": "c1026-1412-6", "made_to": "../outside"},
 ]
@@ -149,7 +149,7 @@ class CommitmentsTest(unittest.TestCase):
 
     def test_I10_peer_promises_never_expire_and_invalid_sourced_operator_is_self(self):
         unsourced = {k: v for k, v in MADE.items() if k != "talk_id"}
-        self.write_rows([{**MADE, "made_to": "wren"},
+        self.write_rows([{**MADE, "made_to": "wisp"},
                          {**unsourced, "id": "c1026-1412-2", "message_file": "missing.md", "sourced": True},
                          {**unsourced, "id": "c1026-1412-3", "sourced": True}])
         late = NOW + timedelta(days=7)
@@ -161,7 +161,7 @@ class CommitmentsTest(unittest.TestCase):
         self.assertEqual(supervisor.ledger("x", late), items)
 
     def test_I10_operator_promise_made_before_the_source_rule_stays_the_operators(self):
-        """18 open operator promises (shaft 8, wren 6, thelos 4) predate the rule: reclassifying them as self would
+        """18 open operator promises (shaft 8, wisp 6, tundra 4) predate the rule: reclassifying them as self would
         expire them unseen (integration review, 2026-11-03)."""
         legacy = {k: v for k, v in MADE.items() if k != "talk_id"}
         self.write_rows([legacy])
@@ -183,7 +183,7 @@ class CommitmentsTest(unittest.TestCase):
             box.as_of = datetime(2026, 10, 26, 13)
             self.assertEqual(box._record("commitment_source", cycle=file), "")
             box.as_of = None
-            self.assertEqual(box._record("commitment_source", cycle=file.replace("from-x", "from-wren")), "")
+            self.assertEqual(box._record("commitment_source", cycle=file.replace("from-x", "from-wisp")), "")
             (self.sup / "operator-inbox/read").mkdir()
             path.rename(self.sup / "operator-inbox/read" / file)   # messages._archive: the operator read or answered it
             self.assertEqual(box._record("commitment_source", cycle=file), "To: operator\n\n")
@@ -258,7 +258,7 @@ class CommitmentsTest(unittest.TestCase):
         self.assertEqual(deliver.call_args.args[:2], ("operator", file))
 
     def test_I10_wrong_recipient_speaker_and_link_are_not_operator_sources(self):
-        (self.root / "notes/peer.md").write_text("To: wren\n\nTo: operator\n")
+        (self.root / "notes/peer.md").write_text("To: wisp\n\nTo: operator\n")
         (self.root / "notes/link.md").symlink_to(self.root / "notes/operator-message.md")
         forged = "20261026-140000-000000-from-x.md"
         (self.root / forged).write_text("To: operator\n\nA local file is not a delivered message.\n")
@@ -267,7 +267,7 @@ class CommitmentsTest(unittest.TestCase):
         (self.sup / "operator-inbox" / MSG).unlink()   # only the local copy exists: never delivered
         _, stub = self.broker()
         for refs in ({"message_file": "notes/peer.md"}, {"message_file": "notes/link.md"}, {"talk_id": "coder"},
-                     {"message_file": forged}, {"message_file": forged.replace("from-x", "from-wren")}):
+                     {"message_file": forged}, {"message_file": forged.replace("from-x", "from-wisp")}):
             with self.subTest(refs=refs), stub:
                 (self.root / agent.FILE).unlink(missing_ok=True)
                 self.assertIn("recorded as self", agent.add(self.root, {**PROMISE, **refs}, "talk", NOW))
@@ -283,14 +283,14 @@ class CommitmentsTest(unittest.TestCase):
         self.assertEqual(items["c1026-1412-2"]["promise"], "Send report")
         self.assertEqual(items[CID]["due"], "2026-10-27T23:59:59.999999")
         self.assertEqual(items[CID]["status"], "open")
-        with mock.patch("shaft.broker.call", return_value="instances: wren, a_2, 0-peer"):
-            for recipient in ("wren", "a_2", "0-peer"):
+        with mock.patch("shaft.broker.call", return_value="instances: wisp, a_2, 0-peer"):
+            for recipient in ("wisp", "a_2", "0-peer"):
                 self.assertFalse(self.add(made_to=recipient).startswith("ERROR:"))
 
     def test_self_audit_loop_ledger_keeps_only_promises_to_others(self):
         """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
         from shaft import broker
-        with mock.patch.object(broker, "call", return_value="instances: wren, a_2, 0-peer") as peers:
+        with mock.patch.object(broker, "call", return_value="instances: wisp, a_2, 0-peer") as peers:
             for recipient in ("self", self.root.name, "unknown"):
                 with self.subTest(recipient=recipient):
                     result = self.add(made_to=recipient)
@@ -298,11 +298,11 @@ class CommitmentsTest(unittest.TestCase):
                     self.assertIn("goals/notes", result)
                     self.assertFalse((self.root / agent.FILE).exists())
             self.assertFalse(self.add().startswith("ERROR:"))
-            for recipient in ("wren", "a_2", "0-peer"):
+            for recipient in ("wisp", "a_2", "0-peer"):
                 self.assertFalse(self.add(made_to=recipient).startswith("ERROR:"))
             peers.assert_called_with("list_instances")
         with mock.patch.object(broker, "call", side_effect=broker.BrokerError("offline")):
-            self.assertIn("ERROR:", self.add(made_to="wren"))
+            self.assertIn("ERROR:", self.add(made_to="wisp"))
             self.assertFalse(self.add().startswith("ERROR:"))   # a conversation source needs no broker
             self.assertIn("ERROR:", self.add(talk_id="", message_file=MSG))
 
@@ -312,13 +312,13 @@ class CommitmentsTest(unittest.TestCase):
         box = Toolbox(self.root)
         box.commit_source, box.commit_talk_id = "talk", "conversation-1"
         with mock.patch("shaft.clock.now", return_value=NOW), \
-                mock.patch("shaft.broker.call", return_value="instances: wren"):
+                mock.patch("shaft.broker.call", return_value="instances: wisp"):
             self.assertIn("goals/notes", box.run("commit_to", json.dumps({**PROMISE, "made_to": "self"})))
             self.assertFalse((self.root / agent.FILE).exists())
-            for recipient in ("operator", "wren"):
+            for recipient in ("operator", "wisp"):
                 result = box.run("commit_to", json.dumps({**PROMISE, "made_to": recipient}))
                 self.assertTrue(result.startswith("commitment c"), result)
-        self.assertEqual([it["made_to"] for it in agent.fold(self.root, NOW).values()], ["operator", "wren"])
+        self.assertEqual([it["made_to"] for it in agent.fold(self.root, NOW).values()], ["operator", "wisp"])
 
     def test_self_audit_loop_legacy_self_hidden_from_prompt_sleep_and_recall(self):
         """Old self promises still fold, but only promises to others reach the agent."""
@@ -350,8 +350,8 @@ class CommitmentsTest(unittest.TestCase):
 
     def test_invalid_add_never_writes(self):
         for changes in ({"promise": " "}, {"criterion": ""}, {"promise": "x" * 301}, {"due": "yesterday"},
-                        {"due": "2026-10-25"}, {"due": "2026-10-26 14:11"}, {"made_to": "Wren"},
-                        {"made_to": "../wren"}, {"criterion": []}):
+                        {"due": "2026-10-25"}, {"due": "2026-10-26 14:11"}, {"made_to": "Wisp"},
+                        {"made_to": "../wisp"}, {"criterion": []}):
             with self.subTest(changes=changes):
                 self.assertTrue(self.add(**changes).startswith("ERROR:"))
         self.assertTrue(agent.add(self.root, PROMISE, "sleep", NOW).startswith("ERROR:"))

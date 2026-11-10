@@ -7,13 +7,13 @@ from supervisor import core, metrics, provenance, surprise
 
 class TestRunIsolationTest(unittest.TestCase):
     def test_the_instances_folder_is_not_the_real_one(self):
-        """test_judge2 read wren's real facts and episodes through core.INSTANCES: 72 s, and an outcome that
+        """test_judge2 read wisp's real facts and episodes through core.INSTANCES: 72 s, and an outcome that
         depended on live data (2026-10-29)."""
         real = core.PROJECT / "instances"
         for module in (core, metrics, surprise):
             with self.subTest(module=module.__name__):
                 self.assertNotEqual(module.INSTANCES, real)
-        self.assertEqual(provenance.facts("wren"), [])
+        self.assertEqual(provenance.facts("wisp"), [])
 
     def test_no_module_holds_a_folder_a_test_patched_in_while_it_was_imported(self):
         """trial.SUP_DIR froze on test_browser's temporary folder when trial was first imported inside a patch, and

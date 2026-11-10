@@ -1,4 +1,4 @@
-"""Voice turns, server side (PLAN-voice M1; M1-CONTRACT C1, C4, C5): a spoken send is recorded `via: voice` and the
+"""Voice turns, server side (M1-CONTRACT C1, C4, C5): a spoken send is recorded `via: voice` and the
 API is told (`"voice": true`), a typed one neither; the reply's events reach the app's stream from the relay's memory
 as the API writes them, not through the chat file written every SAVE_EVERY_S (up to 1.5 s added per piece: M0); the
 stream replays after `after`, ends with `end`, refuses when nothing runs, notices a client that left, and holding it
@@ -151,7 +151,7 @@ class VoiceTest(AppTest):
         return json.loads(r.body)["chat"]
 
     def user_items(self) -> list[dict]:
-        return [i for i in self.get("/app/v1/chat/wren")["items"] if i["type"] == "user"]
+        return [i for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "user"]
 
 
 # -- C1: the voice flag ------------------------------------------------------------------------------------------------
@@ -165,7 +165,7 @@ class VoiceFlagTest(VoiceTest):
         self.assertEqual(c["turns"][0]["via"], "voice")
         self.assertIs(self.fake.bodies()[0]["voice"], True)
         self.assertEqual([i["via"] for i in self.user_items()], ["voice"])
-        html = str(web_views.chat_feed("wren", c, []))
+        html = str(web_views.chat_feed("wisp", c, []))
         self.assertIn("· spoken", html)
 
     def test_a_typed_send_carries_neither(self):
@@ -175,7 +175,7 @@ class VoiceFlagTest(VoiceTest):
         self.assertNotIn("via", c["turns"][0])
         self.assertNotIn("voice", self.fake.bodies()[0])
         self.assertEqual([i["via"] for i in self.user_items()], [None])
-        self.assertNotIn("· spoken", str(web_views.chat_feed("wren", c, [])))
+        self.assertNotIn("· spoken", str(web_views.chat_feed("wisp", c, [])))
         self.sent(self.send(text="typed too", mid="t-2", voice="0"))
         self.wait_idle(cid)
         self.assertNotIn("voice", self.fake.bodies()[1])
@@ -197,7 +197,7 @@ class VoiceFlagTest(VoiceTest):
         cid = self.sent(self.send(text="start", mid="t-1"))
         self.wait_for(lambda: self.fake.written.get(3), what="the API's drafts")
         r = self.send(text="actually, tomorrow", mid="v-2", voice="1")
-        self.assertEqual(json.loads(r.body)["said"], "wren reads it at its next step")
+        self.assertEqual(json.loads(r.body)["said"], "wisp reads it at its next step")
         self.assertIs(self.fake.bodies("/v1/chat/interject")[0]["voice"], True)
         turns = web_chat.load(cid)["turns"]
         self.assertEqual((turns[-1]["interjected"], turns[-1]["via"]), (True, "voice"))
@@ -224,11 +224,11 @@ class VoiceFlagTest(VoiceTest):
         body = b"".join(f'--B\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
                         for k, v in (("text", "hi"), ("mid", "w-1"), ("voice", "1"))) + b"--B--\r\n"
         cookie = self.paired()
-        r = self.req("/chat/wren/send", "POST", body=body, cookie=cookie,
+        r = self.req("/chat/wisp/send", "POST", body=body, cookie=cookie,
                      headers={"content-type": "multipart/form-data; boundary=B", "sec-fetch-site": "same-origin",
                               "x-csrf-token": self.csrf(cookie)})
         self.assertEqual(r.status, 200, r.body)
-        c = self.wait_idle(web_chat.open_chat("wren")["id"])
+        c = self.wait_idle(web_chat.open_chat("wisp")["id"])
         self.assertEqual(c["turns"][0]["via"], "voice")
         self.assertIs(self.fake.bodies()[0]["voice"], True)
 
@@ -254,14 +254,14 @@ def read_events(stream, until: str = "end", timeout: float = 10) -> list[dict]:
 
 class StreamTest(VoiceTest):
     def stream(self, query: str = "", **kw):
-        r = self.api(f"/app/v1/chat/wren/stream{query}", **kw)
+        r = self.api(f"/app/v1/chat/wisp/stream{query}", **kw)
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(r.headers["Content-Type"], "text/event-stream; charset=utf-8")
         self.addCleanup(r.stream.close)
         return r.stream
 
     def test_events_arrive_in_order_as_the_api_writes_them_not_with_the_chat_file(self):
-        """The bug (PLAN-voice M0): a piece of the spoken reply reached the app only through the chat file, written
+        """The bug: a piece of the spoken reply reached the app only through the chat file, written
         every SAVE_EVERY_S (1 s) and polled every 0.5 s — up to 1.5 s added before each piece. With the file write
         pushed to a minute, a draft still reaches the stream within a fraction of a second, while the API holds."""
         hold = threading.Event()
@@ -305,16 +305,16 @@ class StreamTest(VoiceTest):
         self.assertEqual([e["seq"] for e in read_events(self.stream(headers={"last-event-id": "8"}))], [9, 10])
         self.assertEqual([e["seq"] for e in read_events(self.stream(f"?after=9&reply={reply}"))], [10])
         self.assertEqual(len(read_events(self.stream("?after=9&reply=0000000000000000"))), 10)   # another reply's seq
-        self.error(self.api("/app/v1/chat/wren/stream?after=10"), 409, "not_replying")         # all of it seen
-        self.error(self.api("/app/v1/chat/wren/stream?after=-1"), 400, "bad_request")
-        self.error(self.api("/app/v1/chat/wren/stream?after=x"), 400, "bad_request")
+        self.error(self.api("/app/v1/chat/wisp/stream?after=10"), 409, "not_replying")         # all of it seen
+        self.error(self.api("/app/v1/chat/wisp/stream?after=-1"), 400, "bad_request")
+        self.error(self.api("/app/v1/chat/wisp/stream?after=x"), 400, "bad_request")
 
     def test_409_when_nothing_runs_and_after_the_keep_window(self):
         """The bug: a stream with no reply to follow hung open (or answered 200 with nothing), and the app waited on
         silence instead of listening again."""
-        self.error(self.api("/app/v1/chat/wren/stream"), 409, "not_replying")      # no chat at all
+        self.error(self.api("/app/v1/chat/wisp/stream"), 409, "not_replying")      # no chat at all
         self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
-        self.error(self.api("/app/v1/chat/wren/stream"), 409, "not_replying")      # a chat, no reply
+        self.error(self.api("/app/v1/chat/wisp/stream"), 409, "not_replying")      # a chat, no reply
         self.error(self.api("/app/v1/chat/ghost/stream"), 404, "not_found")
         self.fake.script = voice_turn()
         cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
@@ -322,7 +322,7 @@ class StreamTest(VoiceTest):
         relay = web_chat.stream_of(cid)
         self.assertEqual(read_events(self.stream())[-1]["type"], "end")             # kept: a reconnect gets the end
         relay.ended -= web_chat.STREAM_KEEP_S + 1
-        self.error(self.api("/app/v1/chat/wren/stream"), 409, "not_replying")      # and then not any more
+        self.error(self.api("/app/v1/chat/wisp/stream"), 409, "not_replying")      # and then not any more
         self.assertIsNone(web_chat.stream_of(cid))
 
     def test_a_failed_or_stopped_reply_ends_the_stream_with_why(self):
@@ -332,7 +332,7 @@ class StreamTest(VoiceTest):
         cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
         stream = self.stream()
         read_events(stream, until="draft")
-        self.assertEqual(json.loads(self.api("/app/v1/chat/wren/stop", "POST", {"cid": cid}).body)["said"],
+        self.assertEqual(json.loads(self.api("/app/v1/chat/wisp/stop", "POST", {"cid": cid}).body)["said"],
                          "stopping the reply")
         got = read_events(stream)
         self.assertEqual((got[-2]["type"], got[-1]["type"], got[-1]["failure"]), ("answer", "end", "stopped by you"))
@@ -349,7 +349,7 @@ class StreamTest(VoiceTest):
         self.sent(self.send(text="weather?", mid="v-1", voice="1"))
         stream = self.stream()
         read_events(stream, until="draft")
-        self.assertIn(self.device, web_chat.watchers("wren"))
+        self.assertIn(self.device, web_chat.watchers("wisp"))
         hold.set()
         read_events(stream)
         self.wait_idle(cid)
@@ -366,7 +366,7 @@ class StreamTest(VoiceTest):
         with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0):
             web_chat._watched.clear()
             next(stream)                                              # a keepalive, KEEPALIVE_S later
-            self.assertIn(self.device, web_chat.watchers("wren"))
+            self.assertIn(self.device, web_chat.watchers("wisp"))
         hold.set()
 
 
@@ -393,7 +393,7 @@ class StreamServerTest(VoiceTest):
         hold = threading.Event()
         self.fake.script = voice_turn(hold)
         cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
-        s = self.open("/app/v1/chat/wren/stream")
+        s = self.open("/app/v1/chat/wisp/stream")
         raw = b""
         while raw.count(b"data: ") < 3:                     # status and both drafts, flushed as they came
             raw += s.recv(65536)
@@ -401,7 +401,7 @@ class StreamServerTest(VoiceTest):
         self.assertIn(b"Content-Type: text/event-stream; charset=utf-8", raw)
         self.assertNotIn(b"Content-Length", raw.partition(b"\r\n\r\n")[0])
         self.assertIn(b'"text": "look."', raw)
-        self.assertEqual(app_api.held("wren"), 1)
+        self.assertEqual(app_api.held("wisp"), 1)
         started = time.monotonic()                          # meanwhile, another request is answered at once
         with self.open("/app/v1/instances") as other:
             answer = b""
@@ -410,7 +410,7 @@ class StreamServerTest(VoiceTest):
         self.assertIn(b" 200 ", answer.split(b"\r\n")[0])
         self.assertLess(time.monotonic() - started, 2)
         s.close()                                           # the phone locked, the network went
-        self.wait_for(lambda: app_api.held("wren") == 0, what="the server to notice the client left")
+        self.wait_for(lambda: app_api.held("wisp") == 0, what="the server to notice the client left")
         hold.set()
         self.wait_idle(cid)
 
@@ -429,7 +429,7 @@ class StreamServerTest(VoiceTest):
         self.fake.script = voice_turn()
         cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
         self.wait_idle(cid)
-        with self.open("/app/v1/chat/wren/stream") as s:
+        with self.open("/app/v1/chat/wisp/stream") as s:
             raw = b""
             while chunk_ := s.recv(65536):
                 raw += chunk_
@@ -471,7 +471,7 @@ class VoicesTest(AppTest):
                                                "state": "open"}])
         stub.available = record("available", {"ios": [{"identifier": "it-voice", "name": "Alice", "language": "it-IT",
                                                       "quality": "enhanced"}], "macos": []})
-        stub.assign = record("assign", {}, refuse=lambda n, lang, ident, by: ident == "taken" and "taken is Wren's voice for it")
+        stub.assign = record("assign", {}, refuse=lambda n, lang, ident, by: ident == "taken" and "taken is Wisp's voice for it")
         stub.clear = record("clear")
         stub.decide = record("decide", {}, refuse=lambda n, pid, accept, reason: pid == "vp-gone" and "no open proposal vp-gone")
         stub.report = record("report", refuse=lambda platform, voices: any(v["identifier"] == "bad" for v in voices)
@@ -483,7 +483,7 @@ class VoicesTest(AppTest):
 
     def test_get_shows_held_proposed_and_available_voices(self):
         """The bug: the app could not show which voice an instance has, what it proposed, or what is installed."""
-        got = self.get("/app/v1/voices/wren")
+        got = self.get("/app/v1/voices/wisp")
         self.assertEqual(got["voices"]["en"]["ts"], app_api.stamp("2026-11-09T10:00:00"))
         self.assertIsNone(got["voices"]["it"])
         self.assertEqual(got["proposals"][0]["id"], "vp-1")
@@ -492,24 +492,24 @@ class VoicesTest(AppTest):
 
     def test_assign_clear_and_refused_by_name(self):
         """The bug: a voice another instance holds was taken silently, or its refusal reached the app as a 500."""
-        self.get("/app/v1/voices/wren", method="POST", data={"language": "it", "identifier": "it-voice"})
-        self.assertIn(("assign", "wren", "it", "it-voice", "operator"), self.calls)
-        err = self.error(self.api("/app/v1/voices/wren", "POST", {"language": "it", "identifier": "taken"}),
+        self.get("/app/v1/voices/wisp", method="POST", data={"language": "it", "identifier": "it-voice"})
+        self.assertIn(("assign", "wisp", "it", "it-voice", "operator"), self.calls)
+        err = self.error(self.api("/app/v1/voices/wisp", "POST", {"language": "it", "identifier": "taken"}),
                          409, "refused")
-        self.assertEqual(err["message"], "taken is Wren's voice for it")
-        self.get("/app/v1/voices/wren", method="POST", data={"language": "en", "clear": True})
-        self.assertIn(("clear", "wren", "en"), self.calls)
+        self.assertEqual(err["message"], "taken is Wisp's voice for it")
+        self.get("/app/v1/voices/wisp", method="POST", data={"language": "en", "clear": True})
+        self.assertIn(("clear", "wisp", "en"), self.calls)
         for bad in ({"language": "it"}, {"language": "it", "identifier": 3}, {"language": "en", "clear": "yes"},
                     {"language": "it", "identifier": "x", "clear": True}):
             with self.subTest(bad=bad):
-                self.error(self.api("/app/v1/voices/wren", "POST", bad), 400, "bad_request")
+                self.error(self.api("/app/v1/voices/wisp", "POST", bad), 400, "bad_request")
 
     def test_a_proposal_is_decided_and_its_refusal_named(self):
         """The bug: deciding a proposal that is gone answered 500, or an accept that was not a bool passed as one."""
-        self.get("/app/v1/voices/wren/proposals/vp-1", method="POST", data={"accept": False, "reason": "too sharp"})
-        self.assertIn(("decide", "wren", "vp-1", False, "too sharp"), self.calls)
-        self.error(self.api("/app/v1/voices/wren/proposals/vp-gone", "POST", {"accept": True}), 409, "refused")
-        self.error(self.api("/app/v1/voices/wren/proposals/vp-1", "POST", {"accept": "yes"}), 400, "bad_request")
+        self.get("/app/v1/voices/wisp/proposals/vp-1", method="POST", data={"accept": False, "reason": "too sharp"})
+        self.assertIn(("decide", "wisp", "vp-1", False, "too sharp"), self.calls)
+        self.error(self.api("/app/v1/voices/wisp/proposals/vp-gone", "POST", {"accept": True}), 409, "refused")
+        self.error(self.api("/app/v1/voices/wisp/proposals/vp-1", "POST", {"accept": "yes"}), 400, "bad_request")
 
     def test_the_device_reports_its_voices(self):
         """The bug: the instance could only propose from a list nobody reported, or a malformed report was stored."""
@@ -526,11 +526,11 @@ class VoicesTest(AppTest):
 
 class InstanceRowTest(AppTest):
     def test_the_chat_list_says_whether_voice_is_on(self):
-        """The bug: the app had no way to know whether to show the Talk button for an instance (C2: only Thelos)."""
+        """The bug: the app had no way to know whether to show the Talk button for an instance (C2: only Tundra)."""
         self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "off")      # not set: off
-        (self.inst / "wren" / "config.env").write_text('VOICE_MODE="on"\n')
+        (self.inst / "wisp" / "config.env").write_text('VOICE_MODE="on"\n')
         self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "on")
-        (self.inst / "wren" / "config.env").write_text('VOICE_MODE="yes"\n')
+        (self.inst / "wisp" / "config.env").write_text('VOICE_MODE="yes"\n')
         self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "off")
 
 

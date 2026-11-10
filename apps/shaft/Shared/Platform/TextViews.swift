@@ -121,7 +121,7 @@ final class ComposerUITextView: UITextView {
         placeholder.adjustsFontForContentSizeCategory = true
         placeholder.textColor = UIColor(Color.textTertiary)
         placeholder.isAccessibilityElement = false
-        // At the largest text "Message thelos" is wider than the field: it shrinks to fit rather than cut to "Messag…".
+        // At the largest text "Message tundra" is wider than the field: it shrinks to fit rather than cut to "Messag…".
         placeholder.adjustsFontSizeToFitWidth = true
         placeholder.minimumScaleFactor = 0.4
         placeholder.baselineAdjustment = .alignCenters

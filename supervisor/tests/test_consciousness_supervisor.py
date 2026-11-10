@@ -1,4 +1,4 @@
-"""PLAN-consciousness on the supervisor's side: the attention schema scored against the tool log (B3), the kill-test
+"""The self-knowledge mechanisms on the supervisor's side: the attention schema scored against the tool log (B3), the kill-test
 harness (supervisor/experiments.py: knob changes, target cycles, endpoints, the workspace's planted probe), and the
 stats.md sections — one that fails never costs the instance the others. The modules written by the relay lanes have
 their own tests (test_metacog, test_anchoring, test_commitments, test_provenance, test_tom)."""
@@ -36,7 +36,7 @@ FAMILY_CASES = [
     ("run", {"command": "echo hi"}, None),
     ("run", {"command": "wc -l f"}, None),
     ("run", {"command": "cd /a && grep x f"}, None),
-    ("send_message", {"to": "wren", "text": "hi"}, "send_message → wren"),
+    ("send_message", {"to": "wisp", "text": "hi"}, "send_message → wisp"),
     ("http_request", {"url": "https://api.example.org/v1", "method": "post"}, "http_request POST api.example.org"),
     ("http_request", {"url": "https://api.example.org/v1"}, None),
     ("delegate_coding", {"task": "x"}, "delegate_coding"),
@@ -71,12 +71,12 @@ class AttentionTest(unittest.TestCase):
             call("declare_intent", {}), call("read_file", {"path": "notes/plan.md"}),
             call("fetch_page", {"url": "https://example.org/a"}), call("search_memory", {"query": "q"}),
             call("send_message", {"to": "operator", "text": "t"}), call("finish_cycle", {})],
-            intent={"goal": "g", "attention": [{"source": "notes/"}, {"source": "web"}, {"source": "wren"},
+            intent={"goal": "g", "attention": [{"source": "notes/"}, {"source": "web"}, {"source": "wisp"},
                                                {"why": "no source"}]})
         s = attention.score(e)
         self.assertEqual(s["calls"], 4)             # the controls are not where it looked
         self.assertEqual(s["on_named"], 2)          # notes/plan.md and the web page
-        self.assertEqual(s["untouched"], ["wren"])
+        self.assertEqual(s["untouched"], ["wisp"])
         self.assertEqual(s["unreadable"], 1)
         self.assertIsNone(attention.score(ep("t", [])))   # nothing declared, nothing scored
 
@@ -85,8 +85,8 @@ class AttentionTest(unittest.TestCase):
         self.assertTrue(attention.matches("memory", attention.touches(call("write_file", {"path": "memory/people/x.md"}))))
         self.assertTrue(attention.matches("example.org", attention.touches(call("fetch_page", {"url": "https://example.org/a"}))))
         self.assertTrue(attention.matches("code", attention.touches(call("write_file", {"path": "shaft/live.py"}))))
-        self.assertTrue(attention.matches("another instance", attention.touches(call("send_message", {"to": "wren"}))))
-        self.assertFalse(attention.matches("wren", attention.touches(call("send_message", {"to": "thelos"}))))
+        self.assertTrue(attention.matches("another instance", attention.touches(call("send_message", {"to": "wisp"}))))
+        self.assertFalse(attention.matches("wisp", attention.touches(call("send_message", {"to": "tundra"}))))
         self.assertFalse(attention.matches("another instance", attention.touches(call("send_message", {"to": "operator"}))))
 
     def test_it_does_not_over_match(self):
@@ -109,7 +109,7 @@ class AttentionTest(unittest.TestCase):
 
 
 class AttentionMissedTouchesTest(unittest.TestCase):
-    """Bug: attention scoring missed touches made through task_queue/record/run/plugins. Thelos's declared sources were
+    """Bug: attention scoring missed touches made through task_queue/record/run/plugins. Tundra's declared sources were
     'never touched' in most cycles (share 0-25%) while its calls went right there: the file a run command reads, a
     plugin's own code, the mail/calendar/drive/notion plugins, '.tmp' read as 'tmp',
     and declarations written as 'notes/…', 'a / b' or 'mail_search/mail_read (a thread)'."""
@@ -236,7 +236,7 @@ class KnobChangeTest(unittest.TestCase):
     def change(self, env=b""):
         with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": self.CONFIG,
                                                                      "config.env": env}):
-            return experiments.knob_change(Path("/nowhere"), "wren", "WORKSPACE", "relevance")
+            return experiments.knob_change(Path("/nowhere"), "wisp", "WORKSPACE", "relevance")
 
     def test_flips_only_that_default(self):
         out = self.change()["shaft/config.py"].decode()
@@ -246,7 +246,7 @@ class KnobChangeTest(unittest.TestCase):
     def test_refuses_without_the_knob_or_when_config_env_sets_it(self):
         with self.assertRaisesRegex(experiments.ExperimentError, "update it to the template"):
             with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": b"FIELDS = {}"}):
-                experiments.knob_change(Path("/nowhere"), "wren", "WORKSPACE", "off")
+                experiments.knob_change(Path("/nowhere"), "wisp", "WORKSPACE", "off")
         with self.assertRaisesRegex(experiments.ExperimentError, "config.env sets WORKSPACE"):
             self.change(b"WORKSPACE=off\n")
 
@@ -255,7 +255,7 @@ def control_rows(n: int, acted: int, fp=None, shown: int | None = None) -> None:
     """n positive-control replays of the workspace experiment, `acted` of them acted on, `shown` with the probe in
     front (all, by default)."""
     for i in range(n):
-        experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": experiments.CONTROL, "completed": True,
+        experiments._ws_append("wisp", {"ts": f"2026-10-2{i}", "arm": experiments.CONTROL, "completed": True,
                                         "acted": i < acted, "captured": 0, "fingerprint": fp,
                                         "in_front": "inbox" if i < (n if shown is None else shown) else ""})
 
@@ -299,9 +299,9 @@ class ProbeTest(unittest.TestCase):
             control_rows(6, 6)
             for i in range(6):
                 for arm, acted in (("off", False), ("relevance", i == 0), ("competitive", i < 5)):
-                    experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True,
+                    experiments._ws_append("wisp", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True,
                                                     "acted": acted, "captured": 0, "in_front": "focus" if acted else ""})
-            out = experiments.workspace_report("wren")
+            out = experiments.workspace_report("wisp")
         self.assertIn("positive control (probe in the inbox, shipped code): acted 6/6", out)
         self.assertIn("acted on the probe 5/6 (5 of them in front)", out)
         self.assertIn("only competitive acted 4, only relevance 0", out)
@@ -314,16 +314,16 @@ class ProbeTest(unittest.TestCase):
             for fp, acted in (("old", True), ("new", False)):
                 control_rows(1, 1, fp)
                 for arm in experiments.WORKSPACE_ARMS:
-                    experiments._ws_append("wren", {"ts": "2026-10-20", "arm": arm, "completed": True, "acted": acted,
+                    experiments._ws_append("wisp", {"ts": "2026-10-20", "arm": arm, "completed": True, "acted": acted,
                                                     "captured": 0, "fingerprint": fp})
-            out = experiments.workspace_report("wren")
+            out = experiments.workspace_report("wisp")
         self.assertIn("acted on the probe 0/1", out)
         self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"2"}, "m"))
         self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"1"}, "n"))
 
 
 class WorkspaceInstrumentTest(unittest.TestCase):
-    """Regression: workspace kill test could not separate arms: probe acted on 0/19 even in off (Thelos, 2026-10-28/29).
+    """Regression: workspace kill test could not separate arms: probe acted on 0/19 even in off (Tundra, 2026-10-28/29).
     The probe ranked ~8,500th of ~13,800 chunks for the cycle's search, so no arm ever had it in front; the endpoint
     read a diff cut at 16,000 characters; and with no positive control the report still said "delete it"."""
 
@@ -334,7 +334,7 @@ class WorkspaceInstrumentTest(unittest.TestCase):
         self.enterContext(mock.patch.object(experiments, "workspace_path", return_value=self.dir / "w.jsonl"))
 
     def copy(self) -> tuple[Path, dict, dict]:
-        dest = self.dir / f"copy{len(list(self.dir.glob('copy*')))}" / "wren"
+        dest = self.dir / f"copy{len(list(self.dir.glob('copy*')))}" / "wisp"
         for folder in ("memory", "notes", "inbox"):
             (dest / folder).mkdir(parents=True)
         (dest / "memory" / "journal.md").write_text("## 2026-10-25 09:00 — orchard\n\nCounted the rows.\n")
@@ -394,12 +394,12 @@ class WorkspaceInstrumentTest(unittest.TestCase):
     def arms(self, acted=False, n=4):
         for i in range(n):
             for arm in experiments.WORKSPACE_ARMS:
-                experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True, "acted": acted,
+                experiments._ws_append("wisp", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True, "acted": acted,
                                                 "captured": 0, "in_front": ""})
 
     def test_no_positive_control_gives_no_verdict(self):
         self.arms()   # the 2026-10-28/29 run's shape: three arms, nothing acted on, no control
-        out = experiments.workspace_report("wren")
+        out = experiments.workspace_report("wisp")
         self.assertIn("no verdict: no positive control replayed yet", out)
         self.assertNotIn("delete it", out)
         self.assertNotIn("kill rule", out)
@@ -407,21 +407,21 @@ class WorkspaceInstrumentTest(unittest.TestCase):
     def test_a_failed_positive_control_reports_instrument_failure_not_a_verdict(self):
         control_rows(4, 1)   # acted on once in four: not most
         self.arms()
-        out = experiments.workspace_report("wren")
+        out = experiments.workspace_report("wisp")
         self.assertIn("INSTRUMENT FAILED: the probe in the inbox was acted on in only 1/4 control replays", out)
         self.assertNotIn("delete it", out)
         self.assertNotIn("kill rule", out)
-        self.assertTrue(experiments.workspace_instrument("wren")["failed"])
+        self.assertTrue(experiments.workspace_instrument("wisp")["failed"])
 
     def test_a_control_whose_probe_was_not_in_front_is_a_broken_plant(self):
         control_rows(4, 4, shown=3)
-        out = experiments.workspace_report("wren")
+        out = experiments.workspace_report("wisp")
         self.assertIn("INSTRUMENT FAILED: the probe planted in the inbox was in front of only 3/4", out)
 
     def test_a_working_control_lets_the_arms_be_judged(self):
         control_rows(4, 3)
         self.arms()
-        out = experiments.workspace_report("wren")
+        out = experiments.workspace_report("wisp")
         self.assertNotIn("INSTRUMENT FAILED", out)
         self.assertIn("kill rule:", out)
 
@@ -462,27 +462,27 @@ class WorkspaceInstrumentTest(unittest.TestCase):
                 mock.patch.object(experiments, "state_hosts", return_value=[]), \
                 mock.patch.object(experiments, "front", side_effect=shown), \
                 mock.patch("supervisor.core.instance_config", return_value={}):
-            result = experiments.run_workspace("wren", 1, project=self.dir)
+            result = experiments.run_workspace("wisp", 1, project=self.dir)
         return result, calls
 
     def test_a_run_whose_control_fails_replays_no_arm(self):
         result, calls = self.fake_run(writes_probe=False)
         self.assertEqual(calls, [experiments.CONTROL])   # the three arms were never paid for
         self.assertTrue(result["instrument"]["failed"])
-        self.assertIn("INSTRUMENT FAILED", experiments.workspace_report("wren"))
+        self.assertIn("INSTRUMENT FAILED", experiments.workspace_report("wisp"))
 
     def test_a_run_whose_control_works_replays_the_arms(self):
         result, calls = self.fake_run(writes_probe=True)
         self.assertEqual(calls[0], experiments.CONTROL)
         self.assertEqual(sorted(calls[1:]), sorted(experiments.WORKSPACE_ARMS))
-        rows = experiments.workspace_rows("wren")
+        rows = experiments.workspace_rows("wisp")
         self.assertEqual([r["acted"] for r in rows], [True] * 4)
         self.assertEqual(rows[0]["in_front"], "inbox")
-        self.assertIn("positive control (probe in the inbox, shipped code): acted 1/1", experiments.workspace_report("wren"))
+        self.assertIn("positive control (probe in the inbox, shipped code): acted 1/1", experiments.workspace_report("wisp"))
 
 
     def test_a_run_embeds_the_mind_once_and_hands_the_index_on(self):
-        """With no .tmp/memory-index.json in the instance (Thelos, 2026-10-31) every copy embedded all ~14,000 chunks
+        """With no .tmp/memory-index.json in the instance (Tundra, 2026-10-31) every copy embedded all ~14,000 chunks
         again and `shaft front` timed out: the first copy's vectors go to the next."""
         seen = []
 
@@ -495,13 +495,13 @@ class WorkspaceInstrumentTest(unittest.TestCase):
         held: dict = {}
         with mock.patch("subprocess.run", side_effect=verb):
             for i in range(3):
-                dest = self.dir / f"c{i}" / "wren"
+                dest = self.dir / f"c{i}" / "wisp"
                 dest.mkdir(parents=True)
-                experiments.front(self.dir, "wren", dest, {"t0": "2026-10-26T09:00:00"}, held)
+                experiments.front(self.dir, "wisp", dest, {"t0": "2026-10-26T09:00:00"}, held)
         self.assertEqual(seen, [None, '{"copy": 1}', '{"copy": 2}'])
 
     def test_the_vector_log_is_handed_on_after_a_copy_migrates(self):
-        """Bug (PLAN-voice M1): the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
+        """Bug: the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
         JSON after migrating; the handoff carried only the JSON, so every later copy started with no vectors and
         embedded the whole mind again. The next copy gets the log, and no stale JSON."""
         seen = []
@@ -516,9 +516,9 @@ class WorkspaceInstrumentTest(unittest.TestCase):
         held: dict = {"files": {".tmp/memory-index.json": b"{}"}}
         with mock.patch("subprocess.run", side_effect=verb):
             for i in range(3):
-                dest = self.dir / f"m{i}" / "wren"
+                dest = self.dir / f"m{i}" / "wisp"
                 dest.mkdir(parents=True)
-                experiments.front(self.dir, "wren", dest, {"t0": "2026-10-26T09:00:00"}, held)
+                experiments.front(self.dir, "wisp", dest, {"t0": "2026-10-26T09:00:00"}, held)
         self.assertEqual(seen, [["memory-index.json"], ["memory-index.bin"], ["memory-index.bin"]])
         self.assertEqual(held, {"files": {".tmp/memory-index.bin": b"LOG3"}})
 
@@ -561,7 +561,7 @@ class WorkspaceDryRunTest(unittest.TestCase):
                 mock.patch.object(experiments, "_topic", return_value="orchard rows"), \
                 mock.patch("supervisor.core.instance_config", return_value={}), \
                 mock.patch("supervisor.core.EMBED_PORT", 9):   # no embedding service: words only, deterministic
-            r = experiments.run_workspace("wren", 1, dry_run=True, project=base)
+            r = experiments.run_workspace("wisp", 1, dry_run=True, project=base)
         self.assertEqual(r["replays"], 4)   # the control and three arms, none run
         row = r["table"][0]
         self.assertEqual(row["place"], "notes/orchard.md")   # the one host the cycle's search ranks first
@@ -569,11 +569,11 @@ class WorkspaceDryRunTest(unittest.TestCase):
         self.assertEqual(row["control"], "inbox")
         self.assertEqual(row["off"], "focus")          # automatic recall shows the top hit
         self.assertEqual(row["relevance"], "focus")    # the memory codelet's top hit keeps its rank: relevance 1.0
-        text = experiments.workspace_dry_run_text("wren", r)
+        text = experiments.workspace_dry_run_text("wisp", r)
         self.assertIn("notes/orchard.md (#1→#1)", text)
         self.assertIn("in front: control 1/1 (shipped mode competitive), off 1/1, relevance 1/1", text)
         self.assertIn("memory search ran on words only here", text)
-        self.assertIn("cost: unknown — no priced replay of wren", text)
+        self.assertIn("cost: unknown — no priced replay of wisp", text)
 
 
 class BlindHoldsTest(unittest.TestCase):
@@ -595,7 +595,7 @@ class SectionsTest(unittest.TestCase):
         with mock.patch("supervisor.attention.section", side_effect=RuntimeError("boom")), \
                 mock.patch("supervisor.commitments.section", return_value=["## Promises", "- one"]), \
                 mock.patch.object(metrics, "log") as log:
-            lines = metrics._sections("wren", ("attention", "commitments"))
+            lines = metrics._sections("wisp", ("attention", "commitments"))
         self.assertEqual(lines, ["", "## Promises", "- one"])
         self.assertIn("stats section attention failed", log.call_args[0][0])
 

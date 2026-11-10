@@ -42,7 +42,7 @@ class SettingsTest(unittest.TestCase):
         self.assertNotIn("shared", json.loads((self.sup / "tools" / "shaft.json").read_text()))
 
     def test_other_settings_do_not_wipe_the_mail_grant(self):
-        # The same class of bug for the mail grant (docs/plans/PLAN-mail.md): every setter must keep the keys it does not own.
+        # The same class of bug for the mail grant: every setter must keep the keys it does not own.
         grant = [{"account": "work", "label": "AssistantAccess"}]
         core.set_mail_grants("shaft", grant)
         core.set_tool("shaft", "delegate_coding", on=False)
@@ -60,7 +60,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_per_instance(self):
         core.set_shared_folder("shaft", self.folder)
-        self.assertIsNone(core.shared_folder("wren"))
+        self.assertIsNone(core.shared_folder("wisp"))
 
     def test_shaft_state_is_never_shared(self):
         for bad in (core.PROJECT, core.PROJECT / "instances", core.PROJECT / "supervisor", core.SUP_DIR, HOME,

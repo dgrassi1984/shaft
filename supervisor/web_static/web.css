@@ -185,7 +185,7 @@ td:empty::before { content: ""; }
 .md h5 { font-size: 1.15rem; }
 .md h6 { font-size: 1rem; }
 /* In a chat answer and a journal entry, a scale like iOS's (Title 2 / Title 3 / Headline at a 17 px body): a document's
-   2rem title (#59) was 34 px in a reply, larger than the screen's own title (PLAN-pwa-market M1). Documents keep #59's. */
+   2rem title (#59) was 34 px in a reply, larger than the screen's own title. Documents keep #59's. */
 .turn .md h2, .entry .md h2 { font-size: 1.4rem; }
 .turn .md h3, .entry .md h3 { font-size: 1.25rem; }
 .turn .md h4, .entry .md h4 { font-size: 1.1rem; }
@@ -277,7 +277,7 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn.it { background: var(--panel); }
 .chat-day { justify-self: center; font-size: .8rem; margin: .2rem 0; }
 .turn.sent { border-style: dashed; }
-/* left for its next cycle (PLAN-background-messages.md): yours, not answered now */
+/* left for its next cycle: yours, not answered now */
 .turn.later { border-style: dashed; border-color: var(--cycle); }
 .laterchip { font-size: .78rem; font-weight: 400; margin-left: .3rem; }
 .laterchip.waiting { color: var(--warn); }
@@ -336,7 +336,7 @@ blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(-
 /* A quote after text starts the next quote-and-answer pair: more room above it than between a quote and its answer */
 .turn.me :not(blockquote) + blockquote { margin-top: .75rem; }
 
-/* chat-centric frame (docs/plans/PLAN-webui-chat §1) */
+/* chat-centric frame */
 .chathead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .8rem; margin-bottom: .6rem;
             position: relative; }
 .chathead h1 { margin: 0; }
@@ -374,7 +374,7 @@ main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; pa
            overflow-y: auto; }
 .earlier h3 { font-size: .8rem; color: var(--dim); margin: 0 0 .2rem; }
 
-/* chat UX (docs/plans/PLAN-webui-chat §2) */
+/* chat UX */
 .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; border: 1px solid var(--line);
@@ -412,7 +412,7 @@ a.icon.small:hover { border-color: var(--accent); }
    (.turn max-width), so a page cap only left a wide window empty — on 2560 px, closing the drawer made it narrower. */
 .chathead { width: 100%; }
 .chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { width: 100%; }
-/* documents (docs/plans/PLAN-webui-chat §3) */
+/* documents */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
 .docshead { display: flex; align-items: center; gap: .4rem; margin-bottom: .3rem; }   /* icons have no baseline */
@@ -483,7 +483,7 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md blockquote { margin: .4rem 0; }
 form.clearbtn { display: inline; margin: 0; }
 
-/* Touch (docs/plans/PLAN-pwa P0). The phone rules above also apply to a phone held sideways (a touch screen under 520 px tall:
+/* Touch. The phone rules above also apply to a phone held sideways (a touch screen under 520 px tall:
    it was given the desktop's three columns). */
 /* Long words, links and file names wrap instead of widening the chat. */
 .turn, .md, .doclist a, .doctitle b, .doccard, .chip span, .feed .wrap { overflow-wrap: anywhere; min-width: 0; }
@@ -528,7 +528,7 @@ form.clearbtn { display: inline; margin: 0; }
               padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
 }
 
-/* An app on the Home Screen (docs/plans/PLAN-pwa P1): its status bar is translucent (black-translucent) and the page runs under
+/* An app on the Home Screen: its status bar is translucent (black-translucent) and the page runs under
    the notch and over the home indicator, so the page keeps clear of both (0 in a browser tab). */
 body { padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
 nav { height: calc(100vh - env(safe-area-inset-top)); }
@@ -548,7 +548,7 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   .menubody { top: calc(3.5rem + env(safe-area-inset-top)); max-height: calc(100dvh - 4.5rem - env(safe-area-inset-top)); }
 }
 
-/* docs/plans/PLAN-pwa P2: on a phone the chat is the whole screen — the header, the conversation, the composer. The rail is a
+/* On a phone the chat is the whole screen — the header, the conversation, the composer. The rail is a
    sheet behind ☰, the documents a sheet over the chat, and the page is as tall as the keyboard leaves visible
    (--vvh, set from visualViewport by web.js), so the composer sits right above the keyboard. A sheet fixed over the page
    covers only that visible part too (--vvtop, --vvbottom): with inset 0 its Save and Cancel were under the keyboard. */
@@ -611,13 +611,13 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   }
 }
 
-/* docs/plans/PLAN-pwa P3 */
+/* Offline and slow networks */
 #netnote { position: fixed; left: 50%; transform: translateX(-50%); top: calc(.4rem + env(safe-area-inset-top)); z-index: 70;
            background: var(--panel); border: 1px solid var(--warn); color: var(--text); border-radius: 8px;
            padding: .35rem .7rem; font-size: .85rem; max-width: calc(100vw - 1rem); box-shadow: 0 2px 10px rgba(0, 0, 0, .25); }
 .chip.over { border-color: var(--bad); color: var(--bad); }
 
-/* docs/plans/PLAN-pwa P5: accessibility */
+/* Accessibility */
 #announce { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 :root { --field: #8c8c84; }
 @media (prefers-color-scheme: dark) { :root { --field: #6b6b65; } }
@@ -666,7 +666,7 @@ details.threads form.act { display: inline; margin: 0; }
 .docshead > [data-fullscreen-doc] { margin-left: auto; }
 .docshead:has([data-fullscreen-doc]) .closedocs { margin-left: 0; }
 
-/* docs/plans/PLAN-pwa-market: the chat at market standard on iPhone, iPad and a computer. Icons are SVG at fixed px
+/* The chat at market standard on iPhone, iPad and a computer. Icons are SVG at fixed px
    (they stay 20 px when Dynamic Type grows the text, as SF Symbols in a native bar do); hit areas are 44 px on touch. */
 :root { --hover: color-mix(in srgb, var(--text) 7%, transparent); --bubble: color-mix(in srgb, var(--accent) 13%, var(--panel));
         --col: 46rem; }
@@ -839,7 +839,7 @@ form.composer:has(textarea[name=text]:placeholder-shown):not(:has(.chip, .quotec
   body:has(.chatgrid) main { padding-top: 0; }
 }
 
-/* Pages other than the chat on a phone (PLAN-pwa-market decision 3): a bar on top, the rail a sheet behind ☰ */
+/* Pages other than the chat on a phone : a bar on top, the rail a sheet behind ☰ */
 .pagebar { display: none; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   .pagebar { display: flex; align-items: center; gap: .25rem; position: sticky; top: 0; z-index: 20; background: var(--bg);

@@ -214,13 +214,13 @@ class OldCodeTest(unittest.TestCase):
 
 
 class YieldOnlyForTheSameModelTest(unittest.TestCase):
-    """Bug, 2026-10-13: `shaft talk` asked every other running instance to wrap up "so you get the model" — wren on
-    MiMo and kant on Opus were cut short for every conversation with shaft, on local Bonsai, though a cloud model
+    """Bug, 2026-10-13: `shaft talk` asked every other running instance to wrap up "so you get the model" — wisp on
+    MiMo and kiln on Opus were cut short for every conversation with shaft, on local Bonsai, though a cloud model
     is shared with nobody. Only an instance on the same local model server is asked."""
     CONFIGS = {"shaft": {"LLM_BASE_URL": "http://127.0.0.1:8780/v1"},
                "twin": {"LLM_BASE_URL": "http://localhost:8780/v1"},       # same server, other spelling
                "other": {"LLM_BASE_URL": "http://127.0.0.1:9999/v1"},      # another local server
-               "wren": {"LLM_BASE_URL": "broker"}, "kant": {"LLM_BASE_URL": "broker"}}
+               "wisp": {"LLM_BASE_URL": "broker"}, "kiln": {"LLM_BASE_URL": "broker"}}
 
     def setUp(self):
         from supervisor import runner
@@ -232,31 +232,31 @@ class YieldOnlyForTheSameModelTest(unittest.TestCase):
     def test_model_server(self):
         self.assertEqual(self.runner.model_server("shaft"), "127.0.0.1:8780")
         self.assertEqual(self.runner.model_server("twin"), "127.0.0.1:8780")
-        self.assertIsNone(self.runner.model_server("wren"))
+        self.assertIsNone(self.runner.model_server("wisp"))
 
     def test_only_the_same_local_server_is_shared(self):
-        self.assertEqual(self.runner.sharing_model("shaft", ["wren", "kant", "twin", "other"]), ["twin"])
-        self.assertEqual(self.runner.sharing_model("wren", ["shaft", "kant", "twin"]), [])   # cloud waits for nobody
+        self.assertEqual(self.runner.sharing_model("shaft", ["wisp", "kiln", "twin", "other"]), ["twin"])
+        self.assertEqual(self.runner.sharing_model("wisp", ["shaft", "kiln", "twin"]), [])   # cloud waits for nobody
 
     def test_talking_to_shaft_leaves_cloud_cycles_alone(self):
         from supervisor import __main__ as cli
-        busy = {"wren": "live since 20:59", "kant": "live since 21:00", "twin": "live since 21:01"}
+        busy = {"wisp": "live since 20:59", "kiln": "live since 21:00", "twin": "live since 21:01"}
         with mock.patch.object(cli, "busy_with", lambda n: busy.get(n)), \
-                mock.patch.object(cli, "instance_names", lambda: ["shaft", "wren", "kant", "twin"]), \
+                mock.patch.object(cli, "instance_names", lambda: ["shaft", "wisp", "kiln", "twin"]), \
                 mock.patch.object(cli, "request_yield") as yielded, \
                 mock.patch.object(cli, "run_agent", return_value=0), \
                 mock.patch.object(cli, "spawn_recover"), \
                 mock.patch("sys.stderr", new_callable=__import__("io").StringIO) as err:
             self.assertEqual(cli.main(["talk", "shaft", "--plain"]), 0)
         yielded.assert_called_once_with(["twin"])
-        self.assertNotIn("wren", err.getvalue())
+        self.assertNotIn("wisp", err.getvalue())
         self.assertIn("twin (live since 21:01) is using the model shaft needs (127.0.0.1:8780)", err.getvalue())
         with mock.patch.object(cli, "busy_with", lambda n: busy.get(n)), \
-                mock.patch.object(cli, "instance_names", lambda: ["shaft", "wren", "kant", "twin"]), \
+                mock.patch.object(cli, "instance_names", lambda: ["shaft", "wisp", "kiln", "twin"]), \
                 mock.patch.object(cli, "request_yield") as yielded, \
                 mock.patch.object(cli, "run_agent", return_value=0), \
                 mock.patch.object(cli, "spawn_recover"):
-            cli.main(["talk", "wren", "--plain"])
+            cli.main(["talk", "wisp", "--plain"])
         yielded.assert_not_called()                  # talking to a cloud instance takes nothing from anyone
 
 

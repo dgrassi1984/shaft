@@ -1,4 +1,4 @@
-"""Measurement that can show improvement and autonomy (docs/plans/PLAN-measurement.md): judged origin, difficulty and
+"""Measurement that can show improvement and autonomy: judged origin, difficulty and
 novelty; difficulty-weighted stats and probation; the capability battery's isolation, scoring and schedule."""
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ class JudgingTest(InstanceDirCase):
         self.assertTrue(j["origin_supported"])
 
     def test_an_undeclared_origin_is_never_supported(self):
-        # Regression: wren's 2026-10-13 16:19 cycle declared no origin, and the judge still said origin_supported: true.
+        # Regression: wisp's 2026-10-13 16:19 cycle declared no origin, and the judge still said origin_supported: true.
         self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
                       "confidence": 50}, "finish": None, "tools": []})
         with mock.patch.object(judge, "available", return_value=True), \
@@ -159,7 +159,7 @@ class JudgingTest(InstanceDirCase):
         self.assertTrue(merged_under and all(h == [("m", "backfill")] for h in merged_under), merged_under)
 
     def test_backfill_asks_a_rated_cycle_only_for_its_value(self):
-        # docs/plans/PLAN-value V1: cycles rated by the E0 backfill keep their ratings and who gave them; only value is asked.
+        # Cycles rated by the E0 backfill keep their ratings and who gave them; only value is asked.
         self.episode({"ts": "2026-10-14T10:00:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
                       "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
         path = self.sup / "judgments" / "m.jsonl"
@@ -243,7 +243,7 @@ def valued_j(ts: str, value: int, value_for: str = "operator", model: str = "mim
 
 
 class ValueTest(unittest.TestCase):
-    """docs/plans/PLAN-value V2: what the cycles delivered, in stats.md and in `shaft review`."""
+    """What the cycles delivered, in stats.md and in `shaft review`."""
 
     def test_stats_show_value_on_the_current_model_with_who_would_miss_it(self):
         js = ([valued_j(f"2026-10-14T{h:02d}:00:00", 1, "own_record") for h in range(20)]
@@ -308,9 +308,9 @@ class ValueTest(unittest.TestCase):
 
 
 class JudgeMixTest(unittest.TestCase):
-    """docs/plans/PLAN-judge-mix: success and claims never pooled across a change of judges. Bug 2026-10-16: stats.md printed
+    """Success and claims never pooled across a change of judges. Bug 2026-10-16: stats.md printed
     one running count of unsupported claims over Opus, then Haiku and Sonnet at random. On the same cycles Haiku
-    called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%; wren read the pooled count
+    called 54% of wisp's claims unsupported, the blind second judge 4%, Sonnet 21%; wisp read the pooled count
     (8/107 -> 73/273) as "the central fact about my accuracy". The header named only the last cycle's judge."""
     RETIRED = "claude-haiku-5-5"
 
@@ -366,9 +366,9 @@ class JudgeMixTest(unittest.TestCase):
 
 
 class JudgeMixWithinRotationTest(unittest.TestCase):
-    """docs/plans/PLAN-judge-mix, 2026-10-29: today's judges are never pooled either. Bug: once Haiku left (10-16),
-    stats.md still pooled every judge in the rotation. On the same cycles DeepSeek V4.1 Flash called 10% of wren's
-    claims unsupported and GLM 5.3 Flash 2% (thelos 16% vs 3%), and on shaft MiMo 33% vs DeepSeek 20%. shaft's
+    """2026-10-29: today's judges are never pooled either. Bug: once Haiku left (10-16),
+    stats.md still pooled every judge in the rotation. On the same cycles DeepSeek V4.1 Flash called 10% of wisp's
+    claims unsupported and GLM 5.3 Flash 2% (tundra 16% vs 3%), and on shaft MiMo 33% vs DeepSeek 20%. shaft's
     "148 of 696" moved with the dice that picked its judge, not with its cycles."""
     LENIENT, STRICT = "openrouter/z-ai/glm-5.3-flash", "openrouter/deepseek/deepseek-v4.1-flash"
     LATEST = datetime(2026, 10, 29, 12, 0)
@@ -435,7 +435,7 @@ class JudgeMixWithinRotationTest(unittest.TestCase):
 
 
 class ModelTest(InstanceDirCase):
-    """Comparisons stay within one model: wren ran on Bonsai, Haiku and MiMo within its first day."""
+    """Comparisons stay within one model: wisp ran on Bonsai, Haiku and MiMo within its first day."""
 
     def test_a_cycle_gets_the_model_of_its_live_calls(self):
         (self.root / "logs").mkdir()
@@ -499,7 +499,7 @@ class ProbationMeasureTest(unittest.TestCase):
 
 
     def test_a_drop_chance_explains_is_kept(self):
-        # Bug 2026-10-13: wren's github plugin and truncation change were "reverted" for 92% -> 75% (yes x5 and one
+        # Bug 2026-10-13: wisp's github plugin and truncation change were "reverted" for 92% -> 75% (yes x5 and one
         # partial before; three partials after, all in the rogue-AI watch the operator had just assigned). A drop
         # of 0.17 > 0.15, but chance alone gives one that large 27% of the time.
         before = [judgment(f"b{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "yes", "yes", "yes"])]
@@ -508,7 +508,7 @@ class ProbationMeasureTest(unittest.TestCase):
         self.assertFalse(self.check(before, after))
 
     def test_a_change_adopted_against_a_worse_trial_is_undone_on_any_drop(self):
-        # docs/plans/PLAN-trials D3: the trial is the evidence against it, so the chance test does not apply; a 'better'
+        # The trial is the evidence against it, so the chance test does not apply; a 'better'
         # verdict gets the normal rule.
         before = [judgment(f"b{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "yes", "yes", "yes"])]
         after = [judgment(f"a{i}", m, 3) for i, m in enumerate(["yes", "partial", "yes", "partial", "yes", "yes"])]
@@ -593,7 +593,7 @@ class BatteryExamCopyTest(unittest.TestCase):
         got = tree(copy)
         for rel in ("memory/journal.md", "notes/keep.md", "notes/uncommitted.md", "plugins/p.py", "skills/s.md",
                     "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json",
-                    ".tmp/memory-index.bin"):   # bug (PLAN-voice M1): the vector log was left out, the exam re-embedded all
+                    ".tmp/memory-index.bin"):   # bug: the vector log was left out, the exam re-embedded all
             self.assertEqual(got.get(rel), (self.root / rel).read_bytes(), rel)
         for top in (".git", "secrets", ".browser", "mail", "gdrive", "logs", ".tmp/activity.json", "plugins/__pycache__"):
             self.assertFalse([k for k in got if k == top or k.startswith(top + "/")], top)
@@ -677,7 +677,7 @@ class HiddenTestsTest(unittest.TestCase):
 
 class BatteryScheduleTest(unittest.TestCase):
     """Night only, never in the sleep's way (the operator, 2026-10-13)."""
-    NAMES = ["shaft", "wren"]
+    NAMES = ["shaft", "wisp"]
 
     def decide(self, hhmm: str, children: dict, sleeping_due=False, due=True, awake=""):
         h, m = map(int, hhmm.split(":"))
@@ -689,13 +689,13 @@ class BatteryScheduleTest(unittest.TestCase):
         self.assertEqual((start.hour, start.minute, end.hour, end.minute), (1, 0, 3, 50))
 
     def test_a_running_battery_is_stopped_when_the_window_closes(self):
-        stop, start = self.decide("03:50", {"battery shaft": object(), "wake wren": object()})
+        stop, start = self.decide("03:50", {"battery shaft": object(), "wake wisp": object()})
         self.assertEqual(stop, ["battery shaft"])
-        self.assertEqual(start, ["wren"])          # due() is mocked; the real due() is false outside the window
+        self.assertEqual(start, ["wisp"])          # due() is mocked; the real due() is false outside the window
 
     def test_a_due_sleep_stops_a_battery_and_starts_none(self):
-        stop, start = self.decide("04:00", {"battery wren": object()}, sleeping_due=True)
-        self.assertEqual((stop, start), (["battery wren"], []))
+        stop, start = self.decide("04:00", {"battery wisp": object()}, sleeping_due=True)
+        self.assertEqual((stop, start), (["battery wisp"], []))
 
     def test_an_awake_instance_is_not_started(self):
         self.assertEqual(self.decide("01:30", {}, awake="live since 01:25")[1], [])
@@ -704,12 +704,12 @@ class BatteryScheduleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
              mock.patch.object(battery, "EVERY_DAYS", 2):
             (Path(tmp) / "battery" / "items" / battery.VERSION).mkdir(parents=True)
-            self.assertTrue(battery.due("wren", datetime(2026, 10, 14, 1, 0)))
-            self.assertFalse(battery.due("wren", datetime(2026, 10, 14, 0, 59)))
-            self.assertFalse(battery.due("wren", datetime(2026, 10, 14, 3, 50)))
-            (Path(tmp) / "battery" / "schedule.json").write_text(json.dumps({"wren": "2026-10-14T03:40:00"}))
-            self.assertFalse(battery.due("wren", datetime(2026, 10, 15, 2, 0)))     # one night later
-            self.assertTrue(battery.due("wren", datetime(2026, 10, 16, 2, 0)))      # two nights later
+            self.assertTrue(battery.due("wisp", datetime(2026, 10, 14, 1, 0)))
+            self.assertFalse(battery.due("wisp", datetime(2026, 10, 14, 0, 59)))
+            self.assertFalse(battery.due("wisp", datetime(2026, 10, 14, 3, 50)))
+            (Path(tmp) / "battery" / "schedule.json").write_text(json.dumps({"wisp": "2026-10-14T03:40:00"}))
+            self.assertFalse(battery.due("wisp", datetime(2026, 10, 15, 2, 0)))     # one night later
+            self.assertTrue(battery.due("wisp", datetime(2026, 10, 16, 2, 0)))      # two nights later
 
     def test_default_cadence_is_every_five_nights(self):
         # the operator, 2026-10-13: "set it to run every 5 nights" (was 2).
@@ -719,16 +719,16 @@ class BatteryScheduleTest(unittest.TestCase):
         self.assertEqual(battery.EVERY_DAYS, 5)
 
     def test_an_instance_turned_off_is_never_due_and_never_run(self):
-        # "Kant no battery": kant is on Opus, about $15 a run. Neither the scheduler nor a manual run touches it.
+        # "Kiln no battery": kiln is on Opus, about $15 a run. Neither the scheduler nor a manual run touches it.
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
              mock.patch.object(battery, "EVERY_DAYS", 5), mock.patch.object(battery, "log") as log:
             (Path(tmp) / "battery" / "items" / battery.VERSION).mkdir(parents=True)
-            battery.off_path("kant").write_text("x")
-            self.assertFalse(battery.due("kant", datetime(2026, 10, 14, 1, 0)))
-            self.assertTrue(battery.due("wren", datetime(2026, 10, 14, 1, 0)))
+            battery.off_path("kiln").write_text("x")
+            self.assertFalse(battery.due("kiln", datetime(2026, 10, 14, 1, 0)))
+            self.assertTrue(battery.due("wisp", datetime(2026, 10, 14, 1, 0)))
             with mock.patch.object(battery, "instance_root", side_effect=AssertionError("ran an off instance")):
-                self.assertEqual(battery.run("kant", control_only=True), 0)
-                self.assertEqual(battery.run("kant"), 0)
+                self.assertEqual(battery.run("kiln", control_only=True), 0)
+                self.assertEqual(battery.run("kiln"), 0)
             self.assertIn("battery is off", log.call_args.args[0])
 
     def test_missing_items_are_logged_once_a_night_not_skipped_in_silence(self):
@@ -737,13 +737,13 @@ class BatteryScheduleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
              mock.patch.object(battery, "EVERY_DAYS", 5), mock.patch.object(battery, "log") as log, \
              mock.patch.dict(battery._missing_logged, clear=True):
-            self.assertFalse(battery.due("wren", datetime(2026, 10, 13, 23, 0)))   # outside the window: quiet
+            self.assertFalse(battery.due("wisp", datetime(2026, 10, 13, 23, 0)))   # outside the window: quiet
             log.assert_not_called()
             for minute in (0, 1, 30):
-                self.assertFalse(battery.due("wren", datetime(2026, 10, 14, 1, minute)))
+                self.assertFalse(battery.due("wisp", datetime(2026, 10, 14, 1, minute)))
             self.assertEqual(log.call_count, 1)
             self.assertIn("not installed", log.call_args.args[0])
-            battery.due("wren", datetime(2026, 10, 15, 1, 0))                       # the next night says it again
+            battery.due("wisp", datetime(2026, 10, 15, 1, 0))                       # the next night says it again
             self.assertEqual(log.call_count, 2)
 
 
@@ -779,12 +779,12 @@ class BrokerRootTest(unittest.TestCase):
     def test_a_control_broker_works_in_its_own_folder_and_bills_separately(self):
         from supervisor.broker import Broker
         with tempfile.TemporaryDirectory() as tmp:
-            b = Broker("wren-control", Path(tmp), {}, Path(tmp) / "b.log", root=Path(tmp) / "ctrl",
-                       usage_name="wren-control-battery")
+            b = Broker("wisp-control", Path(tmp), {}, Path(tmp) / "b.log", root=Path(tmp) / "ctrl",
+                       usage_name="wisp-control-battery")
             self.assertEqual(b._root(), (Path(tmp) / "ctrl").resolve())
-            self.assertEqual(b.usage_name, "wren-control-battery")
-            default = Broker("wren", Path(tmp), {}, Path(tmp) / "b.log")
-            self.assertEqual(default._root(), (Path(tmp) / "instances" / "wren").resolve())
+            self.assertEqual(b.usage_name, "wisp-control-battery")
+            default = Broker("wisp", Path(tmp), {}, Path(tmp) / "b.log")
+            self.assertEqual(default._root(), (Path(tmp) / "instances" / "wisp").resolve())
 
 
 TEMPLATE_CODE = Path(__file__).resolve().parents[2] / "template" / "shaft"

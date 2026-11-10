@@ -1,4 +1,4 @@
-"""PLAN-voice M1, lane L6: the warm voice session (§7). A spoken turn of an API conversation is answered by one
+"""Lane L6: the warm voice session (§7). A spoken turn of an API conversation is answered by one
 agent process kept for the whole conversation (runner.Warm, api.VoiceSessions), which holds the instance only while
 it replies, never answers on stale code, and ends when it is no longer wanted — idle, ended, paused, killed, updated,
 deleted, or with the API. The agent here is a real process speaking `answer --loop`'s protocol; no model, no network."""
@@ -44,7 +44,7 @@ while True:
     n += 1
     text = req["messages"][-1]["content"]
     try:
-        emit(type="ready", name="wren", pid=pid)
+        emit(type="ready", name="wisp", pid=pid)
         script = Path(".tmp/script.json")
         if script.exists():
             for e in json.loads(script.read_text()):
@@ -101,7 +101,7 @@ class WarmFixture:
     """runner's run machinery around a real fake agent: lock, Reply presence and Turn are real; the launch, the
     reconcile/snapshot (the approved code is self.code) and the settle are stand-ins."""
 
-    name = "wren"
+    name = "wisp"
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-warm-")).resolve()
@@ -161,7 +161,7 @@ class WarmFixture:
 
 class WarmRunTest(WarmFixture, unittest.TestCase):
     def test_two_replies_use_one_process_and_one_broker(self):
-        """Bug guarded (M0): every API reply started a fresh sandboxed agent (~1.8 s), re-read Thelos's memory (~4 s)
+        """Bug guarded (M0): every API reply started a fresh sandboxed agent (~1.8 s), re-read Tundra's memory (~4 s)
         and, its broker being per run, re-opened the Codex session (5.8-9.8 s): a voice turn must reuse all three."""
         s = self.warm()
         code1, first = self.ask(s, "hello")

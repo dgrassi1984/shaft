@@ -1,4 +1,4 @@
-"""PLAN-model-choice in the template (M1): the consult allowance and menu in the prompt's envelope, the
+"""Model consultation in the template: the consult allowance and menu in the prompt's envelope, the
 `broker.consult` transport a plugin uses, and the skill page listed among my skills. The supervisor side is
 test_consult (transport, allowance, books) and test_consultstats (M2)."""
 from __future__ import annotations
@@ -17,7 +17,7 @@ sys.path.insert(0, str(TEMPLATE))
 from shaft import broker, prompts
 
 if not hasattr(broker, "consult"):
-    raise unittest.SkipTest("template/ predates PLAN-model-choice: merge claude/model-choice-template into template")
+    raise unittest.SkipTest("template/ predates model consultation: merge claude/model-choice-template into template")
 
 CONSULT = {"spent_usd": 0.5, "reserved_usd": 0.25, "cap_usd": 3.0, "models": [
     {"model": "openrouter/z-ai/glm-5.3", "in_per_m": 0.07, "out_per_m": 1.4, "available": True, "why": None},

@@ -252,8 +252,7 @@ can distinguish the instance from its base model; `--strict` removes identifying
 --freeze` freezes a baseline. `surprise-rejudge` pays to regrade the newest matching pre-M1 cycles with their
 stored judges. `surprise-report` reports P1-P5 and sleep dispositions.
 
-`shaft consults` compares consultations by model and run, including consulted versus unconsulted results. See
-`docs/plans/PLAN-model-choice.md`. `compression` is a speculative offline compression and held-out fact recall
+`shaft consults` compares consultations by model and run, including consulted versus unconsulted results. `compression` is a speculative offline compression and held-out fact recall
 assay. `metacog` reports confidence AUROC, paired v3 results, claim matrices, and doubt/error alignment.
 `anchoring` pays to compare the same judge with the claim shown or withheld. `attention` compares intended and
 actual attention, including unreadable sources. `commitments` reports kept, broken, and overdue promises.
@@ -281,8 +280,8 @@ eligible now.
 `shaft trial models` replays past cycles on each arm and judges blind against the first arm as baseline.
 Options include `--episodes TS…`, `--judge M`, `--parallel N`, `--arm-parallel N`, and `--replay-only`. `--id
 ID` resumes a run; `--report` prints it. `--export-cases DIR` and `--import-verdicts DIR`, with optional
-`--judged-by M`, support judging with Claude Code subagents rather than the API. Read [the bake-off rules and
-ledger](bakeoffs/README.md) first.
+`--judged-by M`, support judging with Claude Code subagents rather than the API. Read [how to run a
+bake-off](bakeoffs/README.md) first.
 
 `--cycles N` replays N consecutive live cycles per arm from one reconstructed past state, default 1. `--sleep`
 runs consolidation between every pair of live cycles, never after the last. Each operation uses the same
@@ -301,8 +300,8 @@ honest, useful), so you can see whether identity costs usefulness. Records go to
 
 ### Experiments
 
-The cards, attention, commitments, and forecast experiments run knob trials from
-`docs/plans/PLAN-consciousness.md`. Workspace plants a probe in a searchable memory item. It first runs a
+The cards, attention, commitments, and forecast experiments run knob trials of the
+self-knowledge mechanisms (see [configuration](configuration.md)). Workspace plants a probe in a searchable memory item. It first runs a
 positive control with the probe in the inbox. Unless most control replays act on it, the report says
 INSTRUMENT FAILED and skips the off, relevance, and competitive arms. Its dry run shows the probe's position
 for each arm and control through sandboxed `shaft front`, without a model call, plus the cost.
@@ -390,7 +389,7 @@ cap, refuse to start while needed, and stop when demand arrives. `--model` overr
 experiments. `--report` reads saved results without model calls. `--dry-run` reports outcome replays, one-turn
 prediction calls, and estimated replay model calls without spending. The estimate uses `MAX_STEPS_LIVE`;
 confirmations, retries and early finishes can change the actual count. See [the experiment
-endpoints](../docs/plans/PLAN-consciousness.md#self-knowledge-experiments-100-and-101).
+endpoints].
 
 ## Operator controls
 

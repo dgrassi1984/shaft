@@ -77,10 +77,10 @@ class ConsultStatsTest(unittest.TestCase):
 
     def test_rows_skips_bad_lines_and_filters_by_instance(self):
         self.write_ledger([row("2026-10-25T10:00:00", GLM, 0.05, 10.0),
-                           {"instance": "wren", "ts": "2026-10-25T10:00:00", "model": GLM},
+                           {"instance": "wisp", "ts": "2026-10-25T10:00:00", "model": GLM},
                            [], "garbage"])
         self.assertEqual([r["instance"] for r in consultstats.rows("x")], ["x"])
-        self.assertEqual([r["ts"] for r in consultstats.rows("wren")], ["2026-10-25T10:00:00"])
+        self.assertEqual([r["ts"] for r in consultstats.rows("wisp")], ["2026-10-25T10:00:00"])
         self.assertEqual(consultstats.rows("nobody"), [])
 
     def test_rows_since_until(self):

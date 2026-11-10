@@ -25,13 +25,13 @@ def feed(archived=False):
                       {"role": "user", "content": "and then?", "ts": ASKED},
                       {"role": "assistant", "content": "Newest answer", "ts": LATEST}]}
     sent = [{"ts": SENT, "file": "m9.md", "text": "a note meanwhile", "kind": "note", "read": False}]
-    return str(web_views.chat_feed("wren", chat, sent, archived=archived))
+    return str(web_views.chat_feed("wisp", chat, sent, archived=archived))
 
 
 HARNESS = r'''
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const input = JSON.parse(process.argv[2]), handlers = {};
-let stored = input.seen === null ? null : JSON.stringify({wren: input.seen});
+let stored = input.seen === null ? null : JSON.stringify({wisp: input.seen});
 const classes = (...initial) => { const s = new Set(initial);
   return { contains: k => s.has(k), add: k => s.add(k), remove: k => s.delete(k), toggle(k, on) { on ? s.add(k) : s.delete(k); } }; };
 // Each feed item is 100px tall, in document order; the scroll box shows `height` px of it (250 by default).
@@ -46,13 +46,13 @@ const items = [...input.html.matchAll(/<(?:div|p) class="[^"]*"([^>]*)>/g)].map(
                     top: i * 100, getClientRects: () => [1], closest: q => q === "[data-scroll]" ? box : null,
                     getBoundingClientRect() { return { top: this.top - box.scrollTop, bottom: this.top + 100 - box.scrollTop }; } }));
 box.scrollHeight = items.length * 100;
-const feed = { dataset: { poll: "/fragment/chat/wren", every: "1500", follow: "1" }, isConnected: true,
+const feed = { dataset: { poll: "/fragment/chat/wisp", every: "1500", follow: "1" }, isConnected: true,
   classList: classes("feed"), children: [], getClientRects: () => [1], closest: q => q === "[data-scroll]" ? box : null,
   querySelector: () => null,
   querySelectorAll: q => q === "[data-seen-inst]" ? items.filter(n => n.dataset.seenInst) : [],
   dispatchEvent() {} };
 const newbelow = { hidden: true };
-const document = { readyState: "loading", visibilityState: "visible", title: "wren · chat · SHAFT",
+const document = { readyState: "loading", visibilityState: "visible", title: "wisp · chat · SHAFT",
   body: { scrollHeight: 0, classList: classes(), appendChild() {} },
   addEventListener(k, f) { (handlers[k] ||= []).push(f); },
   querySelector: q => q === "[data-newbelow]" ? newbelow : null,
@@ -73,7 +73,7 @@ for (const f of handlers.DOMContentLoaded || []) f();
 const end = () => box.scrollHeight - box.clientHeight;
 assert.equal(box.scrollTop, end(), "opened at the last message");
 assert.equal(newbelow.hidden, true, "nothing new below the last message");
-if (input.seen !== null && !input.archived) assert.equal(JSON.parse(stored).wren, input.after, "what is on screen is seen");
+if (input.seen !== null && !input.archived) assert.equal(JSON.parse(stored).wisp, input.after, "what is on screen is seen");
 // Pinned: the feed's box and the feed itself are watched; growth after the jump goes back to the end ...
 const pin = observers.find(o => o.seen.includes(box) && o.seen.includes(feed));
 assert.ok(pin, "the feed and its box are watched for size changes");

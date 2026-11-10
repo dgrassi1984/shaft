@@ -15,7 +15,7 @@ from supervisor.tests.test_opconfig import CONFIG, TEMPLATE
 class SettingsTest(AppTest):
     def setUp(self):
         super().setUp()
-        self.root = self.inst / "wren"
+        self.root = self.inst / "wisp"
         self.fake = "fake-secret-never-send-7c9a"
         (self.root / "config.env").write_text(CONFIG.replace("sk-secret-value", self.fake))
         (self.root / "shaft/config.py").write_text(
@@ -31,7 +31,7 @@ class SettingsTest(AppTest):
                   mock.patch.object(opconfig, "log"),
                   mock.patch.object(autonomy, "SUP_DIR", self.sup),
                   mock.patch.object(runner, "SUP_DIR", self.sup),
-                  mock.patch.object(core, "instance_names", return_value=["wren"]),
+                  mock.patch.object(core, "instance_names", return_value=["wisp"]),
                   mock.patch.object(actions, "service_guard", self.guard),
                   mock.patch.object(actions, "run_now", self.command),
                   mock.patch.object(cloudllm, "spent_today", return_value=0.25),
@@ -56,14 +56,14 @@ class SettingsTest(AppTest):
         return True, "done"
 
     def save(self, field, value, expect):
-        return self.api("/app/v1/settings/wren", "POST", {"field": field, "value": value, "expect": expect})
+        return self.api("/app/v1/settings/wisp", "POST", {"field": field, "value": value, "expect": expect})
 
     def test_get_exact_contract_and_no_secret_or_base_url(self):
-        r = self.api("/app/v1/settings/wren")
+        r = self.api("/app/v1/settings/wisp")
         self.assertEqual(r.status, 200, r.body)
         got = json.loads(r.body)
         self.assertEqual(got, {
-            "instance": "wren", "paused": False,
+            "instance": "wisp", "paused": False,
             "watch_mail": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_calendar": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_gchat": {"value": "off", "choices": ["off", "inbox", "wake"]},
@@ -99,24 +99,24 @@ class SettingsTest(AppTest):
                 self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
                 self.assertEqual(writer.call_args.args[2], {key: None if field.startswith("watch_") else str(expect)})
                 self.assertNotIn(self.fake.encode(), r.body)
-        self.assertEqual(core.instance_config("wren")["LLM_BASE_URL"], "broker")
+        self.assertEqual(core.instance_config("wisp")["LLM_BASE_URL"], "broker")
         self.assertEqual(got["settings"]["wake_interval"]["effective"], 0)
-        app_api.log.assert_any_call("app iphone-app: operator setting model for wren")
+        app_api.log.assert_any_call("app iphone-app: operator setting model for wisp")
 
     def test_effective_wake_uses_scheduler_floor_and_fallback(self):
-        core._update_tool_settings("wren", wake_floor_minutes=20)
-        self.assertEqual(self.get("/app/v1/settings/wren")["wake_interval"],
+        core._update_tool_settings("wisp", wake_floor_minutes=20)
+        self.assertEqual(self.get("/app/v1/settings/wisp")["wake_interval"],
                          {"value": 5, "floor": 20, "effective": 20})
         (self.root / "config.env").write_text('WAKE_INTERVAL_MINUTES="bad"\n')
         with mock.patch.object(autonomy, "log"):
-            got = self.get("/app/v1/settings/wren")["wake_interval"]
+            got = self.get("/app/v1/settings/wisp")["wake_interval"]
         self.assertEqual(got, {"value": autonomy.WAKE_DEFAULT_MIN, "floor": 20,
                                "effective": max(autonomy.WAKE_DEFAULT_MIN, 20)})
 
     def test_effort_can_be_unset_and_missing_choices_are_null(self):
         self.assertEqual(json.loads(self.save("effort", None, "medium").body)["settings"]["effort"]["value"], None)
         (self.root / "shaft/config.py").unlink()
-        self.assertEqual(self.get("/app/v1/settings/wren")["effort"], {"value": None, "choices": None})
+        self.assertEqual(self.get("/app/v1/settings/wisp")["effort"], {"value": None, "choices": None})
 
     def test_tool_settings_save_in_process_and_auto_removes_channel(self):
         for field, value, expect in (("cloud_cap", 2.5, None), ("cloud_cap", None, 2.5),
@@ -125,8 +125,8 @@ class SettingsTest(AppTest):
             self.assertEqual(r.status, 200, r.body)
             self.assertEqual(json.loads(r.body)["settings"][field]["value"], value)
         self.command.assert_not_called()
-        self.assertNotIn("channel", core._tool_settings("wren"))
-        app_api.log.assert_any_call("wren: cloud-cap set to 2.5 by the operator (app iphone-app)")
+        self.assertNotIn("channel", core._tool_settings("wisp"))
+        app_api.log.assert_any_call("wisp: cloud-cap set to 2.5 by the operator (app iphone-app)")
 
     def test_cli_write_between_app_read_and_save_is_stale_not_lost(self):
         real = core._update_tool_settings
@@ -138,13 +138,13 @@ class SettingsTest(AppTest):
             with mock.patch.object(core, "_update_tool_settings", side_effect=raced):
                 err = self.error(self.save(field, value, expect), 409, "stale")
             self.assertEqual(err["settings"][field]["value"], other)
-            self.assertEqual(core._tool_settings("wren")[key], other)
+            self.assertEqual(core._tool_settings("wisp")[key], other)
 
     def test_channel_help_is_refused_instead_of_silent_cli_success(self):
         with mock.patch.object(actions, "run_now", return_value=(True, "usage: shaft channel")) as command:
             self.error(self.save("channel", "--help", "auto"), 409, "refused")
             command.assert_not_called()
-        self.assertEqual(channel.preference("wren"), "auto")
+        self.assertEqual(channel.preference("wisp"), "auto")
 
     def test_stale_for_every_field_returns_fresh_settings_without_writing(self):
         for field, value, expect in (("model", "new-model", "old"), ("effort", "low", "xhigh"),
@@ -153,7 +153,7 @@ class SettingsTest(AppTest):
             with self.subTest(field=field), mock.patch.object(opconfig, "set_values") as writer:
                 r = self.save(field, value, expect)
                 err = self.error(r, 409, "stale")
-                self.assertEqual(err["settings"], self.get("/app/v1/settings/wren"))
+                self.assertEqual(err["settings"], self.get("/app/v1/settings/wisp"))
                 self.assertNotIn(self.fake.encode(), r.body)
                 writer.assert_not_called()
         self.command.assert_not_called()
@@ -162,7 +162,7 @@ class SettingsTest(AppTest):
         real = opconfig.set_values
 
         def raced(*args):
-            real("wren", {"LLM_REASONING_EFFORT": "xhigh"})
+            real("wisp", {"LLM_REASONING_EFFORT": "xhigh"})
             return real(*args)
         with mock.patch.object(opconfig, "set_values", side_effect=raced):
             err = self.error(self.save("effort", "low", "medium"), 409, "stale")
@@ -178,7 +178,7 @@ class SettingsTest(AppTest):
             self.error(self.save(field, value, expect), 409, "refused")
 
     def test_voice_settings_round_trip_through_config_env(self):
-        """The bug: voice mode and voice effort (PLAN-voice C2) could not be set from the app, or saved without the
+        """The bug: voice mode and voice effort could not be set from the app, or saved without the
         compare-and-set the other config fields have."""
         for field, value, expect, key, applies in (("voice_mode", "on", "off", "VOICE_MODE", "now"),
                                                    ("voice_effort", "low", "", "VOICE_REASONING_EFFORT", "next run"),
@@ -189,7 +189,7 @@ class SettingsTest(AppTest):
                 self.assertEqual(r.status, 200, r.body)
                 got = json.loads(r.body)
                 self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
-                self.assertEqual(core.instance_config("wren")[key], value)
+                self.assertEqual(core.instance_config("wisp")[key], value)
         self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "off")
         self.save("voice_mode", "on", "off")
         self.assertEqual(self.get("/app/v1/instances")["instances"][0]["voice_mode"], "on")
@@ -197,7 +197,7 @@ class SettingsTest(AppTest):
     def test_voice_settings_stale_and_bad_values_are_refused(self):
         """The bug: a voice setting changed elsewhere since the app drew it was overwritten, or a value the talk loop
         cannot use (VOICE_MODE "yes", an effort its code does not accept) was written to config.env."""
-        opconfig.set_values("wren", {"VOICE_MODE": "on"})
+        opconfig.set_values("wisp", {"VOICE_MODE": "on"})
         with mock.patch.object(opconfig, "set_values") as writer:
             err = self.error(self.save("voice_mode", "off", "off"), 409, "stale")    # shown off, it is on now
             writer.assert_not_called()
@@ -207,20 +207,20 @@ class SettingsTest(AppTest):
                                                ("voice_effort", "turbo", "", "must be empty")):
             err = self.error(self.save(field, value, expect), 409, "refused")
             self.assertIn(message, err["message"])
-        self.assertNotIn("VOICE_REASONING_EFFORT", core.instance_config("wren"))
+        self.assertNotIn("VOICE_REASONING_EFFORT", core.instance_config("wisp"))
         for field, value, expect in (("voice_mode", None, "on"), ("voice_mode", True, "on"), ("voice_effort", None, "")):
             self.error(self.save(field, value, expect), 400, "bad_request")
 
     def test_the_web_config_page_offers_the_voice_keys(self):
         """The bug: the web's instance settings (Config page) had no voice keys until the template documented them,
         or offered a free text box where only on/off or an effort works."""
-        fields = {f["key"]: f for f in opconfig.fields("wren")}
+        fields = {f["key"]: f for f in opconfig.fields("wisp")}
         self.assertEqual((fields["VOICE_MODE"]["choices"], fields["VOICE_MODE"]["default"], fields["VOICE_MODE"]["set"]),
                          (["on", "off"], "off", False))
         self.assertEqual(fields["VOICE_REASONING_EFFORT"]["choices"], ["", "medium", "xhigh", "low"])
         self.assertTrue(fields["VOICE_MODE"]["help"])
         from supervisor import web_config
-        row = str(web_config.config_row("wren", fields["VOICE_MODE"]))
+        row = str(web_config.config_row("wisp", fields["VOICE_MODE"]))
         self.assertIn('<option value="on">on</option>', row)
 
     def test_wrong_shapes_are_bad_request(self):
@@ -228,7 +228,7 @@ class SettingsTest(AppTest):
                      {"field": [], "value": 1, "expect": 1},
                      {"field": "LLM_API_KEY", "value": "x", "expect": "x"},
                      {"field": "channel", "value": "web", "expect": "auto", "extra": 1}):
-            self.error(self.api("/app/v1/settings/wren", "POST", data), 400, "bad_request")
+            self.error(self.api("/app/v1/settings/wisp", "POST", data), 400, "bad_request")
         for field, value, expect in (("wake_interval", True, 5), ("wake_interval", 1.5, 5),
                                      ("cloud_cap", True, None), ("cloud_cap", float("inf"), None),
                                      ("model", None, "old"), ("operator_name", 2, "the operator"),
@@ -239,17 +239,17 @@ class SettingsTest(AppTest):
     def test_pause_and_resume_share_web_action_and_device_logging(self):
         for verb in ("pause", "resume"):
             with mock.patch.object(web_actions, "pause_resume", wraps=web_actions.pause_resume) as shared:
-                r = self.api(f"/app/v1/settings/wren/{verb}", "POST")
+                r = self.api(f"/app/v1/settings/wisp/{verb}", "POST")
             self.assertEqual(r.status, 200, r.body)
-            self.assertEqual(json.loads(r.body), {"settings": self.get("/app/v1/settings/wren")})
-            shared.assert_called_once_with(verb, "wren", who="app iphone-app")
-            self.assertEqual(self.command.call_args.args[0], [verb, "wren"])
+            self.assertEqual(json.loads(r.body), {"settings": self.get("/app/v1/settings/wisp")})
+            shared.assert_called_once_with(verb, "wisp", who="app iphone-app")
+            self.assertEqual(self.command.call_args.args[0], [verb, "wisp"])
         with mock.patch.object(actions, "run_now", return_value=(False, "paused refused")):
-            self.error(self.api("/app/v1/settings/wren/pause", "POST"), 409, "refused")
+            self.error(self.api("/app/v1/settings/wisp/pause", "POST"), 409, "refused")
 
     def test_routes_require_auth_and_reject_unknown_instances_and_methods(self):
-        routes = [("/settings/wren", "GET"), ("/settings/wren", "POST"),
-                  ("/settings/wren/pause", "POST"), ("/settings/wren/resume", "POST"),
+        routes = [("/settings/wisp", "GET"), ("/settings/wisp", "POST"),
+                  ("/settings/wisp/pause", "POST"), ("/settings/wisp/resume", "POST"),
                   ("/services", "GET"), ("/services/api/restart", "POST"),
                   ("/services/scheduler/restart", "POST"), ("/services/scheduler/cancel", "POST")]
         for path, method in routes:
@@ -257,7 +257,7 @@ class SettingsTest(AppTest):
             self.error(self.api("/app/v1" + path, method, login="intruder"), 403, "login")
             self.error(self.api("/app/v1" + path, method, host="intruder"), 403, "host")
         self.error(self.api("/app/v1/settings/missing"), 404, "not_found")
-        self.error(self.api("/app/v1/settings/wren", "DELETE"), 405, "method")
+        self.error(self.api("/app/v1/settings/wisp", "DELETE"), 405, "method")
         self.command.assert_not_called()
 
     def test_dead_scheduler_leftover_request_does_not_block_restart(self):
@@ -292,7 +292,7 @@ class SettingsTest(AppTest):
 
     def test_services_only_project_allowed_record_fields(self):
         rec = {"pid": 123, "started": "2026-11-05T10:00:00", "commit": "abc", "settings": {"key": self.fake}}
-        drain = {"state": "draining", "waiting": ["wren live"], "deadline": 1793876400, "secret": self.fake}
+        drain = {"state": "draining", "waiting": ["wisp live"], "deadline": 1793876400, "secret": self.fake}
         with mock.patch.object(version, "service", side_effect=lambda n, **kw: rec if n == "api" else None), \
                 mock.patch.object(autonomy, "drain_status", return_value=drain):
             r = self.api("/app/v1/services")
@@ -301,7 +301,7 @@ class SettingsTest(AppTest):
             {"name": "api", "running": True, "pid": 123, "started": app_api.stamp(rec["started"]),
              "commit": "abc", "busy": ""},
             {"name": "scheduler", "running": False, "pid": None, "started": None, "commit": None, "busy": "",
-             "drain": {"state": "draining", "waiting": ["wren live"], "deadline": app_api.stamp(1793876400)}}]})
+             "drain": {"state": "draining", "waiting": ["wisp live"], "deadline": app_api.stamp(1793876400)}}]})
         self.assertNotIn(self.fake.encode(), r.body)
 
     def test_service_restart_and_cancel_use_existing_commands_and_timeouts(self):
@@ -316,31 +316,31 @@ class SettingsTest(AppTest):
             self.error(self.api("/app/v1/services/api/restart", "POST"), 409, "refused")
 
     def test_busy_api_restart_refused_without_force(self):
-        self.guard.return_value = "wren is replying"
+        self.guard.return_value = "wisp is replying"
         err = self.error(self.api("/app/v1/services/api/restart", "POST", {"force": True}), 409, "busy")
-        self.assertEqual(err["message"], "wren is replying")
+        self.assertEqual(err["message"], "wisp is replying")
         self.command.assert_not_called()
-        self.assertEqual(self.get("/app/v1/services")["services"][0]["busy"], "wren is replying")
+        self.assertEqual(self.get("/app/v1/services")["services"][0]["busy"], "wisp is replying")
 
     def test_run_lock_for_an_api_reply_makes_existing_service_guard_busy(self):
         # Exercise API._chat's run entry point and its real lock, stubbing only the agent execution.
         def reply(*args, **kw):
             rows = self.get("/app/v1/services")["services"]
-            self.assertIn("wren (api since", rows[0]["busy"])
+            self.assertIn("wisp (api since", rows[0]["busy"])
             self.error(self.api("/app/v1/services/api/restart", "POST"), 409, "busy")
             return 0
 
         with mock.patch.object(actions, "service_guard", ORIGINAL_GUARD), \
                 mock.patch("supervisor.panel.scheduled_runs", return_value=[]), \
                 mock.patch.object(runner, "_run", side_effect=reply) as agent:
-            self.assertEqual(runner.run_agent("wren", "api", ["answer"], interactive=True), 0)
+            self.assertEqual(runner.run_agent("wisp", "api", ["answer"], interactive=True), 0)
             agent.assert_called_once()
             self.assertEqual(self.get("/app/v1/services")["services"][0]["busy"], "")
         self.command.assert_not_called()
 
     def test_repeated_drain_is_not_requested_again_even_before_first_tick(self):
         req = {"pid": 123, "at": 10, "deadline": 100}
-        for record in (None, {**req, "state": "draining", "waiting": ["wren live"]}):
+        for record in (None, {**req, "state": "draining", "waiting": ["wisp live"]}):
             with mock.patch.object(version, "service", return_value={"pid": 123}), \
                     mock.patch.object(autonomy, "restart_request", return_value=req), \
                     mock.patch.object(autonomy, "drain_status", return_value=record):

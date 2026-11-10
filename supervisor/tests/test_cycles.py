@@ -30,7 +30,7 @@ class CyclesDaysTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.inst = self.tmp / "instances"
         self.sup = self.tmp / "sup"
-        self.root = self.inst / "wren"
+        self.root = self.inst / "wisp"
         (self.root / "shaft").mkdir(parents=True)
         (self.root / ".git").write_text("")
         self.eps = self.root / "memory" / "episodes"
@@ -51,7 +51,7 @@ class CyclesDaysTest(unittest.TestCase):
     def judge(self, **record) -> None:
         folder = self.sup / "judgments"
         folder.mkdir(parents=True, exist_ok=True)
-        with (folder / "wren.jsonl").open("a") as f:
+        with (folder / "wisp.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
 
     def write(self, rel: str, text: str) -> None:
@@ -66,7 +66,7 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a", "origin": "operator"},
                 finish={"criterion_met": "partial", "delivered_via": "message"})
         self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00", content="slept")
-        d = cycles.days("wren")["days"][0]
+        d = cycles.days("wisp")["days"][0]
         self.assertEqual(d["counts"],
                          {"cycles": 1, "yes": 0, "partial": 1, "no": 0, "none": 0, "judged": 0, "for_you": 1})
         self.assertEqual([r["kind"] for r in d["rows"]], ["cycle", "sleep"])
@@ -74,7 +74,7 @@ class CyclesDaysTest(unittest.TestCase):
     def test_fell_short_is_live_cycles_only(self):
         self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00", content="slept")
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "unfinished"})   # no finish
-        self.assertEqual([r["goal"] for r in cycles.days("wren", filt="short")["days"][0]["rows"]], ["unfinished"])
+        self.assertEqual([r["goal"] for r in cycles.days("wisp", filt="short")["days"][0]["rows"]], ["unfinished"])
 
     def test_a_verdict_of_partial_falls_short_though_the_claim_says_yes(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "overclaimed"},
@@ -83,7 +83,7 @@ class CyclesDaysTest(unittest.TestCase):
                 finish={"criterion_met": "yes"})
         self.judge(episode_ts="2026-11-05T09:00:00", criterion_met="partial", difficulty=2)
         self.judge(episode_ts="2026-11-05T10:00:00", criterion_met="yes", difficulty=2)
-        d = cycles.days("wren", filt="short")["days"][0]
+        d = cycles.days("wisp", filt="short")["days"][0]
         self.assertEqual([r["goal"] for r in d["rows"]], ["overclaimed"])
         self.assertEqual((d["rows"][0]["claim"], d["rows"][0]["verdict"]), ("yes", "partial"))
         self.assertEqual(d["counts"],
@@ -100,21 +100,21 @@ class CyclesDaysTest(unittest.TestCase):
                 intent={"goal": "quiet", "origin": "self"},
                 finish={"criterion_met": "yes", "delivered_via": None})
         self.ep("2026-11-05", kind="talk", ts="2026-11-05T11:00:00", content="chat")
-        yours = cycles.days("wren", filt="yours")["days"][0]["rows"]
+        yours = cycles.days("wisp", filt="yours")["days"][0]["rows"]
         self.assertEqual(len(yours), 1)
         self.assertEqual(yours[0]["goal"], "x" * 300)
         self.assertFalse(yours[0]["delivered"])
-        delivered = cycles.days("wren", filt="delivered")["days"][0]["rows"]
+        delivered = cycles.days("wisp", filt="delivered")["days"][0]["rows"]
         self.assertEqual([r["goal"] for r in delivered], ["sent"])
         self.assertTrue(delivered[0]["delivered"])
 
     def test_paging_runs_over_gaps_between_days(self):
         for day in ("2026-11-01", "2026-11-04", "2026-11-05"):
             self.ep(day, kind="live", ts=f"{day}T09:00:00", intent={"goal": day}, finish={"criterion_met": "yes"})
-        first = cycles.days("wren", limit=2)
+        first = cycles.days("wisp", limit=2)
         self.assertEqual([d["date"] for d in first["days"]], ["2026-11-05", "2026-11-04"])
         self.assertEqual(first["next"], "2026-11-01")
-        self.assertEqual(cycles.days("wren", before="2026-11-02", limit=2)["next"], None)
+        self.assertEqual(cycles.days("wisp", before="2026-11-02", limit=2)["next"], None)
 
     def test_following_next_covers_every_day_once(self):
         for day in ("2026-11-01", "2026-11-04", "2026-11-05"):
@@ -122,7 +122,7 @@ class CyclesDaysTest(unittest.TestCase):
         seen: list[str] = []
         cursor: str | None = None
         while True:
-            page = cycles.days("wren", before=cursor, limit=1)
+            page = cycles.days("wisp", before=cursor, limit=1)
             seen.extend(d["date"] for d in page["days"])
             cursor = page["next"]
             if cursor is None:
@@ -133,29 +133,29 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"})
         with (self.eps / "2026-11-05.jsonl").open("a") as f:
             f.write('{"kind": "live", "ts"')
-        d = cycles.days("wren")["days"][0]
+        d = cycles.days("wisp")["days"][0]
         self.assertEqual((len(d["rows"]), d["skipped_lines"]), (1, 1))
-        lines, skipped = cycles._lines("wren", "2026-11-05")
+        lines, skipped = cycles._lines("wisp", "2026-11-05")
         self.assertEqual((len(lines), lines[0][0], skipped), (1, 1, 1))
 
     def test_an_unreadable_judge_file_leaves_the_cycles_and_says_so(self):  # review focus 3
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"})
         with mock.patch.object(panel, "judgments", side_effect=ValueError("bad line")):
-            out = cycles.days("wren")
+            out = cycles.days("wisp")
         self.assertIn("bad line", out["judge_error"])
         self.assertTrue(out["days"])
 
     def test_no_tool_log_reaches_a_row(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"},
                 tools=[{"tool": "run", "args": "SECRET", "result": "SECRET"}])
-        self.assertNotIn("SECRET", json.dumps(cycles.days("wren")))
+        self.assertNotIn("SECRET", json.dumps(cycles.days("wisp")))
 
     def test_an_instance_with_no_episodes_has_no_days(self):
-        self.assertEqual(cycles.days("wren")["days"], [])
+        self.assertEqual(cycles.days("wisp")["days"], [])
 
     def test_unknown_cost_and_duration_stay_unknown(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"}, project_usage=None)
-        did = cycles.cycle("wren", "2026-11-05T09:00:00")["did"]
+        did = cycles.cycle("wisp", "2026-11-05T09:00:00")["did"]
         self.assertIsNone(did["usd"])
         self.assertIsNone(did["duration_s"])
 
@@ -167,7 +167,7 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-05", kind="live", ts=ts, intent=intent, run_started="2026-11-05T13:25:13",
                 project_usage={"usd": 0.25}, ended_by="finish", wrapped_up="normal",
                 finish={"what_happened": "did a", "delivered_via": "message"})
-        out = cycles.cycle("wren", ts)
+        out = cycles.cycle("wisp", ts)
         self.assertIsInstance(out["did"]["duration_s"], int)
         self.assertEqual((out["id"], out["ts"], out["kind"], out["where"], out["content"]),
                          (ts, ts, "cycle", "memory/episodes/2026-11-05.jsonl:1", None))
@@ -180,7 +180,7 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-04", kind="live", ts="2026-11-04T23:59:00", intent={"goal": "a"})
         self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00", content="slept")
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "b"})
-        self.assertEqual(cycles.cycle("wren", "2026-11-04T23:59:00")["left"]["next_goal"], "b")
+        self.assertEqual(cycles.cycle("wisp", "2026-11-04T23:59:00")["left"]["next_goal"], "b")
 
     def test_next_goal_uses_the_first_later_live_goal(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T08:00:00", intent={"goal": "before"})
@@ -188,18 +188,18 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00", intent=[])
         self.ep("2026-11-05", kind="live", ts="2026-11-05T11:00:00", intent={"goal": "b"})
         self.ep("2026-11-06", kind="live", ts="2026-11-06T09:00:00", intent={"goal": "c"})
-        self.assertEqual(cycles.cycle("wren", "2026-11-05T09:00:00")["left"]["next_goal"], "b")
+        self.assertEqual(cycles.cycle("wisp", "2026-11-05T09:00:00")["left"]["next_goal"], "b")
 
     def test_the_newest_cycle_has_no_next_goal(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"})
-        self.assertIsNone(cycles.cycle("wren", "2026-11-05T09:00:00")["left"]["next_goal"])
+        self.assertIsNone(cycles.cycle("wisp", "2026-11-05T09:00:00")["left"]["next_goal"])
 
     def test_a_sleep_has_content_and_no_plan(self):
         for kind, expected in (("sleep", "sleep"), ("reflect", "reflection")):
             with self.subTest(kind=kind):
                 ts = "2026-11-05T04:00:00" if kind == "sleep" else "2026-11-05T05:00:00"
                 self.ep("2026-11-05", kind=kind, ts=ts, content="slept")
-                out = cycles.cycle("wren", ts)
+                out = cycles.cycle("wisp", ts)
                 self.assertEqual((out["kind"], out["content"]), (expected, "slept"))
                 for key in ("planned", "result", "left"):
                     self.assertIsNone(out[key])
@@ -213,7 +213,7 @@ class CyclesDaysTest(unittest.TestCase):
                   "reasoning": "second reason", "judge": "second model"}
         self.judge(episode_ts=ts, criterion_met="no", claim_supported=False, first_error="The first check was skipped.",
                    reasoning="first reason", judge="first model", second=second)
-        result = cycles.cycle("wren", ts)["result"]
+        result = cycles.cycle("wisp", ts)["result"]
         self.assertEqual(result, {
             "claim": "yes", "surprises": [{"expected": "quiet", "observed": "noise", "so_what": "s"}],
             "doubts": [{"step": 1, "what": "d"}], "judge_error": "",
@@ -226,7 +226,7 @@ class CyclesDaysTest(unittest.TestCase):
         ts = "2026-11-05T09:00:00"
         self.ep("2026-11-05", kind="live", ts=ts)
         self.judge(episode_ts=ts, criterion_met="yes", second={"judge": "m", "error": "HTTP 503"})
-        result = cycles.cycle("wren", ts)["result"]
+        result = cycles.cycle("wisp", ts)["result"]
         self.assertEqual(result["second"]["error"], "HTTP 503")
         self.assertIsNone(result["second"]["verdict"])
         self.assertEqual(result["judge"]["error"], "")
@@ -235,7 +235,7 @@ class CyclesDaysTest(unittest.TestCase):
         ts = "2026-11-05T09:00:00"
         self.ep("2026-11-05", kind="live", ts=ts)
         with mock.patch.object(panel, "judgments", side_effect=ValueError("bad line")):
-            result = cycles.cycle("wren", ts)["result"]
+            result = cycles.cycle("wisp", ts)["result"]
         self.assertEqual(result["judge_error"], "ValueError: bad line")
         self.assertIsNone(result["judge"])
         self.assertIsNone(result["second"])
@@ -243,15 +243,15 @@ class CyclesDaysTest(unittest.TestCase):
     def test_a_malformed_ts_is_none_not_a_path(self):
         with mock.patch.object(cycles, "_lines") as lines:
             for ts in ("../../x", "2026-11-05", "2026-11-05T09:00:00Z", "2026-02-30T09:00:00"):
-                self.assertIsNone(cycles.cycle("wren", ts))
+                self.assertIsNone(cycles.cycle("wisp", ts))
             lines.assert_not_called()
-        self.assertIsNone(cycles.cycle("wren", "2026-11-05T09:00:00"))
+        self.assertIsNone(cycles.cycle("wisp", "2026-11-05T09:00:00"))
 
     def test_no_tool_log_reaches_the_detail(self):
         ts = "2026-11-05T09:00:00"
         self.ep("2026-11-05", kind="live", ts=ts, doing="SECRET",
                 tools=[{"tool": "run", "args": "SECRET", "result": "SECRET"}])
-        out = cycles.cycle("wren", ts)
+        out = cycles.cycle("wisp", ts)
         self.assertEqual(out["did"]["tool_calls"], 1)
         self.assertNotIn("SECRET", json.dumps(out))
 
@@ -261,18 +261,18 @@ class CyclesDaysTest(unittest.TestCase):
                 ts = f"2026-11-05T{hour:02}:00:00"
                 self.ep("2026-11-05", kind="live", ts=ts, intent=[], finish=[],
                         project_usage="bad", tools="bad", run_started=start)
-                out = cycles.cycle("wren", ts)
+                out = cycles.cycle("wisp", ts)
                 self.assertIsNone(out["planned"])
                 self.assertIsNone(out["did"]["usd"])
                 self.assertIsNone(out["did"]["duration_s"])
                 self.assertEqual(out["did"]["tool_calls"], 0)
         self.ep("2026-11-05", kind="live", ts="2026-11-05T15:00:00",
                 finish={"unfinished": ["b", 7, None], "next_action": "bad"})
-        self.assertEqual(cycles.cycle("wren", "2026-11-05T15:00:00")["left"],
+        self.assertEqual(cycles.cycle("wisp", "2026-11-05T15:00:00")["left"],
                          {"unfinished": ["b"], "next_action": None, "next_goal": None})
         self.ep("2026-11-05", kind="live", ts="2026-11-05T16:00:00",
                 finish={"unfinished": 7, "next_action": {"action": "do b", "revise_if": "x"}})
-        self.assertEqual(cycles.cycle("wren", "2026-11-05T16:00:00")["left"],
+        self.assertEqual(cycles.cycle("wisp", "2026-11-05T16:00:00")["left"],
                          {"unfinished": [], "next_action": {"action": "do b", "revise_if": "x"}, "next_goal": None})
 
     def test_next_poll_parses_each_unchanged_day_once_without_caching_tool_logs(self):
@@ -281,25 +281,25 @@ class CyclesDaysTest(unittest.TestCase):
                 finish={"next_action": {"action": "check"}, "unfinished": ["notes"]})
         self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00")
         with mock.patch.object(cycles, "_lines", wraps=cycles._lines) as parse:
-            first = cycles.plan("wren", {})
-            second = cycles.plan("wren", {})
+            first = cycles.plan("wisp", {})
+            second = cycles.plan("wisp", {})
         self.assertEqual(parse.call_count, 2)
         self.assertEqual(first["next_step"], second["next_step"])
         self.assertEqual(second["next_step"]["action"], "check")
         self.assertNotIn("PRIVATE TOOL LOG", repr(panel._memo))
         self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00",
                 finish={"next_action": {"action": "new"}})
-        self.assertEqual(cycles.plan("wren", {})["next_step"]["action"], "new")
+        self.assertEqual(cycles.plan("wisp", {})["next_step"]["action"], "new")
 
     def test_next_poll_reads_unchanged_journal_once_and_invalidates_on_change(self):
         self.journal("## 2026-11-05 04:00 — Sleep\n\nHow I will improve: check")
         with mock.patch.object(core, "safe_read", wraps=core.safe_read) as read:
-            first = cycles.plan("wren", {})
-            second = cycles.plan("wren", {})
+            first = cycles.plan("wisp", {})
+            second = cycles.plan("wisp", {})
         self.assertEqual(sum(c.args[1] == "memory/journal.md" for c in read.call_args_list), 1)
         self.assertEqual(first["improvement"], second["improvement"])
         self.journal("## 2026-11-05 04:00 — Sleep\n\nHow I will improve: check again")
-        self.assertEqual(cycles.plan("wren", {})["improvement"]["text"], "How I will improve: check again")
+        self.assertEqual(cycles.plan("wisp", {})["improvement"]["text"], "How I will improve: check again")
 
     def test_unreadable_journal_is_an_improvement_error_not_no_plan_or_a_crash(self):
         for error in (core.UnsafePath("link"), core.TooBig("large"), PermissionError("denied")):
@@ -311,28 +311,28 @@ class CyclesDaysTest(unittest.TestCase):
                     return read(root, rel, *args, **kwargs)
                 panel._memo.clear()
                 with mock.patch.object(core, "safe_read", side_effect=fail):
-                    plan = cycles.plan("wren", {})
+                    plan = cycles.plan("wisp", {})
                 self.assertIsNone(plan["improvement"])
                 self.assertEqual(plan["improvement_error"], f"could not read memory/journal.md: {error}")
-        self.assertEqual(cycles.plan("wren", {})["improvement_error"], "")
+        self.assertEqual(cycles.plan("wisp", {})["improvement_error"], "")
 
     def test_link_and_oversized_journals_report_the_real_safe_read_error(self):
         target = self.tmp / "journal-target.md"
         target.write_text("private")
         journal = self.root / "memory/journal.md"
         journal.symlink_to(target)
-        plan = cycles.plan("wren", {})
+        plan = cycles.plan("wisp", {})
         self.assertIsNone(plan["improvement"])
         self.assertTrue(plan["improvement_error"].startswith("could not read memory/journal.md:"))
         journal.unlink()
         self.journal("oversized")
         with mock.patch.object(core, "FILE_READ_MAX_MB", 0):
-            plan = cycles.plan("wren", {})
+            plan = cycles.plan("wisp", {})
         self.assertEqual(plan["improvement_error"], "could not read memory/journal.md: 9 bytes, more than 0")
 
     def test_all_malformed_lines_keep_the_day_and_its_skipped_count(self):
         self.write("memory/episodes/2026-11-05.jsonl", "broken\n[]\n")
-        day = cycles.days("wren")["days"][0]
+        day = cycles.days("wisp")["days"][0]
         self.assertEqual((day["date"], day["rows"], day["skipped_lines"]), ("2026-11-05", [], 2))
         self.assertEqual(day["counts"]["cycles"], 0)
 
@@ -341,22 +341,22 @@ class CyclesDaysTest(unittest.TestCase):
         self.ep("2026-11-05", kind="live", ts=ts)
         self.judge(episode_ts=ts, criterion_met="no")
         self.judge(episode_ts=ts, criterion_met="yes")
-        self.assertEqual(cycles.days("wren")["days"][0]["rows"][0]["verdict"], "yes")
-        self.assertEqual(cycles.cycle("wren", ts)["result"]["judge"]["verdict"], "yes")
+        self.assertEqual(cycles.days("wisp")["days"][0]["rows"][0]["verdict"], "yes")
+        self.assertEqual(cycles.cycle("wisp", ts)["result"]["judge"]["verdict"], "yes")
 
     def test_now_never_carries_doing(self):
-        p = cycles.plan("wren", {"state": "in a cycle", "since": "09:00", "goal": "g", "doing": "run SECRET"})
+        p = cycles.plan("wisp", {"state": "in a cycle", "since": "09:00", "goal": "g", "doing": "run SECRET"})
         self.assertEqual(p["now"], {"state": "in a cycle", "since": "09:00", "goal": "g"})
         self.assertNotIn("SECRET", json.dumps(p))
 
     def test_a_stale_goal_is_not_shown_while_idle(self):
-        self.assertIsNone(cycles.plan("wren", {"state": "idle", "goal": "old"})["now"]["goal"])
+        self.assertIsNone(cycles.plan("wisp", {"state": "idle", "goal": "old"})["now"]["goal"])
 
     def test_next_step_walks_back_past_a_cycle_without_one(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"},
                 finish={"next_action": {"action": "do b", "revise_if": "x"}, "unfinished": ["b"]})
         self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00", intent={"goal": "stopped"})
-        p = cycles.plan("wren", {})
+        p = cycles.plan("wisp", {})
         self.assertEqual(p["next_step"], {"ts": "2026-11-05T09:00:00", "action": "do b", "revise_if": "x"})
         self.assertEqual(p["unfinished"], ["b"])
 
@@ -365,23 +365,23 @@ class CyclesDaysTest(unittest.TestCase):
                 finish={"next_action": {"action": "do b"}, "unfinished": ["b"]})
         self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00", intent={"goal": "stopped"},
                 finish={"next_action": "do c", "unfinished": ["c"]})
-        p = cycles.plan("wren", {})
+        p = cycles.plan("wisp", {})
         self.assertEqual(p["next_step"], {"ts": "2026-11-05T09:00:00", "action": "do b", "revise_if": None})
         self.assertEqual(p["unfinished"], ["b"])
 
     def test_unfinished_that_is_not_a_list_does_not_break_the_plan(self):
         self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"},
                 finish={"next_action": {"action": "do b"}, "unfinished": 7})
-        p = cycles.plan("wren", {})
+        p = cycles.plan("wisp", {})
         self.assertEqual(p["unfinished"], [])
         self.assertEqual(p["next_step"]["action"], "do b")
 
     def test_no_queue_says_none(self):
-        self.assertEqual(cycles.plan("wren", {})["queue"]["state"], "none")
+        self.assertEqual(cycles.plan("wisp", {})["queue"]["state"], "none")
 
     def test_a_queue_of_another_shape_is_unreadable(self):
         self.write("notes/queue.json", '{"tasks": 3}')
-        q = cycles.plan("wren", {})["queue"]
+        q = cycles.plan("wisp", {})["queue"]
         self.assertEqual(q["state"], "unreadable")
         self.assertTrue(q["error"])
 
@@ -392,7 +392,7 @@ class CyclesDaysTest(unittest.TestCase):
             (self.root / d).mkdir(parents=True, exist_ok=True)
         (self.root / "self" / "goals.md").symlink_to(secret)
         (self.root / "notes" / "queue.json").symlink_to(secret)
-        p = cycles.plan("wren", {})
+        p = cycles.plan("wisp", {})
         self.assertNotIn("SECRET", json.dumps(p))
         self.assertEqual(p["goals"], "")
         self.assertTrue(p["goals_error"])
@@ -419,7 +419,7 @@ class CyclesDaysTest(unittest.TestCase):
             {"id": 15, "task": "t15", "due_at": "", "status": "cancelled"},
         ]
         self.write("notes/queue.json", json.dumps(rows))
-        q = cycles.plan("wren", {}, now=now)["queue"]
+        q = cycles.plan("wisp", {}, now=now)["queue"]
         self.assertEqual((q["open"], len(q["rows"])), (12, 10))
         self.assertEqual(q["overdue"], 5)
         self.assertEqual([r["id"] for r in q["rows"]], [11, 9, 3, 1, 2, 5, 6, 7, 4, 10])
@@ -432,14 +432,14 @@ class CyclesDaysTest(unittest.TestCase):
              "status": "done", "added": "2026-11-04T09:00:00", "done_at": "2026-11-05T09:00:00"},
         ]
         self.write("notes/queue.json", json.dumps(rows))
-        queue = cycles.plan("wren", {}, now=datetime(2026, 11, 5, 12))["queue"]
+        queue = cycles.plan("wisp", {}, now=datetime(2026, 11, 5, 12))["queue"]
         self.assertEqual(queue["open"], 1)
         self.assertEqual(queue["overdue"], 1)
         self.assertEqual([row["id"] for row in queue["rows"]], [1])
 
     def test_a_long_queue_task_is_clipped_at_200(self):
         self.write("notes/queue.json", json.dumps([{"id": 1, "task": "x" * 250}]))
-        row = cycles.plan("wren", {})["queue"]["rows"][0]
+        row = cycles.plan("wisp", {})["queue"]["rows"][0]
         self.assertEqual(row["task"], "x" * 200)
 
     def test_commitments_to_itself_are_left_out(self):
@@ -450,11 +450,11 @@ class CyclesDaysTest(unittest.TestCase):
                    "made_to": "self"},
             "c3": {"id": "c3", "promise": "own thing", "due": "2026-11-05T12:00:00", "status": "overdue",
                    "made_to": "own"},
-            "c4": {"id": "c4", "promise": "wren thing", "due": "2026-11-05T11:00:00", "status": "open",
-                   "made_to": "wren"},
+            "c4": {"id": "c4", "promise": "wisp thing", "due": "2026-11-05T11:00:00", "status": "open",
+                   "made_to": "wisp"},
         }
         with mock.patch.object(commitments, "ledger", return_value=ledger):
-            self.assertEqual(cycles.plan("wren", {})["commitments"],
+            self.assertEqual(cycles.plan("wisp", {})["commitments"],
                              [{"id": "c1", "promise": "send notes", "due": "2026-11-05T14:00:00",
                                "status": "open"}])
 
@@ -463,17 +463,17 @@ class CyclesDaysTest(unittest.TestCase):
                          "status": "overdue", "made_to": "operator"}}
         with mock.patch.object(panel.time, "time", return_value=1000), \
                 mock.patch.object(commitments, "ledger", return_value=ledger) as read:
-            first = cycles.plan("wren", {})
-            second = cycles.plan("wren", {})
-        read.assert_called_once_with("wren", None)
+            first = cycles.plan("wisp", {})
+            second = cycles.plan("wisp", {})
+        read.assert_called_once_with("wisp", None)
         expected = [{"id": "c1", "promise": "send notes", "due": "2026-11-05T11:00:00", "status": "overdue"}]
         self.assertEqual(first["commitments"], expected)
         self.assertEqual(second["commitments"], expected)
 
     def test_a_failed_commitments_ledger_is_not_cached(self):
         with mock.patch.object(commitments, "ledger", side_effect=[OSError("unreadable"), {}]) as read:
-            first = cycles.plan("wren", {})
-            second = cycles.plan("wren", {})
+            first = cycles.plan("wisp", {})
+            second = cycles.plan("wisp", {})
         self.assertEqual(first["commitments"], [])
         self.assertEqual(first["commitments_error"], "OSError: unreadable")
         self.assertEqual(second["commitments_error"], "")
@@ -482,16 +482,16 @@ class CyclesDaysTest(unittest.TestCase):
     def test_the_improvement_plan_stops_at_consolidation(self):
         self.journal("## 2026-11-05 04:00 — Sleep\n\nslept\n\n**How I will improve:** run less\n\n"
                      "*Consolidation actions:* x\n")
-        self.assertEqual(cycles.plan("wren", {})["improvement"]["text"], "**How I will improve:** run less")
+        self.assertEqual(cycles.plan("wisp", {})["improvement"]["text"], "**How I will improve:** run less")
 
     def test_paused_is_said(self):
         with mock.patch.object(autonomy, "paused", return_value=True):
-            p = cycles.plan("wren", {})
+            p = cycles.plan("wisp", {})
         self.assertEqual(p["check"]["paused"], True)
         self.assertEqual(p["check"]["next"], "paused")
 
     def test_a_new_instance_has_an_empty_plan_not_an_error(self):
-        p = cycles.plan("wren", {})
+        p = cycles.plan("wisp", {})
         self.assertIsNone(p["next_step"])
         self.assertEqual(p["unfinished"], [])
         self.assertEqual(p["commitments"], [])

@@ -1,4 +1,4 @@
-"""The instance's mind store (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md): the past imported exactly, the cutover,
+"""The instance's mind store (supervisor/mind.py): the past imported exactly, the cutover,
 and every reader and creator of a mind going through the store."""
 from __future__ import annotations
 
@@ -341,45 +341,45 @@ class ReadersTest(unittest.TestCase):
 
     def parent_with_knowledge(self) -> Path:
         """A parent that has lived a little: a people file and facts about its operator, a self it wrote."""
-        root = self.new("wren")
+        root = self.new("wisp")
         (root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         (root / "memory" / "people").mkdir(parents=True)
-        (root / "memory" / "people" / "the-operator.md").write_text("# You (the operator)\n\n- You created me (wren) "
+        (root / "memory" / "people" / "the-operator.md").write_text("# You (the operator)\n\n- You created me (wisp) "
                                                                "[journal 2026-10-12 17:13].\n")
         (root / "memory" / "facts.md").write_text("# Facts I have learned\n\n- [2026-10-13 05:06] no piped tests\n")
         (root / "memory" / "facts-archive.md").write_text("OLD FACTS\n")
-        (root / "self" / "self.md").write_text("I AM WREN\n")
-        (root / "memory" / "journal.md").write_text("WREN'S JOURNAL\n")
-        mind.commit("wren", "wren: sleep", root)
+        (root / "self" / "self.md").write_text("I AM WISP\n")
+        (root / "memory" / "journal.md").write_text("WISP'S JOURNAL\n")
+        mind.commit("wisp", "wisp: sleep", root)
         (root / "memory" / "facts.md").write_text("UNCOMMITTED, MID-CYCLE\n")   # its worktree; the store is the truth
         return root
 
     def test_seed_brings_what_the_parent_knows_about_the_operator_and_nothing_of_itself(self):
         self.parent_with_knowledge()
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(cli.cmd_new("thelos", "wren", seed=True), 0)
-        self.assertIn("seeded from wren: memory/people/the-operator.md, memory/facts.md", out.getvalue())
-        files = sorted(mind.git("thelos", "ls-tree", "-r", "--name-only", "mind").stdout.split())
+            self.assertEqual(cli.cmd_new("tundra", "wisp", seed=True), 0)
+        self.assertIn("seeded from wisp: memory/people/the-operator.md, memory/facts.md", out.getvalue())
+        files = sorted(mind.git("tundra", "ls-tree", "-r", "--name-only", "mind").stdout.split())
         self.assertEqual(files, ["memory/facts.md", "memory/journal.md", "memory/people/the-operator.md",
                                  "self/goals.md", "self/self.md"])
-        people = mind.show("thelos", "mind", "memory/people/the-operator.md")
+        people = mind.show("tundra", "mind", "memory/people/the-operator.md")
         self.assertTrue(people.startswith("# You (the operator)\n\n> Seeded "), people)   # its heading first, then whose
-        self.assertIn("wren's beliefs about the operator, written in wren's voice", people)
-        self.assertIn("- You created me (wren) [journal 2026-10-12 17:13].", people)   # the text itself unchanged
-        facts = mind.show("thelos", "mind", "memory/facts.md")
+        self.assertIn("wisp's beliefs about the operator, written in wisp's voice", people)
+        self.assertIn("- You created me (wisp) [journal 2026-10-12 17:13].", people)   # the text itself unchanged
+        facts = mind.show("tundra", "mind", "memory/facts.md")
         self.assertIn("- [2026-10-13 05:06] no piped tests", facts)
         self.assertNotIn("MID-CYCLE", facts)
-        self.assertNotIn("WREN", mind.show("thelos", "mind", "self/self.md"))
-        journal = mind.show("thelos", "mind", "memory/journal.md")
-        self.assertNotIn("WREN'S JOURNAL", journal)
+        self.assertNotIn("WISP", mind.show("tundra", "mind", "self/self.md"))
+        journal = mind.show("tundra", "mind", "memory/journal.md")
+        self.assertNotIn("WISP'S JOURNAL", journal)
         self.assertIn("of its memories only what it knows about the operator", journal)
-        root = self.project / "instances" / "thelos"
+        root = self.project / "instances" / "tundra"
         self.assertEqual(git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", *MIND_PATHS), "")   # none on the branch
         self.assertIn("of its memories only what it knows about the operator", git(root, "log", "-1", "--format=%s"))
 
     def test_without_seed_a_fork_knows_nothing_of_the_parent_s_operator(self):
         self.parent_with_knowledge()
-        child = self.new("kid", source="wren")
+        child = self.new("kid", source="wisp")
         self.assertFalse((child / "memory" / "facts.md").exists())
         self.assertFalse((child / "memory" / "people").exists())
         self.assertIn("code, skills and plugins only, not its memories",

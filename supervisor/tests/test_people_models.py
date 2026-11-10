@@ -24,10 +24,10 @@ class PredictionsTest(unittest.TestCase):
         self.root = Path(tmp)
         self.enterContext(mock.patch.object(tom, "SUP_DIR", self.root))
         self.b = object.__new__(broker.Broker)
-        self.b.name, self.b.as_of = "wren", None
+        self.b.name, self.b.as_of = "wisp", None
 
     def rows(self, rows):
-        path = self.root / "expectations" / "wren-scored.jsonl"
+        path = self.root / "expectations" / "wisp-scored.jsonl"
         path.parent.mkdir(exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
@@ -50,7 +50,7 @@ class PredictionsTest(unittest.TestCase):
                     '2026-10-30 12:09 to operator — said will_reply 1% within 24h; gist: "Agrees". '
                     'Outcome: no reply in the window.')
         replay = object.__new__(broker.ReplayBroker)
-        replay.name, replay.as_of = "wren", datetime(2026, 10, 31, 14)
+        replay.name, replay.as_of = "wisp", datetime(2026, 10, 31, 14)
         self.assertEqual(replay._record("expectations", since="2026-10-31T13:00"), expected)
         live = self.b._record("expectations", since="2026-10-31 13:00:00")
         self.assertTrue(live.startswith(expected + "\n"))
@@ -63,7 +63,7 @@ class PredictionsTest(unittest.TestCase):
     def test_record_empty_invalid_since_and_own_rows_only(self):
         self.assertEqual(self.b._record("expectations"), "(nothing recorded yet)")
         self.rows([self.row("2026-10-31T13:00:00")])
-        self.b.name = "thelos"
+        self.b.name = "tundra"
         self.assertEqual(self.b._record("expectations"), "(nothing recorded yet)")
         for bad in ("yesterday", "2026-02-30 13:00", 42):
             with self.subTest(since=bad), self.assertRaises(ValueError):
@@ -94,11 +94,11 @@ class PredictionsTest(unittest.TestCase):
                           sections(name, tuple(m for m in which if m == "tom"))))
         self.enterContext(mock.patch.object(metrics, "judgments", return_value=[
             judgment("2026-10-31T12:00:00", "yes", 3, "self")]))
-        episode_dir = self.root / "roots" / "wren" / "memory" / "episodes"
+        episode_dir = self.root / "roots" / "wisp" / "memory" / "episodes"
         episode_dir.mkdir(parents=True)
         (episode_dir / "2026-10-31.jsonl").write_text(json.dumps(
             {"kind": "live", "ts": "2026-10-31T12:00:00", "tools": []}) + "\n")
-        text = metrics.stats_text("wren")
+        text = metrics.stats_text("wisp")
         title = "## What I expected others to answer"
         at = text.index(title)
         self.assertLess(text.index("## My expectations vs what happened"), at)
@@ -106,7 +106,7 @@ class PredictionsTest(unittest.TestCase):
         self.assertLess(at, text.index("## Success against my own criteria (raw)"))
         self.assertIn("Per peer: operator:", text[:5500])
         self.assertEqual(text.count(title), 1)
-        self.assertEqual(len(tom.section("wren")), 5)
+        self.assertEqual(len(tom.section("wisp")), 5)
 
 
 class SleepPredictionsTest(unittest.TestCase):
@@ -123,7 +123,7 @@ class SleepPredictionsTest(unittest.TestCase):
         self.run_agent = self.enterContext(mock.patch.object(agent, "run", return_value=
             agent.Outcome(mock.Mock(content="Done."), "answer", 1)))
 
-    def run_sleep(self, text="Scored prediction: wren replied.", error=None, last_sleep=""):
+    def run_sleep(self, text="Scored prediction: wisp replied.", error=None, last_sleep=""):
         def record(tool, **args):
             if args["kind"] == "expectations":
                 if error:
@@ -139,7 +139,7 @@ class SleepPredictionsTest(unittest.TestCase):
     def test_sleep_includes_predictions_and_last_sleep_cursor(self):
         user, calls = self.run_sleep(last_sleep="2026-10-30T12:34:56")
         self.assertIn("## What I expected others to answer, and what happened (step 2)\n\n"
-                      "Scored prediction: wren replied.", user)
+                      "Scored prediction: wisp replied.", user)
         self.assertLess(user.index("Scored prediction:"), user.index("## My operational envelope"))
         calls.assert_any_call("record", kind="expectations", limit=50, since="2026-10-30 12:34:56")
         self.assertIn("a reply you put under 50% that came", user)

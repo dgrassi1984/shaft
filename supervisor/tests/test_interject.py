@@ -1,5 +1,5 @@
 """A message the operator sends while the instance is still replying reaches that reply at its next step (the operator,
-2026-10-16: "it should be injected immediately into it"; docs/plans/PLAN-interject.md). The agent side: the real talk.answer
+2026-10-16: "it should be injected immediately into it"). The agent side: the real talk.answer
 against a scripted model, with the supervisor's .tmp/interject-<talk id>.jsonl written while the model works."""
 from __future__ import annotations
 

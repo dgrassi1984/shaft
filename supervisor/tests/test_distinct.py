@@ -45,7 +45,7 @@ class StripTest(unittest.TestCase):
             return {"rewrites": [{"id": i, "text": "<" + clean(t) + ">"} for i, t in texts_in(prompt).items()]}
         pairs = pairs_with("ABBA")
         with mock.patch.object(judge, "ask", side_effect=fake):
-            stripped, leaks = evolution._strip("wren", pairs, {"wren", "operator"}, random.Random(1))
+            stripped, leaks = evolution._strip("wisp", pairs, {"wisp", "operator"}, random.Random(1))
         self.assertEqual(len(prompts), 1)
         self.assertNotIn("agent", prompts[0].lower())
         self.assertNotIn("### A", prompts[0])
@@ -67,7 +67,7 @@ class StripTest(unittest.TestCase):
             return {"rewrites": [{"id": i, "text": t if "#42" in t else clean(t)}
                                  for i, t in texts_in(prompt).items()]}
         with mock.patch.object(judge, "ask", side_effect=fake):
-            stripped, leaks = evolution._strip("wren", pairs_with("AAAA"), set(), random.Random(2))
+            stripped, leaks = evolution._strip("wisp", pairs_with("AAAA"), set(), random.Random(2))
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(calls[1]), 1)                       # only the leaky text is re-sent
         self.assertIn("#42", next(iter(calls[1].values())))
@@ -75,15 +75,15 @@ class StripTest(unittest.TestCase):
         self.assertIn("#42", leaks["1A"])
 
     def test_names_of_people_and_instances_count_as_leaks(self):
-        self.assertEqual(evolution._leaks("the operator told wren's peer to wait.", {"operator", "wren"}),
-                         ["operator", "wren"])
-        self.assertEqual(evolution._leaks("I would listen and ask why.", {"operator", "wren"}), [])
+        self.assertEqual(evolution._leaks("the operator told wisp's peer to wait.", {"operator", "wisp"}),
+                         ["operator", "wisp"])
+        self.assertEqual(evolution._leaks("I would listen and ask why.", {"operator", "wisp"}), [])
 
     def test_a_dropped_rewrite_is_an_error_not_a_silent_gap(self):
         def fake(system, prompt, schema, purpose, **kw):
             return {"rewrites": [{"id": i, "text": t} for i, t in list(texts_in(prompt).items())[:-1]]}
         with mock.patch.object(judge, "ask", side_effect=fake), self.assertRaises(judge.JudgeError):
-            evolution._strip("wren", pairs_with("ABAB"), set(), random.Random(3))
+            evolution._strip("wisp", pairs_with("ABAB"), set(), random.Random(3))
 
 
 def verdict(picks: str, eff: list[tuple[int, int]]) -> dict:
@@ -111,7 +111,7 @@ class ScoreTest(unittest.TestCase):
 class DistinctEndToEndTest(unittest.TestCase):
     def test_strict_run_reports_both_modes_and_saves_the_record(self):
         tmp = Path(tempfile.mkdtemp(prefix="shaft-distinct-"))
-        root = tmp / "instances" / "wren"
+        root = tmp / "instances" / "wisp"
         (root / "self").mkdir(parents=True)
         (root / "self" / "self.md").write_text("I check claims against sources.")
         (root / "config.env").write_text('LLM_BASE_URL="broker"\nLLM_MODEL="claude-haiku-5-5"\n')
@@ -132,7 +132,7 @@ class DistinctEndToEndTest(unittest.TestCase):
         rng_truths = iter("ABBA")
         picks = ["ABBA"]
         with mock.patch.object(evolution, "instance_root", return_value=root), \
-             mock.patch.object(evolution, "instance_names", return_value=["wren"]), \
+             mock.patch.object(evolution, "instance_names", return_value=["wisp"]), \
              mock.patch.object(evolution, "run_agent", side_effect=fake_agent), \
              mock.patch.object(evolution, "_base_answer", side_effect=lambda r, q: BASE[evolution.PROBES.index(q)]), \
              mock.patch.object(evolution.random.Random, "choice", side_effect=lambda seq: next(rng_truths)), \
@@ -140,13 +140,13 @@ class DistinctEndToEndTest(unittest.TestCase):
              mock.patch.object(evolution, "PROJECT", tmp), mock.patch.object(evolution, "log"), \
              mock.patch.object(judge, "ask", side_effect=fake_judge), \
              contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(evolution.distinct("wren", strict=True), 0)
-        self.assertEqual(purposes, ["distinct wren", "distinct-strip wren", "distinct-strict wren"])
+            self.assertEqual(evolution.distinct("wisp", strict=True), 0)
+        self.assertEqual(purposes, ["distinct wisp", "distinct-strip wisp", "distinct-strict wisp"])
         text = out.getvalue()
         self.assertIn("standard: judge identified the agent in 4/4", text)
         self.assertIn("strict (specifics stripped, voice only): judge identified the agent in 2/4", text)
         self.assertIn("effectiveness agent 7.0 vs base 5.0", text)
-        rec = json.loads(next((tmp / ".supervisor" / "evals").glob("distinct-wren-*.json")).read_text())
+        rec = json.loads(next((tmp / ".supervisor" / "evals").glob("distinct-wisp-*.json")).read_text())
         self.assertEqual((rec["identified"], rec["strict"]["identified"]), (4, 2))
         self.assertEqual(rec["strict"]["leaks"], {})
         self.assertNotIn("#42", json.dumps(rec["strict"]["pairs"]))

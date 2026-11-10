@@ -116,7 +116,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
         env = {telegram.token_key(n): t for n, t in TOK.items()}
         for p in (mock.patch.object(telegram, "SUP_DIR", self.sup), mock.patch.object(telegram, "API_BASE", self.api.url),
                   mock.patch.object(telegram, "secrets_env", lambda: env),
-                  mock.patch.object(telegram, "instance_names", lambda: ["shaft", "wren"]),
+                  mock.patch.object(telegram, "instance_names", lambda: ["shaft", "wisp"]),
                   mock.patch.object(telegram, "log", lambda *_: None),
                   mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "PROJECT", self.project),
                   mock.patch.object(messages, "OPERATOR_INBOX", self.sup / "operator-inbox"),
@@ -134,12 +134,12 @@ class TelegramAttachmentsTest(unittest.TestCase):
         t.forward_new()                                                    # cursor: now
         inbox = self.sup / "operator-inbox"
         atts = messages.store_attachments(inbox, "attachments/m1", [("chart.png", PNG), ("data.csv", b"a,b\n1,2\n")])
-        path = inbox / "20991231-235959-000001-from-wren.md"
+        path = inbox / "20991231-235959-000001-from-wisp.md"
         path.write_text("x")
-        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "see files", atts,
+        messages.record(self.sup, path, "wisp", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "see files", atts,
                         ("telegram", "test"))
         self.assertEqual(t.forward_new(), 1)
-        methods = [(m, p) for tok, m, p in self.api.calls if tok == self.tok["wren"] and m.startswith("send")]
+        methods = [(m, p) for tok, m, p in self.api.calls if tok == self.tok["wisp"] and m.startswith("send")]
         self.assertEqual([m for m, _ in methods], ["sendMessage", "sendPhoto", "sendDocument"])   # picture inline
         self.assertIn('filename="chart.png"', self.api.uploads[0])
         self.assertIn('filename="data.csv"', self.api.uploads[1])
@@ -147,28 +147,28 @@ class TelegramAttachmentsTest(unittest.TestCase):
     def test_operator_sends_a_file_it_lands_in_the_instance_and_the_turn_says_where(self):
         t = self.telegram
         asked = []
-        chat = t.Chat("wren", self.tok["wren"])
+        chat = t.Chat("wisp", self.tok["wisp"])
         msg = {"message_id": 7, "from": {"id": 42}, "chat": {"id": 42, "type": "private"}, "caption": "look at this",
                "document": {"file_id": "F1", "file_name": "paper.pdf"}}
         with mock.patch.object(t, "ask_api",
                                lambda name, history, request_id="": asked.append(history[-1]["content"]) or ("ok", 0)):
-            t.handle_update("wren", self.tok["wren"], chat, {"update_id": 1, "message": msg})
-        (saved,) = (self.project / "instances" / "wren" / "attachments" / "from-operator").glob("*/paper.pdf")
+            t.handle_update("wisp", self.tok["wisp"], chat, {"update_id": 1, "message": msg})
+        (saved,) = (self.project / "instances" / "wisp" / "attachments" / "from-operator").glob("*/paper.pdf")
         self.assertEqual(saved.read_bytes(), self.api.FILE)
         self.assertTrue(asked[0].startswith("look at this"))
-        self.assertIn(f"- {saved.relative_to(self.project / 'instances' / 'wren')} (", asked[0])
+        self.assertIn(f"- {saved.relative_to(self.project / 'instances' / 'wisp')} (", asked[0])
 
     def test_a_photo_without_text_and_an_unsupported_message(self):
         t = self.telegram
         asked = []
-        chat = t.Chat("wren", self.tok["wren"])
+        chat = t.Chat("wisp", self.tok["wisp"])
         photo = {"message_id": 8, "from": {"id": 42}, "chat": {"id": 42, "type": "private"},
                  "photo": [{"file_id": "small"}, {"file_id": "F1"}]}
         sticker = {"message_id": 9, "from": {"id": 42}, "chat": {"id": 42, "type": "private"}, "sticker": {}}
         with mock.patch.object(t, "ask_api",
                                lambda name, history, request_id="": asked.append(history[-1]["content"]) or ("ok", 0)):
-            t.handle_update("wren", self.tok["wren"], chat, {"update_id": 2, "message": photo})
-            t.handle_update("wren", self.tok["wren"], chat, {"update_id": 3, "message": sticker})
+            t.handle_update("wisp", self.tok["wisp"], chat, {"update_id": 2, "message": photo})
+            t.handle_update("wisp", self.tok["wisp"], chat, {"update_id": 3, "message": sticker})
         self.assertTrue(asked[0].startswith("(no text, only files)"))
         self.assertIn("photo-8.jpg", asked[0])
         self.assertEqual(len(asked), 1)

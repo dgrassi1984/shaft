@@ -1,7 +1,7 @@
 # The native apps' API: `/app/v1`
 
-The contract between the SHAFT web service and the native chat apps for iPhone, iPad and Mac
-([docs/plans/PLAN-native-apps.md](../docs/plans/PLAN-native-apps.md) M0). The server side is `supervisor/app_api.py` (M1). Every field
+The contract between the SHAFT web service and the native chat apps for iPhone, iPad and Mac.
+The server side is `supervisor/app_api.py` (M1). Every field
 below is what the server sends; the Swift side (`SHAFTKit`) decodes the fixtures the server's own serialiser writes
 (Appendix A.5), never a hand-written copy.
 
@@ -606,7 +606,7 @@ after the window. These links have no grade, probation or reward consumers.
 
 Server-Sent Events of the reply running in the current chat, for voice mode: the app speaks the reply as it is
 written. The events come from the web server's own memory (`web_chat.Relay`), appended as the API's chunks arrive. They
-never wait for the chat file, written every second, or the feed's 0.5 s look (up to 1.5 s per piece: PLAN-voice M0).
+never wait for the chat file, written every second, or the feed's 0.5 s look (up to 1.5 s per piece).
 The feed (§4) still carries the reply for clients not on the stream.
 
 - **Auth:** §1.2.
@@ -650,8 +650,8 @@ Every event:
 | `answer` | `text`: str | the reply ended: the answer as the chat keeps it (the `assistant` item's `content`); `""` when none, partial when it failed |
 | `end` | `failure`: str or null | the last event. null: the reply ended normally. Else the reply's note: `"stopped by you"`, or `"error: …"` |
 
-`draft`, `step_end`, `status`, `tool_start` and `tool_end` come only on a voice turn, when the API sends them
-(PLAN-voice C3). A typed reply's stream carries only `answer` and `end`. A field the API left out is `null`.
+`draft`, `step_end`, `status`, `tool_start` and `tool_end` come only on a voice turn, when the API sends them.
+A typed reply's stream carries only `answer` and `end`. A field the API left out is `null`.
 
 ```text
 GET /app/v1/chat/example/stream?after=0
@@ -910,7 +910,7 @@ app reads the document again (§10.2).
 
 ## 11. Push
 
-Native push goes through APNs (`supervisor/apns.py`, PLAN §2.2). The notification carries only the title ("example
+Native push goes through APNs (`supervisor/apns.py`). The notification carries only the title ("example
 replied", "example's reply failed", "example asks"), the badge and the instance; the app's notification extension fetches
 the body from `/app/v1/push/latest` with the device bearer, over the tailnet.
 

@@ -1,6 +1,6 @@
 """The egress proxy: instances reach the public internet, never anything of the operator's (the operator, 2026-10-14).
 
-Before it, `run` had no network at all and the agent could reach only its local ports, so wren could not install
+Before it, `run` had no network at all and the agent could reach only its local ports, so wisp could not install
 a crypto library and planned to hand-write RSA signing. Open sockets were not an option: macOS's sandbox filters
 only "localhost" or "anywhere", which would have opened localhost, the LAN and the tailnet too.
 """
@@ -24,7 +24,7 @@ from unittest import mock
 from supervisor import broker, core, egress, sandbox
 from supervisor.core import PROJECT
 
-NAME = "wren"
+NAME = "wisp"
 
 
 class Upstream:
@@ -254,7 +254,7 @@ class AddressFallbackTest(unittest.TestCase):
     def handler(self):
         with mock.patch.object(egress, "ThreadingHTTPServer") as server, \
                 mock.patch.object(egress.threading, "Thread"):
-            proxy = egress.Egress("wren", Path("unused"))
+            proxy = egress.Egress("wisp", Path("unused"))
             proxy.start()
         handler = server.call_args.args[1].__new__(server.call_args.args[1])
         handler._fail = mock.Mock()

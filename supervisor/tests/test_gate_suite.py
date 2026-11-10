@@ -1,4 +1,4 @@
-"""The gate's supervisor tests split in two (docs/plans/PLAN-gate-cache.md, M0): the modules that read the instance
+"""The gate's supervisor tests split in two: the modules that read the instance
 under test, run at every gate, and the shared rest, whose result depends only on the commit. The split is read from
 the code, and a module that reaches the instance by a route the scan misses fails the shared part, never passes it.
 
@@ -374,7 +374,7 @@ class Run(unittest.TestCase):
 
 
 class Workers(unittest.TestCase):
-    """A part across several processes (docs/plans/PLAN-gate-5min.md): the same tests, the same verdicts, the same
+    """A part across several processes: the same tests, the same verdicts, the same
     guards as one process."""
 
     def tree(self, modules: dict[str, str]) -> Tree:

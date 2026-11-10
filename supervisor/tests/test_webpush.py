@@ -1,4 +1,4 @@
-"""docs/plans/PLAN-pwa P4: Web Push — the key, the signed token a push service checks, the subscriptions, what is sent and when."""
+"""Web Push — the key, the signed token a push service checks, the subscriptions, what is sent and when."""
 from __future__ import annotations
 
 import base64
@@ -114,25 +114,25 @@ class SubscriptionsTest(PushTest):
 class QueueTest(PushTest):
     def test_instance_takes_leave_other_chats_queued_and_remember_each_last_event(self):
         from supervisor import web_alerts, web_chat
-        a = web_chat.reply_event({"instance": "wren", "turns": [{"role": "assistant", "content": "Done."}]})
-        b = web_alerts.event({"from": "wren-message", "file": "one.md", "text": "Which one?", "kind": "question"})
+        a = web_chat.reply_event({"instance": "wisp", "turns": [{"role": "assistant", "content": "Done."}]})
+        b = web_alerts.event({"from": "wisp-message", "file": "one.md", "text": "Which one?", "kind": "question"})
         webpush.subscribe("phone", {"endpoint": APPLE})
         with mock.patch.object(webpush, "_wake"):
             webpush.notify(a)
             webpush.notify(b)
-        self.assertEqual(webpush.take("phone", instance="wren"), [a])
+        self.assertEqual(webpush.take("phone", instance="wisp"), [a])
         self.assertEqual([e["body"] for e in webpush._queue()["phone"]["pending"]], ["Which one?"])
-        self.assertEqual(webpush.take("phone", instance="wren-message"), [b])
-        self.assertEqual(webpush.take("phone", instance="wren"), [a])
-        self.assertEqual(webpush.take("phone", instance="wren-message"), [b])
+        self.assertEqual(webpush.take("phone", instance="wisp-message"), [b])
+        self.assertEqual(webpush.take("phone", instance="wisp"), [a])
+        self.assertEqual(webpush.take("phone", instance="wisp-message"), [b])
         self.assertEqual(webpush.take("phone", instance="unknown"), [webpush.NOTHING])
         self.assertEqual(webpush.take("phone"), [b])
 
     def test_instance_fallback_uses_only_a_matching_legacy_last(self):
-        event = {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": 100}
+        event = {"title": "wisp replied", "body": "Done.", "url": "/i/wisp/chat", "tag": "wisp", "at": 100}
         webpush._save_queue({"phone": {"pending": [], "last": event}})
         self.assertEqual(webpush.take("phone", instance="other", now=100), [webpush.NOTHING])
-        self.assertEqual(webpush.take("phone", instance="wren", now=100),
+        self.assertEqual(webpush.take("phone", instance="wisp", now=100),
                          [{k: v for k, v in event.items() if k != "at"}])
 
     def test_unscoped_take_remembers_every_instances_fallback(self):
@@ -244,12 +244,12 @@ class RoutesTest(WebTest):
         self.assertEqual(self.post("/push/subscribe", {"endpoint": APPLE}).status, 200)
         dev = web.device_from_cookie(self.cookie)[0]
         with mock.patch.object(webpush, "_wake"):
-            webpush.notify({"title": "thelos replied", "body": "Done", "url": "/i/thelos/chat", "tag": "thelos"})
-            webpush.notify({"title": "wren asks", "body": "Which one?", "url": "/i/wren/chat", "tag": "wren-message"})
+            webpush.notify({"title": "tundra replied", "body": "Done", "url": "/i/tundra/chat", "tag": "tundra"})
+            webpush.notify({"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/chat", "tag": "wisp-message"})
         shown = json.loads(self.latest().body)["events"]
-        self.assertEqual([s["title"] for s in shown], ["thelos replied", "wren asks"])
-        self.assertEqual(shown[1], {"title": "wren asks", "body": "Which one?", "url": "/i/wren/chat",
-                                    "tag": "wren-message"})
+        self.assertEqual([s["title"] for s in shown], ["tundra replied", "wisp asks"])
+        self.assertEqual(shown[1], {"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/chat",
+                                    "tag": "wisp-message"})
         self.assertEqual(webpush._queue()[dev]["pending"], [])               # all taken
 
     def test_the_service_worker_shows_what_it_fetches_and_opens_the_chat(self):
@@ -267,15 +267,15 @@ class WhenTest(unittest.TestCase):
         a phone that locked stayed "watching" for WATCH_S more. Per device now, and ?away=1 ends it at once."""
         from supervisor import web_chat
         web_chat._watched.clear()
-        self.assertEqual(web_chat.watchers("thelos"), set())
-        web_chat.watching("thelos", "laptop")
-        self.assertEqual(web_chat.watchers("thelos"), {"laptop"})
-        self.assertEqual(web_chat.watchers("wren"), set())                    # another instance's chat
-        web_chat.watching("thelos", "phone")
-        web_chat.unwatch("thelos", "phone")                                  # the phone locked
-        self.assertEqual(web_chat.watchers("thelos"), {"laptop"})
+        self.assertEqual(web_chat.watchers("tundra"), set())
+        web_chat.watching("tundra", "laptop")
+        self.assertEqual(web_chat.watchers("tundra"), {"laptop"})
+        self.assertEqual(web_chat.watchers("wisp"), set())                    # another instance's chat
+        web_chat.watching("tundra", "phone")
+        web_chat.unwatch("tundra", "phone")                                  # the phone locked
+        self.assertEqual(web_chat.watchers("tundra"), {"laptop"})
         with mock.patch.object(web_chat.time, "monotonic", return_value=time.monotonic() + web_chat.WATCH_S + 1):
-            self.assertEqual(web_chat.watchers("thelos"), set())
+            self.assertEqual(web_chat.watchers("tundra"), set())
 
 
 class RenewRaceTest(PushTest):

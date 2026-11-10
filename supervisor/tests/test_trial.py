@@ -1,4 +1,4 @@
-"""Trials (docs/plans/PLAN-trials.md): a past cycle is rebuilt faithfully, replayed with no side effects, judged blind in both
+"""Trials: a past cycle is rebuilt faithfully, replayed with no side effects, judged blind in both
 orders, and the verdict reaches the instance and its probation. Local-model trials never take an instance's time."""
 from __future__ import annotations
 
@@ -110,9 +110,9 @@ class ReconstructTest(Fixture):
         self.assertFalse((dest / "logs").exists())
 
     def test_the_copy_keeps_the_memory_index_in_either_format(self):
-        """Bug (PLAN-voice M1): the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
+        """Bug: the template's memory search moved its vectors to .tmp/memory-index.bin and deletes the
         JSON once migrated; the trial copy carried only the JSON, so a replay of an updated instance embedded its whole
-        mind again (~14,000 chunks on Thelos). Both files are carried when present."""
+        mind again (~14,000 chunks on Tundra). Both files are carried when present."""
         (self.root / ".tmp").mkdir(exist_ok=True)
         (self.root / ".tmp" / "memory-index.bin").write_bytes(b"VECTOR-LOG")
         (self.root / ".tmp" / "memory-index.json").write_text('{"legacy": 1}')
@@ -143,8 +143,8 @@ class ReconstructTest(Fixture):
         self.assertIn(b"PURPLE-OWL", laid["inbox/20261010-100500-from-x.md"])         # from the store's tip
 
     def test_state_of_follows_the_instance_line_not_a_merged_template_commit(self):
-        # Regression (M0 of docs/plans/PLAN-mind-out-of-git): kant's cycle of 2026-10-13 20:58 got the template commit
-        # a8c52d5 (17:27:32, merged into kant later) as its start, because the walk followed the merge's second
+        # Regression: kiln's cycle of 2026-10-13 20:58 got the template commit
+        # a8c52d5 (17:27:32, merged into kiln later) as its start, because the walk followed the merge's second
         # parent: a replay with the template's tree and an empty mind. 8 of the 50 replayed states on disk.
         tpl = self.project / "tpl"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "template", str(tpl))
@@ -159,7 +159,7 @@ class ReconstructTest(Fixture):
 
     def test_an_arm_keeps_its_committed_config_env_although_the_gate_no_longer_counts_it_as_code(self):
         # The gate dropped config.env from CODE_PATHS (an operator's mid-cycle edit was reverted as the instance's,
-        # kant 2026-10-13); trials read each arm's model from it, and lost it when they shared the gate's paths.
+        # kiln 2026-10-13); trials read each arm's model from it, and lost it when they shared the gate's paths.
         self.assertNotIn("config.env", trial.gate.CODE_PATHS)
         code = trial.committed_code(self.project, NAME)
         self.assertIn("config.env", code)
@@ -254,8 +254,8 @@ class ReplayLeavesTheMindStoreTest(ReplayEndToEndTest):
 
 
 class ReplaySeesItsRealVenvTest(Fixture):
-    """Bug (M4 of docs/plans/PLAN-browser, 2026-10-19): the replay copy had no .venv/, so `.venv/bin/python …` — the path
-    Thelos's 07:51 cycle drove its browser with — failed with "no such file" in a replay, and a replayed cycle
+    """Bug (2026-10-19): the replay copy had no .venv/, so `.venv/bin/python …` — the path
+    Tundra's 07:51 cycle drove its browser with — failed with "no such file" in a replay, and a replayed cycle
     could tell it was a replay ("NO_VENV", then a `uv venv` rebuild). The copy now links the instance's real
     .venv/ and .uv/, and the sandbox still keeps them read-only."""
 
@@ -688,7 +688,7 @@ class FlowTest(Fixture):
         self.assertIn("Trials of my proposed changes", "\n".join(trial.stats_lines(NAME)))
 
     def test_the_trialled_edit_is_recognised_on_a_file_that_moved_on(self):
-        """wren adopted its trialled sentence on top of a template merge that had landed in prompts.py meanwhile;
+        """wisp adopted its trialled sentence on top of a template merge that had landed in prompts.py meanwhile;
         a byte-for-byte match missed it, so its probation never knew the verdict (2026-10-13)."""
         base = trial.committed_code(self.project, NAME)["shaft/prompts.py"]
         cand = base.replace(b"\n", b"\nTRIALLED SENTENCE\n", 1)
@@ -764,8 +764,8 @@ class WorkerTest(Fixture):
             self.assertEqual(trial._files(NAME, t["id"], "candidate")["shaft/x.py"], f"# {k}\n".encode())
 
     def test_two_instances_trials_with_the_same_id_both_get_their_tests(self):
-        """wren's and shaft's trials made in the same second shared an id; the worker took wren's tests for done
-        once shaft's ran, and wren's trial sat in 'testing' (2026-10-13)."""
+        """wisp's and shaft's trials made in the same second shared an id; the worker took wisp's tests for done
+        once shaft's ran, and wisp's trial sat in 'testing' (2026-10-13)."""
         other = self.project / "instances" / "tx"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/tx", str(other))
         shutil.copytree(self.root / "shaft", other / "shaft")

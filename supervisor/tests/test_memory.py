@@ -134,7 +134,7 @@ class SleepConsolidationTest(unittest.TestCase):
         self.assertNotIn("Superseded", facts)
         self.assertIn("Superseded", (self.root / "memory" / "facts-archive.md").read_text())
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": ""}):
-            source = memory.search(self.root, "superseded")[0].source   # with its src and age (PLAN-consciousness C3)
+            source = memory.search(self.root, "superseded")[0].source   # with its src and age
         self.assertTrue(source.startswith("memory/facts-archive.md, src unknown, "), source)
 
     def test_bad_facts_and_direct_writes_are_refused(self):

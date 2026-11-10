@@ -1,4 +1,4 @@
-"""The web UI's read-only pages (docs/plans/PLAN-webui.md M1): each shows what its `shaft top` tab shows, from the same panel
+"""The web UI's read-only pages: each shows what its `shaft top` tab shows, from the same panel
 reader and the same fixtures as test_control_panel (the strings asserted there are asserted here), and
 attachments are served only as the plan says — only files a message names, no links, never as a page."""
 from __future__ import annotations
@@ -24,7 +24,7 @@ class PagesTest(WebTest):
         self.addCleanup(shutil.rmtree, self.inst, True)
         (self.inst / "shaft" / "shaft").mkdir(parents=True)
         (self.inst / "shaft" / ".git").write_text("")
-        for p in (mock.patch.object(web, "_names", return_value=["shaft", "wren"]),
+        for p in (mock.patch.object(web, "_names", return_value=["shaft", "wisp"]),
                   mock.patch.object(panel, "instance_detail", return_value=DETAIL),
                   mock.patch.object(panel, "judgments", return_value=[JUDGMENT]),
                   mock.patch.object(panel, "traits", return_value={"traits": [{"supported": "yes"}]}),
@@ -33,7 +33,7 @@ class PagesTest(WebTest):
                   mock.patch.object(panel, "battery_status", return_value={"installed": False, "results": [],
                                                                             "lines": []}),
                   mock.patch.object(panel, "evals", return_value=[
-                      {"kind": "distinct", "who": "wren", "at": "2026-10-13T08:39",
+                      {"kind": "distinct", "who": "wisp", "at": "2026-10-13T08:39",
                        "data": {"identified": 4, "n": 4, "consistent_with_self": 4, "effectiveness_agent": 7.25,
                                 "effectiveness_base": 6.25}}]),
                   mock.patch.object(panel, "surprise_summary", return_value={
@@ -123,7 +123,7 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
 
     def test_a_trial_report(self):
         with mock.patch("supervisor.trial.report", return_value="Trial t-1: worse (W0 L6)") as report:
-            self.has("/trials/wren/t-1", "Trial t-1: worse (W0 L6)")
+            self.has("/trials/wisp/t-1", "Trial t-1: worse (W0 L6)")
         report.assert_called_once_with(TRIAL)
 
     def test_benchmarks(self):
@@ -158,20 +158,20 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
             return [TRIAL]
 
         with mock.patch.object(panel, "trials", side_effect=trials):
-            filtered = self.get("/trials?i=wren")
-            self.get("/fragment/trials?i=wren")
-        self.assertIn('data-poll="/fragment/trials?i=wren"', filtered)
-        self.assertIn("wren", seen)                               # the fragment asks for the same instance
+            filtered = self.get("/trials?i=wisp")
+            self.get("/fragment/trials?i=wisp")
+        self.assertIn('data-poll="/fragment/trials?i=wisp"', filtered)
+        self.assertIn("wisp", seen)                               # the fragment asks for the same instance
         with mock.patch("supervisor.trial.report", return_value="queued: 0/6 replayed") as report:
-            one = self.get("/trials/wren/t-1")
-            one_frag = self.get("/fragment/trials/wren/t-1")
-        self.assertIn('data-poll="/fragment/trials/wren/t-1"', one)
+            one = self.get("/trials/wisp/t-1")
+            one_frag = self.get("/fragment/trials/wisp/t-1")
+        self.assertIn('data-poll="/fragment/trials/wisp/t-1"', one)
         self.assertIn("queued: 0/6 replayed", one)
         self.assertIn("queued: 0/6 replayed", one_frag)
         self.assertNotIn("data-poll", one_frag)
         self.assertNotIn("<h1>", one_frag)
         self.assertGreaterEqual(report.call_count, 2)            # the page and the fragment each render it
-        self.get("/fragment/trials/wren/t-404", 404)
+        self.get("/fragment/trials/wisp/t-404", 404)
         self.get("/fragment/trials/nobody/t-1", 404)
 
     def test_issue_29_the_service_log_refreshes(self):
@@ -209,7 +209,7 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
         self.get("/i/nobody", 404)
         self.get("/i/shaft/nothing", 404)
         self.get("/i/shaft/judge?ts=1999-01-01T00:00:00", 404)
-        self.get("/trials/wren/t-404", 404)
+        self.get("/trials/wisp/t-404", 404)
 
     def test_a_reader_that_fails_says_so_on_the_page(self):
         with mock.patch.object(panel, "costs", side_effect=OSError("cloud_usage.jsonl unreadable")):
@@ -533,9 +533,9 @@ class MessagesTest(PagesTest):
         atts += [{"name": "up.txt", "path": ".supervisor/operator-inbox/attachments/../../.env", "bytes": 1},
                  {"name": "abs.txt", "path": "/etc/hosts", "bytes": 1},
                  {"name": "other.txt", "path": ".supervisor/web/devices.json", "bytes": 1}]
-        self.ms = [{"ts": "2026-10-19T08:41:25", "from": "thelos", "to": "operator", "kind": "note", "read": True,
+        self.ms = [{"ts": "2026-10-19T08:41:25", "from": "tundra", "to": "operator", "kind": "note", "read": True,
                     "file": "m1.md", "text": "prep for tomorrow\nsecond line", "attachments": atts},
-                   {"ts": "2026-10-19T09:00:00", "from": "wren", "to": "shaft", "kind": "question", "read": False,
+                   {"ts": "2026-10-19T09:00:00", "from": "wisp", "to": "shaft", "kind": "question", "read": False,
                     "file": "m2.md", "text": "are you <there>?"}]
         for p in (mock.patch.object(messages, "history", return_value=self.ms),
                   mock.patch("supervisor.core.PROJECT", self.sup.parent)):
@@ -543,11 +543,11 @@ class MessagesTest(PagesTest):
             self.addCleanup(p.stop)
 
     def test_the_list_newest_first_with_a_filter(self):
-        body = self.has("/messages", "thelos → operator", "wren → shaft", "prep for tomorrow", "are you &lt;there&gt;?",
+        body = self.has("/messages", "tundra → operator", "wisp → shaft", "prep for tomorrow", "are you &lt;there&gt;?",
                         "📎8")
-        self.assertLess(body.index("wren → shaft"), body.index("thelos → operator"))
-        only = self.get("/messages?who=thelos")
-        self.assertNotIn("wren → shaft", only)
+        self.assertLess(body.index("wisp → shaft"), body.index("tundra → operator"))
+        only = self.get("/messages?who=tundra")
+        self.assertNotIn("wisp → shaft", only)
 
     def test_a_message_in_full_with_its_attachments(self):
         body = self.has("/messages/m1.md", "second line", "photo.png", '<img class="attachment" src="/files/m1.md/1"',
@@ -555,19 +555,19 @@ class MessagesTest(PagesTest):
         self.assertNotIn("<script>x", body)
         self.assertNotIn("# prep", body)
 
-    def sent_by_wren(self):
-        """m3: wren's message to the operator with a Markdown file, an image, non-UTF-8 text, a link and a big file."""
+    def sent_by_wisp(self):
+        """m3: wisp's message to the operator with a Markdown file, an image, non-UTF-8 text, a link and a big file."""
         (self.inbox / "latin.txt").write_bytes("caff\xe8".encode("latin-1"))
         (self.inbox / "big.txt").write_text("x" * 300)
         atts = [{"name": n, "path": f".supervisor/operator-inbox/attachments/m1/{n}", "bytes": 10}
                 for n in ("notes.md", "photo.png", "latin.txt", "link.txt", "big.txt")]
-        self.ms.append({"ts": "2026-10-19T10:00:00", "from": "wren", "to": "operator", "kind": "note", "read": True,
+        self.ms.append({"ts": "2026-10-19T10:00:00", "from": "wisp", "to": "operator", "kind": "note", "read": True,
                         "file": "m3.md", "text": "the plan", "attachments": atts})
 
     def test_a_text_attachment_previews_read_only_in_the_documents_panel(self):
         """Reverting the preview leaves ?att= ignored: the panel lists documents and the file only downloads."""
-        self.sent_by_wren()
-        body = self.has("/fragment/docs/wren?att=m3.md%2F0", "sent by wren", "📎 notes.md", "<h2>prep</h2>",
+        self.sent_by_wisp()
+        body = self.has("/fragment/docs/wisp?att=m3.md%2F0", "sent by wisp", "📎 notes.md", "<h2>prep</h2>",
                         "&lt;script&gt;x&lt;/script&gt;", 'href="/files/m3.md/0" title="Download" aria-label="Download"><svg', "data-back-docs",
                         "data-fullscreen-doc")
         for absent in ("<script>x", "data-edit-doc", "docdelete", "data-comment-doc", "New document"):
@@ -575,25 +575,25 @@ class MessagesTest(PagesTest):
 
     def test_an_attachment_preview_says_why_it_shows_no_text(self):
         """A preview that silently showed an empty panel, or another instance's file, would be a bug."""
-        self.sent_by_wren()
-        self.has("/fragment/docs/wren?att=m3.md%2F1", "photo.png is not a text file", 'href="/files/m3.md/1"')
-        self.has("/fragment/docs/wren?att=m3.md%2F2", "latin.txt is not UTF-8 text", 'href="/files/m3.md/2"')
-        self.has("/fragment/docs/wren?att=m3.md%2F3", "link.txt is not there (any more).")
+        self.sent_by_wisp()
+        self.has("/fragment/docs/wisp?att=m3.md%2F1", "photo.png is not a text file", 'href="/files/m3.md/1"')
+        self.has("/fragment/docs/wisp?att=m3.md%2F2", "latin.txt is not UTF-8 text", 'href="/files/m3.md/2"')
+        self.has("/fragment/docs/wisp?att=m3.md%2F3", "link.txt is not there (any more).")
         with mock.patch.object(web, "TEXT_MAX", 100):
-            self.has("/fragment/docs/wren?att=m3.md%2F4", "big.txt is too big to show here", 'href="/files/m3.md/4"')
+            self.has("/fragment/docs/wisp?att=m3.md%2F4", "big.txt is too big to show here", 'href="/files/m3.md/4"')
         for att in ("m3.md%2F9", "m1.md%2F0", "m2.md%2F0", "nope.md%2F0", "m3.md%2Fx", "m3.md"):
-            body = self.has(f"/fragment/docs/wren?att={att}", "wren sent you no such attachment.")
-            self.assertNotIn("prep", body, att)     # m1 is thelos's message: never shown in wren's panel
+            body = self.has(f"/fragment/docs/wisp?att={att}", "wisp sent you no such attachment.")
+            self.assertNotIn("prep", body, att)     # m1 is tundra's message: never shown in wisp's panel
 
     def test_a_text_attachment_in_the_chat_opens_in_the_panel_and_still_downloads(self):
-        self.sent_by_wren()
-        card = str(web_views._sent_cards("wren", [self.ms[-1]])[0])
+        self.sent_by_wisp()
+        card = str(web_views._sent_cards("wisp", [self.ms[-1]])[0])
         self.assertIn('<a href="/files/m3.md/0" target="_blank" data-open-att="m3.md/0">📎 notes.md</a>', card)
         self.assertIn('<a href="/files/m3.md/2" target="_blank" data-open-att="m3.md/2">📎 latin.txt</a>', card)
         self.assertNotIn('data-open-att="m3.md/1"', card)   # an image keeps its thumbnail
-        page = str(web_views.chat_page("wren", None, [self.ms[-1]], [], {}, ["wren"], "csrf", att="m3.md/0",
-                                       panel=web_views.attachment_panel("wren", "notes.md", "/files/m3.md/0", "# hi")))
-        self.assertIn('data-poll="/fragment/docs/wren?att=m3.md%2F0"', page)
+        page = str(web_views.chat_page("wisp", None, [self.ms[-1]], [], {}, ["wisp"], "csrf", att="m3.md/0",
+                                       panel=web_views.attachment_panel("wisp", "notes.md", "/files/m3.md/0", "# hi")))
+        self.assertIn('data-poll="/fragment/docs/wisp?att=m3.md%2F0"', page)
         self.assertIn("<h2>hi</h2>", page)
 
     def test_a_long_message_shows_whole_in_the_chat_as_markdown(self):
@@ -601,7 +601,7 @@ class MessagesTest(PagesTest):
         "You got cut out"), and showed its Markdown as raw asterisks."""
         tail = "Whenever you want, I'll review the recap and move its Status."
         text = "Done — **created** the skill.\n\n" + "x " * 400 + tail
-        card = str(web_views._sent_cards("thelos", [{**self.ms[0], "text": text}])[0])
+        card = str(web_views._sent_cards("tundra", [{**self.ms[0], "text": text}])[0])
         shown = card.split('<div class="who">', 1)[1]           # what is on screen, not the data-raw copy for Copy/Reply
         self.assertIn(tail.replace("'", "&#x27;"), shown)
         self.assertIn("<b>created</b>", shown)
@@ -679,7 +679,7 @@ class NavTest(PagesTest):
         body = self.get("/i/shaft")
         for href in ("/i/shaft/judge", "/i/shaft/changes", "/i/shaft/journal", "/i/shaft/activity",
                      "/i/shaft/transcripts", "/i/shaft/benchmarks", "/trials", "/messages", "/costs", "/services",
-                     "/overview", "/settings", 'href="/i/wren/chat"'):
+                     "/overview", "/settings", 'href="/i/wisp/chat"'):
             self.assertIn(href, body)
 
     def test_the_summary_refreshes_its_live_part(self):
@@ -783,7 +783,7 @@ class StylesTest(TestCase):
         """Codex review: 📄 Documents with no documents yet (.showdocs) kept two columns wider than a phone."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
         phone = css[css.index("@media (max-width: 720px)"):]
-        # on a phone the chat is one column (a flex column), and the documents a sheet over it (docs/plans/PLAN-pwa P2)
+        # on a phone the chat is one column (a flex column), and the documents a sheet over it
         self.assertRegex(phone, r"\.chatgrid \{ display: flex; flex-direction: column;")
         self.assertRegex(phone, r"\.chatgrid\.showdocs > aside\.docs \{ display: block; position: fixed; "
                                 r"inset: var\(--vvtop, 0px\) 0 var\(--vvbottom, 0px\);")

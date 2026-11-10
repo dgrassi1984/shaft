@@ -34,7 +34,7 @@ class StalenessTest(InstanceFixture, unittest.TestCase):
         self.assertNotIn("self/goals.md:2", text)
 
     def test_a_ledger_of_dated_lines_is_capped_one_row_per_line(self):
-        """#138: Thelos's 159 KB goals.md gave 504 rows (313,000 characters) to its sleep prompt before the cap; a
+        """#138: Tundra's 159 KB goals.md gave 504 rows (313,000 characters) to its sleep prompt before the cap; a
         line with two old dates gives one row, by its newest; a line still current by one date gives none."""
         self.state.goals_md.write_text("".join(f"- 2026-10-20 and 2026-10-2{i % 3} entry {i} " + "x" * 400 + "\n"
                                                for i in range(100)) + "set 2026-10-20, due 2026-10-28\n")

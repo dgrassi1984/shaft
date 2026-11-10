@@ -1,4 +1,4 @@
-"""Chat with an instance in the browser (docs/plans/PLAN-webui.md M4). Stdlib only.
+"""Chat with an instance in the browser. Stdlib only.
 
 Each web chat is a conversation of SHAFT's own API, as Telegram's are: the web server calls 127.0.0.1's
 /v1/chat/completions (streamed) with SHAFT_API_KEY and the operator's tailnet login, naming the conversation with
@@ -42,7 +42,7 @@ MAX_TEXT = 20000                   # a message, at most
 
 
 # Added, unseen by the operator, to the first message of each web chat: how the instance shares a document with them
-# (docs/plans/PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
+#. In the message rather than its prompts, so every instance gets it whatever its own code says.
 DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document the operator sees "
              "live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you "
              "as a diff in their next message. The operator's comments on notes/docs/X.md, sent or not, are in "
@@ -123,7 +123,7 @@ _parsed: dict[str, tuple[tuple, dict]] = {}     # path -> ((inode, mtime_ns, siz
 
 def chats(name: str) -> list[dict]:
     """This instance's web chats, newest first. Read-only: a change goes through load() and save(). Every feed, panel
-    and rail refresh asks for them (docs/plans/PLAN-pwa P3: every chat file of every instance was parsed each time)."""
+    and rail refresh asks for them (every chat file of every instance was parsed each time)."""
     out = []
     for p in _dir().glob("web-*.json") if _dir().is_dir() else []:
         try:
@@ -178,7 +178,7 @@ def watchers(name: str) -> set[str]:
 
 def reply_event(chat: dict) -> dict:
     """What the push for this chat's reply shows: its first line. A reply that failed says so (a stopped one is never
-    pushed): on 2026-10-29 thelos's upstream timeout reached the phone as "thelos replied"."""
+    pushed): on 2026-10-29 tundra's upstream timeout reached the phone as "tundra replied"."""
     name = chat["instance"]
     t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
     first = first_line(t.get("content") or "") or (t.get("note") or "")          # the text, not its Markdown
@@ -271,7 +271,7 @@ def excerpt(chat: dict) -> tuple[str, int]:
 
 
 # -- what a chat shows (docs/app-api.md §13): one model for the HTML feed and the apps' JSON --------------------------
-# web_views.chat_feed renders build(); app_api serialises it. A fix to one cannot miss the other (PLAN-native-apps §1).
+# web_views.chat_feed renders build(); app_api serialises it. A fix to one cannot miss the other.
 CHAT_WINDOW = 80          # turns a chat shows (review C13/M21); "Show the N earlier messages" asks for them all
 
 # Feeds held by a long-poll (app_api) wait on this: every save() of a chat — a turn, a reply's activity as it streams
@@ -553,7 +553,7 @@ def _flush_queue(chat: dict) -> bool:
     turn = {"role": "user", "content": "\n\n".join(t["content"] for t in queued),
             "shown": "\n\n".join(t.get("shown", "") for t in queued), "ts": _now(),
             "attachments": [a for t in queued for a in t.get("attachments", [])]}
-    if queued[-1].get("via") == "voice":           # the reply is heard as the latest message was said (PLAN-voice C1)
+    if queued[-1].get("via") == "voice":           # the reply is heard as the latest message was said
         turn["via"] = "voice"
     _take_feedback(chat, turn)
     edits, paths, deleted = _take_edits(chat)
@@ -631,7 +631,7 @@ def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int,
 
 
 def spoken(chat: dict) -> bool:
-    """The operator's last message in the conversation was spoken (`via: voice`, PLAN-voice C1): the API is told so."""
+    """The operator's last message in the conversation was spoken (`via: voice`): the API is told so."""
     last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "user" and not t.get("retried")), {})
     return last.get("via") == "voice"
 
@@ -679,7 +679,7 @@ def classify_reply(*, stopped: bool, status: int | None, exc: BaseException | No
 
 # -- the relay: one reply, streamed, saved as it goes ----------------------------------------------------------------
 # What the stream endpoint (app_api, GET /app/v1/chat/<n>/stream; docs/app-api.md §6.1) passes on from the API's chunks:
-# its `shaft_event` (PLAN-voice C3), only these types and only these fields. Then `answer` and `end` when the reply ends.
+# its `shaft_event`, only these types and only these fields. Then `answer` and `end` when the reply ends.
 STREAM_EVENTS = {"draft": ("text",), "step_end": ("answer",), "status": ("phase", "detail"),
                  "tool_start": ("name",), "tool_end": ("name", "ok")}
 
@@ -687,7 +687,7 @@ STREAM_EVENTS = {"draft": ("text",), "step_end": ("answer",), "status": ("phase"
 class Relay:
     """One reply: the API connection it reads, and its events in order for the stream endpoint, held in memory as the
     chunks arrive — never through the chat file, which is written every SAVE_EVERY_S and read by a 0.5 s poll (up to
-    1.5 s added before each piece of a spoken reply: PLAN-voice M0)."""
+    1.5 s added before each piece of a spoken reply)."""
 
     def __init__(self, cid: str):
         self.cid, self.conn, self.sock, self.stopped = cid, None, None, False
@@ -769,7 +769,7 @@ def _run(relay: Relay) -> None:
     try:
         relay.conn = conn = _api_conn(3600)
         body = {"model": chat["instance"], "messages": _api_messages(chat), "stream": True}
-        if spoken(chat):                            # the API tells the instance it is heard aloud (PLAN-voice C1.3)
+        if spoken(chat):                            # the API tells the instance it is heard aloud
             body["voice"] = True
         conn.request("POST", "/v1/chat/completions", json.dumps(body), _headers(chat))
         posted = True
@@ -905,7 +905,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
     if not unheard and not queued and not relay.stopped:
-        from . import webpush                       # each device not looking is told (docs/plans/PLAN-pwa P4)
+        from . import webpush                       # each device not looking is told
         webpush.notify(reply_event(chat), skip=watchers(chat["instance"]))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
@@ -915,7 +915,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
 
 
 # -- what the page does ----------------------------------------------------------------------------------------------
-# -- the operator's edits to its documents (docs/plans/PLAN-webui-chat §3 D2) ---------------------------------------------------
+# -- the operator's edits to its documents ---------------------------------------------------
 EDIT_DIFF_MAX = 12000                  # a diff longer than this is summarised: the instance reads the file itself
 
 
@@ -1049,7 +1049,7 @@ def _in_chat(chat: dict | None, mid: str) -> bool:
 
 def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
                comment_block: str = "", comments: list[dict] | None = None) -> tuple[str, str]:
-    """Next cycle (docs/plans/PLAN-background-messages.md): the message goes to the instance's inbox now and is read in
+    """Next cycle: the message goes to the instance's inbox now and is read in
     its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
     in the chat. Files and a quoted question as send()'s. (inbox file, what to say)"""
     from . import autonomy, messages
@@ -1115,7 +1115,7 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice.
     `retry_of`: the index of the failed reply this sends again (Retry): it and its question fold (mark_retried).
-    `voice`: spoken and transcribed on the device (PLAN-voice C1): the turn is `via: voice`, and the API is told."""
+    `voice`: spoken and transcribed on the device: the turn is `via: voice`, and the API is told."""
     from . import messages
     with _inst_lock(name):
         if _in_chat(c := open_chat(name), mid):

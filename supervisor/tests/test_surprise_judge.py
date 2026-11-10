@@ -162,7 +162,7 @@ class SurpriseJudgeTest(unittest.TestCase):
 
     def test_baseline_reuses_the_stored_judge_and_sets_cross_judge_rows_aside(self):
         # Regression (2026-10-25): the re-judge drew a fresh judge from the rotation, so the M2 agreement compared two
-        # different models on most cycles (shaft 50/60, wren 54/60: FAIL) and measured judge swaps, not the new fields.
+        # different models on most cycles (shaft 50/60, wisp 54/60: FAIL) and measured judge swaps, not the new fields.
         old, mid, new = self.episode(), self.episode("2026-10-13T09:00:00"), self.episode("2026-10-13T10:00:00")
         path, rows = self.stored([old, mid, new])
         rows[0]["judge"], rows[1]["judge"], rows[2]["judge"] = "glm", "deepseek", "mimo"
@@ -210,7 +210,7 @@ class SurpriseJudgeTest(unittest.TestCase):
         self.assertEqual([r["episode_ts"] for r in metrics._surprise_baseline_rows("m")], [old["ts"]])
 
     def test_control_asks_the_same_case_by_the_same_judge_without_the_fields(self):
-        # The M2 control (2026-10-26): the fields run failed at 54/60 on shaft and wren, and nothing said how often the
+        # The M2 control (2026-10-26): the fields run failed at 54/60 on shaft and wisp, and nothing said how often the
         # same judge disagrees with itself on the same case. The control differs from the fields run only in the fields.
         self.assertTrue(metrics.JUDGE_SYSTEM.startswith(metrics.CONTROL_SYSTEM))
         self.assertNotIn("Expectations", metrics.CONTROL_SYSTEM)
@@ -269,16 +269,16 @@ class SurpriseJudgeTest(unittest.TestCase):
 
     def test_m2_acceptance_is_relative_to_the_control(self):
         # Regression (2026-10-26): M2 asked for all but at most 1 in 15 verdicts to agree, but the no-fields control
-        # itself moved 13 of 181 (wren 54/60 with nothing changed), so the bar failed the judge's own re-ask noise and
+        # itself moved 13 of 181 (wisp 54/60 with nothing changed), so the bar failed the judge's own re-ask noise and
         # said nothing about the fields. The fields now fail only when they move clearly more cycles than the control.
         def acceptance(f_only, c_only, missing=0):
             c = {"n": 60, "fields": 60 - f_only, "control": 60 - c_only, "f_only": f_only, "c_only": c_only,
                  "f_strict": f_only, "f_lenient": 0, "c_strict": c_only, "c_lenient": 0, "same": 60 - f_only - c_only,
                  "missing": missing}
             return metrics._control_lines("m", c)[-1].rsplit(": ", 1)[1]
-        self.assertEqual(acceptance(3, 3), "PASS")   # wren 2026-10-26: 54/60 both ways, a FAIL under the old bar
+        self.assertEqual(acceptance(3, 3), "PASS")   # wisp 2026-10-26: 54/60 both ways, a FAIL under the old bar
         self.assertEqual(acceptance(5, 2), "PASS")   # shaft 2026-10-26
-        self.assertEqual(acceptance(0, 2), "PASS")   # thelos: the fields moved less
+        self.assertEqual(acceptance(0, 2), "PASS")   # tundra: the fields moved less
         self.assertEqual(acceptance(6, 0), "FAIL")   # p = 1/64
         self.assertEqual(acceptance(12, 3), "FAIL")
         self.assertEqual(acceptance(11, 4), "PASS")   # p = 0.059: chance still explains it
@@ -366,7 +366,7 @@ class SurpriseJudgeTest(unittest.TestCase):
                     results.append((metrics.stats_text("m"), metrics.review_text(["m"], now=datetime(2026, 10, 14))))
             self.assertEqual(results[0], results[1])
             stats = results[0][0]
-            self.assertIn("judge-test too few (1) vs none", stats)   # per judge, PLAN-judge-mix 2026-10-29
+            self.assertIn("judge-test too few (1) vs none", stats)   # per judge
             self.assertLess(stats.index("SURPRISE-STATS"), stats.index("## Success against"))
 
 

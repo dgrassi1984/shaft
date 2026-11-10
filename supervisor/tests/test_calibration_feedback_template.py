@@ -1,4 +1,4 @@
-"""The confirm step of PLAN-calibration-feedback (Task 3, template side): when the declared confidence lands in a band
+"""The confirm step of calibration feedback (template side): when the declared confidence lands in a band
 with data in self/calibration.json, declare_intent shows that band's base rate, every other tool stays closed until
 confirm_confidence, and the intent keeps both numbers (v3). Without a usable band the cycle runs exactly as v2."""
 from __future__ import annotations
@@ -17,7 +17,7 @@ from shaft import agent, config, live
 try:
     from shaft import base_rate
 except ImportError:
-    raise unittest.SkipTest("template/ predates PLAN-calibration-feedback Task 3 (no shaft.base_rate): "
+    raise unittest.SkipTest("template/ predates calibration feedback (no shaft.base_rate): "
                             "merge claude/calibration-feedback-template into template first") from None
 
 from shaft.llm import Client

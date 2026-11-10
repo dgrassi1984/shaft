@@ -1,4 +1,4 @@
-"""Images for instances (docs/plans/PLAN-vision.md): which models see them, and every image prepared in one place.
+"""Images for instances: which models see them, and every image prepared in one place.
 
 An image travels in the OpenAI chat format, as a user message part {"type": "image_url", "image_url": {"url":
 "data:<type>;base64,<data>"}}. The broker's /llm proxy runs `prepare` on every request before any provider sees it:

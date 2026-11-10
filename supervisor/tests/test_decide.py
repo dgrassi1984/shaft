@@ -1,6 +1,6 @@
 """Decision models (TypeSafe's Jev) through the broker's `decide` tool (the operator, 2026-10-14).
 
-Jev is not a chat model, so the broker's /llm path could not reach it: wren had to ask the operator for a key of its own.
+Jev is not a chat model, so the broker's /llm path could not reach it: wisp had to ask the operator for a key of its own.
 Now the supervisor calls OpenRouter's decisions endpoint with its own key, under the same allowlist, daily cap,
 usage log and data policy as the chat models; a trial replay's pair shares one real answer.
 """
@@ -29,14 +29,14 @@ class DecideTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-decide-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        (self.tmp / "instances" / "wren").mkdir(parents=True)
+        (self.tmp / "instances" / "wisp").mkdir(parents=True)
         self.fake = FakeOpenRouter(reply=ANSWER)
         self.addCleanup(self.fake.close)
         for p in (mock.patch.object(cloudllm, "USAGE", self.tmp / "cloud_usage.jsonl"),
                   mock.patch.object(cloudllm, "DECISIONS_API", self.fake.url)):
             p.start()
             self.addCleanup(p.stop)
-        self.b = broker.Broker("wren", self.tmp, {"OPENROUTER_API_KEY": "sk-or-test"}, self.tmp / "broker.log")
+        self.b = broker.Broker("wisp", self.tmp, {"OPENROUTER_API_KEY": "sk-or-test"}, self.tmp / "broker.log")
 
     def test_answers_come_back_and_the_cost_is_recorded_for_the_instance(self):
         r = self.b.call("decide", {"state": "checkout page blank after Pay", "questions": QUESTIONS})
@@ -54,7 +54,7 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(headers["authorization"], "Bearer sk-or-test")
         self.assertNotIn("sk-or-test", r["result"])
         row = json.loads((self.tmp / "cloud_usage.jsonl").read_text().splitlines()[-1])
-        self.assertEqual((row["instance"], row["model"]), ("wren", "typesafe/jev-1.13"))
+        self.assertEqual((row["instance"], row["model"]), ("wisp", "typesafe/jev-1.13"))
         self.assertGreater(row["usd"], 0)                                      # spend counts toward the daily cap
 
     def test_only_allowed_models_and_within_the_daily_cap(self):
@@ -68,7 +68,7 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(self.fake.requests, [])                               # nothing was sent
 
     def test_no_key_says_where_it_is_missing(self):
-        b = broker.Broker("wren", self.tmp, {}, self.tmp / "broker.log")
+        b = broker.Broker("wisp", self.tmp, {}, self.tmp / "broker.log")
         r = b.call("decide", {"state": "x", "questions": QUESTIONS})
         self.assertIn("OPENROUTER_API_KEY", r["error"])
 
@@ -90,16 +90,16 @@ class DecideTest(unittest.TestCase):
         cache, lock = {}, threading.Lock()
         def replay():
             state = Path(tempfile.mkdtemp(dir=self.tmp, prefix="copy-"))
-            return broker.ReplayBroker("wren", self.tmp, {"OPENROUTER_API_KEY": "sk-or-test"}, self.tmp / "b.log",
+            return broker.ReplayBroker("wisp", self.tmp, {"OPENROUTER_API_KEY": "sk-or-test"}, self.tmp / "b.log",
                                        state_root=state, start_commit="0", as_of=datetime.now(), cache=cache,
-                                       cache_lock=lock, billed="wren@trial:t", tools_log=self.tmp / "t.log")
+                                       cache_lock=lock, billed="wisp@trial:t", tools_log=self.tmp / "t.log")
         first, second = replay(), replay()
         a = first.call("decide", {"state": "x", "questions": QUESTIONS})
         b = second.call("decide", {"state": "x", "questions": QUESTIONS})
         self.assertEqual(a["result"], b["result"])
         self.assertEqual(len(self.fake.requests), 1)
         row = json.loads((self.tmp / "cloud_usage.jsonl").read_text().splitlines()[-1])
-        self.assertEqual(row["instance"], "wren@trial:t")                     # billed to the trial, not the instance
+        self.assertEqual(row["instance"], "wisp@trial:t")                     # billed to the trial, not the instance
 
     def test_battery_exams_keep_their_tools(self):
         self.assertIn("decide", battery.EXAM_OFF)

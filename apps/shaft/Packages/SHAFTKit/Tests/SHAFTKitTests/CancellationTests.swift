@@ -36,7 +36,7 @@ struct CancellationTests {
         let store = InstancesStore(client: server.client,
                                    outbox: try Outbox(directory: folder.appending(path: "outbox")),
                                    drafts: DraftStore(directory: folder.appending(path: "drafts")))
-        let chat = store.chat("wren")
+        let chat = store.chat("wisp")
         let task = Task { await chat.unqueue("m-1") }
         for await _ in began { break }
         task.cancel()
@@ -49,7 +49,7 @@ struct CancellationTests {
     @Test func aDocumentSaveCancelledInFlightIsNoRefusal() async throws {
         let (server, began, finish) = heldServer()
         defer { finish() }
-        let docs = DocumentsStore(client: server.client, instance: "thelos")
+        let docs = DocumentsStore(client: server.client, instance: "tundra")
         let task = Task { await docs.save(path: "notes.md", text: "# Notes\n", sha: "none") }
         for await _ in began { break }
         task.cancel()

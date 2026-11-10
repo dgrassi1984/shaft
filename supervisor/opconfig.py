@@ -1,4 +1,4 @@
-"""The operator's edits of an instance's config.env and drive.md (docs/plans/PLAN-webui.md M3): `shaft config` and `shaft drive`,
+"""The operator's edits of an instance's config.env and drive.md: `shaft config` and `shaft drive`,
 which the web UI's Config and Drive pages run. Stdlib only.
 
 config.env has two writers, the operator and the instance (the broker's set_config); both write under
@@ -9,7 +9,7 @@ core.config_lock, so neither loses the other's line. An edit here:
   - is refused if a value is no longer what the editor saw (`expect`), naming what it is now;
   - is committed at once, as the operator's (runner._commit_outside_config), when the instance is free; while it runs,
     the edit stays in the file and the run commits it as the operator's before its own commit — the gate undoes only
-    the instance's set_config lines, so it cannot take this one for the instance's (kant, 2026-10-13).
+    the instance's set_config lines, so it cannot take this one for the instance's (kiln, 2026-10-13).
 drive.md has one writer, the operator: replaced whole, with the same compare-and-set (its sha256), committed the same
 way (runner._commit_outside_drive, which also tells the instance in its journal).
 
@@ -31,7 +31,7 @@ from .watch import CONFIG_KEYS as WATCH_KEYS, MODES as WATCH_MODES
 # LLM_CONTEXT_TOKENS, which a first, looser pattern hid as secrets (live, 2026-10-19).
 SECRET_KEY = re.compile(r"(?:^|_)(?:KEY|TOKEN)$|SECRET|PASSWORD|PASSPHRASE")
 LOCAL_URL = "http://127.0.0.1:8780/v1"              # SHAFT's own model server (the template's default)
-# Voice turns (PLAN-voice C2): what an instance whose config.env does not set them has. The app shows its Talk button
+# Voice turns: what an instance whose config.env does not set them has. The app shows its Talk button
 # only for VOICE_MODE "on"; "" for VOICE_REASONING_EFFORT means its LLM_REASONING_EFFORT.
 VOICE_DEFAULTS = {"VOICE_MODE": "off", "VOICE_REASONING_EFFORT": ""}
 VOICE_MODES = ("on", "off")
@@ -156,7 +156,7 @@ def fields(name: str) -> list[dict]:
     return out
 
 
-VOICE_HELP = {"VOICE_MODE": "Voice mode offered for this instance: on shows the Talk button in the apps (PLAN-voice).",
+VOICE_HELP = {"VOICE_MODE": "Voice mode offered for this instance: on shows the Talk button in the apps.",
               "VOICE_REASONING_EFFORT": "Reasoning effort on spoken turns; empty: its LLM_REASONING_EFFORT."}
 
 

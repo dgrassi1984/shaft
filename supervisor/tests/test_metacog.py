@@ -166,7 +166,7 @@ class MetacogTest(unittest.TestCase):
                          'confidence AUROC 1.00 [1.00, 1.00] (n 40), claim AUROC unavailable, bias +0.00, SD 50.0')
 
     def test_section_waits_for_five_misses(self):
-        """Regression: wren had 12 met and 1 missed v2/v3 cycle on 2026-10-26, and stats.md would have told it
+        """Regression: wisp had 12 met and 1 missed v2/v3 cycle on 2026-10-26, and stats.md would have told it
         "AUROC 0.12" from that one miss. Below MIN_CLASS met or missed cycles the section is left out."""
         rows = [{'episode_ts': f'2026-10-{20 + i % 5:02d}T10:{i:02d}:00', 'confidence': 80,
                  'confidence_of': 'criterion_met=yes', 'criterion_met': 'yes', 'judge': 'j'} for i in range(12)]
@@ -174,7 +174,7 @@ class MetacogTest(unittest.TestCase):
         with mock.patch.object(metrics, 'judgments', return_value=rows), \
                 mock.patch.object(metrics, 'live_episodes', return_value=[]), \
                 mock.patch.object(metrics, 'by_current_judge', return_value=True):
-            self.assertEqual(metacog.section('wren'), [])
+            self.assertEqual(metacog.section('wisp'), [])
 
 
 if __name__ == '__main__':

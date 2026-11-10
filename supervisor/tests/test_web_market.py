@@ -1,4 +1,4 @@
-"""docs/plans/PLAN-pwa-market: the iPhone and iPad app at market standard. One test per finding fixed, named after it."""
+"""The iPhone and iPad app at market standard. One test per finding fixed, named after it."""
 from __future__ import annotations
 
 import re
@@ -14,7 +14,7 @@ from supervisor.tests.node_helpers import NODE_TIMEOUT_S
 
 NODE = shutil.which("node")
 PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
-LIVE = {"name": "wren", "model": "m", "state": "idle"}
+LIVE = {"name": "wisp", "model": "m", "state": "idle"}
 
 
 def replying(answer: str = "", activity: list | None = None) -> dict:
@@ -28,7 +28,7 @@ class StreamingTest(unittest.TestCase):
         """Reviews C11/I9: the server held the partial answer, the page showed "the answer appears when it is ready"."""
         live = str(web_views.live_activity(replying("**Summary.** The sweep fini")))
         self.assertIn('<div class="streaming" data-k="ans"><div class="md"><p><b>Summary.</b> The sweep fini</p>', live)
-        self.assertNotIn("the answer appears when it is ready", str(web_views.chat_feed("wren", replying("x"), [])))
+        self.assertNotIn("the answer appears when it is ready", str(web_views.chat_feed("wisp", replying("x"), [])))
         self.assertNotIn("aria-live", live)          # VoiceOver must not re-read the whole reply at every refresh
 
     def test_before_the_first_word_a_working_line_and_dots(self):
@@ -40,7 +40,7 @@ class StreamingTest(unittest.TestCase):
 
 class HeaderTest(unittest.TestCase):
     def header(self, **live) -> str:
-        return str(web_views.chat_header("wren", {**LIVE, **live}, {"id": "c1", "state": "idle"}, []))
+        return str(web_views.chat_header("wisp", {**LIVE, **live}, {"id": "c1", "state": "idle"}, []))
 
     def test_i10_no_emoji_as_controls(self):
         """Review I10: ☰ 🕘 📄 ⏸ read as disabled and were blobs in dark mode; one SVG set, in the text's colour."""
@@ -54,17 +54,17 @@ class HeaderTest(unittest.TestCase):
         body = self.header()
         tools = re.search(r'<div class="headtools">(.*)</header>', body, re.S).group(1)
         self.assertEqual(re.findall(r'aria-label="([^"]+)"', tools.split('<div class="menubody">')[0]),
-                         ["Documents", "New chat", "wren: pages and actions"])
+                         ["Documents", "New chat", "wisp: pages and actions"])
         self.assertIn('data-key="earlier-chats"', tools.split('<div class="menubody">', 1)[1])   # in ⋯
 
     def test_i13_kill_last_and_apart_and_not_on_overview_cards(self):
         """Review I13: Kill sat beside Pause on every card and among the ⋯ menu's pages."""
-        buttons = str(web_actions.instance_buttons({"name": "wren", "state": "idle"}, delete=True))
+        buttons = str(web_actions.instance_buttons({"name": "wisp", "state": "idle"}, delete=True))
         zone = buttons.index('class="actions dangerzone"')
         self.assertLess(buttons.index(">Pause<"), zone)
         self.assertGreater(buttons.index(">Kill<"), zone)
         self.assertGreater(buttons.index(">Delete…<"), zone)
-        self.assertNotIn(">Kill<", str(web_actions.instance_buttons({"name": "wren", "state": "idle"}, kill=False)))
+        self.assertNotIn(">Kill<", str(web_actions.instance_buttons({"name": "wisp", "state": "idle"}, kill=False)))
         self.assertIn("instance_buttons(i, kill=False)", Path(web_pages.__file__).read_text())
         menu = self.header()
         self.assertLess(menu.index("Reload / update"), menu.index('class="actions dangerzone"'))   # last in ⋯, found live
@@ -73,7 +73,7 @@ class HeaderTest(unittest.TestCase):
 class ComposerTest(unittest.TestCase):
     def composer(self, state: str | None = None) -> str:
         chat = {"id": "web-a", "state": state, "turns": [], "created": "2026-10-27T10:00:00"} if state else None
-        return str(web_views.chat_page("wren", chat, [], [], {}, ["wren"], "t"))
+        return str(web_views.chat_page("wisp", chat, [], [], {}, ["wisp"], "t"))
 
     def test_i7_one_send_arrow_and_the_other_ways_behind_it(self):
         """Review I7: Attach files + Send now / Queue after reply / Next cycle wrapped to two rows; one arrow now."""
@@ -99,7 +99,7 @@ class ComposerTest(unittest.TestCase):
 
     def test_i18_empty_chat_is_a_welcome_not_a_grey_line(self):
         page = self.composer()
-        self.assertIn('<div class="emptychat" data-k="empty"><p class="big">Chat with wren</p>', page)
+        self.assertIn('<div class="emptychat" data-k="empty"><p class="big">Chat with wisp</p>', page)
 
 
 @unittest.skipUnless(NODE, "node is not installed")
@@ -167,7 +167,7 @@ class MessageActionsTest(unittest.TestCase):
             {"role": "assistant", "content": "a1", "ts": "2026-10-27T10:00:05"},
             {"role": "user", "content": "q2", "ts": "2026-10-27T10:01:00"},
             {"role": "assistant", "content": "a2", "ts": "2026-10-27T10:01:05"}]}
-        return str(web_views.chat_feed("wren", chat, []))
+        return str(web_views.chat_feed("wisp", chat, []))
 
     def test_i12_actions_under_the_message_last_answer_marked(self):
         """Review I12: two bordered boxes in every message's header, bigger than short messages."""
@@ -207,7 +207,7 @@ class IPadTest(unittest.TestCase):
         self.assertIn("nav form.unpair { display: none; }", CSS)
 
     def test_p6_p7_shortcuts_line_and_send_toast(self):
-        """P6: the shortcuts line stayed with the on-screen keyboard up. P7: "sent to kant" covered the header."""
+        """P6: the shortcuts line stayed with the on-screen keyboard up. P7: "sent to kiln" covered the header."""
         self.assertIn('if (keyboardUp()) { document.body.classList.toggle("hwkbd", false); hardwareKeys = false; }', JS)
         self.assertIn("if (!(r.ok && shown)) toast(", JS)
 
@@ -239,14 +239,14 @@ class RetryInPlaceTest(unittest.TestCase):
         """iPad review P9: Retry added a second copy of the question and a second error under the first."""
         from supervisor import web_chat
         chat = self.chat()
-        self.assertIn('data-retry-of="1"', str(web_views.chat_feed("wren", chat, [])))
+        self.assertIn('data-retry-of="1"', str(web_views.chat_feed("wisp", chat, [])))
         self.assertFalse(web_chat.mark_retried(chat, 1, "something else"))        # only the text that failed
         self.assertFalse(web_chat.mark_retried(chat, 0, "first"))
         self.assertTrue(web_chat.mark_retried(chat, 1, "first"))
         self.assertFalse(web_chat.mark_retried(chat, 1, "first"))                 # once
         chat["turns"].append({"role": "user", "content": "first", "ts": "2026-10-27T10:01:00"})
         self.assertEqual(web_chat._api_messages(chat), [{"role": "user", "content": "first"}])
-        feed = str(web_views.chat_feed("wren", chat, []))
+        feed = str(web_views.chat_feed("wisp", chat, []))
         self.assertEqual(feed.count(">first<"), 1)
         self.assertIn('<p class="dim retried" data-k="a1">The first try failed and was sent again', feed)
         self.assertNotIn("The model could not finish the reply", feed)
@@ -264,18 +264,18 @@ class LongChatTest(unittest.TestCase):
         turns = [{"role": "user" if k % 2 == 0 else "assistant", "content": f"m{k}", "ts": f"2026-10-27T10:{k // 60:02d}:{k % 60:02d}"}
                  for k in range(200)]
         chat = {"id": "web-a", "state": "idle", "created": "2026-10-27T10:00:00", "turns": turns}
-        feed = str(web_views.chat_feed("wren", chat, []))
+        feed = str(web_views.chat_feed("wisp", chat, []))
         self.assertIn('<a class="button" href="?all=1">Show the 120 earlier messages</a>', feed)
         self.assertNotIn('data-k="u0"', feed)
         self.assertIn('data-k="u120"', feed)              # each turn keeps its own index: nothing shifts
         self.assertIn('data-k="a199"', feed)
-        whole = str(web_views.chat_feed("wren", chat, [], whole=True))
+        whole = str(web_views.chat_feed("wisp", chat, [], whole=True))
         self.assertIn('data-k="u0"', whole)
         self.assertNotIn("earlier messages", whole)
-        page = str(web_views.chat_page("wren", chat, [], [], {}, ["wren"], "t", whole=True))
-        self.assertIn('data-poll="/fragment/chat/wren?all=1"', page)   # its refreshes stay whole
+        page = str(web_views.chat_page("wisp", chat, [], [], {}, ["wisp"], "t", whole=True))
+        self.assertIn('data-poll="/fragment/chat/wisp?all=1"', page)   # its refreshes stay whole
         short = {**chat, "turns": turns[:10]}
-        self.assertNotIn("earlier messages", str(web_views.chat_feed("wren", short, [])))
+        self.assertNotIn("earlier messages", str(web_views.chat_feed("wisp", short, [])))
 
 
 class AlertsTest(unittest.TestCase):
@@ -289,9 +289,9 @@ class AlertsTest(unittest.TestCase):
                       'run 2, web search 2 finish reason: stop', out)
         self.assertIn("…</span>", out)
         self.assertIn("<summary>Full line</summary><pre>07:31:38 shaft: end live", out)   # nothing lost, nothing reworded
-        short = str(web_actions.alert_line({"id": "y", "text": "wren: code change FAILED tests"}))
+        short = str(web_actions.alert_line({"id": "y", "text": "wisp: code change FAILED tests"}))
         self.assertNotIn("Full line", short)
-        self.assertIn("wren: code change FAILED tests", short)
+        self.assertIn("wisp: code change FAILED tests", short)
 
 
 class LayoutTest(unittest.TestCase):
@@ -308,10 +308,10 @@ class LayoutTest(unittest.TestCase):
 
     def test_i5_other_pages_have_a_bar_and_the_rail_is_a_sheet(self):
         """Review I5: in the installed app the journal had no way back and the rail filled half the screen."""
-        page = str(web_views.frame("wren · journal", web_pages.Html("<p>x</p>"), ["wren"], "t", current="i:wren"))
-        self.assertIn('<div class="pagebar"><a class="iconbtn back" href="/i/wren/chat" aria-label="Back to the chat">', page)
+        page = str(web_views.frame("wisp · journal", web_pages.Html("<p>x</p>"), ["wisp"], "t", current="i:wisp"))
+        self.assertIn('<div class="pagebar"><a class="iconbtn back" href="/i/wisp/chat" aria-label="Back to the chat">', page)
         self.assertIn('data-toggle-nav aria-label="Chats and pages"', page.split('class="pagebar"')[1])
-        chat = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
+        chat = str(web_views.chat_page("wisp", None, [], [], {}, ["wisp"], "t"))
         self.assertNotIn('class="pagebar"', chat)
         # every page with the rail: the overview builds its own page (found live: it had no bar)
         self.assertIn('return page("Overview", join([pagebar("Overview"), body])', Path(web_pages.__file__).read_text())

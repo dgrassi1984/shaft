@@ -1,12 +1,12 @@
 """The capability battery: fixed tasks an instance never sees, run by the supervisor at night.
 
-Why: an instance chooses its own goals and success criteria, so its judged success rate saturates (wren
+Why: an instance chooses its own goals and success criteria, so its judged success rate saturates (wisp
 reached 95% on small goals). The battery is a fixed yardstick — the same held-out items, run after run —
 graded effectiveness first, and compared with a *control*: a fresh copy of the template on the same model
 with an empty mind. Improvement means the instance's scores rise relative to the control's, within one
 era (item set × model × judge model); comparisons across eras are never made.
 
-Four categories (docs/plans/PLAN-measurement.md, E3):
+Four categories:
   coding    task + hidden tests run by the supervisor (headline: share of hidden tests passed) + judge
   research  questions with stable answers needing primary sources; judged against a frozen key
   recall    questions about the instance's own older journal entries, generated once and frozen
@@ -67,7 +67,7 @@ CATEGORIES =("coding", "research", "recall", "self", "perturbation")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
-            "describe_image",   # docs/plans/PLAN-vision: exams keep the tools they were calibrated with
+            "describe_image",   # exams keep the tools they were calibrated with
             # Keyed by the instance's name, not its folder, so it acts on the live instance whatever copy the exam runs
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
@@ -87,7 +87,7 @@ def items_dir() -> Path:
 
 def off_path(name: str) -> Path:
     """Present: this instance gets no battery, scheduled or by hand (`shaft battery off|on <name>`).
-    the operator, 2026-10-13: "Kant no battery" (on Opus a run costs about $15)."""
+    the operator, 2026-10-13: "Kiln no battery" (on Opus a run costs about $15)."""
     return base() / f"off-{name}"
 
 

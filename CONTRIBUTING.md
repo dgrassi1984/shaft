@@ -40,7 +40,7 @@ Before proposing a merge, commit your change and run:
 bin/shaft gate budget
 ```
 
-This check uses committed supervisor and template code, so it does not test uncommitted edits. It runs both test parts as the instance gate does. It fails if a part fails, exceeds half the gate timeout, contains a test over 10 seconds, or runs a test twice. The default gate timeout is 300 seconds. Tests that wait must wait for an event rather than a fixed sleep. See [the gate budget plan](docs/plans/PLAN-gate-5min.md).
+This check uses committed supervisor and template code, so it does not test uncommitted edits. It runs both test parts as the instance gate does. It fails if a part fails, exceeds half the gate timeout, contains a test over 10 seconds, or runs a test twice. The default gate timeout is 300 seconds. Tests that wait must wait for an event rather than a fixed sleep. See the gate budget plan.
 
 ## Architectural invariants
 
@@ -72,4 +72,4 @@ Instances never hold credentials for the operator's mail or Drive. Check label g
 
 Keep documentation with behavior changes. Use plain English and generic instance names in examples. Never include `.env`, instance data, credentials, or real mail in an issue or pull request, including logs and attachments.
 
-`docs/CODEMAP.md` and `agent-overlay.yaml` are generated or used by the maintainer's own tooling. Contributors need not edit them by hand.
+`docs/CODEMAP.md` is generated. Contributors need not edit it by hand.

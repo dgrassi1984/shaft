@@ -105,7 +105,7 @@ class ShaftProcessTest(unittest.TestCase):
             "  456 /opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/Resources/"
             "Python.app/Contents/MacOS/Python -m supervisor web serve",
             "  789 /bin/zsh -c 'echo -m supervisor'",
-            "   10 /usr/bin/python3 -m supervisor.talk_ui wren",
+            "   10 /usr/bin/python3 -m supervisor.talk_ui wisp",
             "   11 /usr/bin/python3 -m supervisorfoo",
             "   12 /bin/sh -c shaft-codex-app-server",
             "   13 /usr/bin/python3 -m supervisor.top",
@@ -246,18 +246,18 @@ class StopServiceTest(MigCase):
 
 class ManifestTest(MigCase):
     def test_manifest_fields(self):
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=Path("/Users/x/Documents")), \
-                mock.patch.object(core, "git", return_value=cp(0, "template abc123\ninstance/wren def456\n")), \
+                mock.patch.object(core, "git", return_value=cp(0, "template abc123\ninstance/wisp def456\n")), \
                 mock.patch("supervisor.mind.head", return_value="mh789"), \
                 mock.patch.object(migrate, "_tailscale_json",
                                   return_value={"MagicDNSSuffix": "ts.net", "Self": {"DNSName": "old.ts.net."}}):
             m = self.mig()
             manifest = migrate._manifest(m, ["autonomy", "web"])
         self.assertEqual(manifest["services"], ["autonomy", "web"])
-        self.assertEqual(manifest["branches"], {"template": "abc123", "instance/wren": "def456"})
-        self.assertEqual(manifest["minds"], {"wren": "mh789"})
-        self.assertEqual(manifest["shared"], {"wren": "/Users/x/Documents"})
+        self.assertEqual(manifest["branches"], {"template": "abc123", "instance/wisp": "def456"})
+        self.assertEqual(manifest["minds"], {"wisp": "mh789"})
+        self.assertEqual(manifest["shared"], {"wisp": "/Users/x/Documents"})
         self.assertEqual(manifest["tailnet"]["suffix"], "ts.net")
         self.assertEqual(manifest["browsers"], False)
 
@@ -295,7 +295,7 @@ class CopyTest(MigCase):
                 mock.patch.object(migrate, "_check_new_mac"), \
                 mock.patch.object(migrate, "_remote_home", return_value="/new/home"), \
                 mock.patch.object(migrate, "_dest", return_value="/new/home/project"), \
-                mock.patch.object(core, "instance_names", return_value=["wren"]), \
+                mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=str(shared)), \
                 mock.patch.object(migrate, "_map_to_remote", return_value="/new/home/Documents/Shared"):
             migrate._copy(m)
@@ -322,15 +322,15 @@ class TargetRefuseTest(MigCase):
 
 class RepairTest(MigCase):
     def test_path_change_repairs_and_removes_instance_env(self):
-        inst = self.project / "instances" / "wren"
+        inst = self.project / "instances" / "wisp"
         (inst / ".venv").mkdir(parents=True)
         (inst / ".uv").mkdir(parents=True)
         m = self.mig()
         m.manifest = {"project": "/old/path"}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "git", return_value=cp(0)) as git:
             migrate._repair(m)
-        self.assertIn(mock.call("worktree", "repair", "template", "instances/wren", check=False), git.call_args_list)
+        self.assertIn(mock.call("worktree", "repair", "template", "instances/wisp", check=False), git.call_args_list)
         self.assertFalse((inst / ".venv").exists())
         self.assertFalse((inst / ".uv").exists())
 
@@ -338,12 +338,12 @@ class RepairTest(MigCase):
         outside = self.tmp / "elsewhere"
         (outside / ".venv").mkdir(parents=True)
         # a symlinked .venv pointing outside instances must be refused, not followed
-        inst = self.project / "instances" / "wren"
+        inst = self.project / "instances" / "wisp"
         inst.mkdir(parents=True)
         (inst / ".venv").symlink_to(outside / ".venv")
         m = self.mig()
         m.manifest = {"project": "/old/path"}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "git", return_value=cp(0)):
             with self.assertRaises(migrate.Stop):
                 migrate._repair(m)
@@ -351,7 +351,7 @@ class RepairTest(MigCase):
 
 class SetupTest(MigCase):
     def test_created_line_stops(self):
-        self.runner.script = {"shaft setup": cp(0, "created template    template\nok      instance/wren\n")}
+        self.runner.script = {"shaft setup": cp(0, "created template    template\nok      instance/wisp\n")}
         m = self.mig()
         with self.assertRaises(migrate.Stop):
             migrate._setup(m)
@@ -399,7 +399,7 @@ class CodexTest(MigCase):
         m = self.mig()
         self.runner.script = {"shaft codex status": cp(0, "Codex login: missing; run shaft codex login\n")}
         with mock.patch.object(migrate, "_uses_codex", return_value=True), \
-                mock.patch.object(core, "instance_names", return_value=["wren"]):
+                mock.patch.object(core, "instance_names", return_value=["wisp"]):
             migrate._codex(m)
         self.assertTrue(any(c[:2] == ["interactive", str(core.PROJECT / "bin" / "shaft")] and c[-1] == "login"
                             for c in self.runner.calls))
@@ -408,7 +408,7 @@ class CodexTest(MigCase):
         m = self.mig()
         self.runner.script = {"shaft codex status": cp(0, "Codex login: present\n")}
         with mock.patch.object(migrate, "_uses_codex", return_value=True), \
-                mock.patch.object(core, "instance_names", return_value=["wren"]):
+                mock.patch.object(core, "instance_names", return_value=["wisp"]):
             migrate._codex(m)
         self.assertFalse(any("login" in c for c in self.runner.calls))
 
@@ -700,13 +700,13 @@ class TailscaleJsonTest(MigCase):
 class WaitingOnTest(MigCase):
     def test_names_each_blocker(self):
         self.runner.script = {"ps -axo pid=,command=": cp(0, "")}
-        with mock.patch.object(core, "instance_names", return_value=["thelos", "wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["tundra", "wisp"]), \
                 mock.patch("supervisor.runner.is_busy", side_effect=[True, False]), \
                 mock.patch.object(core, "update_queued", side_effect=[None, "x"]), \
                 mock.patch("supervisor.runner.open_conversations", return_value={}), \
                 mock.patch("supervisor.runner._held", return_value={}):
             blockers = migrate._waiting_on(self.runner)
-        self.assertEqual(blockers, ["thelos busy", "update queued for wren"])
+        self.assertEqual(blockers, ["tundra busy", "update queued for wisp"])
 
 
 class DirtyAndUnpushedTest(MigCase):
@@ -720,8 +720,8 @@ class DirtyAndUnpushedTest(MigCase):
                          f"worktree {self.tmp}/clean-one\n\nworktree {self.tmp}/clean-two\n")
         with mock.patch.object(core, "git", side_effect=[
                 cp(0, worktree_list),
-                cp(0, "main [ahead 1]\ntemplate [ahead 2]\ninstance/wren [ahead 3]\nfeature [ahead 4]\n")]), \
-                mock.patch.object(core, "instance_names", return_value=["wren"]), \
+                cp(0, "main [ahead 1]\ntemplate [ahead 2]\ninstance/wisp [ahead 3]\nfeature [ahead 4]\n")]), \
+                mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(migrate, "_dirty_count", side_effect=[2, 2, 0, 0]):
             import contextlib
             import io
@@ -735,7 +735,7 @@ class DirtyAndUnpushedTest(MigCase):
         self.assertNotIn("clean-two", out)
         self.assertIn("2 other development worktrees are clean\n", out)
         self.assertIn("feature [ahead 4]", out)
-        self.assertNotIn("instance/wren [ahead 3]", out)
+        self.assertNotIn("instance/wisp [ahead 3]", out)
 
     def test_all_development_worktrees_are_clean(self):
         with mock.patch.object(core, "git", side_effect=[
@@ -786,7 +786,7 @@ class PrintTargetCommandTest(MigCase):
 class CompareRefsTest(MigCase):
     def test_mind_uses_verify_refs_heads_mind(self):
         m = self.mig()
-        m.manifest = {"branches": {}, "minds": {"wren": "abc"}}
+        m.manifest = {"branches": {}, "minds": {"wisp": "abc"}}
         self.runner.script = {"rev-parse": cp(0, "abc\n")}
         with mock.patch.object(migrate, "_dest", return_value="/new/home/project"):
             migrate._compare_refs(m)
@@ -834,7 +834,7 @@ class CodexRegexTest(MigCase):
         self.runner.script = {"shaft codex status": cp(0, "some line about missing models, not login\n"
                                                           "Codex login: present\n")}
         with mock.patch.object(migrate, "_uses_codex", return_value=True), \
-                mock.patch.object(core, "instance_names", return_value=["wren"]):
+                mock.patch.object(core, "instance_names", return_value=["wisp"]):
             migrate._codex(m)
         self.assertFalse(any(c[:2] == ["interactive", str(core.PROJECT / "bin" / "shaft")] and c[-1] == "login"
                              for c in self.runner.calls))
@@ -843,7 +843,7 @@ class CodexRegexTest(MigCase):
 class TalkEachTest(MigCase):
     def test_l_runs_login_then_talks_again(self):
         m = self.mig(stdin=["l", ""])
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(migrate, "_uses_codex", return_value=True):
             migrate._talk_each(m)
         self.assertIn(["interactive", str(core.PROJECT / "bin" / "shaft"), "codex", "login"], self.runner.calls)
@@ -999,7 +999,7 @@ case "$cmd" in
   pause) mkdir -p "$PROJECT/.supervisor"; touch "$PROJECT/.supervisor/paused" ;;
   resume) rm -f "$PROJECT/.supervisor/paused" ;;
   share) printf '{"shared":"%s"}\n' "$3" > "$PROJECT/.supervisor/tools/$2.json" ;;
-  setup) echo 'ok      template'; echo 'ok      instance/wren' ;;
+  setup) echo 'ok      template'; echo 'ok      instance/wisp' ;;
 esac
 if [ "$sub" = "off" ]; then
   svc="$cmd"; [ "$svc" = "autonomy" ] && svc="scheduler"
@@ -1104,12 +1104,12 @@ exit 0
         subprocess.run(["git", "-C", str(old_project / "template"), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(old_project / "template"), "commit", "-q", "-m", "template"], check=True)
 
-        subprocess.run(["git", "-C", str(old_project), "worktree", "add", "-b", "instance/wren", "instances/wren"],
+        subprocess.run(["git", "-C", str(old_project), "worktree", "add", "-b", "instance/wisp", "instances/wisp"],
                        check=True, capture_output=True)
-        (old_project / "instances" / "wren" / "shaft").mkdir(parents=True)
-        (old_project / "instances" / "wren" / "shaft" / "README.md").write_text("wren")
-        subprocess.run(["git", "-C", str(old_project / "instances" / "wren"), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(old_project / "instances" / "wren"), "commit", "-q", "-m", "wren"],
+        (old_project / "instances" / "wisp" / "shaft").mkdir(parents=True)
+        (old_project / "instances" / "wisp" / "shaft" / "README.md").write_text("wisp")
+        subprocess.run(["git", "-C", str(old_project / "instances" / "wisp"), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(old_project / "instances" / "wisp"), "commit", "-q", "-m", "wisp"],
                        check=True)
 
         (old_project / ".venv-ui").mkdir()
@@ -1118,10 +1118,10 @@ exit 0
         self._write_exec(old_project / ".venv-bonsai" / "bin" / "python",
                          "#!/bin/sh\necho 'numpy==1.26.0'\nexit 0\n")
         for sub in (".venv", ".uv", ".tmp"):
-            (old_project / "instances" / "wren" / sub).mkdir()
-            (old_project / "instances" / "wren" / sub / "x").write_text("x")
+            (old_project / "instances" / "wisp" / sub).mkdir()
+            (old_project / "instances" / "wisp" / sub / "x").write_text("x")
 
-        minds = old_project / ".supervisor" / "minds" / "wren.git"
+        minds = old_project / ".supervisor" / "minds" / "wisp.git"
         minds.mkdir(parents=True)
         subprocess.run(["git", "--git-dir", str(minds), "init", "--bare", "-q"], check=True)
         mind_work = tmp / "mindwork"
@@ -1140,7 +1140,7 @@ exit 0
         shared.mkdir()
         (shared / "shared.txt").write_text("shared-data")
         (old_project / ".supervisor" / "tools").mkdir(parents=True, exist_ok=True)
-        (old_project / ".supervisor" / "tools" / "wren.json").write_text(json.dumps({"shared": str(shared)}))
+        (old_project / ".supervisor" / "tools" / "wisp.json").write_text(json.dumps({"shared": str(shared)}))
 
         for name in ("scheduler", "telegram", "web", "api", "embed", "model"):
             data = {"Label": f"com.shaft.{name}", "WorkingDirectory": str(old_project)}
@@ -1204,7 +1204,7 @@ exit 0
         self.assertEqual(ctx["target_rc"], 0)
 
         log_lines = ctx["log"].read_text().splitlines()
-        setup_idx = next(i for i, line in enumerate(log_lines) if line.startswith("share wren "))
+        setup_idx = next(i for i, line in enumerate(log_lines) if line.startswith("share wisp "))
         src, tgt = log_lines[:setup_idx], log_lines[setup_idx:]
 
         self.assertEqual(src[0], "pause")
@@ -1223,20 +1223,20 @@ exit 0
         self.assertFalse((new_project / ".venv-ui" / "x").exists())
         self.assertFalse((new_sup / "migration" / "source-state.json").exists())
 
-        for wt in ("template", "instances/wren"):
+        for wt in ("template", "instances/wisp"):
             self.assertIn(str(new_project.resolve()), (new_project / wt / ".git").read_text())
-        subprocess.run(["git", "-C", str(new_project / "instances" / "wren"), "status"], check=True)
+        subprocess.run(["git", "-C", str(new_project / "instances" / "wisp"), "status"], check=True)
         for sub in (".venv", ".uv", ".tmp"):
-            self.assertFalse((new_project / "instances" / "wren" / sub).exists())
+            self.assertFalse((new_project / "instances" / "wisp" / sub).exists())
 
-        self.assertEqual(tgt[0], f"share wren {new_home / 'Shared Folder'}")
+        self.assertEqual(tgt[0], f"share wisp {new_home / 'Shared Folder'}")
         self.assertLess(tgt.index("setup"), tgt.index("embed on"))
-        self.assertEqual(json.loads((new_sup / "tools" / "wren.json").read_text())["shared"],
+        self.assertEqual(json.loads((new_sup / "tools" / "wisp.json").read_text())["shared"],
                          str(new_home / "Shared Folder"))
         self.assertNotIn("model on", tgt)
         self.assertEqual([l for l in tgt if l.endswith(" on")],
                          ["embed on", "api on", "web on", "telegram on", "autonomy on"])
-        self.assertLess(tgt.index("talk wren"), tgt.index("check wren"))
+        self.assertLess(tgt.index("talk wisp"), tgt.index("check wisp"))
         self.assertLess(tgt.index("resume"), tgt.index("autonomy on"))
 
         self.assertFalse((new_sup / "migration").exists())
@@ -1402,8 +1402,8 @@ class FourthPassRegressionTest(MigCase):
         (self.sup / "paused").touch()
         m = self.mig()
         m.manifest = {"branches": {}, "minds": {}}
-        with mock.patch.object(migrate, "_waiting_on", return_value=["wren busy", "update queued for wren"]):
-            with self.assertRaisesRegex(migrate.Stop, "wren busy.*update queued"):
+        with mock.patch.object(migrate, "_waiting_on", return_value=["wisp busy", "update queued for wisp"]):
+            with self.assertRaisesRegex(migrate.Stop, "wisp busy.*update queued"):
                 migrate._require_source_stopped(m)
 
     def test_target_requires_typed_yes_that_named_old_mac_stays_stopped(self):
@@ -1472,32 +1472,32 @@ class FourthPassRegressionTest(MigCase):
         self.assertNotIn("zsh", self.runner.calls[-1][-1])
 
     def test_same_project_path_still_removes_machine_bound_instance_environments(self):
-        inst = core.INSTANCES / "wren"
+        inst = core.INSTANCES / "wisp"
         for rel in (".venv", ".uv", ".tmp"):
             (inst / rel).mkdir(parents=True)
         m = self.mig()
         m.manifest = {"project": str(core.PROJECT)}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]):
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]):
             migrate._repair(m)
-            self.assertIn("rm -rf instances/wren/.venv", " ".join(migrate._repair_commands(m)))
+            self.assertIn("rm -rf instances/wisp/.venv", " ".join(migrate._repair_commands(m)))
         self.assertFalse(any((inst / rel).exists() for rel in (".venv", ".uv", ".tmp")))
 
     def test_cleanup_removes_files_and_internal_dangling_environment_symlinks(self):
-        inst = core.INSTANCES / "wren"
+        inst = core.INSTANCES / "wisp"
         inst.mkdir(parents=True)
         (inst / ".uv").write_text("old machine cache")
         (inst / ".venv").symlink_to(inst / "missing-environment")
         m = self.mig()
         m.manifest = {"project": str(core.PROJECT)}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]):
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]):
             migrate._repair(m)
         self.assertFalse((inst / ".uv").exists())
         self.assertFalse((inst / ".venv").is_symlink())
 
     def test_failed_instance_check_explains_environment_rebuild_and_retry(self):
-        self.runner.script = {"shaft check wren": cp(1)}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]):
-            with self.assertRaisesRegex(migrate.Stop, "talk wren.*rebuilds.*log.*rerun `migrate target`"):
+        self.runner.script = {"shaft check wisp": cp(1)}
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]):
+            with self.assertRaisesRegex(migrate.Stop, "talk wisp.*rebuilds.*log.*rerun `migrate target`"):
                 migrate._check_each(self.mig())
 
     def test_shared_pointer_maps_home_even_when_project_does_not_move(self):
@@ -1505,11 +1505,11 @@ class FourthPassRegressionTest(MigCase):
         mapped.mkdir()
         m = self.mig()
         m.manifest = {"project": str(core.PROJECT), "home": "/old/home"}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=Path("/old/home/Shared Folder")):
             migrate._repair(m)
-            self.assertIn("bin/shaft share wren", " ".join(migrate._repair_commands(m)))
-            self.assertIn([str(core.PROJECT / "bin/shaft"), "share", "wren", str(mapped)], self.runner.calls)
+            self.assertIn("bin/shaft share wisp", " ".join(migrate._repair_commands(m)))
+            self.assertIn([str(core.PROJECT / "bin/shaft"), "share", "wisp", str(mapped)], self.runner.calls)
             self.runner.script = {"shaft share": cp(1, "", "share refused")}
             with self.assertRaisesRegex(migrate.Stop, "share.*failed"):
                 migrate._repair(m)
@@ -1517,13 +1517,13 @@ class FourthPassRegressionTest(MigCase):
     def test_missing_shared_pointer_is_reported_and_outside_home_unchanged(self):
         m = self.mig()
         m.manifest = {"project": str(core.PROJECT), "home": "/old/home"}
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=Path("/old/home/missing")), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             migrate._repair(m)
         self.assertIn("does not exist here", out.getvalue())
         self.assertEqual(self.runner.calls, [])
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=Path("/external/shared")):
             migrate._repair(m)
         self.assertEqual(self.runner.calls, [])
@@ -1531,7 +1531,7 @@ class FourthPassRegressionTest(MigCase):
     def test_non_directory_shared_folder_is_reported_and_omitted_from_preview(self):
         folder = self.tmp / "missing"
         m = self.mig(host="new")
-        with mock.patch.object(core, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(core, "shared_folder", return_value=folder), \
                 mock.patch.object(migrate, "_dest", return_value="/new/project"), \
                 mock.patch.object(migrate, "_remote_home", return_value="/new"), \
@@ -1604,7 +1604,7 @@ class FourthPassRegressionTest(MigCase):
                     mock.patch.object(migrate, "_dest", return_value="/new/project"), \
                     mock.patch.object(migrate, "_folder_kb", side_effect=sizes) as size, \
                     mock.patch.object(migrate, "_remote_free_kb", return_value=40), \
-                    mock.patch.object(core, "instance_names", return_value=["wren"]), \
+                    mock.patch.object(core, "instance_names", return_value=["wisp"]), \
                     mock.patch.object(core, "shared_folder", return_value=shared), \
                     mock.patch.object(migrate, "_uses_codex", return_value=False), \
                     mock.patch.object(migrate, "_require_remote_no_shaft"), \

@@ -1,4 +1,4 @@
-// SHAFT web UI behaviour (docs/plans/PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
+// SHAFT web UI behaviour. No inline script anywhere (the CSP forbids it): pages declare what they
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
@@ -32,7 +32,7 @@
     return fullText(html).slice(0, 300);
   }
 
-  // Live regions (docs/plans/PLAN-pwa P5) exist, empty, from the start: a region created already filled is not read out.
+  // Live regions exist, empty, from the start: a region created already filled is not read out.
   function region(id, role) {
     let box = document.getElementById(id);
     if (!box) {
@@ -187,7 +187,7 @@
     return !!box && !!raw && box.value !== raw.value;
   }
 
-  // The network (docs/plans/PLAN-pwa P3). A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
+  // The network. A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
   // it gives up after 15 s; a failure backs off (up to 30 s) and is said once, at the top, not under every panel;
   // the connection coming back or the app coming to the front refreshes at once.
   const POLL_LIMIT_MS = 15000;
@@ -1532,7 +1532,7 @@
     else keepFeedback(group, "up", "", false);
   });
 
-  // A message's actions as a menu (PLAN-pwa-market decision 2): long-press on touch, right-click or the context-menu key
+  // A message's actions as a menu : long-press on touch, right-click or the context-menu key
   // on a computer, as in Messages or Slack. They are the message's own buttons (shown on hover and Tab, hidden on
   // touch): the menu presses them. On touch, "Select text" lets the text be selected, which a long press now is not.
   const selectIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
@@ -1667,7 +1667,7 @@
     quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
-  // The rail (docs/plans/PLAN-webui-chat §1): an instance whose last answer this browser has not seen is marked unread. What was
+  // The rail: an instance whose last answer this browser has not seen is marked unread. What was
   // seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more).
   function seenGet() {
     try { return JSON.parse(localStorage.getItem("shaft.seen") || "{}"); } catch (e) { return {}; }
@@ -1731,7 +1731,7 @@
     const rail = document.querySelector("nav .rail");
     if (rail) markRail(rail);
   }
-  // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
+  // Notifications: Web Push, the only way a reply reaches a phone whose app is closed or locked (an
   // iPhone stops a page's scripts in the background). "On" means SHAFT has this device's subscription, not only the browser.
   const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -1878,7 +1878,7 @@
     if (ev.key === "shaft.seen" || ev.key === null) unreadState();
   });
 
-  // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
+  // The documents panel: a card in a reply or a name in its list opens that document in the
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
   // What the panel polls for: one document (?doc=), or the list (?list=1: without it the server opens what this chat
   // last changed, so ← Documents would bounce straight back to it) of a folder (?dir=, none for notes/docs/ itself), or a
@@ -2267,7 +2267,7 @@
     copyText(raw ? raw.value : "", b);
   });
 
-  // On a phone (docs/plans/PLAN-pwa P2) the chat is the whole screen: the rail is a sheet behind ☰, the documents a sheet over
+  // On a phone the chat is the whole screen: the rail is a sheet behind ☰, the documents a sheet over
   // the chat, and the page is as tall as what the keyboard leaves visible, so the composer sits right above it.
   document.addEventListener("click", (ev) => {
     const t = ev.target.closest && ev.target.closest("[data-toggle-nav], [data-close-docs], nav a");

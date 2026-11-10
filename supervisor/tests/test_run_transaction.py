@@ -54,18 +54,18 @@ class RunTransactionCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.project, True)
         git(self.project, "init", "-q")
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
-        self.root = self.project / "instances" / "kant"
-        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/kant", str(self.root))
+        self.root = self.project / "instances" / "kiln"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/kiln", str(self.root))
         for d in ("shaft", "self", "memory", "plugins/text_stats", ".tmp"):
             (self.root / d).mkdir(parents=True)
         (self.root / "shaft" / "__init__.py").write_text("")
         (self.root / "plugins" / "text_stats" / "main.py").write_text(COMMITTED)
-        (self.root / "memory" / "journal.md").write_text("# kant — journal\n")
+        (self.root / "memory" / "journal.md").write_text("# kiln — journal\n")
         (self.root / ".gitignore").write_text(".tmp/\n" + IGNORE_MIND)
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "kant: created")
-        mind.init("kant", self.project)
-        mind.commit("kant", "kant: created", self.root, self.project)
+        git(self.root, "commit", "-q", "-m", "kiln: created")
+        mind.init("kiln", self.project)
+        mind.commit("kiln", "kiln: created", self.root, self.project)
         self.gated: list[str] = []
 
     def fake_gate(self, root: Path, home: Path, env_root: Path | None = None, data_root: Path | None = None):
@@ -78,7 +78,7 @@ class RunTransactionCase(unittest.TestCase):
     def cycle(self, script: str = QUIET) -> int:
         """One live cycle through the supervisor's own entry point; its agent is `script`."""
         sup = self.project / ".supervisor"
-        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        b = broker.Broker("kiln", self.project, {}, sup / "broker.log")
         cmd, env = [sys.executable, "-c", script], {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
         with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
              mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
@@ -89,7 +89,7 @@ class RunTransactionCase(unittest.TestCase):
              mock.patch.object(gate, "run_tests", side_effect=self.fake_gate), \
              mock.patch.object(runner, "log") as self.logged, mock.patch("supervisor.metrics.after_cycle"), \
              mock.patch("supervisor.metrics.start_probation"):
-            return runner.run_agent("kant", "live", ["live"], False)
+            return runner.run_agent("kiln", "live", ["live"], False)
 
     def logs(self) -> str:
         return "\n".join(str(c.args[0]) for c in self.logged.call_args_list)
@@ -118,7 +118,7 @@ class UnsettledCodeTest(RunTransactionCase):
         journal = (self.root / "memory" / "journal.md").read_text()
         self.assertIn("unchecked code from an earlier run", journal)
         self.assertIn("were reverted because the tests failed", journal)
-        kept, = (self.project / ".supervisor" / "rejected").glob("kant-*")   # Codex on e77d5e5: nothing is lost
+        kept, = (self.project / ".supervisor" / "rejected").glob("kiln-*")   # Codex on e77d5e5: nothing is lost
         self.assertEqual((kept / "plugins" / "text_stats" / "main.py").read_text(), UNGATED)
         self.assertIn(str(kept), journal)
         self.assertIn(str(kept), self.logs())
@@ -131,7 +131,7 @@ class UnsettledCodeTest(RunTransactionCase):
         self.assertEqual(self.plugin(), good)
         self.assertEqual(self.code_status(), "", "kept but never committed: gated again at every run")
         self.assertIn("plugins/text_stats/main.py", git(self.root, "log", "--format=%B", "-n", "2"))
-        self.assertIn("kant: interrupted", git(self.root, "log", "--format=%s", "-n", "2"))
+        self.assertIn("kiln: interrupted", git(self.root, "log", "--format=%s", "-n", "2"))
 
     def test_a_run_after_a_settled_one_is_not_gated_at_its_start(self):
         self.assertEqual(self.cycle(), 0)
@@ -151,7 +151,7 @@ class ApprovedCodeTest(RunTransactionCase):
     def setUp(self):
         super().setUp()
         (self.root / ".gitignore").write_text((self.root / ".gitignore").read_text() + "plugins/stash/\n")
-        git(self.root, "commit", "-qam", "kant: its own ignore")
+        git(self.root, "commit", "-qam", "kiln: its own ignore")
 
     def stash(self, text: str) -> Path:
         f = self.root / self.STASH
@@ -165,7 +165,7 @@ class ApprovedCodeTest(RunTransactionCase):
         self.assertEqual(self.cycle(), 0)
         self.assertEqual(len(self.gated), 1, "an ignored file left by a dead run was accepted ungated")
         self.assertFalse(f.exists())
-        kept, = (self.project / ".supervisor" / "rejected").glob("kant-*")
+        kept, = (self.project / ".supervisor" / "rejected").glob("kiln-*")
         self.assertEqual((kept / self.STASH).read_text(), UNGATED)
 
     def test_an_ignored_file_the_gate_passed_is_not_gated_again(self):
@@ -179,7 +179,7 @@ class ApprovedCodeTest(RunTransactionCase):
 
     def test_a_run_whose_code_cannot_be_told_is_refused(self):
         self.assertEqual(self.cycle(), 0)
-        record = self.project / ".supervisor" / "baselines" / "kant.json"
+        record = self.project / ".supervisor" / "baselines" / "kiln.json"
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text('{"root": "torn')
         script = "import pathlib\npathlib.Path('.tmp/ran').write_text('1')\n"
@@ -219,7 +219,7 @@ class WithNoFollowTest(RunTransactionCase):
     REFUSED = 75
 
     def record(self) -> str:
-        return (self.project / ".supervisor" / "baselines" / "kant.json").read_text()
+        return (self.project / ".supervisor" / "baselines" / "kiln.json").read_text()
 
     def test_a_tree_too_big_to_check_is_put_back_and_records_nothing(self):
         self.assertEqual(self.cycle(), 0)
@@ -246,15 +246,15 @@ class WithNoFollowTest(RunTransactionCase):
 
     def test_no_approved_code_is_recorded_or_checked_for_a_copy(self):
         from supervisor import baseline
-        copy = self.project / "copy-of-kant"
+        copy = self.project / "copy-of-kiln"
         shutil.copytree(self.root, copy, symlinks=True)
         with mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"), \
                 mock.patch.object(core, "INSTANCES", self.project / "instances"):
             with self.assertRaises(baseline.BaselineError):
-                baseline.write("kant", copy, {})
+                baseline.write("kiln", copy, {})
             with self.assertRaises(baseline.BaselineError):
-                baseline.unapproved("kant", copy, {})
-        self.assertFalse((self.project / ".supervisor" / "baselines" / "kant.json").exists())
+                baseline.unapproved("kiln", copy, {})
+        self.assertFalse((self.project / ".supervisor" / "baselines" / "kiln.json").exists())
 
 
 class StrayDescendantsTest(unittest.TestCase):
@@ -341,7 +341,7 @@ class ApprovedFileLinkedTest(RunTransactionCase):
         (self.root / "notes").mkdir(exist_ok=True)
         (self.root / "notes" / "decoy.txt").write_text("not code\n")
         git(self.root, "add", "-A", "--", *self.FILES)
-        git(self.root, "commit", "-qm", "kant: more code")
+        git(self.root, "commit", "-qm", "kiln: more code")
 
     def check(self, rel: str):
         (self.root / rel).unlink()
@@ -446,7 +446,7 @@ class CommitTheGatedBytesTest(RunTransactionCase):
         git(self.root, "add", "plugins/b.py")                      # staged B; C only in the working tree
         staged = git(self.root, "ls-files", "-s", "plugins/b.py").split()[1]
         with mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "log") as logged:
-            core._commit_gated("kant", self.root, None, "kant: test", [], sorted(gated), gated)
+            core._commit_gated("kiln", self.root, None, "kiln: test", [], sorted(gated), gated)
         self.assertEqual(git(self.root, "show", "HEAD:plugins/b.py"), "B = 'gated'\n")
         self.assertEqual(git(self.root, "ls-files", "-s", "plugins/b.py").split()[1], staged, "the staged B was lost")
         self.assertEqual(git(self.root, "ls-files", "-s", "plugins/text_stats/main.py").split()[1],
@@ -462,7 +462,7 @@ class CommitTheGatedBytesTest(RunTransactionCase):
     def cycle_with(self, script):
         """cycle(), but gate.run_tests stays as the test patched it."""
         sup = self.project / ".supervisor"
-        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        b = broker.Broker("kiln", self.project, {}, sup / "broker.log")
         cmd, env = [sys.executable, "-c", script], {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
         with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
              mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
@@ -472,7 +472,7 @@ class CommitTheGatedBytesTest(RunTransactionCase):
              mock.patch.object(runner, "_launch", return_value=(b, cmd, env)), \
              mock.patch.object(runner, "log") as self.logged, mock.patch("supervisor.metrics.after_cycle"), \
              mock.patch("supervisor.metrics.start_probation"):
-            return runner.run_agent("kant", "live", ["live"], False)
+            return runner.run_agent("kiln", "live", ["live"], False)
 
 
 class StrayProcessTest(unittest.TestCase):
@@ -556,7 +556,7 @@ class RunOutlivesItselfTest(RunTransactionCase):
         self.addCleanup(signal.signal, signal.SIGTERM, before)
         script = "import subprocess, time\nsubprocess.Popen(['sleep', '30'])\ntime.sleep(30)\n"
         sup = self.project / ".supervisor"
-        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        b = broker.Broker("kiln", self.project, {}, sup / "broker.log")
         with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
              mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
              mock.patch.object(runner, "PROJECT", self.project), mock.patch.object(core, "PROJECT", self.project), \
@@ -564,7 +564,7 @@ class RunOutlivesItselfTest(RunTransactionCase):
              mock.patch.object(runner, "instance_root", return_value=self.root), \
              mock.patch.object(runner, "_launch", return_value=(b, [sys.executable, "-c", script], {})), \
              mock.patch.object(runner, "log"):
-            runner.run_conversation("kant", "talk", [], "t1", driver)
+            runner.run_conversation("kiln", "talk", [], "t1", driver)
         self.assertEqual(alive_at_signal, [False], "the signal did its work with the agent still running")
 
     def test_a_stopped_api_service_ends_the_agents_of_its_replies_first(self):

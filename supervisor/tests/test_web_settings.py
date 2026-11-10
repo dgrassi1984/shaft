@@ -1,4 +1,4 @@
-"""The web UI's Settings page (docs/plans/PLAN-webui-chat.md §4, S1): every group renders each knob with its value, source and
+"""The web UI's Settings page: every group renders each knob with its value, source and
 default; a save runs `shaft settings set … --from-web` with what the page showed as the expected value; ports and
 paths have no form; a saved value not live yet says which services to restart and offers the guarded restart."""
 from __future__ import annotations
@@ -86,7 +86,7 @@ class SettingsPageTest(ActionsTest):
                 f["not_live"] = ["api", "scheduler"]
             if f["name"] == "SHAFT_JUDGE_ALERT_USD":
                 f["not_live"] = ["web"]
-        body = self.page(fs, "/fragment/settings", runs=["wren (live since 10:00)"])
+        body = self.page(fs, "/fragment/settings", runs=["wisp (live since 10:00)"])
         self.assertIn("Saved, not live yet: restart api, scheduler, web.", body)
         self.assertIn('data-post="/action/service"', body)
         self.assertIn("Restart api", body)

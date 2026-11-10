@@ -268,7 +268,7 @@ struct DecodingTests {
         let feed = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("failed"))
         let content = try #require(feed.content)
         #expect(feed.partial == false)
-        #expect(content.items.map(\.key) == ["u0", "a1", "s20261103-140230-118204-from-wren.md",
+        #expect(content.items.map(\.key) == ["u0", "a1", "s20261103-140230-118204-from-wisp.md",
                                              "b20261103-140301-552019-from-operator.md", "u2", "a3", "u4", "a5", "u6", "a7"])
         guard case .assistant(let failed) = content.items[5] else { Issue.record("a3 is not an answer"); return }
         #expect(failed.failure?.retry?.retryOf == 3)
@@ -285,7 +285,7 @@ struct DecodingTests {
         #expect(partial.partial)
         #expect(partial.content == nil)
         let merged = full.merging(partial)
-        #expect(merged.version == "2d764345726b89c0")
+        #expect(merged.version == "04cdc1f9bb08b132")
         #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(merged.content == full.content)

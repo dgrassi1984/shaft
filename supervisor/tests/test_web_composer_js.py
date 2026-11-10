@@ -31,7 +31,7 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
     closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focused:0,focus(){this.focused++;},
     setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
-  const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
+  const form={dataset:{post:'/chat/wisp/send',draft:'wisp',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
     closest:()=>null,querySelectorAll:q=>q==='textarea.quoteanswer'?(form.chip?.querySelectorAll(q)||[]):[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
       'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechips':form.chip})[q]||null,
     insertBefore(n){this.chip=n;n.remove=()=>{this.chip=null;};},reset(){box.value='';mid.value='';files.files=[];}};
@@ -56,7 +56,7 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
       const classes=new Set();n.classList.toggle=k=>{if(classes.has(k)){classes.delete(k);return false;}classes.add(k);return true;};
       Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
-    crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
+    crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wisp/chat'},
     window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
@@ -99,17 +99,17 @@ const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'tex
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_21_quotes_save_grow_and_reset_identity(self):
-        """Reverting #21 loses the restored quote or keeps the old retry identity. PLAN-pwa-market (iPhone review I17):
+        """Reverting #21 loses the restored quote or keeps the old retry identity. iPhone review I17:
         the quote is a chip above the field, not "> " lines typed into it; Send puts it first, as the same quote."""
         self.run_composer("""
 for(const kind of ['reply','quote']) {
  storage.clear();const p=page();p.mid.value='old';await p[kind]();
  assert.equal(p.mid.value,'');assert.equal(p.box.value,'');
- assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wren').includes('quote'));
+ assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wisp').includes('quote'));
  const q=page();await q.load();assert.ok(q.form._quotes[0].q.includes('quote'),'kept with the draft');
  await q.type('my answer');const sending=q.send();await Promise.resolve();
  const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
- assert.equal(storage.get('shaft.quote.wren'),undefined);
+ assert.equal(storage.get('shaft.quote.wisp'),undefined);
 }
 """)
 
@@ -129,13 +129,13 @@ await p.quote('second piece');assert.equal(p.form._quotes.length,3,'the same pie
 p.mid.value='old';p.form.chip.children[0].children[1].click();
 assert.deepEqual(plain(p.form._quotes),[{q:'> second piece',a:''},{q:'> whole quote',a:''}],'x takes out its own quote only');
 assert.equal(p.mid.value,'','another message: a new id');
-assert.deepEqual(plain(JSON.parse(storage.get('shaft.quote.wren'))),[{q:'> second piece',a:''},{q:'> whole quote',a:''}]);
+assert.deepEqual(plain(JSON.parse(storage.get('shaft.quote.wisp'))),[{q:'> second piece',a:''},{q:'> whole quote',a:''}]);
 const q=page();await q.load();assert.deepEqual(plain(q.form._quotes),[{q:'> second piece',a:''},{q:'> whole quote',a:''}],'kept with the draft');
 await q.type('my answer');const sending=q.send();await Promise.resolve();
 assert.equal(q.payload().text,'> second piece'+nl+nl+'> whole quote'+nl+nl+'my answer','each its own quote, in order');
 assert.equal(q.form.chip,null,'the chips go at Send');
-q.answer();await sending;assert.equal(storage.get('shaft.quote.wren'),undefined);
-storage.clear();storage.set('shaft.quote.wren','> kept before several quotes');
+q.answer();await sending;assert.equal(storage.get('shaft.quote.wisp'),undefined);
+storage.clear();storage.set('shaft.quote.wisp','> kept before several quotes');
 const r=page();await r.load();assert.deepEqual(plain(r.form._quotes),[{q:'> kept before several quotes',a:''}],'a quote kept by the old page');
 const t=page([],true);await t.quote('on a phone');assert.equal(t.box.focused,0,'no keyboard over the chat on a phone');
 await t.reply();assert.equal(t.answerBox(1).focused,1,'a whole-message Reply brings the keyboard, to its answer field');
@@ -148,13 +148,13 @@ assert.equal(p.box.placeholder,'Anything else…');
 assert.equal(p.answerBox(2).focused,1,'the new answer gets focus');
 assert.equal(p.answerBox(2).scrolled,true);
 assert.equal(p.answerBox(2).attrs['aria-label'],'Your answer to quote 3 of 3');
-p.mid.value='old';storage.set('shaft.pending.wren','old attempt');
+p.mid.value='old';storage.set('shaft.pending.wisp','old attempt');
 p.answerBox(0).scrollHeight=900;await p.typeAnswer(0,'  answer 1  ');
-assert.equal(p.mid.value,'');assert.equal(storage.get('shaft.pending.wren'),undefined);
+assert.equal(p.mid.value,'');assert.equal(storage.get('shaft.pending.wisp'),undefined);
 assert.equal(p.answerBox(0).style.height,'128px');
 await p.typeAnswer(2,'answer 3');await p.type('else');
-assert.equal(JSON.parse(storage.get('shaft.quote.wren'))[0].a,'  answer 1  ');
-assert.equal(storage.get('shaft.draft.wren'),'else','answers do not overwrite the main draft');
+assert.equal(JSON.parse(storage.get('shaft.quote.wisp'))[0].a,'  answer 1  ');
+assert.equal(storage.get('shaft.draft.wisp'),'else','answers do not overwrite the main draft');
 const r=page();await r.load();assert.equal(r.answerBox(0).value,'  answer 1  ');
 assert.equal(r.answerBox(1).value,'');assert.equal(r.answerBox(2).value,'answer 3');
 let sending=r.send();await Promise.resolve();
@@ -170,7 +170,7 @@ for (const [saved,expected] of [
  [JSON.stringify([{q:'> new',a:'answer'}]),[{q:'> new',a:'answer'}]],
  [JSON.stringify(['> old','> older']),[{q:'> old',a:''},{q:'> older',a:''}]],
  ['> bare',[{q:'> bare',a:''}]]]) {
- storage.clear();storage.set('shaft.quote.wren',saved);const p=page();await p.load();
+ storage.clear();storage.set('shaft.quote.wisp',saved);const p=page();await p.load();
  assert.deepEqual(plain(p.form._quotes),expected);
  assert.equal(p.answerBox(0).value,expected[0].a);
 }
@@ -181,7 +181,7 @@ for (const [saved,expected] of [
 for(const modifier of ['altKey','shiftKey']) {
  storage.clear();const p=page();await p.quote('q');await p.typeAnswer(0,'abcd');
  const a=p.answerBox(0);a.setSelectionRange(1,3);await p.key({[modifier]:true},a);
- assert.equal(a.value,'a\nd');assert.equal(JSON.parse(storage.get('shaft.quote.wren'))[0].a,'a\nd');
+ assert.equal(a.value,'a\nd');assert.equal(JSON.parse(storage.get('shaft.quote.wisp'))[0].a,'a\nd');
  assert.equal(p.payload(),undefined);
 }
 for(const modifier of ['metaKey','ctrlKey',null]) {
@@ -210,7 +210,7 @@ p.form.chip.children[0].children[1].click();assert.equal(p.box.placeholder,'Writ
         self.run_composer("""
 const p=page([],false,[],true);await p.type('hello');let sending=p.send();await Promise.resolve();
 assert.equal(p.box.value,'','empty while sending');assert.equal(p.payload().text,'hello');
-p.answer();await sending;assert.equal(p.box.value,'');assert.equal(storage.get('shaft.draft.wren'),undefined);
+p.answer();await sending;assert.equal(p.box.value,'');assert.equal(storage.get('shaft.draft.wisp'),undefined);
 await p.type('again');sending=p.send();await Promise.resolve();assert.equal(p.box.value,'');
 await p.type('more');p.fail();await sending;
 assert.equal(p.box.value,'again'+String.fromCharCode(10,10)+'more','a failure puts it back, before what came after');
@@ -224,7 +224,7 @@ assert.deepEqual(p.files.files,[A,B]);const sending=p.send();await Promise.resol
 assert.deepEqual(p.payload().files,[A,B]);await p.remove(1);await p.pick({...B});
 await p.type('next');p.answer();await sending;
 assert.equal(p.box.value,'next');assert.deepEqual(p.files.files,[B]);
-assert.equal(storage.get('shaft.draft.wren'),'next');
+assert.equal(storage.get('shaft.draft.wisp'),'next');
 """)
 
     def test_issue_21_attachments_warn_and_change_retry_identity(self):
@@ -244,7 +244,7 @@ const p=page();await p.type('hello');let sending=p.send();await Promise.resolve(
 p.fail();await sending;sending=p.send();await Promise.resolve();assert.equal(p.payload().mid,id);p.fail();await sending;
 const q=page();await q.load();assert.equal(q.box.value,'hello');assert.equal(q.mid.value,id);
 const r=page([id]);await r.load();assert.equal(r.box.value,'');assert.equal(r.mid.value,'');
-assert.equal(storage.get('shaft.draft.wren'),undefined);
+assert.equal(storage.get('shaft.draft.wisp'),undefined);
 """)
 
     def test_w11_a_sent_message_leaves_no_retry_behind(self):
@@ -253,8 +253,8 @@ assert.equal(storage.get('shaft.draft.wren'),undefined);
         it itself, whatever the reset does."""
         self.run_composer("""
 const p=page();await p.type('hello');const sending=p.send();await Promise.resolve();
-assert.ok(storage.get('shaft.pending.wren'));p.answer();await sending;
-assert.equal(storage.get('shaft.pending.wren'),undefined);assert.equal(storage.get('shaft.draft.wren'),undefined);
+assert.ok(storage.get('shaft.pending.wisp'));p.answer();await sending;
+assert.equal(storage.get('shaft.pending.wisp'),undefined);assert.equal(storage.get('shaft.draft.wisp'),undefined);
 """)
 
     def test_w11_a_lost_send_the_feed_shows_is_let_go(self):
@@ -264,19 +264,19 @@ assert.equal(storage.get('shaft.pending.wren'),undefined);assert.equal(storage.g
 const p=page([],false,[]);await p.type('hello');let sending=p.send();await Promise.resolve();const id=p.payload().mid;
 p.fail();await sending;assert.equal(p.box.value,'hello');assert.equal(p.mid.value,id);
 const q=page([],false,[id]);await q.load();assert.equal(q.box.value,'');assert.equal(q.mid.value,'');
-assert.equal(storage.get('shaft.pending.wren'),undefined);
+assert.equal(storage.get('shaft.pending.wisp'),undefined);
 storage.clear();const r=page([],false,[]);await r.type('again');sending=r.send();await Promise.resolve();
 const rid=r.payload().mid;r.fail();await sending;
 await r.swapped();assert.equal(r.box.value,'again');assert.equal(r.mid.value,rid);   // not in the feed yet: kept
 r.feed.push(rid);await r.swapped();                                 // the next refresh brings its turn
-assert.equal(r.box.value,'');assert.equal(r.mid.value,'');assert.equal(storage.get('shaft.pending.wren'),undefined);
+assert.equal(r.box.value,'');assert.equal(r.mid.value,'');assert.equal(storage.get('shaft.pending.wisp'),undefined);
 """)
 
     def test_w11_a_reload_says_the_files_of_an_unsent_attempt_are_gone(self):
         """W11: an attempt with files, restored after a reload, would be sent again without them, unsaid."""
         self.run_composer("""
 const p=page();await p.type('see these');await p.pick(A,B);const sending=p.send();await Promise.resolve();p.fail();await sending;
-assert.deepEqual(JSON.parse(storage.get('shaft.pending.wren')).files,['a.txt','b.txt']);
+assert.deepEqual(JSON.parse(storage.get('shaft.pending.wisp')).files,['a.txt','b.txt']);
 const q=page();await q.load();assert.equal(q.box.value,'see these');
 assert.match(q.toast(),/its files could not be kept: attach a[.]txt, b[.]txt again/);
 """)
@@ -285,7 +285,7 @@ assert.match(q.toast(),/its files could not be kept: attach a[.]txt, b[.]txt aga
         """Reverting #21 loses retry identity; reconciliation must also preserve edits made during a send."""
         self.run_composer("""
 const p=page();await p.type('hello');const sending=p.send();await Promise.resolve();const id=p.payload().mid;
-const pending=JSON.parse(storage.get('shaft.pending.wren'));assert.equal(pending.mid,id);assert.equal(pending.text,'hello');
+const pending=JSON.parse(storage.get('shaft.pending.wisp'));assert.equal(pending.mid,id);assert.equal(pending.text,'hello');
 await p.type('new text');p.fail();await sending;
 const q=page([id]);await q.load();assert.equal(q.box.value,'new text');assert.equal(q.mid.value,'');
 """)
@@ -305,7 +305,7 @@ const q=page([id]);await q.load();assert.equal(q.box.value,'new text');assert.eq
         chat = {"id": "web-a", "state": "ended", "created": "2026-10-20T10:00:00", "turns": [
             {"role": "user", "content": "hello", "ts": "2026-10-20T10:00:00", "mid": 'm-"1'}]}
         parser = Composer()
-        parser.feed(str(chat_page("wren", chat, [], [], {}, ["wren"], "csrf")))
+        parser.feed(str(chat_page("wisp", chat, [], [], {}, ["wisp"], "csrf")))
         self.assertEqual(json.loads(parser.attrs["data-sent-mids"]), ['m-"1'])
 
     def test_issue_70_newlines_and_queue_keys(self):
@@ -314,7 +314,7 @@ const q=page([id]);await q.load();assert.equal(q.box.value,'new text');assert.eq
 for(const modifier of ['altKey','shiftKey']) {
  storage.clear();const p=page();await p.type('abcd');p.box.setSelectionRange(1,3);
  await p.key({[modifier]:true});assert.equal(p.box.value,'a\\nd');assert.equal(p.payload(),undefined);
- assert.equal(p.box.selectionStart,2);assert.equal(storage.get('shaft.draft.wren'),'a\\nd');
+ assert.equal(p.box.selectionStart,2);assert.equal(storage.get('shaft.draft.wisp'),'a\\nd');
 }
 for(const modifier of ['metaKey','ctrlKey',null]) {
  const p=page();await p.type('next');await p.key(modifier?{[modifier]:true}:{});
@@ -399,7 +399,7 @@ await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payl
             buttons = Buttons()
             chat = {'id': 'web-a', 'state': state, 'turns': [], 'started': '2026-10-22T09:00:00',
                     'created': '2026-10-22T09:00:00'} if state else None
-            buttons.feed(str(chat_page('wren', chat, [], [], {}, ['wren'], 't')))
+            buttons.feed(str(chat_page('wisp', chat, [], [], {}, ['wisp'], 't')))
             self.assertEqual(buttons.labels, [['', 'Send now', False], ['1', 'Queue after reply', queue_hidden]], state)
 
     def test_queue_after_reply_shows_only_while_a_reply_runs(self):
@@ -414,7 +414,7 @@ const document = { readyState: "loading", addEventListener(k, f) { (handlers[k] 
   querySelector: q => q === 'form[data-files] button[data-queue="1"]' ? queue : null,
   querySelectorAll: () => [], getElementById: () => null };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, navigator: {}, setInterval() {},
-  window: { addEventListener() {} }, location: { href: "https://shaft.test/i/wren/chat" } });
+  window: { addEventListener() {} }, location: { href: "https://shaft.test/i/wisp/chat" } });
 const swap = () => { for (const f of handlers["shaft:swapped"]) f({ target: feed, detail: {} }); };
 live = true; swap(); assert.equal(queue.hidden, false, "a reply started: offer to queue");
 live = false; swap(); assert.equal(queue.hidden, true, "the reply ended: only Send now");

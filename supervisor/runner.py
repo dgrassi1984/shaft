@@ -13,7 +13,7 @@ so it holds the lock (and is checked and committed) one reply at a time — an o
 pause only while a reply is being written and resume after, and every run sees the open
 conversations so no journal write-up closes one still going on.
 
-An API voice conversation keeps its agent the same way (Warm, PLAN-voice §7): one process for the whole
+An API voice conversation keeps its agent the same way (Warm): one process for the whole
 conversation, held and checked one reply at a time, started again when the code it runs is no longer the
 approved code; `shaft update` and `shaft delete` end a quiet one from their own process (end_warm).
 """
@@ -121,7 +121,7 @@ def model_server(name: str) -> str | None:
 
 def sharing_model(name: str, others: list[str]) -> list[str]:
     """Those of `others` whose runs take the model `name` needs: the same model server. A cloud model is never
-    shared — wren on MiMo and kant on Opus were asked to wrap up for every conversation with shaft, on Bonsai
+    shared — wisp on MiMo and kiln on Opus were asked to wrap up for every conversation with shaft, on Bonsai
     (2026-10-13), and an instance on a cloud model waits for nobody."""
     server = model_server(name)
     return [] if server is None else [n for n in others if model_server(n) == server]
@@ -228,7 +228,7 @@ def is_busy(name: str) -> bool:
 
 def _core(root: Path) -> str:
     """The core personality's traits (bullet lines) from every `## Core` block — captions and placeholders
-    don't count. All blocks, not the first: a second Core block (wren, 2026-10-13) held a core change the
+    don't count. All blocks, not the first: a second Core block (wisp, 2026-10-13) held a core change the
     pace rule had refused, out of the rule's sight. A personality that is a link reads as none (_personality)."""
     return _core_of(_personality(root))
 
@@ -638,7 +638,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
     is told which of the operator's mail labels, calendars, Drive and Google Chat accounts its broker serves it (SHAFT_MAIL,
-    shaft mail; SHAFT_CALENDAR, shaft calendar; SHAFT_GDRIVE, shaft gdrive; SHAFT_GCHAT, shaft gchat), whether its model sees images (SHAFT_VISION, docs/plans/PLAN-vision.md),
+    shaft mail; SHAFT_CALENDAR, shaft calendar; SHAFT_GDRIVE, shaft gdrive; SHAFT_GCHAT, shaft gchat), whether its model sees images (SHAFT_VISION),
     and the instance's Python environment when `root` is a copy (trial replay). SHAFT_CODE_ROOT in `extra`
     redirects live launches to their protected code; replay callers already own a copy and leave it unset."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
@@ -670,7 +670,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     return cmd, env
 
 
-# What the instance reads to tell the operator how to set SHAFT up: how to use it, not how it was built (docs/plans/).
+# What the instance reads to tell the operator how to set SHAFT up: how to use it, not how it was built.
 DOCS_SOURCES = ("README.md", "docs/*.md")
 
 
@@ -1042,7 +1042,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                                     safe_read_bytes(root, "config.env", b""), instance=root) as tree:
                     ok, test_log = gate.run_tests(tree, HOME, env_root=root, data_root=root)
             except Exception as e:   # a failed copy is a failed gate, never an unchecked change kept
-                # The copy is the supervisor's machinery (a protected-copy regression reverted thelos's changes):
+                # The copy is the supervisor's machinery (a protected-copy regression reverted tundra's changes):
                 # the baseline's, unless the change itself made it impossible (too big, an entry never copied).
                 ok, test_log = False, gate.Output(
                     f"== protected copy ==\n{type(e).__name__}: {e}",
@@ -1329,7 +1329,7 @@ REVERTED = "notes/reverted"   # in the instance's own folder: a reverted change'
 
 def _keep_for_instance(root: Path, code: dict, paths: list[str]) -> tuple[str, str]:
     """Copy what the gate is about to put back into the instance's own notes/reverted/<stamp>/, so the instance can
-    read what it lost: a revert before any commit leaves no history (thelos, 2026-10-27: a failing test file it was
+    read what it lost: a revert before any commit leaves no history (tundra, 2026-10-27: a failing test file it was
     building from was gone). notes/ is mind, not code: the copy is committed to its mind store and never gated or
     run. Every write goes through the no-link descriptors (safe_write*). Best effort, unlike _keep_rejected: a copy
     that cannot be made (a link the instance put in the way, a full disk) never stops the revert. Returns (the
@@ -1441,7 +1441,7 @@ def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
 
 
 def _commit_outside_drive(name: str, root: Path) -> None:
-    """drive.md (what the instance is for, docs/plans/PLAN-thelos.md) as the operator left it, committed on its own: only they
+    """drive.md (what the instance is for) as the operator left it, committed on its own: only they
     write it (the sandbox denies the instance), so any difference from HEAD is theirs. Uncommitted, it would stop
     `shaft update` (dirty worktree) and ride along in the instance's next commit as if it were its change. The
     instance is told in its journal: what it believes about its purpose may now be out of date."""
@@ -1591,15 +1591,15 @@ def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_
     return code
 
 
-# -- a warm conversation: one agent process kept between the replies of an API conversation (PLAN-voice §7) ----------
+# -- a warm conversation: one agent process kept between the replies of an API conversation ----------
 WARM_DONE = "request_done"   # the agent's end of one reply in `answer --loop` (template talk.answer_loop)
 WARM_STOP_GRACE_S = 15       # a stopped reply must say it is done within this, or its process is ended
 WARM_END_S = 5               # how long a quiet process has to leave on its own (EOF on stdin) before its group is ended
 
 
 class Warm:
-    """An API conversation whose agent process stays up between replies, as a terminal talk's does: a voice session
-    (PLAN-voice §7). The process, its broker — and the broker's model channel, so a Codex session is kept — and the
+    """An API conversation whose agent process stays up between replies, as a terminal talk's does: a voice session.
+   The process, its broker — and the broker's model channel, so a Codex session is kept — and the
     agent's own caches (its memory index) live from one reply to the next, instead of a fresh sandboxed run for each.
 
     It holds the instance only while it replies: each reply is one Turn (the Reply presence, the run lock, _reconcile;

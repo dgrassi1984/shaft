@@ -1,4 +1,4 @@
-# The native chat apps (docs/plans/PLAN-native-apps.md §2.3). XcodeGen makes SHAFT.xcodeproj from this file
+# The native chat apps. XcodeGen makes SHAFT.xcodeproj from this file
 # (`xcodegen generate`); the project, its Info.plists and entitlements (Generated/) are git-ignored and never edited
 # by hand. apps/shaft/README.md says how to build, sign and install.
 name: SHAFT

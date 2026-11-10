@@ -1,4 +1,4 @@
-"""PLAN-voice M1, lane L2, the instance's side: a spoken turn (`request["voice"] is True`) gets the voice note and the
+"""Lane L2, the instance's side: a spoken turn (`request["voice"] is True`) gets the voice note and the
 voice reasoning effort, both its episodes say `voice`, and a typed turn is unchanged."""
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ class VoiceConfigTest(unittest.TestCase):
             return config.load(root, environ={"LLM_BASE_URL": "x", "LLM_MODEL": "m", **env})
 
     def test_voice_knobs_default_off_and_empty_and_refuse_other_values(self):
-        """Bug guarded: voice mode on for every instance by default (Thelos only was decided), or a voice effort the
+        """Bug guarded: voice mode on for every instance by default (Tundra only was decided), or a voice effort the
         model server refuses (Bonsai's template raises on an unknown effort, failing every spoken reply)."""
         cfg = self.load()
         self.assertEqual((cfg.VOICE_MODE, cfg.VOICE_REASONING_EFFORT), ("off", ""))

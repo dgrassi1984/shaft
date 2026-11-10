@@ -1,4 +1,4 @@
-"""PLAN-consciousness in the template, wired together: the workspace (B2), the attention schema (B3), outcome cards
+"""The self-knowledge mechanisms in the template, wired together: the workspace (B2), the attention schema (B3), outcome cards
 held in a live cycle (B1), commitments in cycles, conversations and sleep (C2), the forecast at declare (D1), and every
 knob off. Black-box through FakeLLM where the loop is involved; the modules' own tests are test_cards, test_commitments,
 test_forecast and test_provenance."""
@@ -19,7 +19,7 @@ from shaft import config, live, sleep
 try:
     from shaft import cards, commitments, workspace
 except ImportError:
-    raise unittest.SkipTest("template/ predates PLAN-consciousness: merge claude/consciousness-template into template")
+    raise unittest.SkipTest("template/ predates the self-knowledge mechanisms: merge claude/consciousness-template into template")
 
 from shaft.llm import Client
 from shaft.state import State
@@ -41,7 +41,7 @@ class Fixture:
             (self.root / folder).mkdir()
         self.state = State(self.root)
         self.cfg = config.load(self.root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake",
-                                                 "NAME": "wren", "MAX_STEPS_LIVE": "8", "CURIOSITY_EVERY_CYCLES": "0"})
+                                                 "NAME": "wisp", "MAX_STEPS_LIVE": "8", "CURIOSITY_EVERY_CYCLES": "0"})
         self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root), "SHAFT_NOW": NOW}, clear=True))
         self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
 
@@ -122,10 +122,10 @@ class WorkspaceUnitTest(Fixture, unittest.TestCase):
         self.assertTrue(ws.winners)
 
     def test_refocus_competes_for_the_declared_goal_and_attention_in_competition_only(self):
-        inbox = [("20261026-010000-000000-from-wren.md", "From: wren\n\nthe greenhouse sensor log is ready"),
-                 ("20261026-010000-000001-from-thelos.md", "From: thelos\n\nthe kiln temperature chart is ready")]
+        inbox = [("20261026-010000-000000-from-wisp.md", "From: wisp\n\nthe greenhouse sensor log is ready"),
+                 ("20261026-010000-000001-from-tundra.md", "From: tundra\n\nthe kiln temperature chart is ready")]
         ws = self.build(inbox=inbox, k=1)
-        ws.refocus("tidy my notes", [{"source": "kiln temperature chart", "why": "thelos's message"}])
+        ws.refocus("tidy my notes", [{"source": "kiln temperature chart", "why": "tundra's message"}])
         self.assertEqual(ws.winners[0].ref, inbox[1][0])            # attention broke the tie between two messages
         self.assertEqual(ws.record()["refocused"], [ws.winners[0].key()])
         rel = self.build("relevance", inbox=inbox, k=1)
@@ -229,7 +229,7 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         (self.root / "notes" / "orchard.md").write_text("# Orchard\n\nThe orchard rows, counted by survey.\n")
         for mode in workspace.MODES:
             with self.subTest(mode):
-                message.write_text("From: operator\nTo: wren\nKind: note\nDate: 2026-10-26 09:50\n\n"
+                message.write_text("From: operator\nTo: wisp\nKind: note\nDate: 2026-10-26 09:50\n\n"
                                    "please survey the orchard rows")
                 self.cfg.values["WORKSPACE"] = mode
                 out = live.fronts(self.cfg, self.state)

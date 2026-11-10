@@ -15,7 +15,7 @@ from . import metrics
 
 MIN_V3, MIN_FAILURES, MARGIN = 40, 12, -0.05
 BINS = 10
-MIN_CLASS = 5   # met and missed cycles each, before stats.md shows a number: one miss in 13 gave wren "AUROC 0.12"
+MIN_CLASS = 5   # met and missed cycles each, before stats.md shows a number: one miss in 13 gave wisp "AUROC 0.12"
 MIN_DAYS = 5    # days a day-clustered interval resamples: three gave shaft "AUROC 0.60 [0.17, 0.64]" (2026-10-27)
 
 

@@ -1,5 +1,5 @@
-"""E4 (docs/plans/PLAN-measurement.md §3): LIVE step 2 asks for the most valuable goal that can be finished, not
-the smallest. Held until the PLAN-surprise M5 window closes; until template/ has it, this test skips and says so."""
+"""E4: LIVE step 2 asks for the most valuable goal that can be finished, not
+the smallest. Until template/ has it, this test skips and says so."""
 from __future__ import annotations
 
 import sys

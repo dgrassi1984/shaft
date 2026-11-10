@@ -54,7 +54,7 @@ class EffectTest(unittest.TestCase):
         self.assertEqual([e["turn"] for e in guard.events], [3])
 
     def test_successful_writes_with_a_constant_answer_are_new_work(self):
-        """#103, from thelos's real record: its sleep of 2026-10-27 13:40 stored five facts, each answered
+        """#103, from tundra's real record: its sleep of 2026-10-27 13:40 stored five facts, each answered
         "remembered"; comparing results alone flagged that as a loop. A successful write is new work."""
         guard = loopguard.Guard()
         for turn in range(1, 6):
@@ -62,7 +62,7 @@ class EffectTest(unittest.TestCase):
         self.assertEqual(guard.events, [])
 
     def test_shell_runs_are_grouped_by_program_and_subcommand(self):
-        """#103, from thelos's real record: every `run` was one family, so three unrelated failing commands looked
+        """#103, from tundra's real record: every `run` was one family, so three unrelated failing commands looked
         like one loop. Different programs are different families; the same command failing three times is not."""
         guard = loopguard.Guard()
         for turn, command in enumerate(("python3 near_read.py extract", "git commit -m x", "pytest -q"), 1):

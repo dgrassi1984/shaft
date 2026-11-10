@@ -2,7 +2,7 @@ wait 3
 activate
 float
 wait 1
-open thelos
+open tundra
 wait 3
 state
 doc ledger.md

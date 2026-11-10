@@ -323,7 +323,7 @@ class RunTest(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def test_a_malformed_prediction_is_left_out_with_its_reply_and_the_run_goes_on(self):
-        """Regression (2026-10-29): one prediction with a wrong field ended thelos's paid privileged run with only
+        """Regression (2026-10-29): one prediction with a wrong field ended tundra's paid privileged run with only
         "refused: invalid prediction JSON" — no state saved, no trace of what the model returned."""
         self.two_states()
         calls = []
@@ -346,7 +346,7 @@ class RunTest(unittest.TestCase):
         self.assertIn('"met": 80', report)
 
     def test_a_cut_off_exam_is_left_out_and_recognition_goes_on(self):
-        """Regression (2026-10-29): an exam reply cut off at max_tokens twice ended thelos's recognition run."""
+        """Regression (2026-10-29): an exam reply cut off at max_tokens twice ended tundra's recognition run."""
         self.two_states()
 
         def answer(project, name, state, code, model, prompt, empty=False):

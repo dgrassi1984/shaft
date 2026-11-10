@@ -87,7 +87,7 @@ menu.open = true;
 document.activeElement = summary;
 const classes = new Set();
 const el = {
-  dataset: { poll: "/fragment/chat/wren/header" }, isConnected: true,
+  dataset: { poll: "/fragment/chat/wisp/header" }, isConnected: true,
   classList: { add: x => classes.add(x), remove: x => classes.delete(x) },
   parentNode: { insertBefore: n => { el.previousElementSibling = n; } },
   get innerHTML() { return html; },
@@ -191,7 +191,7 @@ const shows = [];
 const window = { addEventListener: (t, f) => { if (t === "pageshow") shows.push(f); }, innerHeight: 0, scrollY: 0 };
 const navigator = { onLine: true };
 const document = { visibilityState: "visible", body: { scrollHeight: 0 }, addEventListener: () => {} };
-const el = { dataset: { poll: "/fragment/chat/wren", every: "1500" }, isConnected: true, children: [],
+const el = { dataset: { poll: "/fragment/chat/wisp", every: "1500" }, isConnected: true, children: [],
   getClientRects: () => [1], querySelectorAll: () => [], closest: () => null, dispatchEvent: () => {} };
 let fetched = 0;
 globalThis.fetch = async () => { fetched += 1; return { status: 304, ok: false, headers: { get: () => "" } }; };

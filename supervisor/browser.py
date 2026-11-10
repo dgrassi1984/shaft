@@ -1,4 +1,4 @@
-"""A real browser for instances (docs/plans/PLAN-browser.md): one Chromium shared by every instance, a private profile each.
+"""A real browser for instances: one Chromium shared by every instance, a private profile each.
 
 "provide it a profile on a shared chromium, and leave all the rest to it." The supervisor only
 - installs Playwright's Chromium builds once, in <project>/.browsers/ (`shaft browser install`, as the operator,

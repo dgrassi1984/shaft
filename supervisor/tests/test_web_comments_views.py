@@ -1,4 +1,4 @@
-"""Comment threads in the documents panel (docs/plans/PLAN-comments.md §6.1)."""
+"""Comment threads in the documents panel."""
 from __future__ import annotations
 
 import html
@@ -223,7 +223,7 @@ class CommentViewsTest(unittest.TestCase):
         self.assertNotIn(raw, html_out)
 
     def test_chat_feed_chips_for_comments_answered_and_opened(self):
-        """PLAN-comments §6.1: 💬 chips, and a comment-only turn (empty shown text) has no empty bubble."""
+        """💬 chips, and a comment-only turn (empty shown text) has no empty bubble."""
         chat = {"id": "web-1", "state": "idle", "turns": [
             {"role": "user", "ts": TS, "content": "look", "shown": "look", "edits": ["plan.md"],
              "comments": [{"id": "c7", "doc": "plan.md"}, {"id": "c8", "doc": 'a"b.md'}]},

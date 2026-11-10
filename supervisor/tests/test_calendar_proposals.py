@@ -1,4 +1,4 @@
-"""PLAN-calendar-write M2: frozen requests through the fake Google, real inbox files and protected web actions.
+"""Frozen requests through the fake Google, real inbox files and protected web actions.
 All projects, grants and notifications belong to fakes; no operator service is contacted.
 """
 import json
@@ -35,7 +35,7 @@ class ProposalTest(write.WriteCase):
         row = self.propose()
         self.assertEqual(self.cal.writes, [])
         self.assertEqual(row['state'], 'pending')
-        self.assertEqual(row['instance'], 'wren')
+        self.assertEqual(row['instance'], 'wisp')
         self.assertEqual(row['target'], self.move_args('external1')['id'])
         self.assertEqual(row['attendees'], ['bob@example.com', 'm@evil.example'])
         self.assertIn('Partnership', row['summary'])  # original time and changed title are both reviewable
@@ -157,7 +157,7 @@ class ProposalTest(write.WriteCase):
         for grants in [[{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator'}], []]:
             self.grant_write()
             row = self.propose()
-            core.set_calendar_grants('wren', grants)
+            core.set_calendar_grants('wisp', grants)
             before = list(self.cal.requests)
             self.assertEqual(self.decide(row)['state'], 'failed')
             self.assertEqual(self.cal.requests, before)
@@ -220,7 +220,7 @@ class ProposalTest(write.WriteCase):
         self.assertEqual(proposals.listing(), [])
 
     def test_telegram_link_and_notification_failures_keep_proposal(self):
-        with mock.patch.object(telegram, 'tokens', return_value={'wren': 'fake-token'}), \
+        with mock.patch.object(telegram, 'tokens', return_value={'wisp': 'fake-token'}), \
              mock.patch.object(telegram, 'paired_id', return_value=123), \
              mock.patch.object(telegram, 'send') as send:
             row = self.propose()
@@ -256,7 +256,7 @@ class ProposalWebTest(webtest.WebTest):
         self.addCleanup(patch.stop)
 
     def test_list_and_actions_use_csrf_and_tailnet(self):
-        row = {'id': 'p1', 'instance': 'wren', 'state': 'pending', 'summary': '<move meeting>',
+        row = {'id': 'p1', 'instance': 'wisp', 'state': 'pending', 'summary': '<move meeting>',
                'attendees': ['guest@example.com'], 'expires_at': 'tomorrow', 'outcome': None}
         cookie = self.paired()
         with mock.patch.object(proposals, 'listing', return_value=[row]):

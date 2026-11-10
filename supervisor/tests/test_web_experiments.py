@@ -16,7 +16,7 @@ class ExperimentsTest(WebTest):
             patch.start()
             self.addCleanup(patch.stop)
         for patch in (mock.patch.object(trial, "LEDGER", self.sup / "trial_usage.jsonl"),
-                      mock.patch.object(web, "_names", return_value=["empty", "wren"])):
+                      mock.patch.object(web, "_names", return_value=["empty", "wisp"])):
             patch.start()
             self.addCleanup(patch.stop)
         web_experiments._cache.clear()
@@ -27,7 +27,7 @@ class ExperimentsTest(WebTest):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
-    def page(self, path="/experiments?i=wren"):
+    def page(self, path="/experiments?i=wisp"):
         response = self.req(path, cookie=self.cookie)
         self.assertEqual(response.status, 200, response.body)
         return response.body.decode()
@@ -39,8 +39,8 @@ class ExperimentsTest(WebTest):
             self.assertIn(f"<h2>{title}</h2>", body)
         self.assertEqual(body.count("Status: not run"), 11)
         self.assertIn('href="/experiments"', body)
-        self.assertIn('data-poll="/fragment/experiments?i=wren"', body)
-        self.assertIn("shaft experiment workspace wren --report", body)
+        self.assertIn('data-poll="/fragment/experiments?i=wisp"', body)
+        self.assertIn("shaft experiment workspace wisp --report", body)
         self.assertNotIn("Queue", body)
 
     def test_raising_report_is_escaped_and_other_cards_render(self):
@@ -64,31 +64,31 @@ class ExperimentsTest(WebTest):
             self.assertIn(b"shaft web pair", response.body)
 
     def test_latest_knob_trials_progress_cost_links_and_default_instance(self):
-        self.write("experiments/wren.jsonl", [
+        self.write("experiments/wisp.jsonl", [
             {"item": "commitments", "value": "off", "knob": "COMMITMENTS", "trial": tid,
              "targets": {}, "queued": "2026-10-28T10:00:00"} for tid in ("t-old", "t-new")])
         for tid, status in (("t-old", "done"), ("t-new", "queued")):
-            path = self.sup / "trials" / "wren" / tid / "trial.json"
+            path = self.sup / "trials" / "wisp" / tid / "trial.json"
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({"id": tid, "status": status, "created": "2026-10-28T10:00:00",
                                         "states": [{"ts": "a", "status": "done"}, {"ts": "b", "status": "pending"}]}))
         self.write("trial_usage.jsonl", [
-            {"instance": "wren", "by": "operator", "trial": "t-new", "usd": .25},
-            {"instance": "wren", "by": "instance", "trial": "t-new", "usd": 50},
+            {"instance": "wisp", "by": "operator", "trial": "t-new", "usd": .25},
+            {"instance": "wisp", "by": "instance", "trial": "t-new", "usd": 50},
             {"instance": "empty", "by": "operator", "trial": "t-new", "usd": 50}])
         body = self.page("/experiments")
         self.assertIn("off: running: 1 of 2 past cycles", body)
-        self.assertIn('href="/trials/wren/t-new"', body)
-        self.assertNotIn('href="/trials/wren/t-old"', body)
+        self.assertIn('href="/trials/wisp/t-new"', body)
+        self.assertNotIn('href="/trials/wisp/t-old"', body)
         self.assertIn("$0.2500 (operator ledger, all runs)", body)
         self.assertIn("Last run: 2026-10-28T10:00:00", body)
-        self.assertIn('data-poll="/fragment/experiments?i=wren"', body)
+        self.assertIn('data-poll="/fragment/experiments?i=wisp"', body)
         self.assertIn("Status: not run", self.page("/fragment/experiments?i=empty"))
 
     def test_saved_failure_and_spend_without_result(self):
-        self.write("experiments/wren.jsonl", [{"item": "choice-blindness", "run": "2026-10-28T10:00:00",
+        self.write("experiments/wisp.jsonl", [{"item": "choice-blindness", "run": "2026-10-28T10:00:00",
                                                "status": "error", "error": "HTTP 502"}])
-        self.write("trial_usage.jsonl", [{"instance": "wren", "by": "operator", "trial": "privileged",
+        self.write("trial_usage.jsonl", [{"instance": "wisp", "by": "operator", "trial": "privileged",
                                          "usd": .5, "ts": "2026-10-28T11:00:00"}])
         body = self.page()
         self.assertIn("failed: HTTP 502", body)
@@ -113,12 +113,12 @@ class ExperimentsTest(WebTest):
                 self.assertLess(elapsed, 4.5)
                 self.assertIn("Status: loading", body)
                 self.assertNotIn("Status: no result", body)
-                self.assertIn('data-poll="/fragment/experiments?i=wren"', body)
+                self.assertIn('data-poll="/fragment/experiments?i=wisp"', body)
                 self.assertIn("no attention experiment queued", body)
             finally:
                 release.set()
                 self.assertTrue(finished.wait(2))
-            body = self.page("/fragment/experiments?i=wren")
+            body = self.page("/fragment/experiments?i=wisp")
             self.assertIn("slow result", body)
             self.assertNotIn("Status: loading", body)
             self.assertEqual(report.call_count, 1)
@@ -141,7 +141,7 @@ class ExperimentsTest(WebTest):
             self.page()
 
     def test_battery_uses_latest_saved_perturbation_item(self):
-        self.write("battery/results/wren.jsonl", [
+        self.write("battery/results/wisp.jsonl", [
             {"category": "perturbation", "at": "2026-10-27T10:00:00", "status": "error", "error": "old"},
             {"category": "perturbation", "at": "2026-10-28T10:00:00", "status": "scored",
              "probe_protocol": "temperature-v1", "base_temperature": .7,
@@ -155,7 +155,7 @@ class ExperimentsTest(WebTest):
         self.assertNotIn("failed: old", body)
 
     def test_workspace_incomplete_states_are_not_reported_as_done(self):
-        self.write("experiments/wren-workspace.jsonl", [
+        self.write("experiments/wisp-workspace.jsonl", [
             {"fingerprint": "fp", "ts": "past", "arm": "off", "completed": True,
              "at": "2026-10-28T10:00:00", "usd": .2, "acted": False, "captured": 0}])
         body = self.page()
@@ -163,7 +163,7 @@ class ExperimentsTest(WebTest):
         self.assertIn("$0.2000 (saved rows, all runs)", body)
 
     def test_workspace_complete_saved_triple_has_a_result(self):
-        self.write("experiments/wren-workspace.jsonl", [
+        self.write("experiments/wisp-workspace.jsonl", [
             {"fingerprint": "fp", "ts": "past", "arm": arm, "completed": True, "in_front": "inbox",
              "at": "2026-10-28T10:00:00", "usd": .2, "acted": True, "captured": 0}
             for arm in ("control", "off", "relevance", "competitive")])
@@ -174,7 +174,7 @@ class ExperimentsTest(WebTest):
     def test_workspace_failed_positive_control_is_an_instrument_failure_not_a_result(self):
         """Regression: workspace kill test could not separate arms: probe acted on 0/19 even in off — the card said
         "done" with a kill verdict while nothing showed the instrument could see an act at all."""
-        self.write("experiments/wren-workspace.jsonl", [
+        self.write("experiments/wisp-workspace.jsonl", [
             {"fingerprint": "fp", "ts": "past", "arm": arm, "completed": True, "in_front": "inbox" if arm == "control"
              else "", "at": "2026-10-28T10:00:00", "usd": .2, "acted": False, "captured": 0}
             for arm in ("control", "off", "relevance", "competitive")])
@@ -184,10 +184,10 @@ class ExperimentsTest(WebTest):
         self.assertNotIn("delete it", body)
 
     def test_prediction_only_is_no_result_and_resource_spend_can_precede_a_result(self):
-        self.write("experiments/wren-privileged.jsonl", [
+        self.write("experiments/wisp-privileged.jsonl", [
             {"run": "20261028100000000000", "ts": "past", "kind": "predictions"}])
         self.write("trial_usage.jsonl", [
-            {"instance": "wren", "by": "operator", "trial": "resource-shock-20261028", "usd": .3,
+            {"instance": "wisp", "by": "operator", "trial": "resource-shock-20261028", "usd": .3,
              "ts": "2026-10-28T10:00:00"}])
         body = self.page()
         self.assertIn("no result (incomplete saved states; liveness not recorded)", body)
@@ -196,21 +196,21 @@ class ExperimentsTest(WebTest):
 
     def test_cache_is_per_instance_and_expires(self):
         with mock.patch.object(experiments, "workspace_report", side_effect=lambda name: f"report for {name}") as report:
-            self.assertIn("report for wren", self.page())
+            self.assertIn("report for wisp", self.page())
             self.assertIn("report for empty", self.page("/experiments?i=empty"))
             self.page()
             self.assertEqual(report.call_count, 2)
-            web_experiments._cache[(str(self.sup), "wren", "workspace")]["at"] -= 6
+            web_experiments._cache[(str(self.sup), "wisp", "workspace")]["at"] -= 6
             self.page()
             self.assertEqual(report.call_count, 3)
 
     def test_card_off_control_links_to_its_latest_trial(self):
-        self.write("experiments/wren.jsonl", [
+        self.write("experiments/wisp.jsonl", [
             {"item": "cards", "value": "off", "knob": "OUTCOME_CARDS", "trial": "t-a",
              "targets": {}, "queued": "2026-10-28T10:00:00"}])
-        path = self.sup / "trials" / "wren" / "t-a" / "trial.json"
+        path = self.sup / "trials" / "wisp" / "t-a" / "trial.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"id": "t-a", "status": "done", "states": []}))
         body = self.page()
         self.assertIn("off: done", body)
-        self.assertIn('href="/trials/wren/t-a"', body)
+        self.assertIn('href="/trials/wisp/t-a"', body)

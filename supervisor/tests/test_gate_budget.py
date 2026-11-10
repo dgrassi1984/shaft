@@ -1,4 +1,4 @@
-"""shaft gate budget: the check before a merge (docs/plans/PLAN-gate-5min.md)."""
+"""shaft gate budget: the check before a merge."""
 import unittest
 from pathlib import Path
 from unittest import mock

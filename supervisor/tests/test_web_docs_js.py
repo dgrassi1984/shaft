@@ -20,17 +20,17 @@ class DocumentControlsJsTest(unittest.TestCase):
         chat = {"id": "web-a", "state": "ended", "ended": "2026-09-25T12:00:00",
                 "turns": [{"role": "assistant", "content": "Done", "ts": "2026-09-25T12:00:00",
                            "docs": [{"path": "a b.md"}]}]}
-        markup = str(chat_feed("wren", chat, [], archived=True))
+        markup = str(chat_feed("wisp", chat, [], archived=True))
         script = r"""
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const handlers = {}, markup = JSON.parse(process.argv[2]);
 const card = markup.match(/<a class="doccard"[^>]*>/)[0];
 let prevented = false, replaced = false;
-const panel = { dataset: { poll: "/fragment/docs/wren?id=web-a" } };
+const panel = { dataset: { poll: "/fragment/docs/wisp?id=web-a" } };
 const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
   querySelector: () => null, querySelectorAll: () => [], getElementById: id => id === "docs" ? panel : null };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, setInterval() {},
-  location: { href: "https://shaft.test/i/wren/chat?id=web-a" }, navigator: {},
+  location: { href: "https://shaft.test/i/wisp/chat?id=web-a" }, navigator: {},
   history: { replaceState() { replaced = true; } }, window: { addEventListener() {} } });
 const target = { closest: q => q === "[data-open-doc]" && card.includes("data-open-doc=")
   ? { dataset: { openDoc: "a b.md" } } : null };
@@ -38,7 +38,7 @@ const target = { closest: q => q === "[data-open-doc]" && card.includes("data-op
   for (const fn of handlers.click) await fn({ target, preventDefault() { prevented = true; } });
   assert.equal(prevented, false);
   assert.equal(replaced, false);
-  assert.ok(card.includes('href="/i/wren/chat?doc=a%20b.md"'));
+  assert.ok(card.includes('href="/i/wisp/chat?doc=a%20b.md"'));
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(JS), json.dumps(markup)], text=True,
@@ -50,7 +50,7 @@ const target = { closest: q => q === "[data-open-doc]" && card.includes("data-op
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const handlers = {}, elements = {}, queries = {}, timers = new Map();
 let nextTimer = 0, copied = "", asked = "", allow = false, ticks = 0, replaced = "";
-const quoteForm = { dataset: { draft: "wren" }, insertBefore(n) { this.chip = n; },
+const quoteForm = { dataset: { draft: "wisp" }, insertBefore(n) { this.chip = n; },
   querySelectorAll: () => [quoteForm.chip.children[0].children[2]],
   querySelector: q => q === ".quotechips" ? quoteForm.chip || null : q === "input[name=mid]" ? { value: "" } : q === "textarea[name=text]" ? box : null };
 const box = { value: "beforeAFTER", selectionStart: 6, selectionEnd: 6, closest: () => quoteForm,
@@ -63,7 +63,7 @@ const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k]
     style: {}, dataset: {}, querySelectorAll: () => [], focus() { this.focused = true; },
     addEventListener() {}, setAttribute() {} }) };
 const context = { document, navigator: { clipboard: { async writeText(t) { copied = t; } } }, URL, Event,
-  location: { href: "https://shaft.test/i/wren/chat?doc=sub%2Fp.md&thread=c1&id=archive" },
+  location: { href: "https://shaft.test/i/wisp/chat?doc=sub%2Fp.md&thread=c1&id=archive" },
   history: { replaceState(a, b, u) { replaced = String(u); } },
   window: { addEventListener() {}, matchMedia: () => ({matches: false}), getSelection: () => ({ removeAllRanges() {} }),
     confirm(t) { asked = t; return allow; } },
@@ -93,7 +93,7 @@ const click = async (selector, button) => {
   const edit = { value: "unsaved" }, raw = { value: "saved" }, md = {}, form = {dataset: {}};
   const view = { querySelector: q => ({ "form.docedit textarea": edit, "textarea.raw": raw,
       ".docmd": md, "form.docedit": form })[q], classList: { toggle(k, on) { assert.equal(on, false); } } };
-  const panel = { dataset: { poll: "/fragment/docs/wren?doc=sub%2Fp.md&thread=c1&id=archive", etag: "old" },
+  const panel = { dataset: { poll: "/fragment/docs/wisp?doc=sub%2Fp.md&thread=c1&id=archive", etag: "old" },
     querySelector: () => view, _tick() { ticks++; } };
   elements.docs = panel;
   queries["#docs .docview.editing"] = view;
@@ -104,8 +104,8 @@ const click = async (selector, button) => {
   allow = true;
   await click("[data-back-docs]", { dataset: {} });
   assert.equal(ticks, 1);
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?id=archive&list=1");   // not bounced back to it
-  assert.equal(replaced, "https://shaft.test/i/wren/chat?id=archive");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?id=archive&list=1");   // not bounced back to it
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat?id=archive");
   assert.equal(panel.dataset.etag, undefined);
   assert.equal(form.hidden, true);
 })().catch(e => { console.error(e); process.exitCode = 1; });
@@ -120,10 +120,10 @@ const click = async (selector, button) => {
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const handlers = {};
 let replaced = "", prevented = 0, ticks = 0;
-const panel = { dataset: { poll: "/fragment/docs/wren?list=1" }, querySelector: () => null, _tick() { ticks++; } };
+const panel = { dataset: { poll: "/fragment/docs/wisp?list=1" }, querySelector: () => null, _tick() { ticks++; } };
 const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
   querySelector: () => null, querySelectorAll: () => [], getElementById: id => id === "docs" ? panel : null };
-const location = { href: "https://shaft.test/i/wren/chat" };
+const location = { href: "https://shaft.test/i/wisp/chat" };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, setInterval() {}, setTimeout() {},
   location, navigator: {}, history: { replaceState(a, b, u) { replaced = location.href = String(u); } },
   window: { addEventListener() {}, confirm: () => true } });
@@ -133,24 +133,24 @@ const click = async (selector, el, extra = {}) => {
 };
 (async () => {
   await click("[data-open-dir]", { dataset: { openDir: "ucg/sub" } });
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg%2Fsub");
-  assert.equal(replaced, "https://shaft.test/i/wren/chat?dir=ucg%2Fsub");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1&dir=ucg%2Fsub");
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat?dir=ucg%2Fsub");
   assert.equal(prevented, 1);
   await click("[data-back-docs]", { dataset: { dir: "ucg" } });               // ← up one level
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg");
-  assert.equal(replaced, "https://shaft.test/i/wren/chat?dir=ucg");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1&dir=ucg");
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat?dir=ucg");
   await click("[data-open-doc]", { dataset: { openDoc: "ucg/a.md" } });
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?doc=ucg%2Fa.md");
-  assert.equal(replaced, "https://shaft.test/i/wren/chat?doc=ucg%2Fa.md");     // no stale ?dir=
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?doc=ucg%2Fa.md");
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat?doc=ucg%2Fa.md");     // no stale ?dir=
   await click("[data-back-docs]", { dataset: { dir: "ucg" } });               // ← from the document: its folder
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1&dir=ucg");
   await click("[data-open-dir]", { dataset: { openDir: "" } });               // Documents: the top, no ?dir=
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1");
-  assert.equal(replaced, "https://shaft.test/i/wren/chat");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1");
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat");
   const before = prevented;
   await click("[data-open-dir]", { dataset: { openDir: "ucg" } }, { metaKey: true });   // ⌘-click: a new tab
   assert.equal(prevented, before);
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
@@ -161,13 +161,13 @@ const click = async (selector, el, extra = {}) => {
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const handlers = {}, win = {}, storage = new Map();
 let view, form, box, raw, sha, note, choice, resolve, submitted, pending;
-let url = 'https://shaft.test/i/wren/chat?doc=p.md', ticks = 0;
+let url = 'https://shaft.test/i/wisp/chat?doc=p.md', ticks = 0;
 const classes = () => { const s = new Set(); return {contains: k => s.has(k),
   toggle(k, on) { on ? s.add(k) : s.delete(k); }, add:k=>s.add(k), remove:k=>s.delete(k)}; };
 const element = () => ({dataset:{}, children:[], setAttribute(){}, focus(){},
   addEventListener(k, fn){this[k]=fn;}, appendChild(n){this.children.push(n);this.lastElementChild=n;},
   remove(){choice=null;}});
-const panel = {id:'docs',dataset:{poll:'/fragment/docs/wren?doc=p.md'},
+const panel = {id:'docs',dataset:{poll:'/fragment/docs/wisp?doc=p.md'},
   querySelector:()=>view, querySelectorAll:q=>q==='.docview'?[view]:[], _tick(){ticks++;}};
 const document = {readyState:'loading', addEventListener(k, fn){(handlers[k] ||= []).push(fn);},
   querySelector(q){if(q === '#docs .docview.editing') return view.classList.contains('editing') ? view : null;return null;},
@@ -182,7 +182,7 @@ const context = {document, URL, URLSearchParams, AbortController, Event, navigat
   DOMParser:class {parseFromString(t){return {body:{textContent:t,childNodes:[t]}};}},
   fetch(u, opts){submitted=String(opts.body);return new Promise(r=>resolve=r);}};
 vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
-function mount(revision='s1', text='saved', instance='wren', doc='p.md') {
+function mount(revision='s1', text='saved', instance='wisp', doc='p.md') {
   choice=null; raw={value:text}; sha={value:revision}; note={textContent:''};
   box={value:text,style:{},scrollHeight:20,focus(){},closest:()=>form};
   const path={value:doc}, button={};
@@ -218,11 +218,11 @@ function unload(){let prevented=false;if(win.beforeunload) win.beforeunload({pre
         self.run_editor(r"""
 const name={blur(){document.activeElement=null;this.blurred=true;}};
 form.closest=()=>null; form.contains=el=>el===name; document.activeElement=name;
-url=context.location.href='https://shaft.test/i/wren/chat?dir=ucg';
+url=context.location.href='https://shaft.test/i/wisp/chat?dir=ucg';
 pending=submit(); await answer();
 assert.equal(name.blurred,true);
-assert.equal(url,'https://shaft.test/i/wren/chat?doc=p.md');
-assert.equal(panel.dataset.poll,'/fragment/docs/wren?doc=p.md');
+assert.equal(url,'https://shaft.test/i/wisp/chat?doc=p.md');
+assert.equal(panel.dataset.poll,'/fragment/docs/wisp?doc=p.md');
 """)
 
     def test_issue_22_typing_during_save(self):
@@ -240,8 +240,8 @@ pending=submit(); await answer(); assert.equal(form.hidden,true); assert.equal(s
         self.run_editor(r"""
 await click('[data-edit-doc]'); await type('mine');
 const open=()=>click('[data-open-doc]',{dataset:{openDoc:'other.md'}});
-await open(); assert.equal(url,'https://shaft.test/i/wren/chat?doc=p.md');
-assert.equal(panel.dataset.poll,'/fragment/docs/wren?doc=p.md');
+await open(); assert.equal(url,'https://shaft.test/i/wisp/chat?doc=p.md');
+assert.equal(panel.dataset.poll,'/fragment/docs/wisp?doc=p.md');
 assert.deepEqual(choice.children.map(b=>b.textContent),['Save','Discard','Stay']);
 choice.children[2].click(); assert.equal(box.value,'mine'); assert.equal(form.hidden,false);
 await open(); choice.children[0].click(); await answer(false);
@@ -261,7 +261,7 @@ await click('[data-toggle-nav], [data-close-docs], nav a',{matches:q=>q==='[data
 mount(); await swap(); assert.equal(box.value,'mine'); assert.equal(form.hidden,false);
 assert.equal(note.textContent,'Unsaved draft restored');
 mount('s1','saved','other'); await swap(); assert.equal(form.hidden,true);
-mount('s1','saved','wren','other.md'); await swap(); assert.equal(form.hidden,true);
+mount('s1','saved','wisp','other.md'); await swap(); assert.equal(form.hidden,true);
 mount('agent','agent text'); await swap(); assert.equal(box.value,'mine'); assert.equal(sha.value,'s1');
 assert.equal(note.textContent,'Unsaved draft restored — started from an older version');
 pending=submit(); assert.match(submitted,/sha=s1/); await answer(false);
@@ -296,7 +296,7 @@ function runLoad(href, closed, narrowSheet) {
   const grid = { classList: classes(), parentElement: main, ...attrs() };
   const chat = { parentElement: grid, ...attrs() };
   const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null };
-  const docs = { id: "docs", dataset: { poll: "/fragment/docs/thelos?doc=plan.md" }, parentElement: grid, ...attrs(),
+  const docs = { id: "docs", dataset: { poll: "/fragment/docs/tundra?doc=plan.md" }, parentElement: grid, ...attrs(),
     getClientRects: () => !grid.classList.contains("hidedocs") && (!narrowSheet || grid.classList.contains("showdocs")) ? [1] : [],
     querySelector: q => q === "[data-close-docs]" ? docclose : null, querySelectorAll: q => q === "[data-fullscreen-doc]" ? [] : [docclose], focus() {} };
   grid.children = [chat, docs]; main.children = [grid]; body.children = [main];
@@ -318,11 +318,11 @@ function runLoad(href, closed, narrowSheet) {
     closedKey: storage.get("shaft.docs.closed") || null, expanded: docbtn.getAttribute("aria-expanded"),
     role: docs.getAttribute("role") };
 }
-const wide = runLoad("https://shaft.test/i/thelos/chat?doc=model-brainstorm.md", true, false);
+const wide = runLoad("https://shaft.test/i/tundra/chat?doc=model-brainstorm.md", true, false);
 assert.deepEqual(wide, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: null });
-const sheet = runLoad("https://shaft.test/i/thelos/chat?doc=model-brainstorm.md", true, true);
+const sheet = runLoad("https://shaft.test/i/tundra/chat?doc=model-brainstorm.md", true, true);
 assert.deepEqual(sheet, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: "dialog" });
-const plain = runLoad("https://shaft.test/i/thelos/chat", true, false);
+const plain = runLoad("https://shaft.test/i/tundra/chat", true, false);
 assert.deepEqual(plain, { showdocs: false, hidedocs: true, closedKey: "1", expanded: "false", role: null });
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
@@ -333,12 +333,12 @@ assert.deepEqual(plain, { showdocs: false, hidedocs: true, closedKey: "1", expan
         from supervisor import web_views
         for archived in (False, True):
             with self.subTest(archived=archived):
-                missing = str(web_views.docs_panel("thelos", [], "gone.md", None, "none", set(), archived=archived))
+                missing = str(web_views.docs_panel("tundra", [], "gone.md", None, "none", set(), archived=archived))
                 self.assertIn('<p class="dim">gone.md is not there (any more).</p>', missing)
         script = r"""
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const handlers = {}, storage = new Map([["shaft.docs.closed", "1"]]), fetched = [];
-let url = "https://shaft.test/i/thelos/chat", editingView = null, inFlightResolve = null, timers = [];
+let url = "https://shaft.test/i/tundra/chat", editingView = null, inFlightResolve = null, timers = [];
 const classes = () => { const s = new Set(["hidedocs"]); return { contains: k => s.has(k), add: k => s.add(k),
   remove: k => s.delete(k), toggle(k, on) { if (on === undefined) on = !s.has(k); on ? s.add(k) : s.delete(k); return on; } }; };
 const attrs = () => { const m = new Map(); return { setAttribute: (k, v) => m.set(k, String(v)),
@@ -348,7 +348,7 @@ const main = { children: [], ...attrs() };
 const grid = { classList: classes(), parentElement: main, ...attrs() };
 const chat = { parentElement: grid, ...attrs() };
 const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null, matches: () => false };
-const panel = { id: "docs", dataset: { poll: "/fragment/docs/thelos?list=1", lazy: "1", etag: '"old"', etagUrl: "/fragment/docs/thelos?list=1" },
+const panel = { id: "docs", dataset: { poll: "/fragment/docs/tundra?list=1", lazy: "1", etag: '"old"', etagUrl: "/fragment/docs/tundra?list=1" },
   isConnected: true, parentElement: grid, innerHTML: "", classList: classes(), ...attrs(),
   contains: n => n === panel || n === docclose,
   getClientRects: () => !grid.classList.contains("hidedocs") && grid.classList.contains("showdocs") ? [1] : [],
@@ -387,8 +387,8 @@ const clickCard = async (openDoc, openThread) => {
   assert.equal(grid.classList.contains("showdocs"), true);
   assert.equal(grid.classList.contains("hidedocs"), false);
   assert.equal(storage.has("shaft.docs.closed"), false);
-  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=model-brainstorm.md");
-  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=model-brainstorm.md");
+  assert.equal(url, "https://shaft.test/i/tundra/chat?doc=model-brainstorm.md");
+  assert.equal(panel.dataset.poll, "/fragment/docs/tundra?doc=model-brainstorm.md");
   assert.equal(panel.dataset.etag, undefined);
   // Finish the old in-flight poll: because the card click set again=true, it schedules an immediate 0 ms retry.
   timers = [];
@@ -417,8 +417,8 @@ const clickCard = async (openDoc, openThread) => {
   grid.classList.remove("showdocs"); grid.classList.add("hidedocs");
   await clickCard("plan.md", "c1");
   assert.equal(grid.classList.contains("showdocs"), true);
-  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=plan.md&thread=c1");
-  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=plan.md&thread=c1");
+  assert.equal(url, "https://shaft.test/i/tundra/chat?doc=plan.md&thread=c1");
+  assert.equal(panel.dataset.poll, "/fragment/docs/tundra?doc=plan.md&thread=c1");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
@@ -440,7 +440,7 @@ function boot(href) {
   const main = { children: [], ...attrs() };
   const grid = { classList: classes(), parentElement: main, ...attrs() };
   const chat = { parentElement: grid, ...attrs() };
-  const panel = { id: "docs", dataset: { poll: "/fragment/docs/wren?doc=" }, isConnected: true, parentElement: grid,
+  const panel = { id: "docs", dataset: { poll: "/fragment/docs/wisp?doc=" }, isConnected: true, parentElement: grid,
     classList: classes(), ...attrs(), contains: n => n === panel,
     getClientRects: () => !grid.classList.contains("hidedocs") ? [1] : [],
     querySelector: () => null, querySelectorAll: () => [], closest: () => null, dispatchEvent() {}, focus() {} };
@@ -469,21 +469,21 @@ function boot(href) {
   return { grid, panel, click, url: () => url };
 }
 (async () => {
-  const t = boot("https://shaft.test/i/wren/chat");
+  const t = boot("https://shaft.test/i/wisp/chat");
   assert.equal(await t.click("[data-open-att]", { openAtt: "m3.md/0" }, { metaKey: true }), false);  // ⌘: the download
   assert.equal(t.grid.classList.contains("showdocs"), false);
   assert.equal(await t.click("[data-open-att]", { openAtt: "m3.md/0" }), true);
   assert.equal(t.grid.classList.contains("showdocs"), true);
-  assert.equal(t.url(), "https://shaft.test/i/wren/chat?att=m3.md%2F0");
-  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?att=m3.md%2F0");
+  assert.equal(t.url(), "https://shaft.test/i/wisp/chat?att=m3.md%2F0");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wisp?att=m3.md%2F0");
   await t.click("[data-back-docs]", {});
-  assert.equal(t.url(), "https://shaft.test/i/wren/chat");
-  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?list=1");
+  assert.equal(t.url(), "https://shaft.test/i/wisp/chat");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wisp?list=1");
   await t.click("[data-open-att]", { openAtt: "m3.md/0" });
   await t.click("[data-open-doc]", { openDoc: "plan.md" });
-  assert.equal(t.url(), "https://shaft.test/i/wren/chat?doc=plan.md");
-  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?doc=plan.md");
-  const loaded = boot("https://shaft.test/i/wren/chat?att=m3.md%2F0");
+  assert.equal(t.url(), "https://shaft.test/i/wisp/chat?doc=plan.md");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wisp?doc=plan.md");
+  const loaded = boot("https://shaft.test/i/wisp/chat?att=m3.md%2F0");
   assert.equal(loaded.grid.classList.contains("showdocs"), true);
   assert.equal(loaded.grid.classList.contains("hidedocs"), false);
 })().catch(e => { console.error(e); process.exitCode = 1; });

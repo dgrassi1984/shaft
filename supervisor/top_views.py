@@ -1,4 +1,4 @@
-"""`shaft top`'s control-panel views (docs/plans/PLAN-control-panel.md): tabs 2–6, 8, 9 and 0, the actions, and the
+"""`shaft top`'s control-panel views: tabs 2–6, 8, 9 and 0, the actions, and the
 overlays every view shares (y/n question, one-line editor, picker, help). Tabs 1 (overview) and 7 (messages)
 are top.py's original views.
 

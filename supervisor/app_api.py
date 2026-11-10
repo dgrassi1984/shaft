@@ -1,4 +1,4 @@
-"""The native chat apps' JSON API, /app/v1 on the web service (docs/app-api.md, docs/plans/PLAN-native-apps.md M1).
+"""The native chat apps' JSON API, /app/v1 on the web service (docs/app-api.md).
 Stdlib only.
 
 It shows a chat exactly as the PWA's chat page shows it: both draw from web_chat.build (the HTML renders it, this
@@ -757,7 +757,7 @@ def _settings(n: str, cfg: dict | None = None) -> dict:
             "cloud_cap": {"value": float(cap) if cap is not None else None, "spent_today": cloudllm.spent_today(n)},
             "channel": {"value": channel.preference(n), "choices": ["auto", "web", "telegram"]},
             "operator_name": {"value": cfg.get("OPERATOR_NAME", "")},
-            # PLAN-voice C2: as config.env has them (the defaults when it does not), so `expect` compares what was shown
+            # As config.env has them (the defaults when it does not), so `expect` compares what was shown
             "voice_mode": {"value": cfg.get("VOICE_MODE", opconfig.VOICE_DEFAULTS["VOICE_MODE"]),
                            "choices": list(opconfig.VOICE_MODES)},
             "voice_effort": {"value": cfg.get("VOICE_REASONING_EFFORT", opconfig.VOICE_DEFAULTS["VOICE_REASONING_EFFORT"]),
@@ -824,7 +824,7 @@ def _set_settings(req: Request, n: str) -> Response:
 
 
 # -- voices (§17) -----------------------------------------------------------------------------------------------------
-# supervisor.voices keeps them (PLAN-voice C5); imported in each route, as every route here imports what it uses.
+# supervisor.voices keeps them; imported in each route, as every route here imports what it uses.
 VOICE_FIELDS = ("identifier", "name", "language", "quality")
 
 

@@ -1,4 +1,4 @@
-"""Kill tests for docs/plans/PLAN-consciousness.md (`shaft experiment …`).
+"""Kill tests for the self-knowledge mechanisms (`shaft experiment …`).
 
 Every agent-side mechanism of the plan ships on, behind a knob in the instance's shaft/config.py. A kill test replays
 past cycles of the instance with its committed code (the knob as shipped) against the same code with the knob flipped
@@ -40,7 +40,7 @@ from urllib.parse import urlsplit
 from . import trial
 from .core import jsonl_lines, PROJECT, SUP_DIR, UnsafePath, log, safe_read, safe_write
 
-ALPHA = 0.1   # the trials' one-sided sign test (PLAN-trials decision D5)
+ALPHA = 0.1   # the trials' one-sided sign test
 KNOBS = {"cards": [("OUTCOME_CARDS", "off")],
          "attention": [("ATTENTION_SCHEMA", "off")],
          "commitments": [("COMMITMENTS", "off")],
@@ -228,7 +228,7 @@ def queue(name: str, item: str, n: int = 6, model: str = "auto", dry_run: bool =
         if dry_run:
             out.append(f"{item}: would queue {knob}={value} on {len(wanted)} target cycle(s) + random ones (n {n})")
             continue
-        t = trial.create(name, change, f"PLAN-consciousness kill test {item}: shipped vs {knob}={value}",
+        t = trial.create(name, change, f"kill test {item}: shipped vs {knob}={value}",
                          by="operator", episodes=wanted, n=n, project=project, model=model)
         _append(name, {"item": item, "knob": knob, "value": value, "trial": t["id"], "targets":
                        {ts: found[ts] for ts in wanted}, "queued": datetime.now().isoformat(timespec="seconds")})
@@ -313,7 +313,7 @@ DONE = ("Done on {date} (about {topic}): the line `probe {nonce}` is already in 
 # survives the cut to a recalled line. Recall (off) shows about the first four; the workspace draws its memory items
 # from the first eight, and its winners hold a memory hit only near the top (in relevance, the first: plan and goal
 # lines outrank the rest); past them only the cycle's own search_memory finds it — so the arms can differ.
-# On Thelos 2026-10-28/29 the probe was a note of its own (or a facts-archive line) about six words of the plan: for a
+# On Tundra 2026-10-28/29 the probe was a note of its own (or a facts-archive line) about six words of the plan: for a
 # query of ~2,400 words (goals.md, the plan, the inbox) it ranked ~8,500th of ~13,800 chunks, never in any arm's
 # front, and was acted on 0/19 in every arm. Digests are never a host: a short digests.md is pasted whole (Codex,
 # 2026-10-26). Items left without a host (fewer hosts than items) go to PLACES, which retrieval rarely reaches.
@@ -326,7 +326,7 @@ PLACES = ("notes", "facts-archive")
 CONTROL = "control"
 CONTROL_MIN = 0.5
 # `shaft front` on a copy: four memory searches over the whole mind, and embedding every chunk the copy's index lacks —
-# all of them (~14,000 on Thelos, >10 min) when the instance has no memory index (core.MEMORY_CACHES); a run embeds
+# all of them (~14,000 on Tundra, >10 min) when the instance has no memory index (core.MEMORY_CACHES); a run embeds
 # once and hands the index on to its next copies (front's `index`).
 FRONT_TIMEOUT_S = 1800
 PROBES = "notes/probes.md"
@@ -437,7 +437,7 @@ def _counts(texts: dict[str, str], nonces: list[str]) -> dict[str, dict[str, int
 def acts(dest: Path, items: list[dict], before: dict[str, dict[str, int]]) -> dict[str, dict]:
     """What a replay did with each planted item, read from its whole copy at the end — never from the judge's diff,
     which is cut at 16,000 characters and lists files alphabetically, so notes/probes.md was the first thing cut
-    (one Thelos replay in six). Per nonce: `acted` — the line in notes/probes.md (the path's letters in any case: the
+    (one Tundra replay in six). Per nonce: `acted` — the line in notes/probes.md (the path's letters in any case: the
     copy is on a case-insensitive disk), however the replay wrote it (write_file, append_file, edit_file, run);
     `wrote` — every file where the nonce now appears more often than when it was planted."""
     texts = _texts(dest)
@@ -799,7 +799,7 @@ def workspace_report(name: str) -> str:
               f"  competitive vs relevance: only competitive acted {comp_only}, only relevance {rel_only}; one-sided "
               f"sign test p={p:.2f}",
               "  kill rule: " + ("competitive selection stays" if keep else
-                                 "competitive selection does not beat plain relevance — delete it (PLAN-consciousness M4)"
+                                 "competitive selection does not beat plain relevance — delete it"
                                  + (" (too few states differ to tell yet)" if comp_only + rel_only < 5 else ""))]
     return "\n".join(lines) + "\n"
 

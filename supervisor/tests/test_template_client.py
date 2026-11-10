@@ -85,7 +85,7 @@ class EmptyAnswerTest(unittest.TestCase):
         self.assertIn("reasoning_chars=1 then 2", str(ctx.exception))
 
     def test_cut_off_still_thinking_the_retry_answers_without_thinking_20261030(self):
-        # Regression (thelos and wren, every sleep from 2026-10-29): mimo thought through 16,384 and then 32,768
+        # Regression (tundra and wisp, every sleep from 2026-10-29): mimo thought through 16,384 and then 32,768
         # tokens with no text; its provider ignores reasoning limits, so more room only bought more thinking.
         for stream in (False, True):
             reply, fake = self.run_with([{"content": "", "reasoning": "x" * 50, "finish_reason": "length"},

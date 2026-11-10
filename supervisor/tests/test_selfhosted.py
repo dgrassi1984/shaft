@@ -169,11 +169,11 @@ class RoutingTest(_Base):
         cfgs = {"shaft": {"LLM_BASE_URL": "broker", "LLM_MODEL": "gpu/bonsai2"},
                 "other": {"LLM_BASE_URL": "http://127.0.0.1:8780/v1"},
                 "twin": {"LLM_BASE_URL": "broker", "LLM_MODEL": "gpu/bonsai2"},
-                "kant": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"}}
+                "kiln": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"}}
         with mock.patch.object(runner, "instance_config", side_effect=lambda n: cfgs[n]):
             self.assertEqual(runner.model_server("shaft"), selfhosted.host_port("gpu/bonsai2"))
-            self.assertIsNone(runner.model_server("kant"))
-            self.assertEqual(runner.sharing_model("shaft", ["other", "twin", "kant"]), ["twin"])
+            self.assertIsNone(runner.model_server("kiln"))
+            self.assertEqual(runner.sharing_model("shaft", ["other", "twin", "kiln"]), ["twin"])
 
 
 if __name__ == "__main__":

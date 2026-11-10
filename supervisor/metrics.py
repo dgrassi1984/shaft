@@ -336,9 +336,9 @@ def cycle_value(j: dict) -> float | None:
 def by_current_judge(j: dict) -> bool:
     """Was this verdict given by a judge still in the rotation (or by the no-intent rule)? Whether a criterion was
     met and a claim was supported are counted only from these. The judges grade both far apart: on the same cycles
-    Haiku 5.5 (retired 2026-10-16) called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%.
-    A count pooled across a change of judges moved with the judges, not with the cycles, and wren read the pooled
-    count as "the central fact about my accuracy" (docs/plans/PLAN-judge-mix.md). Value grades agree across judges: not filtered.
+    Haiku 5.5 (retired 2026-10-16) called 54% of wisp's claims unsupported, the blind second judge 4%, Sonnet 21%.
+    A count pooled across a change of judges moved with the judges, not with the cycles, and wisp read the pooled
+    count as "the central fact about my accuracy". Value grades agree across judges: not filtered.
     Today's judges differ too, so stats.md also gives success and claims per judge (by_judge_trend)."""
     by = j.get("judge")
     return by == "rule" or any(judge.same_model(by, m) for m in judge.JUDGE_MODELS)
@@ -363,8 +363,8 @@ TREND_MIN = 10    # fewer verdicts than this in a window: "too few", no figure
 
 def by_judge_trend(rows: list[dict], figure) -> str:
     """One entry per judge, '<judge> <this week> vs <the week before>', never a figure over two judges. Today's judges
-    differ several-fold too: on the same cycles DeepSeek V4.1 Flash called 10% of wren's claims unsupported and GLM
-    5.3 Flash 2%, and on shaft MiMo 33% vs DeepSeek 20% (docs/plans/PLAN-judge-mix.md, 2026-10-29), so a pooled count
+    differ several-fold too: on the same cycles DeepSeek V4.1 Flash called 10% of wisp's claims unsupported and GLM
+    5.3 Flash 2%, and on shaft MiMo 33% vs DeepSeek 20% (2026-10-29), so a pooled count
     moved with whichever judge the dice picked. The windows end at the latest verdict, not at now: stats.md is
     rewritten after each cycle. A judge with no verdict in the latest window has no entry (the no-intent rule, mostly).
     `figure(verdicts, latest)` formats one window of at least TREND_MIN verdicts."""
@@ -703,7 +703,7 @@ def _logged(text: str) -> str:
 def cycle_model(name: str, ep: dict) -> str | None:
     """The model a cycle ran on, from the instance's own LLM call log (logs/llm_usage.jsonl): the most used
     model among its 'live' calls between the declared intent and the episode. Comparisons stay within one
-    model — wren ran on Bonsai, then Haiku, then MiMo within its first day."""
+    model — wisp ran on Bonsai, then Haiku, then MiMo within its first day."""
     end = _ts(ep.get("ts", ""))
     start = _ts(((ep.get("intent") or {}).get("at")) or "") or (end - timedelta(minutes=45) if end else None)
     if not end or not start:
@@ -723,8 +723,7 @@ def cycle_model(name: str, ep: dict) -> str | None:
 
 def own_models(name: str, ep: dict | None = None) -> list[str]:
     """The models an instance thinks with — the one its cycle ran on and the one configured now: the judge rotation
-    never grades it with either (no self-preference). A cycle that consulted other models (docs/plans/
-    PLAN-model-choice.md) adds every judge of a consulted model's vendor: a cycle that asked z-ai/glm-5.3 is not graded
+    never grades it with either (no self-preference). A cycle that consulted other models adds every judge of a consulted model's vendor: a cycle that asked z-ai/glm-5.3 is not graded
     by a z-ai judge."""
     configured = config_values(_instance_text(name, "config.env")).get("LLM_MODEL")
     own = [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
@@ -1098,7 +1097,7 @@ def _drop_cross_judge(name: str, stored: dict[str, dict]) -> int:
     return len(moved)
 
 
-SURPRISE_TOKENS = 400   # PLAN-surprise §1.6: the judge's extra output for the surprise fields
+SURPRISE_TOKENS = 400   # the judge's extra output for the surprise fields
 
 
 def _judgment_cost() -> tuple[float, str]:
@@ -1121,12 +1120,12 @@ def _judgment_cost() -> tuple[float, str]:
         return (sum(costs) / len(costs) + extra,
                 f"mean recorded cost of {len(costs)} cycle judgments + {SURPRISE_TOKENS} output tokens for the new "
                 f"fields at $20/M; newest cycles first")
-    return (0.046 + 0.028 + extra, f"no priced cycle judgment recorded; estimate: PLAN-measurement §4's $0.046 + E0's $0.028 + "
+    return (0.046 + 0.028 + extra, f"no priced cycle judgment recorded; estimate: $0.046 + $0.028 + "
                                    f"{SURPRISE_TOKENS} output tokens at $20/M")
 
 
 def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False) -> dict:
-    """Re-judge the cycles from before the predictions existed (PLAN-surprise M2), into a file of their own, saving each
+    """Re-judge the cycles from before the predictions existed, into a file of their own, saving each
     paid answer before asking for the next. Newest first: with thousands of past cycles (about $0.04 each), `limit`
     is the newest that many cycles — the same-model baseline the M5 window is compared with — not the first day's; a
     re-run judges only what that window still lacks. Each cycle is re-judged by the model that gave its stored verdict
@@ -1359,7 +1358,7 @@ def _merge_ratings(name: str, rated: dict[str, dict]) -> None:
     tmp.replace(path)
 
 
-# The declare step's base rate (PLAN-calibration-feedback) is the treatment of the paired v3 test, and the verdict is
+# The declare step's base rate is the treatment of the paired v3 test, and the verdict is
 # the outcome both numbers are scored against: a judge that read the rate would be pulled toward it. So no judge sees
 # it — not in the intent, not in the declare result, not in the confirm step or the refusals it caused.
 TREATMENT_TOOLS = ("confirm_confidence",)
@@ -1367,7 +1366,7 @@ NEUTRAL_DECLARE = "intent recorded — now act"   # what live's declare_intent a
 CONFIRM_FIRST = "ERROR: call confirm_confidence first"   # live's refusal of every other tool until the confirm
 
 
-# An outcome card (PLAN-consciousness B1) lists comparable earlier cycles with the judge's verdict on each: a prior on
+# An outcome card lists comparable earlier cycles with the judge's verdict on each: a prior on
 # the outcome, like the base rate. The judges read that the call was held, not the cards.
 HELD = "(held, not run yet)"
 HELD_SHOWN = HELD + " — the agent was shown its record of comparable calls (outcome cards; not part of this case)"
@@ -1439,7 +1438,7 @@ def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "", *, f
             + (IMAGES_NOTE if any(t.get("tool") in IMAGE_TOOLS for t in ep.get("tools", [])) else ""))
 
 
-# Cycles that looked at an image (docs/plans/PLAN-vision.md): the judges read text only. Only these cases carry the note, so every
+# Cycles that looked at an image: the judges read text only. Only these cases carry the note, so every
 # other case stays as it was when the judges were calibrated.
 IMAGE_TOOLS = ("view_image", "describe_image")
 IMAGES_NOTE = ("\n\n## Images\nThe agent looked at an image (view_image) or had one described to it "
@@ -1460,7 +1459,7 @@ CITE_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\]")
 
 def check_personality(name: str) -> None:
     """Does each trait's cited journal entry actually support it? (The instance's own check only
-    verifies that the entry exists — wren pointed that out about itself.)"""
+    verifies that the entry exists — wisp pointed that out about itself.)"""
     pers, journal = _instance_text(name, "self/personality.md"), _instance_text(name, "memory/journal.md")
     if not pers or not journal:
         return
@@ -1522,7 +1521,7 @@ WINDOW = 20
 
 def ran_out_by_model(name: str, js: list[dict], last: int = 2 * WINDOW) -> list[str]:
     """How often my latest judged cycles on each model ran out — no finish, or a forced deadline wrap-up (the template's
-    forecast rule, as experiments._ran_out) — so a model switch is judged on its cut-offs too (review I9: wren's
+    forecast rule, as experiments._ran_out) — so a model switch is judged on its cut-offs too (review I9: wisp's
     went from 13% to 54% after a switch at 16 steps, and nothing it read showed it)."""
     model_of = {j.get("episode_ts"): j.get("model") or "unrecorded" for j in js if j.get("episode_ts")}
     runs: dict[str, list[bool]] = {}
@@ -1854,7 +1853,7 @@ def _stats_text(name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-# The sections of docs/plans/PLAN-consciousness.md, each from its own module. Each in its own try: a record one of them
+# The self-knowledge sections, each from its own module. Each in its own try: a record one of them
 # cannot read must never cost the instance its whole stats.md. None of them feeds probation, base rates or a reward.
 def _sections(name: str, which: tuple[str, ...]) -> list[str]:
     import importlib
@@ -1981,7 +1980,7 @@ def write_stats(name: str) -> None:
             safe_write(INSTANCES / name, rel, content)
         except (UnsafePath, OSError) as e:
             log(f"{name}: could not write {rel}: {type(e).__name__}: {e}")
-    try:   # the supervisor's own copy of the surprise ledger (docs/plans/PLAN-surprise.md §2)
+    try:   # the supervisor's own copy of the surprise ledger
         from . import surprise
         surprise.write_ledger(name)
     except Exception as e:   # measurement never breaks a run
@@ -1991,7 +1990,7 @@ def write_stats(name: str) -> None:
 # -- probation of self-modifications --------------------------------------------
 # A self-change is blamed for a drop only on the cycles that used it, and only if the drop is unlikely to be
 # chance. On 2026-10-13 the old rule (any 6 cycles, a drop of more than 0.15) fired three times in 21 minutes —
-# on a weather plugin never called once in its window (shaft, 3 cycles before vs 6 after: p=0.33) and on wren's
+# on a weather plugin never called once in its window (shaft, 3 cycles before vs 6 after: p=0.33) and on wisp's
 # github plugin and truncation change (p=0.27 each, while an operator directive had just changed its goals).
 PROBATION_ALPHA = 0.05       # one-sided permutation test: how often chance alone gives a drop this large
 PROBATION_EXPIRY = 4         # x PROBATION_CYCLES rated cycles without enough use: kept, nothing to judge it by
@@ -2054,7 +2053,7 @@ def chance_of_drop(before: list[float], after: list[float]) -> float:
 def start_probation(name: str, commit: str, files: list[str], trial: dict | None = None) -> None:
     """`trial`: the finished trial whose change this is, byte for byte (supervisor/trial.py match). A change
     adopted against a 'worse' verdict is undone on any drop, without the chance test: the trial is already the
-    evidence against it (docs/plans/PLAN-trials.md, D3). A change no cycle runs (tests only) is not put on probation."""
+    evidence against it. A change no cycle runs (tests only) is not put on probation."""
     if not any(map(_runtime, files)):
         log(f"{name}: change {commit[:8]} not on probation: no cycle runs {', '.join(files)}")
         return

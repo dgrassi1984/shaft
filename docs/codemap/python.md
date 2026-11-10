@@ -11,21 +11,20 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `apps/shaft/DevServer/fixture_server.py` | — | `setup`, `seed`, `act`, `main` |
 | `apps/shaft/DevServer/test_fixture_settings.py` | `FixtureSettingsTest` | — |
 | `apps/shaft/Shared/make_icons.py` | — | `main` |
-| `docs/bakeoffs/parity_score.py` | — | `solve`, `ols`, `edges`, `bt`, `indices`, `parity`, `quant`, `interval`, `order`, `names_order`, `unsupported`, `weighted`, `weighted_report`, `run` |
-| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `main` |
+| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_gchat`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `main` |
 | `supervisor/actions.py` | — | `restart_lock`, `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
-| `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
+| `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `VoiceSessions`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
 | `supervisor/apns.py` | — | `configured`, `devices`, `register`, `unregister`, `status`, `provider_token` |
-| `supervisor/app_api.py` | `Refusal` | `error`, `stamp`, `file_url`, `to_json`, `partial`, `device`, `route`, `quote_text` |
+| `supervisor/app_api.py` | `Refusal` | `error`, `stamp`, `file_url`, `to_json`, `partial`, `device`, `route`, `quote_text`, `held`, `sse` |
 | `supervisor/attention.py` | — | `touches`, `terms`, `matches`, `score`, `section`, `report` |
 | `supervisor/autonomy.py` | `WakeFacts`, `WarmState` | `running`, `launchd_pid`, `service`, `wake_interval`, `wake_floor`, `next_wake`, `next_cycle`, `describe_schedule`, `editing_lock`, `record`, `last_skip`, `sleep_due`, `scheduler_installed`, `next_sleep`, `replay_next_sleep`, `replay_next_wake`, `wake_gate`, `decide_wakes`, `wake_facts`, `event_wake`, `commitment_wakes`, `update_jobs`, `updating`, `update_ended`, `serve`, `stop_children_on_signal`, `default_drain_s`, `request_restart`, `cancel_restart`, `restart_request`, `parent_draining`, `drain_status`, `draining_now`, `drain_step`, `drain_tick`, `relaunch`, `restart`, `drain_line`, `battery_jobs`, `gate_warm`, `warm_ended`, `regate_recorded`, `regate_after_warm`, `drain_stderr`, `stderr_tail`, `wake`, `start_wake`, `tick`, `autonomy` |
-| `supervisor/bakeoff.py` | `BakeoffError` | `parse_arm`, `path`, `create`, `run`, `export_cases`, `verdict`, `import_verdicts`, `report` |
+| `supervisor/bakeoff.py` | `BakeoffError` | `parse_arm`, `path`, `create`, `stratum`, `last_loop_change`, `eligible`, `draw`, `run`, `mapping_path`, `export_cases`, `verdict`, `import_verdicts`, `report`, `operator_path`, `operator_verdicts`, `operator_queue`, `operator_next`, `operator_case`, `operator_record`, `bradley_terry`, `judged_instances`, `ranking`, `operator_summary`, `saved`, `load` |
 | `supervisor/baseline.py` | `BaselineError` | `record_path`, `committed`, `read`, `write`, `unapproved`, `update` |
 | `supervisor/battery.py` | `Interrupted`, `ExamBroker` | `base`, `items_dir`, `off_path`, `is_off`, `results_path`, `load_items`, `checksum`, `backup`, `exam_dir`, `make_exam_copy`, `make_control`, `run_hidden_tests`, `grade`, `headline`, `truth`, `recall_candidates`, `make_recall`, `results`, `era`, `order`, `run`, `schedule_lock`, `window`, `due`, `stats_lines`, `report` |
 | `supervisor/bonsai_lora.py` | — | `load_text_model`, `load`, `logits_of`, `make_cache`, `render`, `make_lora_class`, `attach_lora`, `spike`, `train`, `load_adapter`, `generate`, `answers` |
 | `supervisor/bonsai_server.py` | `ThinkingBudget`, `Activity` | `tool_progress_handler`, `exit_if_generation_dies`, `exit_when_idle`, `bound_cache_graphs`, `request_budget`, `main` |
-| `supervisor/broker.py` | `BlockedAddress`, `Broker`, `ReplayBroker` | `tailnet_grants`, `judgment_text`, `judgments_text`, `notify`, `resolve_public`, `check_public`, `html_to_text` |
+| `supervisor/broker.py` | `ChatMarked`, `BlockedAddress`, `Broker`, `ReplayBroker` | `tailnet_grants`, `judgment_text`, `judgments_text`, `notify`, `resolve_public`, `check_public`, `html_to_text` |
 | `supervisor/browser.py` | — | `version`, `profile`, `env`, `install`, `describe_install`, `describe`, `startup_note`, `sweep` |
 | `supervisor/calendar.py` | `NotVisible`, `SyncExpired` | `cal_hash`, `handle`, `calendars`, `resolve`, `parse_when`, `window`, `start_key`, `all_day`, `span`, `events`, `event`, `series`, `sync_now`, `changes`, `by_operator`, `own_response`, `written_by`, `recurrence_text`, `render_row`, `render_event`, `write_times`, `direct_only` |
 | `supervisor/calendar_proposals.py` | — | `create`, `listing`, `expire`, `decide`, `reject` |
@@ -37,7 +36,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `envelope`, `complete` |
 | `supervisor/consultstats.py` | — | `rows`, `vendor`, `cycle_of`, `submitted`, `models_in`, `section`, `review_line`, `report` |
-| `supervisor/core.py` | `Knob`, `StaleSetting`, `KeyStoreUnreadable`, `UnsafePath`, `TooBig`, `TreeTooBig`, `Budget` | `settings_file`, `resolve`, `knob`, `positive_int`, `whole`, `dollars`, `hours`, `port`, `temperature`, `gigabytes`, `ports`, `model_name`, `model_names`, `cloud_model`, `instance_model`, `claude_model`, `openrouter_model`, `cloud_models`, `json_object`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `long_pauses`, `set_paused`, `update_queued`, `set_update_queued`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `limit_value`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `gdrive_grants`, `set_gdrive_grants`, `gdrive_lock`, `remove_gdrive_copies`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `open_beneath`, `dir_beneath`, `read_beneath`, `safe_read_bytes`, `safe_read`, `list_beneath`, `set_aside`, `unlink_beneath`, `walk_beneath`, `read_tree`, `reserved`, `link_stays_inside`, `copy_beneath`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `err_text`, `changed_vs_head`, `commit_state` |
+| `supervisor/core.py` | `Knob`, `StaleSetting`, `KeyStoreUnreadable`, `UnsafePath`, `TooBig`, `TreeTooBig`, `Budget` | `settings_file`, `resolve`, `knob`, `positive_int`, `whole`, `dollars`, `hours`, `port`, `temperature`, `gigabytes`, `ports`, `model_name`, `model_names`, `cloud_model`, `instance_model`, `claude_model`, `openrouter_model`, `cloud_models`, `json_object`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `long_pauses`, `set_paused`, `update_queued`, `set_update_queued`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `limit_value`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `gdrive_grants`, `set_gdrive_grants`, `gdrive_lock`, `gchat_lock`, `remove_gdrive_copies`, `gchat_grants`, `set_gchat_grants`, `remove_gchat_copies`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `open_beneath`, `dir_beneath`, `read_beneath`, `safe_read_bytes`, `safe_read`, `list_beneath`, `set_aside`, `unlink_beneath`, `walk_beneath`, `read_tree`, `reserved`, `link_stays_inside`, `copy_beneath`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `err_text`, `changed_vs_head`, `commit_state` |
 | `supervisor/corrections.py` | — | `alerts` |
 | `supervisor/cycles.py` | — | `note_lines`, `days`, `cycle`, `plan` |
 | `supervisor/dashboard.py` | — | `clean`, `event_tone`, `activity`, `instance_state`, `services`, `events`, `snapshot` |
@@ -59,7 +58,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `missing_scope_message`, `migrate`, `client_keys`, `refresh`, `operator_addresses`, `login`, `instance_key_login`, `consent` |
 | `supervisor/grokcli.py` | `Channel` | `serves`, `models`, `child_env` |
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `quiet_jobs`, `inbox_can_wake`, `results_since`, `tick`, `describe` |
-| `supervisor/judge.py` | `JudgeError`, `NoJudgeLeft` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `normalize_anticipated`, `ask_second` |
+| `supervisor/jsonl.py` | — | `jsonl_lines` |
+| `supervisor/judge.py` | `JudgeError`, `NoJudgeLeft` | `spoken`, `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `normalize_anticipated`, `ask_second` |
 | `supervisor/judge_probe.py` | — | `records`, `plant`, `run`, `line` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
@@ -70,7 +70,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/metrics.py` | — | `backfill_schema`, `calibration`, `paired_v3`, `base_rates`, `confidence_shown`, `cycle_value`, `by_current_judge`, `judge_label`, `judge_mix`, `by_judge_trend`, `judgments`, `live_episodes`, `cycle_model`, `own_models`, `consulted_vendors`, `unsampled_rows`, `unsampled`, `judge_sampled`, `judgments_for_stats`, `judge_pending`, `second_sampled`, `stash_second`, `second_pending`, `second_opinion`, `second_counted`, `backfill`, `value_regrade`, `surprise_baseline`, `surprise_baseline_report`, `surprise_control`, `surprise_control_report`, `value_judge`, `blind_holds`, `answers_operator`, `check_personality`, `ran_out_by_model`, `valued`, `mean_value`, `value_shares`, `delivery_counts`, `delivery_line`, `self_audit_lines`, `anticipated_line`, `stats_text`, `plan_lines`, `review_text`, `write_stats`, `chance_of_drop`, `start_probation`, `probation_status`, `restore_change`, `check_probation`, `after_cycle` |
 | `supervisor/migrate.py` | `Stop`, `Step`, `Runner` | `command` |
 | `supervisor/mind.py` | `MindError` | `minds_dir`, `store`, `exists`, `git`, `init`, `head`, `require`, `commit`, `at`, `files`, `archive`, `show`, `log`, `backfill`, `check`, `check_every_commit`, `cutover`, `guard_project`, `describe` |
-| `supervisor/opconfig.py` | `Refused` | `model_choices`, `base_url_for`, `effort_choices`, `fields`, `coupled`, `set_values`, `drive`, `set_drive`, `config_command`, `drive_command` |
+| `supervisor/opconfig.py` | `Refused` | `model_choices`, `base_url_for`, `effort_choices`, `fields`, `voice_mode`, `coupled`, `set_values`, `drive`, `set_drive`, `config_command`, `drive_command` |
 | `supervisor/orders.py` | — | `path`, `checks_path`, `listing`, `clean`, `in_force`, `add`, `added`, `drop`, `line`, `corrections`, `case`, `check`, `log_check`, `refusal`, `shown` |
 | `supervisor/outcomes.py` | — | `records`, `lines` |
 | `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `codex_rate`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `provider_alerts`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
@@ -86,7 +86,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/pyenv.py` | — | `venv_python`, `python`, `uv_binary`, `uv_env`, `path_dirs`, `needs_rebuild`, `rebuild_command`, `describe` |
 | `supervisor/recap.py` | `RecapError` | `redact`, `context`, `ask`, `load`, `write`, `start`, `running`, `command` |
 | `supervisor/reply_links.py` | — | `records`, `record` |
-| `supervisor/runner.py` | `Busy`, `Presence`, `RunRefused`, `Turn` | `run_lock`, `busy_with`, `judge_ok`, `spawn_recover`, `model_server`, `sharing_model`, `request_yield`, `replying`, `Reply`, `open_conversations`, `is_busy`, `enforce_journal`, `enforce_core`, `run_agent`, `rebuild_env`, `agent_command`, `stage_docs`, `end_all_runs`, `stop_runs_on_signal`, `regate_held`, `regate_all`, `run_conversation` |
+| `supervisor/runner.py` | `Busy`, `Presence`, `RunRefused`, `Turn`, `Warm` | `run_lock`, `busy_with`, `judge_ok`, `spawn_recover`, `model_server`, `sharing_model`, `request_yield`, `replying`, `Reply`, `open_conversations`, `is_busy`, `enforce_journal`, `enforce_core`, `run_agent`, `rebuild_env`, `agent_command`, `stage_docs`, `end_all_runs`, `stop_runs_on_signal`, `regate_held`, `regate_all`, `run_conversation`, `warm_pids`, `end_warm` |
 | `supervisor/sandbox.py` | — | `user_folder`, `profile`, `protected_code`, `run_profile`, `job_profile`, `agent_env`, `wrap` |
 | `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
 | `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
@@ -95,9 +95,10 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/talk_stats.py` | `Stats` | — |
 | `supervisor/talk_ui.py` | `Client` | `main` |
 | `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `permanent`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `interject_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
+| `supervisor/tests/bench_memory.py` | — | `generate`, `load_module`, `append_two`, `worker`, `main` |
 | `supervisor/tests/fakellm.py` | `FakeLLM` | — |
 | `supervisor/tests/mindfix.py` | — | `commit_at`, `store_state` |
-| `supervisor/tests/test_actions.py` | `ClassificationTest`, `ActionTest` | — |
+| `supervisor/tests/test_actions.py` | `DefaultSelectionTest`, `ClassificationTest`, `ActionTest` | — |
 | `supervisor/tests/test_anchoring.py` | `AnchoringTest` | `episode`, `judgment` |
 | `supervisor/tests/test_anticipated.py` | `AnticipatedStorageTest`, `AnticipatedTest` | — |
 | `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest`, `OutsideTheGuiSessionTest` | `fake_run_agent` |
@@ -109,7 +110,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_autonomy_gaps_supervisor.py` | `A2Test`, `A4Test`, `A5Test`, `ReplayLedgerTest`, `ConfidenceBackfillTest`, `OldTemplateCompatibilityTest`, `A8Test` | `judgment` |
 | `supervisor/tests/test_autonomy_gaps_template.py` | `InstanceFixture`, `OpenTalkContextTest`, `SleepOpenTalkGuardTest`, `SleepRecordTest`, `SleepVerdictOverflowTest`, `CycleRecallTest`, `ConfidenceQuestionTest`, `OperationalEnvelopeTest`, `TalkInboxTest`, `TalkPartialReadTest`, `GoalsGuardTest`, `ReplayClockTest` | `record_json`, `verdict` |
 | `supervisor/tests/test_background_messages.py` | `Fixture`, `NextCycleMessageTest`, `NextCycleRouteTest`, `NextCycleCommentTest`, `NextCycleCommentRouteTest`, `NextWakeTest`, `CycleReadsItTest` | — |
-| `supervisor/tests/test_bakeoff.py` | `BakeoffTest`, `SubagentJudgeTest` | — |
+| `supervisor/tests/test_bakeoff.py` | `BakeoffTest`, `SubagentJudgeTest`, `ReviewFixesTest`, `DrawTest`, `ReviewFixesFollowUpTest`, `OperatorJudgeTest`, `OperatorJudgeReviewTest`, `OperatorEloTest`, `OperatorPendingTest`, `OperatorSetTest`, `InstanceRankingTest`, `RankingCostTest`, `OperatorNextTest` | — |
 | `supervisor/tests/test_bonsai_budget.py` | `ThinkingBudgetTest`, `WrapUpTest`, `RequestBudgetTest`, `TemplateReasoningTest`, `BudgetWithoutSyncTest`, `Float16NormsTest`, `ToolProgressTest` | — |
 | `supervisor/tests/test_bonsai_buffers.py` | `DecodeBuffersTest` | `live_buffers`, `tiny_qwen35` |
 | `supervisor/tests/test_bonsai_liveness.py` | `GenerationThreadDiesTest`, `GuardTest` | `free_port`, `chat` |
@@ -120,6 +121,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_calibration_feedback.py` | `CalibrationFeedbackTest`, `DeclareStepTest`, `RefusedWriteTest`, `JudgesBlindToTheBaseRateTest`, `ConfidenceShownTest` | `load_top_views`, `row`, `v3`, `judged`, `case_before_f1`, `live_episode` |
 | `supervisor/tests/test_calibration_feedback_template.py` | `Fixture`, `BaseRateModuleTest`, `ConfirmStepTest`, `RunsAsV2Test`, `ExtraStepTest`, `AgentStepLimitTest` | `band`, `rates`, `declare`, `confirm`, `read` |
 | `supervisor/tests/test_cards.py` | `FamilyTest`, `CardsTest` | — |
+| `supervisor/tests/test_channel_stream.py` | `ChannelStreamTest` | `chunks` |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
 | `supervisor/tests/test_codexcli.py` | `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
@@ -157,6 +159,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_gate_held.py` | `ClassifyTest`, `HeldCase`, `WithdrawTest`, `HoldTest`, `RegateTest`, `RecheckTest`, `RecordTest`, `SchedulerTest` | — |
 | `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run`, `Workers` | `plain`, `count` |
 | `supervisor/tests/test_gate_timeout.py` | `GateTimeoutTest` | — |
+| `supervisor/tests/test_gchat.py` | `FakeChat`, `GoogleTest`, `ChatTest`, `SearchTest`, `AttachmentTest`, `ChatGrantsTest`, `ChatBrokerTest`, `TemplatePromptTest` | `answer`, `message`, `at` |
 | `supervisor/tests/test_gdrive.py` | `FakeDrive`, `GoogleTest`, `DriveTest`, `DriveReadTest`, `GrantsTest`, `TemplatePromptTest`, `BrokerTest` | `file`, `answer`, `error` |
 | `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
 | `supervisor/tests/test_grokcli.py` | `DummyBridge`, `ChannelTest`, `RetentionTest`, `WiringTest`, `MappingTest` | `body`, `png_image`, `assistant` |
@@ -165,6 +168,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_isolation.py` | `TestRunIsolationTest` | — |
 | `supervisor/tests/test_jobs.py` | `JobCase`, `DeclaredTest`, `SchedulerTest`, `RunTest`, `ConcurrentStateTest`, `ReplayRecordTest` | — |
 | `supervisor/tests/test_jobs_handoff.py` | `HandoffTest`, `PublishTest`, `ConfinedRunTest`, `RunStreamCutTest`, `LongJobTest`, `LongReplayTest` | — |
+| `supervisor/tests/test_jsonl_lines.py` | `JsonlLinesTests` | — |
 | `supervisor/tests/test_judge2.py` | `RecordShowsWholeVerdictsTest`, `SecondJudgeTest`, `JudgePendingTest`, `ReleasedBeforeTheSecondJudgeTest`, `JudgeLessOftenTest` | — |
 | `supervisor/tests/test_judge_evidence.py` | `FullEvidenceReachesTheJudge`, `JudgeCase` | — |
 | `supervisor/tests/test_judge_rotation.py` | `FakeClaude`, `PickTest`, `RoutingTest`, `CycleVerdictTest` | — |
@@ -187,6 +191,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_mail_paging.py` | `PagingTest`, `SearchPagingTest` | — |
 | `supervisor/tests/test_measurement.py` | `InstanceDirCase`, `CycleValueTest`, `JudgingTest`, `ValueTest`, `JudgeMixTest`, `JudgeMixWithinRotationTest`, `ModelTest`, `ProbationMeasureTest`, `ChanceOfDropTest`, `BatteryExamCopyTest`, `HiddenTestsTest`, `BatteryScheduleTest`, `BatteryResultsTest`, `BrokerRootTest`, `BatteryEndToEndTest` | `judgment`, `valued_j`, `tree` |
 | `supervisor/tests/test_memory.py` | `FakeEmbedder`, `ImprovementPlanTest`, `RecallTest`, `SleepConsolidationTest`, `SemanticSearchTest` | `concept_vector`, `instance` |
+| `supervisor/tests/test_memory_speed.py` | `MemorySpeedTest` | — |
 | `supervisor/tests/test_messages_view.py` | `MessageLogTest`, `StartWakeTest`, `TopKeysTest` | — |
 | `supervisor/tests/test_metacog.py` | `MetacogTest` | `row`, `paired` |
 | `supervisor/tests/test_migrate.py` | `FakeRunner`, `MigCase`, `ShaftProcessTest`, `LiveCheckoutTest`, `InstalledServicesTest`, `SchedulerIdleTest`, `PauseAndWaitTest`, `StopServiceTest`, `ManifestTest`, `CopyTest`, `TargetRefuseTest`, `RepairTest`, `SetupTest`, `RebuildTest`, `StartServicesTest`, `CodexTest`, `StepOrderTest`, `ResumeAndAutonomyTest`, `TailnetCompareTest`, `CommandTest`, `EndToEndCopyTest`, `RemoteSpecTest`, `RetryOrYesTest`, `RequireRemoteNoShaftTest`, `RemotePlistsTest`, `PauseResumeStateTest`, `RequireSourceStoppedTest`, `TargetRefuseSourceStateTest`, `FinishMigrationTest`, `ControlOptsTest`, `RunnerRunTest`, `RemoteFreeKbTest`, `TailscaleJsonTest`, `WaitingOnTest`, `DirtyAndUnpushedTest`, `StopServiceOptionsTest`, `BringBackTest`, `PrintTargetCommandTest`, `CompareRefsTest`, `LaptopTest`, `StartServicesStatusTest`, `RebuildTest`, `CodexRegexTest`, `TalkEachTest`, `TailnetUnknownTest`, `PrintStepCallableTest`, `SourceHostTest`, `FreezeTest`, `CheckTargetFolderTest`, `ControlPathTest`, `StopServiceStderrTest`, `ConfirmPromptTest`, `SourceLiveCheckoutTest`, `LaptopRunYourselfTest`, `RebuildBrewFailureTest`, `EndToEndFullPassTest`, `FourthPassRegressionTest`, `ServiceRunningProbeTest` | `cp` |
@@ -206,12 +211,14 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
 | `supervisor/tests/test_planbridge.py` | `BridgeTest` | `require_sockets` |
 | `supervisor/tests/test_planchannel.py` | `MessageTest`, `OutageTest`, `KillFallbackTest`, `BridgeChannel`, `SelectorTest` | — |
+| `supervisor/tests/test_profile_refusal_paths.py` | `ProfileRefusalPathsTest`, `EntryPointRefusalTest` | — |
 | `supervisor/tests/test_prompt_budget_template.py` | `Fixture`, `InboxTest`, `ContextOrderTest`, `SectionBudgetTest`, `RuntimeSummaryTest`, `GoalSlateTest`, `FirstErrorTest`, `VerdictValueTest`, `DeferredProvenanceTest` | — |
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `ClaudeThinkingTest`, `InstanceLoopTest`, `CoderTest` | — |
 | `supervisor/tests/test_prompt_knobs_template.py` | `PromptKnobsTest` | — |
 | `supervisor/tests/test_protected_snapshot.py` | `ProtectedSnapshotTest` | — |
 | `supervisor/tests/test_provenance.py` | `ProvenanceTest` | — |
 | `supervisor/tests/test_provider_alerts.py` | `ProviderAlertsTest` | — |
+| `supervisor/tests/test_public_tree.py` | `PublicTreeTest` | `tracked` |
 | `supervisor/tests/test_push_hold.py` | `PushHoldTest` | — |
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |
 | `supervisor/tests/test_recap.py` | `RecapCase`, `Context`, `Ask`, `Store`, `Costs`, `Panel` | — |
@@ -219,7 +226,9 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_review_followups.py` | `ReviewFollowupsTest`, `WakeReviewFollowupsTest`, `CitedGradeReviewFollowupsTest` | — |
 | `supervisor/tests/test_review_followups_template.py` | `ReviewFollowupsTest` | `reply` |
 | `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `StrayDescendantsTest`, `LinkedCodeTest`, `ApprovedFileLinkedTest`, `HardLinkAndPipeTest`, `CommitTheGatedBytesTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
+| `supervisor/tests/test_sandbox_refusal.py` | `UserFolderRefusalTest` | — |
 | `supervisor/tests/test_sandbox_temp.py` | `UserFolderTest` | `tiny_pdf` |
+| `supervisor/tests/test_sandbox_user_folder.py` | `UserFolderLookupTest` | — |
 | `supervisor/tests/test_scheduler_drain.py` | `Stop`, `DrainRestartTest`, `RelaunchTest`, `RestartVerbTest`, `FakeProc` | — |
 | `supervisor/tests/test_selfhosted.py` | `HostedServerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
 | `supervisor/tests/test_service_guard_cli.py` | `CliGuardTest` | — |
@@ -235,22 +244,28 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_surprise_rules.py` | `FlagTest`, `BaselineTest` | — |
 | `supervisor/tests/test_talk_input.py` | `DraftKeys`, `PromptKeys`, `QueuedMessages` | `fed` |
 | `supervisor/tests/test_talk_status.py` | `StatusLineTest`, `UsageEventTest` | — |
-| `supervisor/tests/test_telegram.py` | `FakeBotAPI`, `TelegramTest`, `ReplyIdentityTest`, `MarkdownTest`, `ToldTheyCanReachOperatorTest` | — |
+| `supervisor/tests/test_telegram.py` | `FakeBotAPI`, `PlannedStatusTest`, `TelegramTest`, `ReplyIdentityTest`, `MarkdownTest`, `ToldTheyCanReachOperatorTest` | — |
 | `supervisor/tests/test_template_client.py` | `StreamTest`, `ToolAnnouncementTest`, `LeakedThinkingTest`, `EmptyAnswerTest`, `FollowupBudgetTest`, `ReasoningEffortTest`, `RepeatGuardTest`, `ReasoningAcrossStepsTest`, `CallLedgerTest`, `FileToolsTest` | — |
-| `supervisor/tests/test_thelos_review.py` | `SleepJudgmentsTest`, `PauseAlertsTest` | — |
-| `supervisor/tests/test_thelos_review2_template.py` | `BriefingBySectionTest`, `ForecastWrapUpTest`, `CorrectionLedgerTest`, `ReadFileMarkerTest`, `DiscoveryErrorsTest` | `call`, `thelos_shaped_briefing` |
-| `supervisor/tests/test_thelos_review_template.py` | `GoalsBudgetTest`, `SleepPagesTest`, `WrapUpTest` | — |
 | `supervisor/tests/test_tom.py` | `TomTest` | — |
 | `supervisor/tests/test_tool_switch.py` | `ToolSwitchTest` | — |
 | `supervisor/tests/test_transcripts.py` | `TranscriptData`, `TranscriptView` | — |
-| `supervisor/tests/test_trial.py` | `Fixture`, `ReconstructTest`, `ReplayEndToEndTest`, `ReplayLeavesTheMindStoreTest`, `ReplaySeesItsRealVenvTest`, `PreemptTest`, `ReplayBrokerTest`, `VerdictTest`, `RequestTest`, `LocalTimeTest`, `FlowTest`, `WorkerTest` | `git`, `snapshot` |
+| `supervisor/tests/test_trial.py` | `Fixture`, `ReconstructTest`, `ReplayEndToEndTest`, `ReplayLeavesTheMindStoreTest`, `ReplaySeesItsRealVenvTest`, `PreemptTest`, `ReplayBrokerTest`, `VerdictTest`, `BakeoffReviewFixesTest`, `RequestTest`, `LocalTimeTest`, `FlowTest`, `WorkerTest` | `git`, `snapshot` |
 | `supervisor/tests/test_trial_multicycle.py` | `RunTest`, `LedgerTest`, `LiveRunTest` | `result` |
+| `supervisor/tests/test_tundra_review.py` | `SleepJudgmentsTest`, `PauseAlertsTest` | — |
+| `supervisor/tests/test_tundra_review2_template.py` | `BriefingBySectionTest`, `ForecastWrapUpTest`, `CorrectionLedgerTest`, `ReadFileMarkerTest`, `DiscoveryErrorsTest` | `call`, `tundra_shaped_briefing` |
+| `supervisor/tests/test_tundra_review_template.py` | `GoalsBudgetTest`, `SleepPagesTest`, `WrapUpTest` | — |
 | `supervisor/tests/test_turns_left.py` | `TurnsLeftTest` | — |
 | `supervisor/tests/test_version.py` | `VersionTest` | `done` |
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
+| `supervisor/tests/test_voice_api.py` | `VoiceApiTest`, `SpokenTurnJudgeTest` | `event` |
+| `supervisor/tests/test_voice_session.py` | `WarmFixture`, `WarmRunTest`, `WarmTargetsTest`, `VoiceApiSessionTest`, `DeleteAndUpdateTest`, `UpdateEndsWarmTest` | `alive`, `wait_for` |
+| `supervisor/tests/test_voice_session_template.py` | `WarmPromptTest`, `KeptPromptFreshnessTest`, `WarmCodexSessionTest`, `AnswerLoopTest` | `request`, `cycle_in_the_pause`, `two_turns` |
+| `supervisor/tests/test_voice_stream.py` | `ScriptApi`, `VoiceTest`, `VoiceFlagTest`, `StreamTest`, `StreamServerTest`, `Refused`, `VoicesTest`, `InstanceRowTest` | `chunk`, `event`, `voice_turn`, `read_events` |
+| `supervisor/tests/test_voice_turn_template.py` | `VoiceTurnTest`, `VoiceConfigTest` | — |
+| `supervisor/tests/test_voices.py` | `VoicesTest` | `voice` |
 | `supervisor/tests/test_wake_gate.py` | `GateTest`, `FactsTest`, `StateCase`, `RecordTest`, `EventWakeTest`, `CycleClockTest`, `ServeTest`, `PauseDeadlineTest`, `StderrTest` | `nothing` |
-| `supervisor/tests/test_watch.py` | `FakeGoogle`, `WatchCase`, `MailWatchTest`, `CalendarWatchTest`, `OptInTest`, `FailureTest`, `TickTest`, `KeysTest` | `message` |
-| `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `HostsTest`, `PortTest`, `FaviconTest` | `snap` |
+| `supervisor/tests/test_watch.py` | `FakeGoogle`, `WatchCase`, `MailWatchTest`, `CalendarWatchTest`, `OptInTest`, `FailureTest`, `TickTest`, `KeysTest`, `ChatWatchTest` | `message` |
+| `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `HostsTest`, `PortTest`, `FaviconTest`, `BakeoffJudgePagesTest` | `snap` |
 | `supervisor/tests/test_web_a11y.py` | `FieldNamesTest`, `StylesTest` | `declarations`, `contrast` |
 | `supervisor/tests/test_web_actions.py` | `ActionsTest`, `EveryActionRunsItsCommand`, `RefusedWhereTheTuiRefuses`, `AGuardTheOperatorForces`, `ARestartOnceTheRunsEnd`, `PagesShowEachActionAsItRuns`, `Issue20TimeoutTest`, `RecapLockTest`, `NewVerbsTest`, `OneBrokenInstanceTest` | `actions_services` |
 | `supervisor/tests/test_web_archive.py` | `ArchiveTest` | — |
@@ -301,14 +316,15 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tom.py` | — | `record`, `heard`, `scored`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view`, `ask_guarded` |
-| `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `replay_units`, `judge_case`, `state_context`, `judge_pair`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
+| `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `replay_units`, `judge_case`, `state_context`, `judge_pair`, `infra_failure`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
 | `supervisor/version.py` | — | `supervisor_commit`, `shown_commit`, `changelog`, `commit_describe`, `service_version`, `record_service`, `service`, `instance`, `describe` |
 | `supervisor/vision.py` | `VisionError` | `sees_images`, `sees_images_or_no`, `sniff`, `prepare_bytes`, `data_url`, `split_data_url`, `count`, `prepare`, `without_images` |
+| `supervisor/voices.py` | `Refused` | `report`, `available`, `get`, `assign`, `clear`, `propose`, `proposals`, `decide` |
 | `supervisor/watch.py` | — | `on_off`, `mode`, `run_pass`, `busy`, `tick` |
 | `supervisor/web.py` | `Request`, `Response`, `DocStale`, `DocRefused`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `paired_device`, `csrf_token`, `overview`, `respond`, `feedback_action`, `save_doc`, `delete_doc`, `comment_action`, `activity`, `attachment_path`, `serve`, `command` |
 | `supervisor/web_actions.py` | `Refused` | `pause_resume`, `run`, `page_wait`, `server_limit`, `post_attrs`, `button`, `instance_buttons`, `message_forms`, `tool_switches`, `alert_line`, `tool_row`, `saved_row`, `alert_buttons`, `service_buttons`, `guarded`, `autonomy_button` |
 | `supervisor/web_alerts.py` | — | `event`, `forward_new`, `forward_pauses`, `forward_providers`, `start` |
-| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `last_count`, `last_from`, `summary`, `shown`, `sent_during`, `excerpt`, `wait_change`, `failure`, `message_item`, `reply_of`, `sent_mids`, `build`, `feed`, `new_chat`, `pending_feedback`, `send_feedback`, `unpend_feedback`, `reap`, `mark_retried`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
+| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `last_count`, `last_from`, `summary`, `shown`, `sent_during`, `excerpt`, `wait_change`, `failure`, `message_item`, `reply_of`, `sent_mids`, `build`, `feed`, `new_chat`, `pending_feedback`, `send_feedback`, `unpend_feedback`, `reap`, `spoken`, `mark_retried`, `classify_reply`, `replying`, `stream_of`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_row`, `config_page`, `orders_panel`, `drive_diff`, `drive_page`, `google_accounts`, `access_page`, `access` |
 | `supervisor/web_experiments.py` | — | `has_results`, `cards` |
 | `supervisor/web_google.py` | — | `setup`, `route` |
@@ -317,5 +333,5 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `etag`, `icon`, `page`, `rail`, `nav`, `changelog_body`, `pagebar`, `message_page`, `manifest`, `service_worker`, `offline_page`, `unpaired_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
 | `supervisor/web_seen.py` | — | `seen`, `unread`, `badge`, `forget` |
 | `supervisor/web_settings.py` | — | `listing`, `run`, `status`, `page_body` |
-| `supervisor/web_views.py` | — | `q`, `size_label`, `when_label`, `doc_sort`, `frame`, `instance_frame`, `files_page`, `chat_frame`, `earlier_chats`, `busy_note`, `chat_header`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `download_icon`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_live`, `trials_page`, `experiments_live`, `experiments_page`, `trial_report`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `cycles_next`, `cycles_page`, `cycle_page`, `transcripts_page`, `transcript_page`, `messages_page`, `text_view`, `message_page`, `costs_page`, `services_live`, `services_log`, `services_page`, `file_url`, `doc_cards`, `in_chat`, `overwritten`, `threads_list`, `docs_panel`, `attachment_panel`, `live_activity`, `chat_feed`, `feed_html`, `chat_page`, `calendar_proposals_body`, `calendar_proposals_page` |
+| `supervisor/web_views.py` | — | `q`, `size_label`, `when_label`, `doc_sort`, `frame`, `instance_frame`, `files_page`, `chat_frame`, `earlier_chats`, `busy_note`, `chat_header`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `download_icon`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_live`, `trials_page`, `experiments_live`, `experiments_page`, `trial_report`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `cycles_next`, `cycles_page`, `cycle_page`, `transcripts_page`, `transcript_page`, `messages_page`, `text_view`, `message_page`, `costs_page`, `services_live`, `services_log`, `services_page`, `file_url`, `doc_cards`, `in_chat`, `overwritten`, `threads_list`, `docs_panel`, `attachment_panel`, `live_activity`, `chat_feed`, `feed_html`, `chat_page`, `calendar_proposals_body`, `calendar_proposals_page`, `bakeoffs_page`, `bakeoff_ranking`, `bakeoff_page`, `bakeoff_judge_page` |
 | `supervisor/webpush.py` | `PushError` | `b64url`, `ensure_key`, `public_key`, `vapid_token`, `subscriptions`, `allowed_endpoint`, `subscribe`, `holds`, `status`, `unsubscribe`, `take`, `notify`, `fingerprint` |

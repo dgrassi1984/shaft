@@ -9,7 +9,7 @@ from supervisor.tests.test_web import WebTest
 class ArchiveTest(WebTest):
     def setUp(self):
         super().setUp()
-        self.records = [{"id": f"web-{i:016x}", "instance": "wren", "state": "ended",
+        self.records = [{"id": f"web-{i:016x}", "instance": "wisp", "state": "ended",
                          "created": f"2026-09-{i:02d}T12:00:00", "ended": "2026-09-26T13:00:00",
                          "turns": [{"role": "user", "content": f"Topic {i} " + "x" * 100 + "\nHidden second line",
                                     "ts": "2026-09-25T12:00:00"},
@@ -17,7 +17,7 @@ class ArchiveTest(WebTest):
                                     "docs": [{"path": "a b.md", "created": True}]}]}
                         for i in range(25, 0, -1)]
         self.current = {**self.records[0], "id": "web-ffffffffffffffff", "state": "idle"}
-        for patch in [mock.patch("supervisor.web._names", return_value=["wren"]),
+        for patch in [mock.patch("supervisor.web._names", return_value=["wisp"]),
                       mock.patch.object(web_chat, "chats", side_effect=lambda n: [self.current] + self.records),
                       mock.patch.object(web_chat, "shown", return_value=self.current),
                       mock.patch.object(web_chat, "load", side_effect=lambda cid: next(
@@ -39,58 +39,58 @@ class ArchiveTest(WebTest):
 
     def test_issue_8_quick_and_full_lists(self):
         """Reverting #8 hides history in tools, omits topics and makes the oldest five unreachable."""
-        for path in ("/i/wren/chat", "/fragment/chat/wren/header"):
+        for path in ("/i/wisp/chat", "/fragment/chat/wisp/header"):
             body = self.get(path)
             self.assertRegex(body, r'data-key="earlier-chats"><summary data-focus="earlier"><svg[^>]*>.*?</svg> Earlier chats'
                                    r'</summary>')
             self.assertIn("latest 20 of 25", body)
-            self.assertIn('href="/i/wren/chats"', body)
-            self.assertEqual(len(re.findall(r'href="/i/wren/chat\?id=', body)), 20)
-        body = self.get("/i/wren/chats")
-        ids = re.findall(r'href="/i/wren/chat\?id=([^"]+)', body)
+            self.assertIn('href="/i/wisp/chats"', body)
+            self.assertEqual(len(re.findall(r'href="/i/wisp/chat\?id=', body)), 20)
+        body = self.get("/i/wisp/chats")
+        ids = re.findall(r'href="/i/wisp/chat\?id=([^"]+)', body)
         self.assertEqual(ids, [c["id"] for c in self.records])
         self.assertIn("Topic 1 " + "x" * 72 + "… · 1 message(s)", body)
         self.assertNotIn("Hidden second line", body)
         self.records[1]["created"] = self.records[0]["created"]
-        body = self.get("/i/wren/chats")
+        body = self.get("/i/wisp/chats")
         self.assertIn("Topic 24", body)
         self.assertIn("Topic 25", body)
 
     def test_issue_8_empty_and_single_lists(self):
         """Reverting #8 loses the explicit empty state and count for short history lists."""
         self.records[:] = self.records[:1]
-        self.assertIn("latest 1 of 1", self.get("/fragment/chat/wren/header"))
+        self.assertIn("latest 1 of 1", self.get("/fragment/chat/wisp/header"))
         self.records.clear()
-        self.assertIn("latest 0 of 0", self.get("/fragment/chat/wren/header"))
-        self.assertIn("No earlier chats yet.", self.get("/i/wren/chats"))
+        self.assertIn("latest 0 of 0", self.get("/fragment/chat/wisp/header"))
+        self.assertIn("No earlier chats yet.", self.get("/i/wisp/chats"))
 
     def test_issue_8_archive_banner_and_bookmark(self):
         """Reverting #8 removes the archive date and direct return to the current chat."""
-        path = "/i/wren/chat?id=" + self.records[-1]["id"]
+        path = "/i/wisp/chat?id=" + self.records[-1]["id"]
         for _ in range(2):
             body = self.get(path)
             self.assertIn("Earlier chat, 2026-09-01 12:00", body)
-            self.assertIn('href="/i/wren/chat">Back to the current chat</a>', body)
+            self.assertIn('href="/i/wisp/chat">Back to the current chat</a>', body)
             self.assertNotIn('class="composer"', body)
-        self.assertIn('class="composer"', self.get("/i/wren/chat"))
+        self.assertIn('class="composer"', self.get("/i/wisp/chat"))
 
     def test_issue_32_archive_footer(self):
         """Reverting #32 invites a next message in an archive with no composer."""
         cid = self.records[0]["id"]
         self.records[0]["pending_edits"] = {"a b.md": {}}
-        for path in (f"/i/wren/chat?id={cid}", f"/fragment/chat/wren?id={cid}"):
+        for path in (f"/i/wisp/chat?id={cid}", f"/fragment/chat/wisp?id={cid}"):
             body = self.get(path)
             self.assertIn("This conversation ended on 2026-09-26 13:00.", body)
             self.assertNotIn("next message", body)
         self.current["state"] = "ended"
-        self.assertIn("Your next message starts a new conversation", self.get("/fragment/chat/wren"))
+        self.assertIn("Your next message starts a new conversation", self.get("/fragment/chat/wisp"))
 
     def test_issue_15_archive_documents_and_cards(self):
         """Reverting #15 presents current files as historical and exposes mutation controls after polling."""
         cid = self.records[0]["id"]
-        for path in (f"/i/wren/chat?id={cid}&doc=a%20b.md",
-                     f"/fragment/docs/wren?id={cid}&doc=a%20b.md",
-                     f"/fragment/docs/wren?id={cid}&list=1"):
+        for path in (f"/i/wisp/chat?id={cid}&doc=a%20b.md",
+                     f"/fragment/docs/wisp?id={cid}&doc=a%20b.md",
+                     f"/fragment/docs/wisp?id={cid}&list=1"):
             body = self.get(path)
             self.assertIn("Current files — not as they were in this chat", body)
             self.assertIn("Open in the current chat to edit or comment", body)
@@ -98,12 +98,12 @@ class ArchiveTest(WebTest):
                 self.assertNotIn(control, body)
             if "list=1" not in path:
                 self.assertIn("Current replacement text", body)
-                self.assertIn('href="/i/wren/chat?doc=a%20b.md"', body)
-        body = self.get(f"/i/wren/chat?id={cid}&doc=a%20b.md")
-        self.assertIn(f'data-poll="/fragment/docs/wren?doc=a%20b.md&amp;id={cid}"', body)
+                self.assertIn('href="/i/wisp/chat?doc=a%20b.md"', body)
+        body = self.get(f"/i/wisp/chat?id={cid}&doc=a%20b.md")
+        self.assertIn(f'data-poll="/fragment/docs/wisp?doc=a%20b.md&amp;id={cid}"', body)
         card = re.search(r'<a class="doccard"[^>]+>', body).group()
-        self.assertIn('href="/i/wren/chat?doc=a%20b.md"', card)
+        self.assertIn('href="/i/wisp/chat?doc=a%20b.md"', card)
         self.assertNotIn("data-open-doc", card)
-        current = self.get("/i/wren/chat?doc=a%20b.md")
+        current = self.get("/i/wisp/chat?doc=a%20b.md")
         self.assertIn("data-edit-doc", current)
         self.assertIn("data-comment-doc", current)

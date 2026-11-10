@@ -1,4 +1,4 @@
-"""The notify button in web.js, run in Node against a stub page (docs/plans/PLAN-pwa P4, issue #23).
+"""The notify button in web.js, run in Node against a stub page (issue #23).
 
 "Notifications on" has to mean SHAFT accepted this device. A 409 from /push/subscribe used to leave the button on,
 because the click handler ignored that answer and the button only asked the browser.

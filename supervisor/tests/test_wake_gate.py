@@ -141,7 +141,7 @@ class FactsTest(unittest.TestCase):
         own = [{"plugin": "wake_job", "can_wake": True}, {"plugin": "quiet-job", "can_wake": False}]
         with mock.patch.object(jobs, "declared", return_value=(own, [])):
             for sender, expected in (("job wake_job", True), ("job quiet-job", False), ("job removed", True),
-                                     ("operator", True), ("wren", True), ("watch", True)):
+                                     ("operator", True), ("wisp", True), ("watch", True)):
                 file = f"{jobs._stem(NOW, sender)}.md"
                 self.assertEqual(jobs.inbox_can_wake(self.name, file), expected, sender)
         with mock.patch.object(jobs, "declared", side_effect=OSError("disk")):
@@ -182,12 +182,12 @@ class StateCase(unittest.TestCase):
 
 class RecordTest(StateCase):
     def test_a_skip_is_kept_until_the_next_cycle(self):
-        autonomy.record("skip", "wren", "nothing to do: inbox empty")
-        self.assertTrue(autonomy.last_skip("wren").startswith("nothing to do: inbox empty (at "))
-        self.assertEqual(self.st()["wakes"]["wren"], self.st()["skipped"]["wren"]["at"])   # its interval restarts
-        autonomy.record("cycle", "wren")
-        self.assertEqual(autonomy.last_skip("wren"), "")
-        self.assertEqual(self.st()["cycles"]["wren"], self.st()["wakes"]["wren"])
+        autonomy.record("skip", "wisp", "nothing to do: inbox empty")
+        self.assertTrue(autonomy.last_skip("wisp").startswith("nothing to do: inbox empty (at "))
+        self.assertEqual(self.st()["wakes"]["wisp"], self.st()["skipped"]["wisp"]["at"])   # its interval restarts
+        autonomy.record("cycle", "wisp")
+        self.assertEqual(autonomy.last_skip("wisp"), "")
+        self.assertEqual(self.st()["cycles"]["wisp"], self.st()["wakes"]["wisp"])
 
     def test_b16_concurrent_records_lose_nothing(self):
         # B16: an unlocked read-modify-write. With every reader slowed past the others' writes, the old record kept
@@ -210,7 +210,7 @@ class RecordTest(StateCase):
     def test_b16_the_file_is_replaced_whole_never_truncated_in_place(self):
         autonomy.record("sleep")
         before = (self.sup / "schedule.json").stat().st_ino
-        autonomy.record("wake", "wren")   # a reader between truncate and write saw {}: every wake and the sleep due
+        autonomy.record("wake", "wisp")   # a reader between truncate and write saw {}: every wake and the sleep due
         self.assertNotEqual((self.sup / "schedule.json").stat().st_ino, before)
 
     def test_b16_battery_records_lose_nothing(self):
@@ -272,12 +272,12 @@ class EventWakeTest(StateCase):
         self.addCleanup(shutil.rmtree, project, True)
         (project / "instances" / "evy").mkdir(parents=True)
         b = object.__new__(Broker)
-        b.name, b.project = "wren", project
+        b.name, b.project = "wisp", project
         st = {"cycles": {"evy": (datetime.now() - timedelta(minutes=11)).isoformat(timespec="seconds")}}
         (self.sup / "schedule.json").write_text(json.dumps(st))
         b._deliver("evy", "inbox/m1.md", "hi", "message", NOW, "hi")
         self.assertTrue((project / "instances" / "evy" / "inbox" / "m1.md").exists())
-        self.assertEqual(self.by("evy"), ["message from wren"])            # past the floor: due now
+        self.assertEqual(self.by("evy"), ["message from wisp"])            # past the floor: due now
         self.assertNotIn("not_before", jobs.pending_wakes()["evy"])
 
     def test_a_message_inside_the_floor_is_paced_not_dropped(self):
@@ -288,12 +288,12 @@ class EventWakeTest(StateCase):
         self.addCleanup(shutil.rmtree, project, True)
         (project / "instances" / "evp" / "shaft").mkdir(parents=True)
         b = object.__new__(Broker)
-        b.name, b.project = "wren", project
+        b.name, b.project = "wisp", project
         began = datetime.now().replace(microsecond=0) - timedelta(minutes=2)   # a cycle that has ended since
         (self.sup / "schedule.json").write_text(json.dumps({"cycles": {"evp": began.isoformat()}}))
         b._deliver("evp", "inbox/m1.md", "hi", "message", NOW, "hi")
         req = jobs.pending_wakes()["evp"]
-        self.assertEqual(req["by"], ["message from wren"])                  # before: [] (dropped)
+        self.assertEqual(req["by"], ["message from wisp"])                  # before: [] (dropped)
         self.assertEqual(req["not_before"], (began + timedelta(minutes=10)).isoformat())
         started = []
         tick = lambda now: jobs.tick({}, now, lambda a: started.append(a) or object(), ["evp"], lambda n: "")
@@ -306,12 +306,12 @@ class EventWakeTest(StateCase):
         self.assertEqual(started, [["wake", "evp"]])
 
     def test_an_operator_message_lifts_the_pacing(self):
-        jobs.request_wake("evq", "message from wren", datetime.now() + timedelta(minutes=8))
+        jobs.request_wake("evq", "message from wisp", datetime.now() + timedelta(minutes=8))
         jobs.request_wake("evq", "message from the operator")
         self.assertNotIn("not_before", jobs.pending_wakes()["evq"])
         jobs.take_wake("evq")
         jobs.request_wake("evq", "message from the operator")               # due now: a paced one does not delay it
-        jobs.request_wake("evq", "message from wren", datetime.now() + timedelta(minutes=8))
+        jobs.request_wake("evq", "message from wisp", datetime.now() + timedelta(minutes=8))
         self.assertNotIn("not_before", jobs.pending_wakes()["evq"])
 
     def test_a_cycle_after_the_request_drops_it(self):
@@ -319,7 +319,7 @@ class EventWakeTest(StateCase):
         # cycle already saw.
         (autonomy.INSTANCES / "evd" / "shaft").mkdir(parents=True)
         self.addCleanup(shutil.rmtree, autonomy.INSTANCES / "evd", True)
-        jobs.request_wake("evd", "message from wren", datetime.now() + timedelta(minutes=5))
+        jobs.request_wake("evd", "message from wisp", datetime.now() + timedelta(minutes=5))
         later = (datetime.now() + timedelta(seconds=2)).isoformat(timespec="seconds")
         (self.sup / "schedule.json").write_text(json.dumps({"cycles": {"evd": later}}))
         started = []
@@ -330,7 +330,7 @@ class EventWakeTest(StateCase):
         self.assertEqual(started, [])
         self.assertNotIn("evd", jobs.pending_wakes())
         self.assertIn("came after", log.call_args.args[0])
-        jobs.request_wake("evd", "message from wren")                      # one after the last cycle began: kept
+        jobs.request_wake("evd", "message from wisp")                      # one after the last cycle began: kept
         st = self.st()
         st["cycles"]["evd"] = (datetime.now() - timedelta(minutes=1)).isoformat(timespec="seconds")
         (self.sup / "schedule.json").write_text(json.dumps(st))
@@ -427,8 +427,8 @@ class CycleClockTest(StateCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         self.old = "2026-01-02T11:00:00"
         (self.sup / "schedule.json").write_text(json.dumps({
-            "wakes": {"wren": self.old}, "cycles": {"wren": self.old},
-            "skipped": {"wren": {"at": self.old, "why": "nothing to do: inbox empty"}}}))
+            "wakes": {"wisp": self.old}, "cycles": {"wisp": self.old},
+            "skipped": {"wisp": {"at": self.old, "why": "nothing to do: inbox empty"}}}))
         for p in (mock.patch.object(runner, "instance_root", return_value=self.root),
                   mock.patch.object(runner, "log"), mock.patch.object(autonomy, "log"),
                   mock.patch.object(runner, "_second_judge_later")):
@@ -438,21 +438,21 @@ class CycleClockTest(StateCase):
     def test_a_busy_wake_keeps_the_last_cycle_and_its_skip(self):
         # It stamped the cycle before run_agent took the lock: a wake that lost the lock to another run moved the
         # commitment cutoff past commitments no cycle saw, and cleared the shown skip.
-        with mock.patch.object(runner._Held, "acquire", side_effect=runner.Busy("wren")), \
+        with mock.patch.object(runner._Held, "acquire", side_effect=runner.Busy("wisp")), \
                 mock.patch.object(autonomy, "_awake", return_value="talk since 10:58"):
-            self.assertEqual(autonomy.wake("wren"), 0)
+            self.assertEqual(autonomy.wake("wisp"), 0)
         st = self.st()
-        self.assertEqual(st["cycles"]["wren"], self.old)
-        self.assertEqual(st["skipped"]["wren"]["why"], "nothing to do: inbox empty")
-        self.assertNotEqual(st["wakes"]["wren"], self.old)                  # its interval restarts, as before
+        self.assertEqual(st["cycles"]["wisp"], self.old)
+        self.assertEqual(st["skipped"]["wisp"]["why"], "nothing to do: inbox empty")
+        self.assertNotEqual(st["wakes"]["wisp"], self.old)                  # its interval restarts, as before
 
     def test_a_refused_run_records_no_cycle(self):
         with mock.patch.object(runner._Held, "acquire"), mock.patch.object(runner._Held, "release"), \
                 mock.patch.object(runner, "_clean_tmp"), \
                 mock.patch.object(runner, "_reconcile", side_effect=runner.RunRefused("a git merge is in progress")), \
                 mock.patch.object(runner, "_refused", return_value=1):
-            self.assertEqual(runner.run_agent("wren", "live", ["live"], interactive=False, wait_lock=False), 1)
-        self.assertEqual(self.st()["cycles"]["wren"], self.old)
+            self.assertEqual(runner.run_agent("wisp", "live", ["live"], interactive=False, wait_lock=False), 1)
+        self.assertEqual(self.st()["cycles"]["wisp"], self.old)
 
     def launched(self, argv: list[str]) -> None:
         """`shaft <argv>` through the real dispatch, stopped as the agent would start (after the stamp)."""
@@ -472,15 +472,15 @@ class CycleClockTest(StateCase):
     def test_shaft_live_by_hand_stamps_the_cycle(self):
         # Before: only wake() stamped it, so a manual `shaft live` left the gate and the commitment cutoff on the older
         # scheduled cycle.
-        self.launched(["live", "wren"])
+        self.launched(["live", "wisp"])
         st = self.st()
-        self.assertGreater(st["cycles"]["wren"], self.old)
-        self.assertEqual(st["cycles"]["wren"], st["wakes"]["wren"])
-        self.assertNotIn("wren", st["skipped"])
+        self.assertGreater(st["cycles"]["wisp"], self.old)
+        self.assertEqual(st["cycles"]["wisp"], st["wakes"]["wisp"])
+        self.assertNotIn("wisp", st["skipped"])
 
     def test_other_runs_stamp_no_cycle(self):
-        self.launched(["reflect", "wren"])
-        self.assertEqual(self.st()["cycles"]["wren"], self.old)
+        self.launched(["reflect", "wisp"])
+        self.assertEqual(self.st()["cycles"]["wisp"], self.old)
 
 
 class ServeTest(StateCase):
@@ -501,7 +501,7 @@ class ServeTest(StateCase):
                    mock.patch("supervisor.version.record_service"),
                    mock.patch("supervisor.browser.startup_note", return_value=""),
                    mock.patch("supervisor.calendar_proposals.expire"),
-                   mock.patch.object(autonomy, "instance_names", return_value=["wren"]),
+                   mock.patch.object(autonomy, "instance_names", return_value=["wisp"]),
                    mock.patch.object(autonomy, "paused", return_value=False),
                    mock.patch.object(autonomy, "update_jobs", return_value=[]),
                    mock.patch.object(autonomy, "updating", return_value=False),
@@ -528,38 +528,38 @@ class ServeTest(StateCase):
         reasons = [f"nothing to do: no commitment due before {at + TEN:%H:%M}" for at in times[:3]]
         reasons.append("already busy")
         with mock.patch.object(autonomy, "datetime", wraps=datetime) as clock, \
-                mock.patch.object(autonomy, "decide_wakes", side_effect=[({}, {"wren": r}) for r in reasons]):
+                mock.patch.object(autonomy, "decide_wakes", side_effect=[({}, {"wisp": r}) for r in reasons]):
             clock.now.side_effect = [at for at in times for _ in range(2)]   # scheduler and record("skip")
             _, logged = self.tick(WakeFacts(), polls=4)
         skips = [line for line in logged if "wake skipped" in line]
         self.assertEqual(len(skips), 3, skips)
         with mock.patch.object(core, "SUP_DIR", self.sup):
-            b = broker.Broker("wren", self.sup, {}, self.sup / "broker.log", root=self.sup, share=False)
+            b = broker.Broker("wisp", self.sup, {}, self.sup / "broker.log", root=self.sup, share=False)
             answer = b.call("record", {"kind": "runs"})
             self.assertTrue(answer["ok"], answer)
-            self.assertIn("wren: wake skipped — nothing to do", answer["result"])
-            self.assertIn("wren: wake skipped — already awake (already busy)", answer["result"])
-            b.name = "kant"
+            self.assertIn("wisp: wake skipped — nothing to do", answer["result"])
+            self.assertIn("wisp: wake skipped — already awake (already busy)", answer["result"])
+            b.name = "kiln"
             self.assertNotIn("wake skipped", b.call("record", {"kind": "runs"})["result"])
 
     def test_nothing_to_do_skips_then_a_message_wakes(self):
         recent = (datetime.now() - timedelta(minutes=12)).isoformat(timespec="seconds")
-        (self.sup / "schedule.json").write_text(json.dumps({"wakes": {"wren": recent}, "cycles": {"wren": recent}}))
+        (self.sup / "schedule.json").write_text(json.dumps({"wakes": {"wisp": recent}, "cycles": {"wisp": recent}}))
         started, logged = self.tick(WakeFacts())
-        self.assertEqual(started, [])                                      # the old loop started ["wake", "wren"]
-        self.assertTrue(any("wren: wake skipped — nothing to do" in l for l in logged), logged)
-        self.assertTrue(autonomy.last_skip("wren").startswith(autonomy.NOTHING_TO_DO))
+        self.assertEqual(started, [])                                      # the old loop started ["wake", "wisp"]
+        self.assertTrue(any("wisp: wake skipped — nothing to do" in l for l in logged), logged)
+        self.assertTrue(autonomy.last_skip("wisp").startswith(autonomy.NOTHING_TO_DO))
         st = self.st()
-        st["wakes"]["wren"] = recent                                       # its interval passed again
+        st["wakes"]["wisp"] = recent                                       # its interval passed again
         (self.sup / "schedule.json").write_text(json.dumps(st))
         started, logged = self.tick(WakeFacts(unread=1))
-        self.assertEqual(started, [["wake", "wren"]])
-        self.assertIn("scheduler: waking wren — 1 unread message(s) in its inbox", logged)
+        self.assertEqual(started, [["wake", "wisp"]])
+        self.assertIn("scheduler: waking wisp — 1 unread message(s) in its inbox", logged)
 
     def test_status_shows_the_skip(self):
-        autonomy.record("skip", "wren", "nothing to do: inbox empty")
+        autonomy.record("skip", "wisp", "nothing to do: inbox empty")
         out = []
-        with mock.patch.object(autonomy, "service"), mock.patch.object(autonomy, "instance_names", return_value=["wren"]), \
+        with mock.patch.object(autonomy, "service"), mock.patch.object(autonomy, "instance_names", return_value=["wisp"]), \
                 mock.patch.object(autonomy, "wake_interval", return_value=TEN), \
                 mock.patch.object(autonomy, "_launchctl", return_value=mock.Mock(returncode=1)), \
                 mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):

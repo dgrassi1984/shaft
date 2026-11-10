@@ -1,4 +1,4 @@
-"""The operator's Google Calendar, one calendar per grant (docs/plans/PLAN-calendar.md): an instance he granted a calendar to reads
+"""The operator's Google Calendar, one calendar per grant: an instance he granted a calendar to reads
 only that calendar's events — whichever handle it forges, whatever window or query it asks for — never a credential,
 never in an exam, and a revoke holds from its next call. Against a fake Calendar API behind google.urlopen that
 records every path, with one account holding a granted calendar and calendars that are not granted."""
@@ -140,7 +140,7 @@ def git(cwd, *args):
 
 
 class CalendarCase(unittest.TestCase):
-    """A project with instance wren, the account work logged in with both scopes, wren granted work's primary
+    """A project with instance wisp, the account work logged in with both scopes, wisp granted work's primary
     calendar; the operator's time zone is Europe/Rome."""
 
     grant = True
@@ -156,17 +156,17 @@ class CalendarCase(unittest.TestCase):
             self.addCleanup(p.stop)
         time.tzset()
         self.addCleanup(time.tzset)
-        self.root = self.project / "instances" / "wren"
+        self.root = self.project / "instances" / "wisp"
         (self.root / "shaft").mkdir(parents=True)
         (self.root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         google._save_account("work", {"address": ME, "client": "work", "refresh_token": "rt",
                                        "scope": f"{google.GMAIL} {google.CALENDAR}"})
         if self.grant:
-            core.set_calendar_grants("wren", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
+            core.set_calendar_grants("wisp", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
         self.secrets = {"GMAIL_WORK_CLIENT_ID": "cid", "GMAIL_WORK_CLIENT_SECRET": "csecret"}
 
     def broker(self, **kw) -> broker.Broker:
-        return broker.Broker("wren", self.project, self.secrets, self.sup / "broker.log", **kw)
+        return broker.Broker("wisp", self.project, self.secrets, self.sup / "broker.log", **kw)
 
     def ok(self, b, tool, args) -> str:
         r = b.call(tool, args)
@@ -230,7 +230,7 @@ class EnforcementTest(CalendarCase):
             self.assertTrue(path == granted or path.startswith(granted + "/"), path)
 
     def test_grant_on_another_calendar_does_not_open_this_one(self):
-        core.set_calendar_grants("wren", [{"account": "work", "calendar": TEAM, "name": "Team"}])
+        core.set_calendar_grants("wisp", [{"account": "work", "calendar": TEAM, "name": "Team"}])
         b = self.broker()
         self.assertEqual(self.refused(b, "calendar_event", {"id": self.handle(PRIMARY, "own1")}), HIDDEN)
         self.assertIn("Board meeting SECRET", self.week(b))   # its own calendar it does read
@@ -317,7 +317,7 @@ class EnforcementTest(CalendarCase):
     def test_revoke_mid_run(self):
         b = self.broker()
         self.ok(b, "calendar_event", {"id": self.handle(PRIMARY, "own1")})
-        core.set_calendar_grants("wren", [])
+        core.set_calendar_grants("wisp", [])
         before = len(self.cal.requests)
         for tool, args in (("calendar_event", {"id": self.handle(PRIMARY, "own1")}), ("calendar_events", {})):
             self.assertEqual(self.refused(b, tool, args), "no calendar granted to you")
@@ -370,7 +370,7 @@ class EnforcementTest(CalendarCase):
 
 class ScopeTest(CalendarCase):
     def test_token_without_calendar_scope_names_login(self):
-        # A login from before docs/plans/PLAN-calendar (gmail.readonly only) still serves mail; a calendar call names the login.
+        # A mail-only login (gmail.readonly only) still serves mail; a calendar call names the login.
         google._save_account("work", {"address": ME, "client": "work", "refresh_token": "rt", "scope": google.GMAIL})
         b = self.broker()
         for tool, args in (("calendar_events", {}), ("calendar_event", {"id": self.handle(PRIMARY, "own1")})):
@@ -414,7 +414,7 @@ class OfferedTest(CalendarCase):
         self.assertEqual(b.calendar_env(), "")
 
     def test_granted_tools_name_the_grant(self):
-        core.set_calendar_grants("wren", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
+        core.set_calendar_grants("wisp", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
         specs = {s["function"]["name"]: s for s in self.broker().tool_specs()}
         self.assertTrue({"calendar_events", "calendar_event"} <= set(specs))
         self.assertFalse(set(broker.CALENDAR_WRITE_TOOLS) & set(specs))
@@ -423,8 +423,8 @@ class OfferedTest(CalendarCase):
 
     def test_battery_broker_has_no_calendar(self):
         from supervisor import battery
-        core.set_calendar_grants("wren", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
-        exam = self.broker(root=self.project / "control", usage_name="wren-battery", network=False)   # as battery._one
+        core.set_calendar_grants("wisp", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
+        exam = self.broker(root=self.project / "control", usage_name="wisp-battery", network=False)   # as battery._one
         exam.disabled |= battery.EXAM_OFF
         self.assertTrue(set(broker.CALENDAR_TOOLS) <= battery.EXAM_OFF)
         self.assertFalse(set(broker.CALENDAR_TOOLS) & {s["function"]["name"] for s in exam.tool_specs()})
@@ -435,7 +435,7 @@ class OfferedTest(CalendarCase):
 
     def test_agent_command_names_the_grant(self):
         from supervisor import runner
-        core.set_calendar_grants("wren", [{"account": "work", "calendar": PRIMARY, "name": "Operator"},
+        core.set_calendar_grants("wisp", [{"account": "work", "calendar": PRIMARY, "name": "Operator"},
                                           {"account": "work", "calendar": TEAM, "name": "Team, shared"}])
         b = self.broker()
         b.start()
@@ -443,7 +443,7 @@ class OfferedTest(CalendarCase):
         _, env = runner.agent_command(self.root, b, ["live"], self.project / "p.sb", [8780], {})
         self.assertEqual(env["SHAFT_CALENDAR"], "work/Operator; work/Team, shared")
         self.assertFalse([k for k in env if k.startswith("GMAIL")] + [v for v in env.values() if "rt" == v or "csecret" in v])
-        core.set_calendar_grants("wren", [])
+        core.set_calendar_grants("wisp", [])
         _, env = runner.agent_command(self.root, b, ["live"], self.project / "p.sb", [8780], {})
         self.assertNotIn("SHAFT_CALENDAR", env)
 
@@ -462,8 +462,8 @@ class DeletedEventTest(CalendarCase):
 class ReplayTest(CalendarCase):
     def replay(self, cache, lock, as_of):
         state = Path(tempfile.mkdtemp(dir=self.project, prefix="copy-"))
-        return broker.ReplayBroker("wren", self.project, self.secrets, self.sup / "b.log", state_root=state,
-                                   start_commit="0", as_of=as_of, cache=cache, cache_lock=lock, billed="wren@trial:t",
+        return broker.ReplayBroker("wisp", self.project, self.secrets, self.sup / "b.log", state_root=state,
+                                   start_commit="0", as_of=as_of, cache=cache, cache_lock=lock, billed="wisp@trial:t",
                                    tools_log=self.sup / "t.log")
 
     def test_replay_shared_and_hides_events_created_after_as_of(self):
@@ -490,7 +490,7 @@ class ReplayTest(CalendarCase):
         cache, lock = {}, threading.Lock()
         first, second = (self.replay(cache, lock, datetime(2026, 10, 20)) for _ in range(2))
         self.ok(first, "calendar_event", {"id": self.handle(PRIMARY, "own1")})
-        core.set_calendar_grants("wren", [{"account": "work", "calendar": TEAM, "name": "Team"}])
+        core.set_calendar_grants("wisp", [{"account": "work", "calendar": TEAM, "name": "Team"}])
         self.assertEqual(self.refused(second, "calendar_event", {"id": self.handle(PRIMARY, "own1")}), HIDDEN)
 
     def test_event_moved_off_a_granted_calendar_between_the_pair_leaves_a_cached_read(self):
@@ -566,7 +566,7 @@ class CliTest(CalendarCase):
         from supervisor import __main__ as cli
         out = io.StringIO()
         with mock.patch.object(cli, "instance_root", lambda n: self.root), \
-                mock.patch.object(cli, "instance_names", lambda: ["wren"]), \
+                mock.patch.object(cli, "instance_names", lambda: ["wisp"]), \
                 mock.patch.object(core, "secrets_env", lambda: self.secrets), \
                 mock.patch.object(cli, "log", lambda m: None), redirect_stdout(out), redirect_stderr(out):
             code = cli.main(list(argv))
@@ -575,44 +575,44 @@ class CliTest(CalendarCase):
     def test_grant_by_primary_title_and_id_and_revoke_round_trip(self):
         for which in ("primary", "Operator", "operator", ME):
             with self.subTest(which=which):
-                code, out = self.cli("calendar", "wren", "grant", "work", which)
+                code, out = self.cli("calendar", "wisp", "grant", "work", which)
                 self.assertEqual(code, 0, out)
-                self.assertEqual(core.calendar_grants("wren"),
+                self.assertEqual(core.calendar_grants("wisp"),
                                  [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
-                self.assertEqual(self.cli("calendar", "wren", "revoke", "work",
+                self.assertEqual(self.cli("calendar", "wisp", "revoke", "work",
                                           "Operator" if which == "operator" else which)[0], 0)
-                self.assertEqual(core.calendar_grants("wren"), [])
-        self.assertEqual(self.cli("calendar", "wren", "grant", "work", "Team")[0], 0)
-        self.assertEqual(core.calendar_grants("wren")[0]["calendar"], TEAM)          # stored by its ID
-        self.assertIn("wren may read: work/Team (team123@group.calendar.google.com)", self.cli("calendar")[1])
-        self.assertEqual(self.cli("calendar", "wren", "off")[0], 0)
-        self.assertEqual(core.calendar_grants("wren"), [])
+                self.assertEqual(core.calendar_grants("wisp"), [])
+        self.assertEqual(self.cli("calendar", "wisp", "grant", "work", "Team")[0], 0)
+        self.assertEqual(core.calendar_grants("wisp")[0]["calendar"], TEAM)          # stored by its ID
+        self.assertIn("wisp may read: work/Team (team123@group.calendar.google.com)", self.cli("calendar")[1])
+        self.assertEqual(self.cli("calendar", "wisp", "off")[0], 0)
+        self.assertEqual(core.calendar_grants("wisp"), [])
         code, out = self.cli("calendar", "calendars", "work")
         self.assertEqual(code, 0, out)
         self.assertIn(f"primary Operator  ·  {ME}  ·  owner", out)
 
     def test_ambiguous_title_refused(self):
-        code, out = self.cli("calendar", "wren", "grant", "work", "Shared")
+        code, out = self.cli("calendar", "wisp", "grant", "work", "Shared")
         self.assertEqual(code, 2)
         self.assertIn("'Shared' names 2 calendars in account 'work': Shared (s1@group.calendar.google.com); Shared "
                       "(s2@group.calendar.google.com). Grant one by its ID", out)
-        self.assertEqual(core.calendar_grants("wren"), [])
-        self.assertEqual(self.cli("calendar", "wren", "grant", "work", SHARED_B)[0], 0)
-        self.assertEqual(core.calendar_grants("wren")[0]["calendar"], SHARED_B)
+        self.assertEqual(core.calendar_grants("wisp"), [])
+        self.assertEqual(self.cli("calendar", "wisp", "grant", "work", SHARED_B)[0], 0)
+        self.assertEqual(core.calendar_grants("wisp")[0]["calendar"], SHARED_B)
 
     def test_unknown_calendar_or_account_refused(self):
-        code, out = self.cli("calendar", "wren", "grant", "work", "Nope")
+        code, out = self.cli("calendar", "wisp", "grant", "work", "Nope")
         self.assertEqual(code, 2)
         self.assertIn("account 'work' has no calendar 'Nope'; it has: Operator", out)
-        code, out = self.cli("calendar", "wren", "grant", "home", "primary")
+        code, out = self.cli("calendar", "wisp", "grant", "home", "primary")
         self.assertEqual(code, 2)
         self.assertIn("no Google account 'home' (logged in: work); first: shaft google login home <address>", out)
-        self.assertEqual(self.cli("calendar", "wren", "frobnicate", "work", "x")[0], 2)
-        self.assertEqual(core.calendar_grants("wren"), [])
+        self.assertEqual(self.cli("calendar", "wisp", "frobnicate", "work", "x")[0], 2)
+        self.assertEqual(core.calendar_grants("wisp"), [])
 
     def test_grant_lives_only_in_tools_file(self):
-        self.cli("calendar", "wren", "grant", "work", "primary")
-        self.assertEqual(json.loads((self.sup / "tools" / "wren.json").read_text())["calendar"],
+        self.cli("calendar", "wisp", "grant", "work", "primary")
+        self.assertEqual(json.loads((self.sup / "tools" / "wisp.json").read_text())["calendar"],
                          [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
         for p in self.root.rglob("*"):
             if p.is_file():
@@ -620,23 +620,23 @@ class CliTest(CalendarCase):
 
     def test_tool_settings_round_trip_keeps_calendar(self):
         # Each setter owns its key: toggling mail, the shared folder or a tool must not drop the calendar grant.
-        self.cli("calendar", "wren", "grant", "work", "primary")
-        kept = core.calendar_grants("wren")
+        self.cli("calendar", "wisp", "grant", "work", "primary")
+        kept = core.calendar_grants("wisp")
         shared = Path(tempfile.mkdtemp(prefix="shaft-share-")).resolve()
         self.addCleanup(shutil.rmtree, shared, True)
-        for change in (lambda: core.set_gchat_grants("wren", [{"account": "work"}]),
-                       lambda: core.set_gchat_grants("wren", []),
-                       lambda: core.set_gdrive_grants("wren", [{"account": "work", "reach": "all"}]),
-                       lambda: core.set_gdrive_grants("wren", []),
-                       lambda: core.set_mail_grants("wren", [{"account": "work", "label": "L"}]),
-                       lambda: core.set_mail_grants("wren", []), lambda: core.set_shared_folder("wren", shared),
-                       lambda: core.set_shared_folder("wren", None), lambda: core.set_tool("wren", "decide", False),
-                       lambda: core.set_tool("wren", "decide", True)):
+        for change in (lambda: core.set_gchat_grants("wisp", [{"account": "work"}]),
+                       lambda: core.set_gchat_grants("wisp", []),
+                       lambda: core.set_gdrive_grants("wisp", [{"account": "work", "reach": "all"}]),
+                       lambda: core.set_gdrive_grants("wisp", []),
+                       lambda: core.set_mail_grants("wisp", [{"account": "work", "label": "L"}]),
+                       lambda: core.set_mail_grants("wisp", []), lambda: core.set_shared_folder("wisp", shared),
+                       lambda: core.set_shared_folder("wisp", None), lambda: core.set_tool("wisp", "decide", False),
+                       lambda: core.set_tool("wisp", "decide", True)):
             change()
-            self.assertEqual(core.calendar_grants("wren"), kept)
-        core.set_calendar_grants("wren", [])
-        core.set_mail_grants("wren", [{"account": "work", "label": "L"}])
-        self.assertEqual(core.mail_grants("wren"), [{"account": "work", "label": "L"}])   # and the other way round
+            self.assertEqual(core.calendar_grants("wisp"), kept)
+        core.set_calendar_grants("wisp", [])
+        core.set_mail_grants("wisp", [{"account": "work", "label": "L"}])
+        self.assertEqual(core.mail_grants("wisp"), [{"account": "work", "label": "L"}])   # and the other way round
 
 
 class TemplatePromptTest(unittest.TestCase):

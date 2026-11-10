@@ -1,4 +1,4 @@
-"""Tests for template/shaft/forecast.py (PLAN-consciousness M9/D1): resource forecasts before choosing work."""
+"""Tests for template/shaft/forecast.py: resource forecasts before choosing work."""
 from __future__ import annotations
 
 import json
@@ -108,7 +108,7 @@ class SummariseTest(ForecastFixture):
         s = forecast.summarise(eps, self.root)
         self.assertEqual(s["tool_calls"], 1.5)   # [3, 2, 0, 1] -> (1 + 2) / 2
         # Only the one without a finish: a steps or repeating end that still finished did not run out (the old rule
-        # counted all three, 23% cut-offs against Thelos's judge-attributed 5%, 2026-10-31).
+        # counted all three, 23% cut-offs against Tundra's judge-attributed 5%, 2026-10-31).
         self.assertEqual(s["ran_out"], 1)
 
     def test_met_and_judged_from_verdicts(self):

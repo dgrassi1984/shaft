@@ -1,5 +1,5 @@
 """`shaft top`: the supervisor's control panel — every instance's state and what it is doing right now, the
-services, the latest events and messages, and (docs/plans/PLAN-control-panel.md) tabs for one instance in full, the
+services, the latest events and messages, and tabs for one instance in full, the
 judge's verdicts, trials, benchmarks, self-changes and probation, spending against the caps, and the services,
 with guarded actions. Refreshes every second, and restarts itself on the new code when the supervisor's source
 changes on disk. Runs with .venv-ui (rich). Without a terminal (`shaft top --once`, or piped) it prints one

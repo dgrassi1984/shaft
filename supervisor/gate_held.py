@@ -1,4 +1,4 @@
-"""Held candidates and each instance's gate record (docs/plans/PLAN-thelos-review-2.md M2, S2).
+"""Held candidates and each instance's gate record.
 
 A code change whose gate failed on the supervisor's side — its baseline red: the shared supervisor tests failing or
 out of time, the gate's own error, a test of the supervisor's that fails on the approved code too (gate.Output) — is

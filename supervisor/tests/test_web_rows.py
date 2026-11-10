@@ -42,21 +42,21 @@ class SavedRowsTest(ActionsTest):
                 mock.patch.object(opconfig, "_template_text", return_value=""), \
                 mock.patch.object(opconfig, "_commit", return_value=False), \
                 mock.patch.object(opconfig, "log"), mock.patch.object(actions, "run_now", cli):
-            first = self.post_row("config-set", name="wren", key="CUSTOM", value="second", saw="first", saw_set="1")
+            first = self.post_row("config-set", name="wisp", key="CUSTOM", value="second", saw="first", saw_set="1")
             self.assertEqual(first.status, 200, first.body)
             self.assertIn(b'name="saw" value="second"', first.body)
             saw = re.search(rb'name="saw" value="([^"]*)"', first.body)[1].decode()
-            second = self.post_row("config-set", name="wren", key="CUSTOM", value="third", saw=saw, saw_set="1")
+            second = self.post_row("config-set", name="wisp", key="CUSTOM", value="third", saw=saw, saw_set="1")
             self.assertEqual(second.status, 200, second.body)
             self.assertIn(b'name="saw" value="third"', second.body)
-            stale = self.post_row("config-set", name="wren", key="CUSTOM", value="lost", saw=saw, saw_set="1")
+            stale = self.post_row("config-set", name="wisp", key="CUSTOM", value="lost", saw=saw, saw_set="1")
             self.assertEqual(stale.status, 409)
             self.assertNotIn(b"<template", stale.body)
-            unset = self.post_row("config-unset", name="wren", key="CUSTOM", saw="third", saw_set="1")
+            unset = self.post_row("config-unset", name="wisp", key="CUSTOM", saw="third", saw_set="1")
             self.assertEqual(unset.status, 200, unset.body)
             self.assertIn(b'name="saw_set" value="0"', unset.body)
             self.assertNotIn(b">Unset<", unset.body)
-            again = self.post_row("config-set", name="wren", key="CUSTOM", value="back", saw="", saw_set="0")
+            again = self.post_row("config-set", name="wisp", key="CUSTOM", value="back", saw="", saw_set="0")
             self.assertEqual(again.status, 200, again.body)
             self.assertEqual(core.config_values((root / "config.env").read_text())["CUSTOM"], "back")
 
@@ -80,7 +80,7 @@ class SavedRowsTest(ActionsTest):
                 mock.patch.object(opconfig, "_check"), \
                 mock.patch.object(opconfig, "_commit", return_value=False), \
                 mock.patch.object(opconfig, "log"), mock.patch.object(actions, "run_now", cli):
-            r = self.post_row("config-set", name="wren", key="LLM_MODEL", value="new-model", saw="old-model",
+            r = self.post_row("config-set", name="wisp", key="LLM_MODEL", value="new-model", saw="old-model",
                               saw_set="1")
         self.assertEqual(r.status, 200, r.body)
         rows = re.findall(rb'<tr data-row id="config-([A-Z_]+)"', r.body)
@@ -91,9 +91,9 @@ class SavedRowsTest(ActionsTest):
         """Reverting #17 leaves an added key invisible until reload, with no next-save token."""
         field = dict(key="CUSTOM", set=True, value="new", default=None, help="", secret=False, choices=None,
                      numeric=False)
-        self.assertIn('data-add-row="#config-rows"', web_config.config_page("wren", [], []))
+        self.assertIn('data-add-row="#config-rows"', web_config.config_page("wisp", [], []))
         with mock.patch.object(opconfig, "fields", return_value=[field]):
-            saved = self.post_row("config-set", name="wren", key="CUSTOM", value="new", saw="", saw_set="0")
+            saved = self.post_row("config-set", name="wisp", key="CUSTOM", value="new", saw="", saw_set="0")
         self.assertEqual(saved.status, 200)
         self.assertEqual(saved.headers.get("X-Row"), "1")
         self.assertIn(b'id="config-CUSTOM"', saved.body)
@@ -122,25 +122,25 @@ class SavedRowsTest(ActionsTest):
         """Reverting #17 leaves Drive's old sha and Remove button after a mutation."""
         with mock.patch.object(web_config, "SUP_DIR", self.sup), \
                 mock.patch.object(opconfig, "drive", return_value=("new purpose", "new-sha")):
-            saved = self.post_row("drive-set", name="wren", text="new purpose", sha="old-sha")
+            saved = self.post_row("drive-set", name="wisp", text="new purpose", sha="old-sha")
             self.assertEqual(saved.status, 200)
             self.assertIn(b'name="sha" value="new-sha"', saved.body)
             self.assertIn(b"new purpose", saved.body)
             self.assertIn(b"Remove drive.md", saved.body)
         with mock.patch.object(opconfig, "drive", return_value=(None, "empty-sha")):
-            removed = self.post_row("drive-remove", name="wren", sha="new-sha")
+            removed = self.post_row("drive-remove", name="wisp", sha="new-sha")
             self.assertIn(b'name="sha" value="empty-sha"', removed.body)
             self.assertNotIn(b"Remove drive.md", removed.body)
 
     def test_removing_wake_floor_returns_no_floor_control(self):
         with mock.patch.object(web_config, "access", return_value=ACCESS):
-            r = self.post_row("limit", name="wren", limit="wake-floor", value="5")
+            r = self.post_row("limit", name="wisp", limit="wake-floor", value="5")
         self.assertEqual(r.status, 200)
         self.assertIn(b"back to none", r.body)
         self.assertIn(b'name="value" value="off"', r.body)
         access = dict(ACCESS, wake_floor=1, wake_floor_own=False)
         with mock.patch.object(web_config, "access", return_value=access):
-            r = self.post_row("limit", name="wren", limit="wake-floor", value="off")
+            r = self.post_row("limit", name="wisp", limit="wake-floor", value="off")
         self.assertEqual(r.status, 200)
         self.assertIn(b"No floor", r.body)
         self.assertIn(b'already no floor', r.body)
@@ -159,12 +159,12 @@ class SavedRowsTest(ActionsTest):
                 ("calendar", {"op": "grant", "alias": "home", "what": "cal"}, "operator&#x27;s Cal", "Your mail"),
             ]:
                 with self.subTest(verb=verb, form=form):
-                    r = self.post_row(verb, name="wren", **form)
+                    r = self.post_row(verb, name="wisp", **form)
                     self.assertEqual(r.status, 200, r.body)
                     self.assertIn(wanted, r.body.decode())
                     self.assertNotIn(absent, r.body.decode())
         with mock.patch.object(core, "disabled_tools", return_value={"delegate_coding"}):
-            r = self.post_row("tool", name="wren", tool="delegate_coding", to="off")
+            r = self.post_row("tool", name="wisp", tool="delegate_coding", to="off")
             self.assertIn(b"Switch on", r.body)
             self.assertNotIn(b"Switch off", r.body)
 

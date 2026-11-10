@@ -710,8 +710,8 @@ class ChatGrantsTest(unittest.TestCase):
         self.project = Path(tmp.name).resolve()
         git(self.project, 'init', '-q')
         git(self.project, 'commit', '-q', '--allow-empty', '-m', 'main')
-        self.root = self.project / 'instances' / 'wren'
-        git(self.project, 'worktree', 'add', '-q', '--orphan', '-b', 'instance/wren', str(self.root))
+        self.root = self.project / 'instances' / 'wisp'
+        git(self.project, 'worktree', 'add', '-q', '--orphan', '-b', 'instance/wisp', str(self.root))
         (self.root / 'shaft').mkdir()
         self.requests = []
         for patch in (mock.patch.object(core, 'SUP_DIR', self.project / '.supervisor'),
@@ -728,7 +728,7 @@ class ChatGrantsTest(unittest.TestCase):
         self.requests.append(req.full_url)
         self.assertEqual(req.full_url, 'https://chat.googleapis.com/v1/spaces?pageSize=1')
         self.assertEqual(req.get_method(), 'GET')
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
         return answer({'spaces': []})
 
     def cli(self, *args):
@@ -742,7 +742,7 @@ class ChatGrantsTest(unittest.TestCase):
         return code, out.getvalue()
 
     def grant(self, *args):
-        code, out = self.cli('wren', 'grant', 'work', *args)
+        code, out = self.cli('wisp', 'grant', 'work', *args)
         self.assertEqual(code, 0, out)
         return out
 
@@ -756,29 +756,29 @@ class ChatGrantsTest(unittest.TestCase):
         before = {'off': ['web'], 'shared': '/tmp/shared', 'mail': [{'account': 'work', 'label': 'Access'}],
                   'calendar': [{'account': 'work', 'calendar': 'primary', 'name': 'Work', 'write': True}],
                   'gdrive': [{'account': 'work', 'reach': 'all'}], 'wake_floor': 30, 'cloud_cap': 2}
-        self.core._update_tool_settings('wren', **before)
+        self.core._update_tool_settings('wisp', **before)
         own = [{'account': 'work'}]
-        self.assertEqual(self.core.set_gchat_grants('wren', own), own)
-        self.assertEqual(self.core.gchat_grants('wren'), own)
-        self.assertEqual(self.core.set_gchat_grants('wren', own + [{'account': 'work'}]),
+        self.assertEqual(self.core.set_gchat_grants('wisp', own), own)
+        self.assertEqual(self.core.gchat_grants('wisp'), own)
+        self.assertEqual(self.core.set_gchat_grants('wisp', own + [{'account': 'work'}]),
                          [{'account': 'work'}])
-        self.core.set_gchat_grants('wren', [])
-        self.assertEqual(self.core._tool_settings('wren'), before)
+        self.core.set_gchat_grants('wisp', [])
+        self.assertEqual(self.core._tool_settings('wisp'), before)
 
     def test_grant_refuses_unknown_alias(self):
-        code, out = self.cli('wren', 'grant', 'missing')
+        code, out = self.cli('wisp', 'grant', 'missing')
         self.assertEqual(code, 2)
         self.assertIn('shaft google login missing', out)
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
 
     def test_grant_refuses_login_without_scope(self):
         google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': google.GMAIL})
-        code, out = self.cli('wren', 'grant', 'work')
+        code, out = self.cli('wisp', 'grant', 'work')
         self.assertEqual(code, 2)
         self.assertIn('shaft google login work', out)
         self.assertIn('chat.messages.readonly', out)
         self.assertEqual(self.requests, [])
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
 
     def test_grant_requires_every_chat_scope(self):
         # Fix round 1 F4: the broker needs all three Chat scopes; a grant it would refuse is not saved.
@@ -786,43 +786,43 @@ class ChatGrantsTest(unittest.TestCase):
             with self.subTest(missing=missing):
                 scope = ' '.join(s for s in CHAT_SCOPES.split() if s != missing)
                 google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': scope})
-                code, out = self.cli('wren', 'grant', 'work')
+                code, out = self.cli('wisp', 'grant', 'work')
                 self.assertEqual(code, 2)
                 self.assertIn('shaft google login work', out)
                 self.assertIn(google.SCOPE_NAMES[missing], out)
                 self.assertEqual(self.requests, [])
-                self.assertEqual(self.core.gchat_grants('wren'), [])
+                self.assertEqual(self.core.gchat_grants('wisp'), [])
                 self.cli_module.log.assert_not_called()
 
     def test_off_removes_copies(self):
         self.grant()
         self.copies('work')
         self.copies('home')
-        self.assertEqual(self.cli('wren', 'off')[0], 0)
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.cli('wisp', 'off')[0], 0)
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
         self.assertFalse((self.root / 'gchat').exists())
-        self.assertEqual(self.cli('wren', 'off')[0], 0)
+        self.assertEqual(self.cli('wisp', 'off')[0], 0)
 
     def test_off_refuses_account_without_changes(self):
         grants = [{'account': 'work'}, {'account': 'home'}]
-        self.core.set_gchat_grants('wren', grants)
+        self.core.set_gchat_grants('wisp', grants)
         copies = [self.copies(alias) for alias in ('work', 'home')]
-        code, out = self.cli('wren', 'off', 'work')
+        code, out = self.cli('wisp', 'off', 'work')
         self.assertNotEqual(code, 0)
         self.assertIn('off takes no account', out)
         self.assertIn('revoke <alias>', out)
-        self.assertEqual(self.core.gchat_grants('wren'), grants)
+        self.assertEqual(self.core.gchat_grants('wisp'), grants)
         for path in copies:
             self.assertEqual((path / 'copy.txt').read_text(), 'copy')
         self.cli_module.log.assert_not_called()
 
     def test_revoke_removes_only_that_alias(self):
-        self.core.set_gchat_grants('wren', [{'account': 'work'}, {'account': 'home'}])
+        self.core.set_gchat_grants('wisp', [{'account': 'work'}, {'account': 'home'}])
         work, home = self.copies('work'), self.copies('home')
-        self.assertEqual(self.cli('wren', 'revoke', 'work')[0], 0)
+        self.assertEqual(self.cli('wisp', 'revoke', 'work')[0], 0)
         self.assertFalse(work.exists())
         self.assertEqual((home / 'copy.txt').read_text(), 'copy')
-        self.assertEqual(self.core.gchat_grants('wren'), [{'account': 'home'}])
+        self.assertEqual(self.core.gchat_grants('wisp'), [{'account': 'home'}])
 
     def test_symlinked_gchat_refused_target_untouched(self):
         target = self.project / 'target'
@@ -830,38 +830,38 @@ class ChatGrantsTest(unittest.TestCase):
         (target / 'keep').write_text('safe')
         (self.root / 'gchat').symlink_to(target, target_is_directory=True)
         self.grant()
-        code, out = self.cli('wren', 'off')
+        code, out = self.cli('wisp', 'off')
         self.assertNotEqual(code, 0)
         self.assertIn(str(self.root / 'gchat'), out)
         self.assertEqual((target / 'keep').read_text(), 'safe')
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
 
     def test_removal_failure_keeps_revoke_saved(self):
         self.grant()
         path = self.copies('work')
         with mock.patch('supervisor.core.shutil.rmtree', side_effect=PermissionError('denied')):
-            code, out = self.cli('wren', 'revoke', 'work')
+            code, out = self.cli('wisp', 'revoke', 'work')
         self.assertNotEqual(code, 0)
         self.assertIn(str(path), out)
         self.assertTrue(path.exists())
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
 
     def test_remove_rejects_path_alias(self):
         with self.assertRaises(ValueError):
-            self.core.remove_gchat_copies('wren', '../escape')
+            self.core.remove_gchat_copies('wisp', '../escape')
 
     def test_grant_checks_account_with_spaces_list(self):
         self.grant()
         self.assertEqual(self.requests, ['https://chat.googleapis.com/v1/spaces?pageSize=1'])
-        self.assertEqual(self.core.gchat_grants('wren'), [{'account': 'work'}])
-        self.cli_module.log.assert_called_once_with('wren: gchat grant work added by the operator')
+        self.assertEqual(self.core.gchat_grants('wisp'), [{'account': 'work'}])
+        self.cli_module.log.assert_called_once_with('wisp: gchat grant work added by the operator')
 
     def test_grant_api_failure_not_saved(self):
         with mock.patch.object(google, 'urlopen', side_effect=google.ApiError(403, 'access denied')):
-            code, out = self.cli('wren', 'grant', 'work')
+            code, out = self.cli('wisp', 'grant', 'work')
         self.assertEqual(code, 2)
         self.assertIn('access denied', out)
-        self.assertEqual(self.core.gchat_grants('wren'), [])
+        self.assertEqual(self.core.gchat_grants('wisp'), [])
 
     def test_web_action_has_no_reach(self):
         from supervisor import web_config, web_actions
@@ -869,31 +869,31 @@ class ChatGrantsTest(unittest.TestCase):
         self.assertEqual(web_actions.CHECK['gchat'], 'Access')
         with mock.patch.object(web_config, '_ran', return_value=(200, 'ok')) as ran:
             for op in ('grant', 'revoke', 'off'):
-                form = {'op': op, 'name': 'wren'}
+                form = {'op': op, 'name': 'wisp'}
                 if op != 'off':
                     form['alias'] = 'work'
-                web_config.run('gchat', 'wren', form)
-                ran.assert_called_with(['gchat', 'wren', op] + ([] if op == 'off' else ['work']))
+                web_config.run('gchat', 'wisp', form)
+                ran.assert_called_with(['gchat', 'wisp', op] + ([] if op == 'off' else ['work']))
 
     def test_web_action_refuses_extra_fields_without_changes(self):
         from supervisor import web_config, web_actions
         grants = [{'account': 'work'}]
-        self.core.set_gchat_grants('wren', grants)
+        self.core.set_gchat_grants('wisp', grants)
         copies = self.copies('work')
         with mock.patch.object(web_config, '_ran') as ran:
             for op in ('grant', 'revoke', 'off'):
                 for field in ('all', 'reach', 'unexpected'):
                     with self.subTest(op=op, field=field):
                         with self.assertRaisesRegex(web_actions.Refused, field):
-                            web_config.run('gchat', 'wren', {'op': op, 'alias': 'work', field: '1'})
+                            web_config.run('gchat', 'wisp', {'op': op, 'alias': 'work', field: '1'})
                         ran.assert_not_called()
-                        self.assertEqual(self.core.gchat_grants('wren'), grants)
+                        self.assertEqual(self.core.gchat_grants('wisp'), grants)
                         self.assertEqual((copies / 'copy.txt').read_text(), 'copy')
 
     def test_web_form_confirms_every_conversation_and_revoke_deletion(self):
         from supervisor import web_config
         from supervisor.tests.test_web_config import ACCESS
-        page = str(web_config.access_page('wren', dict(ACCESS, gchat=[{'account': 'work'}]), 'gchat'))
+        page = str(web_config.access_page('wisp', dict(ACCESS, gchat=[{'account': 'work'}]), 'gchat'))
         self.assertIn('read every Google Chat conversation on this account?', page)
         self.assertIn('Downloads are deleted on revoke.', page)
         self.assertIn('data-post="/action/gchat" data-confirm=', page)
@@ -904,15 +904,15 @@ class ChatGrantsTest(unittest.TestCase):
 
     def test_show_and_list_grants(self):
         self.grant()
-        for args in ((), ('wren',)):
+        for args in ((), ('wisp',)):
             code, out = self.cli(*args)
             self.assertEqual(code, 0, out)
-            self.assertIn('wren may read: work', out)
+            self.assertIn('wisp may read: work', out)
 
     def test_malformed_grants_dropped(self):
-        self.core._update_tool_settings('wren', gchat=[None, {}, {'account': 1},
+        self.core._update_tool_settings('wisp', gchat=[None, {}, {'account': 1},
             {'account': '../escape'}, {'account': 'work', 'extra': True}])
-        self.assertEqual(self.core.gchat_grants('wren'), [{'account': 'work'}])
+        self.assertEqual(self.core.gchat_grants('wisp'), [{'account': 'work'}])
 
 
 from supervisor.tests.test_mail import MailCase, git   # noqa: E402 — the broker tests share mail's instance setup
@@ -926,7 +926,7 @@ NOTES = {'contentName': 'notes.txt', 'contentType': 'text/plain',
 
 
 class ChatBrokerTest(MailCase):
-    """The three Chat tools through the broker: wren granted `work`, a fake Chat behind google.urlopen."""
+    """The three Chat tools through the broker: wisp granted `work`, a fake Chat behind google.urlopen."""
 
     def fake_gmail(self):
         self.fake = FakeChat()
@@ -936,7 +936,7 @@ class ChatBrokerTest(MailCase):
         super().setUp()
         from supervisor import broker, core, gchat
         self.core, self.broker_module, self.chat = core, broker, gchat
-        core.set_gchat_grants('wren', [{'account': 'work'}])
+        core.set_gchat_grants('wisp', [{'account': 'work'}])
         google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': CHAT_SCOPES})
         with (self.root / '.gitignore').open('a') as out:
             out.write('\ngchat/\n')
@@ -958,9 +958,9 @@ class ChatBrokerTest(MailCase):
         import threading
         from pathlib import Path
         return self.broker_module.ReplayBroker(
-            'wren', self.project, self.secrets, self.sup / 'broker.log',
+            'wisp', self.project, self.secrets, self.sup / 'broker.log',
             state_root=Path(tempfile.mkdtemp(dir=self.project)), start_commit='0', as_of=CUT,
-            cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wren@trial:t',
+            cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wisp@trial:t',
             tools_log=self.sup / 't.log', max_calls=200)
 
     def calls(self):
@@ -971,7 +971,7 @@ class ChatBrokerTest(MailCase):
         return {s['function']['name'] for s in b.tool_specs()}
 
     def test_no_grant_no_tools(self):
-        self.core.set_gchat_grants('wren', [])
+        self.core.set_gchat_grants('wisp', [])
         b = self.broker()
         self.assertFalse(set(self.broker_module.GCHAT_TOOLS) & self.names(b))
         self.assertEqual(b.gchat_env(), '')
@@ -979,7 +979,7 @@ class ChatBrokerTest(MailCase):
             with self.subTest(tool=tool):
                 self.assertEqual(self.refused(b, tool, args), 'no Google Chat granted to you')
         self.assertEqual(self.fake.requests, [])
-        self.core.set_gchat_grants('wren', [{'account': 'work'}])
+        self.core.set_gchat_grants('wisp', [{'account': 'work'}])
         self.assertEqual(set(self.broker_module.GCHAT_TOOLS),
                          {'gchat_search', 'gchat_read', 'gchat_download'})
         self.assertTrue(set(self.broker_module.GCHAT_TOOLS) <= self.names(b))
@@ -996,13 +996,13 @@ class ChatBrokerTest(MailCase):
         b = self.broker()
         for tool, args in self.calls():
             self.ok(b, tool, args)
-        self.core.set_gchat_grants('wren', [])
+        self.core.set_gchat_grants('wisp', [])
         for tool, args in self.calls():
             with self.subTest(tool=tool):
                 self.assertEqual(self.refused(b, tool, args), 'no Google Chat granted to you')
         # One alias of two revoked: its handles are refused at once, the other's still read.
         google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': CHAT_SCOPES})
-        self.core.set_gchat_grants('wren', [{'account': 'home'}])
+        self.core.set_gchat_grants('wisp', [{'account': 'home'}])
         for tool, args in self.calls()[1:]:
             with self.subTest(tool=tool, alias='work'):
                 err = self.refused(b, tool, args)
@@ -1081,7 +1081,7 @@ class ChatBrokerTest(MailCase):
         err = self.refused(b, 'gchat_download', {'id': self.msg, 'attachment': '1'})
         self.assertIn('drive_read / drive_download', err)
         self.assertIn('no Drive is granted to you', err)
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}])
         self.assertIn('yours: work (own)', self.refused(b, 'gchat_download', {'id': self.msg, 'attachment': '1'}))
         self.assertFalse((self.root / 'gchat').exists())
 
@@ -1089,7 +1089,7 @@ class ChatBrokerTest(MailCase):
         (self.root / '.gitignore').write_text('logs/\n')
         err = self.refused(self.broker(), 'gchat_download', {'id': self.msg, 'attachment': '1'})
         self.assertIn('gchat/ is not ignored', err)
-        self.assertIn('shaft update wren', err)
+        self.assertIn('shaft update wisp', err)
         self.assertFalse((self.root / 'gchat').exists())
 
     def test_run_bytes_capped(self):
@@ -1119,9 +1119,9 @@ class ChatBrokerTest(MailCase):
             thread.start()
             try:
                 self.assertTrue(started.wait(5), 'fetch never started')
-                with self.core.gchat_lock('wren'):
-                    self.core.set_gchat_grants('wren', [])
-                    self.core.remove_gchat_copies('wren')
+                with self.core.gchat_lock('wisp'):
+                    self.core.set_gchat_grants('wisp', [])
+                    self.core.remove_gchat_copies('wisp')
                 self.assertFalse((self.root / 'gchat').exists())
             finally:
                 resume.set()
@@ -1142,7 +1142,7 @@ class ChatBrokerTest(MailCase):
             self.assertNotIn('SECRET-LATE', a)                         # created after the replayed cycle began
             google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt',
                                           'scope': CHAT_SCOPES})
-            self.core.set_gchat_grants('wren', [{'account': 'work'}, {'account': 'home'}])
+            self.core.set_gchat_grants('wisp', [{'account': 'work'}, {'account': 'home'}])
             self.ok(second, 'gchat_read', {'id': self.conv})
             self.assertEqual(page.call_count, 2)
         for b in (first, second):
@@ -1175,11 +1175,11 @@ class ChatBrokerTest(MailCase):
                  ('gchat_search', {'text': 'SECRET', 'account': 'work'}))
         for tool, args in reads:
             with self.subTest(tool=tool, change='revoked'):
-                self.core.set_gchat_grants('wren', both)
+                self.core.set_gchat_grants('wisp', both)
                 cache = {}
                 first, second = self.replay(cache), self.replay(cache)
                 self.ok(first, tool, args)
-                self.core.set_gchat_grants('wren', home)
+                self.core.set_gchat_grants('wisp', home)
                 # The cache answers as if the grant had not changed: a cached answer must still not get through.
                 for k, v in list(cache.items()):
                     key = [home if part == both else part for part in json.loads(k)]
@@ -1187,7 +1187,7 @@ class ChatBrokerTest(MailCase):
                 self.assertIn("'work' is not granted", self.refused(second, tool, args))
                 self.assertFalse((second.root / 'gchat').exists())
             with self.subTest(tool=tool, change='left the conversation'):
-                self.core.set_gchat_grants('wren', [{'account': 'work'}])
+                self.core.set_gchat_grants('wisp', [{'account': 'work'}])
                 self.fake.spaces.insert(0, {'name': 'spaces/lobby', 'displayName': 'Lobby'})
                 cache = {}
                 first, second = self.replay(cache), self.replay(cache)
@@ -1420,11 +1420,11 @@ class ChatBrokerTest(MailCase):
         self.assertTrue((self.root / 'gchat/work/room/m1-notes.txt').exists())
         self.assertFalse(any(p.startswith('gchat/') for p in trial._files_now(self.root)))
         with mock.patch.object(battery, 'SUP_DIR', self.sup):
-            copy = battery.make_exam_copy('wren', self.root)
+            copy = battery.make_exam_copy('wisp', self.root)
         self.assertFalse((copy / 'gchat').exists())
         with mock.patch.object(self.core, 'instance_root', return_value=self.root):
             for path in ('gchat/work/room/m1-notes.txt', 'GCHAT/work/room/m1-notes.txt'):
-                self.assertEqual(web._instance_files('wren', 'file', {'path': path}, ['wren'], '').status, 403)
+                self.assertEqual(web._instance_files('wisp', 'file', {'path': path}, ['wisp'], '').status, 403)
         self.assertTrue(coder._hidden('gchat/work/room/m1-notes.txt'))
 
     def test_registries_name_gchat_as_read(self):
@@ -1447,7 +1447,7 @@ class ChatBrokerTest(MailCase):
         self.addCleanup(b.stop)
         _, env = runner.agent_command(self.root, b, ['live'], self.project / 'p.sb', [8780], {})
         self.assertEqual(env['SHAFT_GCHAT'], 'work')
-        self.core.set_gchat_grants('wren', [])
+        self.core.set_gchat_grants('wisp', [])
         _, env = runner.agent_command(self.root, b, ['live'], self.project / 'p.sb', [8780], {})
         self.assertNotIn('SHAFT_GCHAT', env)
 

@@ -1,6 +1,6 @@
 # Shared: the chat both apps draw
 
-The SwiftUI views and view models of the iPhone, iPad and Mac apps ([docs/plans/PLAN-native-apps.md](../../../docs/plans/PLAN-native-apps.md) M4/M5), over SHAFTKit's
+The SwiftUI views and view models of the iPhone, iPad and Mac apps, over SHAFTKit's
 stores. The session forwards badge confirmations to `AppModel.setBadge`, independently of these views.
 Everything here compiles for iOS and macOS; what differs per platform sits behind small seams.
 

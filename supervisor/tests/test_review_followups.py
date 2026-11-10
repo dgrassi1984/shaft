@@ -39,14 +39,14 @@ class ReviewFollowupsTest(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory(prefix="shaft-replay-withdraw-") as tmp:
             root = Path(tmp)
-            path = root / gate_held.RUNS / "kant.jsonl"
+            path = root / gate_held.RUNS / "kiln.jsonl"
             path.parent.mkdir()
             text = "".join(json.dumps(row) + "\n" for row in rows)
             path.write_text(text)
             with mock.patch.object(core, "SUP_DIR", root), \
                  mock.patch.object(gate_held, "pending", side_effect=AssertionError("current state read")):
                 replay = broker.ReplayBroker.__new__(broker.ReplayBroker)
-                replay.name = "kant"
+                replay.name = "kiln"
                 replay.as_of = datetime(2026, 10, 1, 10)
                 replay.sim_withdrawn = set()
                 replay._tags = threading.local()

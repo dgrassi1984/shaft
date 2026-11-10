@@ -18,7 +18,7 @@ class CommentsJsTest(unittest.TestCase):
         script = r"""
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const storage = new Map(), requests = [], toasts = [];
-let fail = false, message = "sent to wren";
+let fail = false, message = "sent to wisp";
 function page() {
   const handlers = {}, elements = {};
   let selection = { removeAllRanges() {} };
@@ -42,7 +42,7 @@ function page() {
         this.children[".comment-send"].querySelectorAll = () => radios;
       } };
   }
-  const panel = { dataset: { poll: "/fragment/docs/wren?doc=plan.md" } };
+  const panel = { dataset: { poll: "/fragment/docs/wisp?doc=plan.md" } };
   const view = { dataset: { doc: "plan.md", sha: "sha" },
     querySelectorAll: () => [{ dataset: { pid: "p-0000000000000009", text: "old note" } }] };
   const document = { readyState: "loading", activeElement: null,
@@ -50,7 +50,7 @@ function page() {
     getElementById: id => id === "docs" ? panel : elements[id],
     addEventListener(k, fn) { (handlers[k] ||= []).push(fn); } };
   const context = { document, URL, URLSearchParams, Uint8Array, AbortController, setTimeout, clearTimeout,
-    crypto: require("node:crypto").webcrypto, location: { href: "https://shaft.test/i/wren/chat" },
+    crypto: require("node:crypto").webcrypto, location: { href: "https://shaft.test/i/wisp/chat" },
     localStorage: { getItem: k => storage.get(k) || null, setItem: (k,v) => storage.set(k,v),
       removeItem: k => storage.delete(k) },
     MutationObserver: class { observe() {} }, requestAnimationFrame() {},
@@ -121,12 +121,12 @@ for (const kind of ["doc", "reply"]) {
   toggle(f, false); assert.equal(label(f), "Save without sending");   // not private: its instance reads it
   toggle(f, true); assert.equal(label(f), "Send comment");
   type(f, "Question"); await submit(f);
-  assert.equal(toasts.at(-1), "sent to wren");
+  assert.equal(toasts.at(-1), "sent to wisp");
   assert.equal(requests.at(-1).body.get("send"), "1");
   f = p.open(kind); toggle(f, false); type(f, "Private note");
-  message = "saved, not sent: wren sees it in notes/comments/"; await submit(f);
+  message = "saved, not sent: wisp sees it in notes/comments/"; await submit(f);
   assert.equal(requests.at(-1).body.has("send"), false);
-  assert.equal(toasts.at(-1), message); message = "sent to wren";
+  assert.equal(toasts.at(-1), message); message = "sent to wisp";
 }
 const f = p.open("edit"); assert.equal(label(f), "Save note");
 type(f, "edited"); await submit(f); assert.equal(requests.at(-1).body.has("send"), false);
@@ -148,7 +148,7 @@ f = p.open(); assert.equal(text(f).value, "whole draft"); assert.equal(when(f), 
 p.view.dataset.doc = "other.md"; f = p.open(); assert.equal(text(f).value, "");
 p.view.dataset.doc = "plan.md"; p.panel.dataset.poll = "/fragment/docs/robin";
 f = p.open(); assert.equal(text(f).value, "");
-p.panel.dataset.poll = "/fragment/docs/wren";
+p.panel.dataset.poll = "/fragment/docs/wisp";
 f = p.open(); click(f, "discard"); f = p.open(); assert.equal(text(f).value, "");
 assert.equal(requests.length, 0);
 type(f, "retry me"); fail = true; await submit(f);
@@ -168,20 +168,20 @@ f = p.select(10); assert.equal(text(f).value, "second quote");
 """)
 
     def test_next_cycle_choice_sends_cycle_and_survives_reload(self):
-        """PLAN-background-messages: "in its next cycle" posts send=cycle (not 1), says so on its button, and a draft
+        """"in its next cycle" posts send=cycle (not 1), says so on its button, and a draft
         keeps the choice; a draft kept before the choice existed (send: false) still opens as kept."""
         self.run_composer(r"""
 let p = page(), f = p.open();
-assert.equal(f.querySelector(".comment-send").querySelector("legend").textContent, "Send to wren");
+assert.equal(f.querySelector(".comment-send").querySelector("legend").textContent, "Send to wisp");
 choose(f, "cycle"); assert.equal(label(f), "Send for its next cycle");
 type(f, "look at this later"); p.escape();
 p = page(); f = p.open(); assert.equal(when(f), "cycle"); assert.equal(text(f).value, "look at this later");
-message = "for wren's next cycle (≈14:20)"; await submit(f);
+message = "for wisp's next cycle (≈14:20)"; await submit(f);
 assert.equal(requests.at(-1).body.get("send"), "cycle");
 assert.equal(toasts.at(-1), message);
 f = p.open("reply", "c3"); choose(f, "now"); type(f, "now please"); await submit(f);
 assert.equal(requests.at(-1).body.get("send"), "1");
-storage.set(`shaft.draft.comment.${JSON.stringify(["wren", "plan.md", "reply", "c4"])}`,
+storage.set(`shaft.draft.comment.${JSON.stringify(["wisp", "plan.md", "reply", "c4"])}`,
             JSON.stringify({ text: "old draft", send: false, pid: "p-00000000000000aa" }));
 f = p.open("reply", "c4"); assert.equal(text(f).value, "old draft"); assert.equal(when(f), "keep");
 """)

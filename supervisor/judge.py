@@ -1,9 +1,9 @@
 """The cloud judge: models that grade instances, never live their lives.
 
 A rotation (Opus 5.5 was too costly; "stochastic rotation I prefer"): every judgment picks one
-model at random from SHAFT_JUDGE_MODELS, never the model the judged instance runs on (no self-preference — wren runs
-on MiMo). Haiku 5.5 left on 2026-10-16: on the same cycles it called 54% of wren's claims unsupported where the blind
-GLM judge called 4%, Sonnet 21% and Opus 17% (docs/plans/PLAN-judge-mix.md). Sonnet 5.5 left on 2026-10-20 for cost
+model at random from SHAFT_JUDGE_MODELS, never the model the judged instance runs on (no self-preference — wisp runs
+on MiMo). Haiku 5.5 left on 2026-10-16: on the same cycles it called 54% of wisp's claims unsupported where the blind
+GLM judge called 4%, Sonnet 21% and Opus 17%. Sonnet 5.5 left on 2026-10-20 for cost
 ($12-25 a day); MiMo and GLM 5.3 Flash since. DeepSeek V4.1 Flash is reserved for the independent second judge.
 The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
@@ -43,7 +43,7 @@ class JudgeError(Exception):
     pass
 
 
-# A conversation turn the operator spoke (its talk episode says `voice`, PLAN-voice C1): the text is what speech
+# A conversation turn the operator spoke (its talk episode says `voice`): the text is what speech
 # recognition heard on the device. Every judge prompt that shows such a turn marks it, so a misheard word ("music" for
 # "mutex") is not taken for what the operator meant.
 SPOKEN = "spoken: transcribed speech, may contain recognition errors"
@@ -197,7 +197,7 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 
 # -- the second judge ---------------------------------------------------------------------------------------------
 # Another model family grades a sample of cycles blind, so an instance can tell the main judge's idiosyncrasies
-# from what its tool log shows (wren, 2026-10-13). GLM 5.3 Flash until 2026-10-20, when the operator made it a main
+# from what its tool log shows (wisp, 2026-10-13). GLM 5.3 Flash until 2026-10-20, when the operator made it a main
 # judge too and it graded four runs twice, agreeing with itself (#45); DeepSeek V4.1 Flash since, which no instance runs
 # on. Its model is left out of the main rotation (pick: there only when no other judge may grade, then that run gets
 # no second judgment), so the cross-check stays an independent family; the agreement

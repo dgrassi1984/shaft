@@ -65,7 +65,7 @@ def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
     A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
     self-model, personality, goals, journal, episodes and notes start fresh. The lineage
     stays in git history. With `seed`, it also starts knowing what the parent knows about the operator
-    (its people file and facts, marked as the parent's), never what the parent is (docs/plans/PLAN-thelos.md).
+    (its people file and facts, marked as the parent's), never what the parent is.
     """
     if not NAME_RE.match(name) or name == "operator":
         print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
@@ -128,7 +128,7 @@ def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
 
 
 def cmd_delete(name: str, yes: bool, keep_archive: bool) -> int:
-    """`shaft delete`: the confirmation, then delete.delete (docs/plans/PLAN-kill-delete.md)."""
+    """`shaft delete`: the confirmation, then delete.delete."""
     from . import delete
     if not yes:
         if not sys.stdin.isatty():
@@ -164,7 +164,7 @@ def _env_values(text: str) -> dict[str, str]:
 
 def _resolve_config_conflict(root) -> bool:
     """A conflict only in config.env: take the template's file, keep each value the instance changed.
-    (wren's Haiku model conflicted with every template change near those lines.)"""
+    (wisp's Haiku model conflicted with every template change near those lines.)"""
     conflicted = git_wt(root, "diff", "--name-only", "--diff-filter=U").stdout.split()
     if conflicted != ["config.env"]:
         return False
@@ -201,7 +201,7 @@ def cmd_update(names: list[str]) -> int:
     operator update is never mistaken for a change the instance made to itself mid-run.
 
     Never on uncommitted changes to tracked files: the gate would test code that is not committed, and
-    the rollback of a failed merge must undo only the merge (wren and kant both had an uncommitted
+    the rollback of a failed merge must undo only the merge (wisp and kiln both had an uncommitted
     config.env while updates ran, 2026-10-13, and the old `reset --hard` would have discarded it).
     An operator's config.env edit is first committed on its own, as a run would (between runs every
     config.env change is the operator's); anything else uncommitted stops the update for the operator.
@@ -307,7 +307,7 @@ def cmd_setup() -> int:
         git("worktree", "add", "-q", str(path), branch)
         print(f"created {branch:24} {path.relative_to(PROJECT)}")
     # A fresh clone has no hooks: until `shaft mind guard` ran, nothing stopped `git push --all` from publishing the
-    # instance branches, whose history holds the minds of the past (PLAN-mind-out-of-git.md D4).
+    # instance branches, whose history holds the minds of the past.
     try:
         print(f"guarded {mind.guard_project()}: instance/* branches are refused on push")
     except mind.MindError as e:
@@ -440,7 +440,7 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
 
 
 def cmd_jobs(name: str | None, action: str | None) -> int:
-    """Scheduled jobs (docs/plans/PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares."""
+    """Scheduled jobs: an instance's own plugins, run on the timer their manifest declares."""
     from . import jobs
     if action and not name:
         print("usage: shaft jobs <name> on|off", file=sys.stderr)
@@ -473,7 +473,7 @@ def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
 
 
 def cmd_channel(name: str, value: str | None) -> int:
-    """Where this instance's messages to you alert you (docs/plans/PLAN-operator-channel.md): auto (where you last wrote
+    """Where this instance's messages to you alert you: auto (where you last wrote
     to it), web or telegram. An open conversation's channel comes first either way."""
     from . import channel
     instance_root(name)
@@ -538,7 +538,7 @@ def cmd_secret(args) -> int:
             print(f"{args.name} has no keys")
         return 0
     if not args.key:
-        print("which key? e.g. shaft secret wren set github --hosts api.github.com", file=sys.stderr)
+        print("which key? e.g. shaft secret wisp set github --hosts api.github.com", file=sys.stderr)
         return 2
     if args.action == "delete":
         try:
@@ -565,7 +565,7 @@ def cmd_secret(args) -> int:
 
 def _secret_google(args, root) -> int:
     """`shaft secret <name> google <key> <address> --client <c> [--scope gmail.modify|drive]`: the instance's own
-    Google account (docs/plans/PLAN-own-mail.md, docs/plans/PLAN-own-drive.md), signed in by the operator in the browser; the broker
+    Google account, signed in by the operator in the browser; the broker
     refreshes it per run."""
     from . import google
     from .core import secrets_env, store_google_key
@@ -574,7 +574,7 @@ def _secret_google(args, root) -> int:
                       if k.startswith("GMAIL_") and k.endswith("_CLIENT_ID")})
     if not (args.address and args.client):
         print(f"usage: shaft secret {args.name} google <key> <address> --client <name> [--scope "
-              f"{'|'.join(google.KEY_SCOPES)}] (e.g. shaft secret thelos google drive assistant@example.com --client "
+              f"{'|'.join(google.KEY_SCOPES)}] (e.g. shaft secret tundra google drive assistant@example.com --client "
               f"personal --scope drive); the OAuth clients in .env: {', '.join(clients) or 'none'}", file=sys.stderr)
         return 2
     try:
@@ -613,7 +613,7 @@ def cmd_share(name: str, folder: str | None) -> int:
 
 def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "") -> int:
     """The operator's Google accounts, shared by mail, calendar, Drive and Chat: log one in (one
-    consent), list them with their clients and granted scopes, or move the account files of docs/plans/PLAN-mail's folder."""
+    consent), list them with their clients and granted scopes, or move the account files out of the old mail folder."""
     from . import google
     from .core import secrets_env
     if action == "login":
@@ -664,7 +664,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
 
 
 def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
-    """The operator's Gmail an instance may read, one label at a time (docs/plans/PLAN-mail.md): grant, revoke, show. The
+    """The operator's Gmail an instance may read, one label at a time: grant, revoke, show. The
     accounts are `shaft google`'s. The grant is read on every mail call, so a revoke takes effect on the instance's
     next call."""
     from . import google, mail
@@ -863,7 +863,7 @@ def cmd_gchat(target: str | None, action: str | None, alias: str | None) -> int:
 
 
 def cmd_calendar(target: str | None, action: str | None, alias: str | None, which: str | None) -> int:
-    """The operator's calendars an instance may read, one calendar per grant (docs/plans/PLAN-calendar.md): grant (by
+    """The operator's calendars an instance may read, one calendar per grant: grant (by
     `primary`, title or ID, stored as the ID), revoke, off, show; `calendars <alias>` lists an account's calendars.
     The grant is read on every calendar call, so a revoke takes effect on the instance's next call."""
     from . import calendar as gcal, google
@@ -921,7 +921,7 @@ def cmd_calendar(target: str | None, action: str | None, alias: str | None, whic
         except (google.AccountError, google.ApiError) as e:
             print(f"not granted: {e}", file=sys.stderr)
             return 2
-        # PLAN-calendar-write M0: write implies read; upgrading replaces the same record, never a parallel grant.
+        # Write implies read; upgrading replaces the same record, never a parallel grant.
         prior = next((g for g in grants if (g["account"], g["calendar"]) == (alias, cal["id"])), {})
         grant = {"account": alias, "calendar": cal["id"], "name": cal["title"]}
         if action == "grant-write" or prior.get("write"):
@@ -967,7 +967,7 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
 
 
 def cmd_mind(args) -> int:
-    """The mind stores (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md). backfill and check only read the project
+    """The mind stores (supervisor/mind.py). backfill and check only read the project
     repository; cutover changes the instance's branch (one untrack commit) and is the operator's step."""
     if args.action == "guard":
         print(f"installed {mind.guard_project(args.project)}: instance/* refs are refused on push")
@@ -1315,7 +1315,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("alerts", help="the control panel's open alerts with their ids; 'dismiss ID…' hides them")
     p.add_argument("action", nargs="?", choices=["dismiss"])
     p.add_argument("ids", nargs="*")
-    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet (docs/plans/PLAN-webui.md): on, off, "
+    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on, off, "
                                    "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
     p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
     p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
@@ -1382,7 +1382,7 @@ def main(argv: list[str]) -> int:
                    help="run: only the control, on coding and research (checks the items discriminate)")
     p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
     p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
-    p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (docs/plans/PLAN-surprise baseline)")
+    p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (the surprise baseline)")
     p.add_argument("names", nargs="*")
     p.add_argument("--freeze", action="store_true", help="also write the baseline the surprise loop is judged against")
     p = sub.add_parser("surprise-rejudge", help="re-judge the cycles before the surprise loop with its judge fields, "
@@ -1395,15 +1395,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("--control", action="store_true", help="the M2 control: re-judge the baseline's cycles by the same "
                    "judge without the surprise fields, into judgments/<name>-surprise-control.jsonl, and compare")
     p = sub.add_parser("surprise-report", help="the surprise loop's acceptance window: P1-P5 against the frozen "
-                       "baseline, and how each sleep handled the surprises (docs/plans/PLAN-surprise.md §4)")
+                       "baseline, and how each sleep handled the surprises")
     p.add_argument("names", nargs="*")
     p.add_argument("--since", required=True, help="when the window began (M3 live): YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--until", default="", help="when it ends (default: now)")
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
-    # docs/plans/PLAN-consciousness.md: measurements and kill tests (read the record; only anchoring and tom --score /
+    # Measurements and kill tests (read the record; only anchoring and tom --score /
     # --baselines pay a judge, only experiment replays cycles)
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
-                       "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
+                       "its consulted cycles fared")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("compression", help="offline memory compression assay with held-out recall (#113)")
     p.add_argument("name")
@@ -1430,7 +1430,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("names", nargs="*")
     p.add_argument("--score", action="store_true", help="score the expectations now decidable (a judge per reply)")
     p.add_argument("--baselines", action="store_true", help="also the two information-matched baselines (paid)")
-    p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
+    p = sub.add_parser("experiment", help="kill tests of the self-knowledge mechanisms: cards, attention, commitments, forecast "
                        "(knob trials), workspace, monitors, choice-blindness, privileged, recognition and "
                        "resource-shock; --report shows results")
     p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "monitors",
@@ -1548,13 +1548,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("--client", default="", help="google: the OAuth client in .env (GMAIL_<CLIENT>_CLIENT_ID/_SECRET)")
     p.add_argument("--scope", default="gmail.modify",
                    help="google: gmail.modify (read, send, label, trash its mail) or drive (its Drive, Sheets, Docs and "
-                        "Slides: docs/plans/PLAN-own-drive.md)")
+                        "Slides)")
     p.add_argument("--header", default="Authorization")
     p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
-    p = sub.add_parser("browser", help="the Chromium every instance browses with (docs/plans/PLAN-browser.md): 'install "
+    p = sub.add_parser("browser", help="the Chromium every instance browses with: 'install "
                                        "[--playwright X.Y.Z]' (re)installs it; alone shows it and each profile")
     p.add_argument("action", nargs="?", choices=["install"])
     p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
@@ -1777,7 +1777,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "google":
         return cmd_google(args.action, args.alias, args.address, args.client)
     if args.cmd == "mail":
-        if args.target == "login":   # docs/plans/PLAN-calendar M1: one login for every Google service
+        if args.target == "login":   # one login for every Google service
             print("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", file=sys.stderr)
             return 2
         if args.target and args.action not in (None, "grant", "revoke", "off"):

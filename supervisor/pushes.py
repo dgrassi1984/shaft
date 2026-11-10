@@ -53,7 +53,7 @@ def hold_until(row: dict, sup_dir: Path, now: datetime, sent: int = 0, live: boo
     The budget counts the notifications that went out today, not the ones held: a night's held messages go out as one
     digest and leave the day's budget whole. Over the budget only urgent=true or an open conversation (the operator
     is in it) notifies at once; a reply within 2 h of the operator's message waits no quiet hours but keeps to the
-    budget (review I14: thelos sent 21 pushes against a budget of 6). `sent`: notifications a trial replay simulated;
+    budget (review I14: tundra sent 21 pushes against a budget of 6). `sent`: notifications a trial replay simulated;
     `live=False` (a replay) leaves out today's conversations."""
     if not PUSH_HOLD or row.get("urgent") or row.get("to") != "operator" or not row.get("alert"):
         return None

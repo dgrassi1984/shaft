@@ -106,7 +106,7 @@ class RoutingTest(unittest.TestCase):
         return [json.loads(l) for l in (self.sup / "judge_usage.jsonl").read_text().splitlines()]
 
     def test_claude_models_go_to_the_claude_api_with_structured_output(self):
-        self.assertEqual(judge.ask("sys", "case", SCHEMA, "judge wren", model="claude-sonnet-5-5"), ANSWER)
+        self.assertEqual(judge.ask("sys", "case", SCHEMA, "judge wisp", model="claude-sonnet-5-5"), ANSWER)
         body = self.claude.requests[-1]
         self.assertEqual(body["model"], "claude-sonnet-5-5")
         self.assertEqual(body["output_config"]["format"]["schema"], SCHEMA)
@@ -136,12 +136,12 @@ class RoutingTest(unittest.TestCase):
 
 
 class CycleVerdictTest(unittest.TestCase):
-    """judge_pending: an instance on MiMo (wren) is graded by Haiku or Sonnet only, and each verdict says which."""
+    """judge_pending: an instance on MiMo (wisp) is graded by Haiku or Sonnet only, and each verdict says which."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-judge-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        root = self.tmp / "instances" / "wren"
+        root = self.tmp / "instances" / "wisp"
         (root / "memory" / "episodes").mkdir(parents=True)
         (root / "config.env").write_text('LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"\n')
         rows = [{"ts": f"2026-10-14T10:{i:02d}:00", "kind": "live", "intent": {"goal": f"g{i}", "success_criterion": "c"},
@@ -166,9 +166,9 @@ class CycleVerdictTest(unittest.TestCase):
                     "value": 1, "value_for": "nobody", "value_reason": "nothing kept", "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True, "delivery_supported": "na", "deliverable_met": "yes",
                "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "pushback": "none", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}
         with mock.patch.object(judge, "ask", ask):
-            self.assertEqual(metrics.judge_pending("wren"), 40)
+            self.assertEqual(metrics.judge_pending("wisp"), 40)
         self.assertEqual(set(used), {"claude-haiku-5-5", "claude-sonnet-5-5"})   # rotated, MiMo never
-        recorded = sorted(j["judge"] for j in metrics.judgments("wren", self.tmp / "sup"))
+        recorded = sorted(j["judge"] for j in metrics.judgments("wisp", self.tmp / "sup"))
         self.assertEqual(recorded, sorted(used))
 
 

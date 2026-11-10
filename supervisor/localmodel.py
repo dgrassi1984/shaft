@@ -148,6 +148,6 @@ def down_problem(log_lines: list[str], since: str = "", port: int = PORT, names:
         if START_OK in line:
             return None
         if START_FAILED in line:
-            what = line[line.index(START_FAILED) + len(START_FAILED):].strip()   # "for kant's live: <reason>"
+            what = line[line.index(START_FAILED) + len(START_FAILED):].strip()   # "for kiln's live: <reason>"
             return f"its on-demand start failed at {line[12:20]} {what}"[:300] if line[1:20] >= since else None
     return None

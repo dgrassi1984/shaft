@@ -38,7 +38,7 @@ class GoogleAccessTest(ActionsTest):
         core.log(message)
 
     def start(self):
-        r = self.req("/google/login?alias=work&name=wren", cookie=self.cookie,
+        r = self.req("/google/login?alias=work&name=wisp", cookie=self.cookie,
                      headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(r.status, 303, r.body)
         return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(r.headers["Location"]).query))
@@ -133,7 +133,7 @@ class GoogleAccessTest(ActionsTest):
         a = copy.deepcopy(ACCESS)
         a["google_accounts"] = {"work": self.original}
         self.env.clear()
-        body = str(web_config.access_page("wren", a))
+        body = str(web_config.access_page("wisp", a))
         for want in ("Google accounts", "calendar.events", "https://console.cloud.google.com/auth/scopes",
                      "shaft google login work operator@work.example --client corp", "2026-10-01", "Web application",
                      "https://shaft.test/google/callback", "GMAIL_CORP_WEB_CLIENT_ID", "GMAIL_CORP_WEB_CLIENT_SECRET",
@@ -141,40 +141,40 @@ class GoogleAccessTest(ActionsTest):
             self.assertIn(want, body)
         self.assertNotIn("original-token", body)
         self.assertNotIn(">Log in again</button>", body)
-        r = self.req("/google/login?alias=work&name=wren", cookie=self.cookie,
+        r = self.req("/google/login?alias=work&name=wisp", cookie=self.cookie,
                      headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(r.status, 403)
         self.assertEqual(web_google._pending, {})
         self.env.update(GMAIL_CORP_WEB_CLIENT_ID="id", GMAIL_CORP_WEB_CLIENT_SECRET="secret")
-        self.assertIn(">Log in again</button>", str(web_config.access_page("wren", a)))
+        self.assertIn(">Log in again</button>", str(web_config.access_page("wisp", a)))
         a["calendar"][0]["write"] = True
-        self.assertIn(">Read only</button>", str(web_config.access_page("wren", a)))
+        self.assertIn(">Read only</button>", str(web_config.access_page("wisp", a)))
 
     def test_toggle_action_and_writable_form_use_cli_and_calendar_id(self):
         for op in ("grant-write", "revoke-write"):
-            status, _ = self.act("calendar", name="wren", op=op, alias="work", what="id%40calendar")
+            status, _ = self.act("calendar", name="wisp", op=op, alias="work", what="id%40calendar")
             self.assertEqual(status, 200)
         with mock.patch.object(core, "calendar_grants", return_value=[
                 {"account": "work", "calendar": "id@calendar", "name": 'A, "title"'}]):
-            self.act("calendar", name="wren", op="grant", alias="work", what="A%2C%20%22title%22", writable="1")
+            self.act("calendar", name="wisp", op="grant", alias="work", what="A%2C%20%22title%22", writable="1")
         self.assertEqual([r[1] for r in self.ran], [
-            ["calendar", "wren", "grant-write", "work", "id@calendar"],
-            ["calendar", "wren", "revoke-write", "work", "id@calendar"],
-            ["calendar", "wren", "grant", "work", 'A, "title"'],
-            ["calendar", "wren", "grant-write", "work", "id@calendar"]])
+            ["calendar", "wisp", "grant-write", "work", "id@calendar"],
+            ["calendar", "wisp", "revoke-write", "work", "id@calendar"],
+            ["calendar", "wisp", "grant", "work", 'A, "title"'],
+            ["calendar", "wisp", "grant-write", "work", "id@calendar"]])
 
     def test_cli_refuses_missing_write_scope_before_resolving_or_saving(self):
-        with mock.patch.object(cli, "instance_root", return_value=self.sup / "wren"), \
+        with mock.patch.object(cli, "instance_root", return_value=self.sup / "wisp"), \
                 mock.patch.object(core, "calendar_grants", return_value=[]), \
                 mock.patch.object(core, "set_calendar_grants") as save, \
                 mock.patch("supervisor.calendar.resolve") as resolve, redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(cli.cmd_calendar("wren", "grant-write", "work", "id@calendar"), 2)
+            self.assertEqual(cli.cmd_calendar("wisp", "grant-write", "work", "id@calendar"), 2)
             def run_cli(args, timeout=60, who="web"):
                 with redirect_stderr(io.StringIO()) as output:
                     code = cli.cmd_calendar(*args[1:])
                 return code == 0, output.getvalue()
             with mock.patch("supervisor.actions.run_now", side_effect=run_cli):
-                status, message = self.act("calendar", name="wren", op="grant-write", alias="work", what="id")
+                status, message = self.act("calendar", name="wisp", op="grant-write", alias="work", what="id")
             self.assertEqual(status, 409)
             self.assertIn("calendar.events", message)
         save.assert_not_called()
@@ -182,8 +182,8 @@ class GoogleAccessTest(ActionsTest):
         self.assertIn(google.missing_scope_message("work", self.original, google.CALENDAR_EVENTS), err.getvalue())
 
     def test_start_and_callback_keep_front_door_gates(self):
-        for path in ("/google/login?alias=work&name=wren", "/google/callback?state=unknown&code=private-code"):
+        for path in ("/google/login?alias=work&name=wisp", "/google/callback?state=unknown&code=private-code"):
             self.assertEqual(self.req(path, cookie=self.cookie, login=None).status, 403)
             self.assertEqual(self.req(path).status, 403)
-        self.assertEqual(self.req("/google/login?alias=work&name=wren", cookie=self.cookie,
+        self.assertEqual(self.req("/google/login?alias=work&name=wisp", cookie=self.cookie,
                                   headers={"sec-fetch-site": "cross-site"}).status, 403)

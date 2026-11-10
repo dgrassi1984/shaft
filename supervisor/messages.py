@@ -105,7 +105,7 @@ def store_attachments(root: Path, rel_dir: str, files: list[tuple[str, bytes]]) 
 def from_operator(name: str, files: list[tuple[str, bytes]], via: str) -> tuple[list[dict], str]:
     """Files the operator sends an instance (on Telegram, in the web UI): saved in its folder under
     attachments/from-operator/<time>/, and the lines its message gets saying where — the same whichever way they came,
-    so it finds an image the same way (docs/plans/PLAN-vision.md: natively, or with describe_image)."""
+    so it finds an image the same way (natively, or with describe_image)."""
     if len(files) > ATTACH_MAX_FILES:
         raise ValueError(f"at most {ATTACH_MAX_FILES} files at a time ({len(files)})")
     for n, data in files:
@@ -211,7 +211,7 @@ def show_inbox() -> int:
     return 0
 
 
-# The web chat's Next cycle (docs/plans/PLAN-background-messages.md): delivered to the inbox now, read in the next cycle.
+# The web chat's Next cycle: delivered to the inbox now, read in the next cycle.
 BACKGROUND = "web-background"
 BACKGROUND_NOTE = ("the web UI, for your next cycle — nobody is waiting on an answer now; answer with send_message "
                    "if it needs one")

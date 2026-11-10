@@ -1,5 +1,5 @@
-"""Jobs deliver, publish and may run long (docs/plans/PLAN-thelos-review-2.md M1: S1, S6, S8). Measured on the real
-record, 2026-10-31: Thelos's `morning-brief` job could not write notes/ (EPERM in the job sandbox); its fallback put a
+"""Jobs deliver, publish and may run long (S1, S6, S8). Measured on the real
+record, 2026-10-31: Tundra's `morning-brief` job could not write notes/ (EPERM in the job sandbox); its fallback put a
 20 KB brief in its output, which was cut at 4,000 characters with the rest nowhere it was told; instances' briefing
 jobs routed around the write limit through the broker's `run`; and a job had 120 s and 30 calls, nothing longer.
 Real runs under sandbox-exec, with a real broker, as in test_jobs."""
@@ -30,7 +30,7 @@ class HandoffTest(JobCase):
                 except OSError as e:
                     return errno.errorcode[e.errno]
             """, {"every_minutes": 10})
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertIn("EPERM", self.inbox()[0])
         self.assertFalse((self.root / "notes" / "x.md").exists())
 
@@ -44,7 +44,7 @@ class HandoffTest(JobCase):
                 open(f"{state}/small.txt", "w").write("small")
                 return {"message": "the brief is ready", "files": ["brief.md", f"{state}/small.txt"]}
             """, {"every_minutes": 10})
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         [message] = self.inbox()
         [md] = sorted((self.root / "inbox").glob("*.md"))
         folder = md.with_suffix(".files")
@@ -68,7 +68,7 @@ class HandoffTest(JobCase):
         files = ["../../notes/secret.md", "/etc/hosts", "big.bin", "link.md", "missing.md",
                  "ok0.txt", "ok1.txt", "ok2.txt", "ok3.txt"]
         self.plugin("brief", f"def run(): return {{'message': 'x', 'files': {files!r}}}", {"every_minutes": 10})
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         [message] = self.inbox()
         refused = message.split("not delivered:\n")[1]
         self.assertIn("- ../../notes/secret.md: not a path inside my job's own folder .jobs/brief/", refused)
@@ -96,7 +96,7 @@ class HandoffTest(JobCase):
     def test_a_20kb_output_is_cut_with_a_marker_naming_a_file_that_holds_all_of_it(self):
         # Bug guarded: a 20 KB output was cut at 4,000 characters with no pointer to the rest.
         self.plugin("brief", "def run(): return 'head ' + 'b' * 19987 + ' THE END'", {"every_minutes": 10})
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         [message] = self.inbox()
         [folder] = (self.root / "inbox").glob("*.files")
         whole = (folder / "output.txt").read_text()
@@ -112,20 +112,20 @@ class HandoffTest(JobCase):
         state = self.root / ".jobs" / "brief"
         state.mkdir(parents=True)
         (state / "a.txt").write_text("a")
-        self.assertTrue(jobs._deliver_job("wren", "brief", "one", "", ["a.txt"]))
+        self.assertTrue(jobs._deliver_job("wisp", "brief", "one", "", ["a.txt"]))
         [first] = (self.root / "inbox").glob("*.files")
         other = self.root / "inbox" / "20260101-000000-000000-from-job-other.files"
         other.mkdir()                                                    # another job's: never touched
-        self.assertTrue(jobs._deliver_job("wren", "brief", "two", "", ["a.txt"]))
+        self.assertTrue(jobs._deliver_job("wisp", "brief", "two", "", ["a.txt"]))
         self.assertTrue(first.is_dir())                                  # its message is still unread: kept
         (self.root / "memory" / "messages").mkdir(parents=True)
         md = first.with_suffix(".md")
         md.rename(self.root / "memory" / "messages" / md.name)             # the cycle read it (live.archive_inbox)
-        self.assertTrue(jobs._deliver_job("wren", "brief", "three", "", ["a.txt"]))
+        self.assertTrue(jobs._deliver_job("wisp", "brief", "three", "", ["a.txt"]))
         self.assertFalse(first.exists())
         self.assertTrue(other.is_dir())
         self.assertEqual(len(list((self.root / "inbox").glob("*-from-job-brief.files"))), 2)
-        self.assertFalse(jobs._deliver_job("wren", "brief", "", "", None))   # nothing to say: nothing delivered
+        self.assertFalse(jobs._deliver_job("wisp", "brief", "", "", None))   # nothing to say: nothing delivered
 
 
 class PublishTest(JobCase):
@@ -144,23 +144,23 @@ class PublishTest(JobCase):
         state, target = self.root / ".jobs" / "brief", self.root / "notes" / "briefing.md"
         state.mkdir(parents=True)
         (state / "content").write_text("A")
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertEqual(target.read_text(), "A")
         self.assertEqual(self.rows()[-1]["published"], ["notes/briefing.md"])
         target.write_text("the instance's own edit")                     # an unchanged source does not overwrite it
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertEqual(target.read_text(), "the instance's own edit")
         self.assertNotIn("published", self.rows()[-1])
         (state / "content").write_text("B")
         (state / "fail").write_text("")
-        self.assertEqual(jobs.run("wren", "brief"), 1)                     # failed: its half-done source stays put
+        self.assertEqual(jobs.run("wisp", "brief"), 1)                     # failed: its half-done source stays put
         self.assertEqual(target.read_text(), "the instance's own edit")
         (state / "fail").unlink()
-        self.assertEqual(jobs.run("wren", "brief"), 0)
+        self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertEqual(target.read_text(), "B")
         self.assertEqual(list((self.root / "notes").glob(".*shaft-publish*")), [])   # no temp file left
-        self.assertIn("publishes notes/briefing.md", jobs.describe("wren"))
-        self.assertIn("published notes/briefing.md", jobs.describe("wren"))
+        self.assertIn("publishes notes/briefing.md", jobs.describe("wisp"))
+        self.assertIn("published notes/briefing.md", jobs.describe("wisp"))
 
     def test_a_publish_target_outside_notes_is_refused_at_validation(self):
         base = {"every_minutes": 10}
@@ -176,7 +176,7 @@ class PublishTest(JobCase):
         self.assertIn("at most", jobs._invalid({**base, "publishes": {f"notes/{i}.md": "x" for i in range(6)}}))
         self.assertEqual(jobs._invalid({**base, "publishes": {"notes/docs/briefing.md": "out/briefing.md"}}), "")
         self.plugin("brief", "def run(): return ''", {**base, "publishes": {"plugins/brief/main.py": "x.py"}})
-        jobs.tick({}, datetime.now(), lambda args: self.fail("an invalid schedule must not run"), ["wren"], lambda n: "")
+        jobs.tick({}, datetime.now(), lambda args: self.fail("an invalid schedule must not run"), ["wisp"], lambda n: "")
         self.assertIn("plugins/brief: schedule not run — publishes target 'plugins/brief/main.py' is not under notes/",
                       self.inbox()[0])
 
@@ -190,7 +190,7 @@ class PublishTest(JobCase):
         (state / "briefing.md").write_text("brief")
         job = {"plugin": "brief", "publishes": {"notes/briefing.md": "briefing.md"}}
         for _ in range(2):
-            self.assertEqual(jobs._publish("wren", self.root, job), [])
+            self.assertEqual(jobs._publish("wisp", self.root, job), [])
         self.assertEqual(list(outside.iterdir()), [])
         [message] = self.inbox()
         self.assertIn("did not publish", message)
@@ -210,11 +210,11 @@ class ConfinedRunTest(JobCase):
         self.plugin("brief", self.BODY, {"every_minutes": 10})
         written = self.root / "notes" / "from-run.md"
         with mock.patch.object(jobs, "RUN_CONFINED", True):
-            self.assertEqual(jobs.run("wren", "brief"), 0)
+            self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertFalse(written.exists())
         self.assertIn("operation not permitted", self.inbox()[-1].lower())
         with mock.patch.object(jobs, "RUN_CONFINED", False):             # the default this release: unchanged
-            self.assertEqual(jobs.run("wren", "brief"), 0)
+            self.assertEqual(jobs.run("wisp", "brief"), 0)
         self.assertTrue(written.exists())
         self.assertIn("WROTE", self.inbox()[-1])
 
@@ -232,7 +232,7 @@ class ConfinedRunTest(JobCase):
 class RunStreamCutTest(JobCase):
     def test_a_long_run_stream_says_its_length_and_how_to_read_it_all(self):
         # C8 / row 24: keep both streams for the template to save without rerunning the command.
-        b = broker_mod.Broker("wren", self.project, {}, self.sup / "broker.log")
+        b = broker_mod.Broker("wisp", self.project, {}, self.sup / "broker.log")
         b.egress = mock.Mock(port=0)
         with mock.patch.object(b, "sandbox_env", return_value={}), mock.patch.object(b, "mail_env", return_value=""), \
                 mock.patch.object(b, "calendar_env", return_value=""), \
@@ -270,34 +270,34 @@ class LongJobTest(JobCase):
             self.addCleanup(p.stop)
 
     def test_a_long_job_that_checkpoints_and_times_out_is_resumed_with_resume_set_and_gives_up_after_n(self):
-        self.plugin("long", self.BODY, {"every_minutes": 60, "long": True, "args": {"who": "wren"}})
+        self.plugin("long", self.BODY, {"every_minutes": 60, "long": True, "args": {"who": "wisp"}})
         (self.state / "checkpointing").write_text("")
-        job = jobs.declared("wren")[0][0]
-        self.assertEqual(jobs.run("wren", "long"), 1)
+        job = jobs.declared("wisp")[0][0]
+        self.assertEqual(jobs.run("wisp", "long"), 1)
         self.assertTrue(self.rows()[-1]["resuming"])
         self.assertEqual(self.rows()[-1]["resumed"], 0)
-        self.assertTrue(jobs.due("wren", job, datetime.now()))            # at the next tick, not in 60 minutes
-        self.assertNotIn("fails", {k for k, v in jobs.entry("wren", "long").items() if v})   # saving its place: no failure
-        record = jobs.describe("wren")
+        self.assertTrue(jobs.due("wisp", job, datetime.now()))            # at the next tick, not in 60 minutes
+        self.assertNotIn("fails", {k for k, v in jobs.entry("wisp", "long").items() if v})   # saving its place: no failure
+        record = jobs.describe("wisp")
         self.assertIn('long: every 60 min · long · ', record)
-        self.assertIn("· resuming 1 of 1 · args {\"who\": \"wren\"}", record)
-        self.assertEqual(jobs.run("wren", "long"), 1)
+        self.assertIn("· resuming 1 of 1 · args {\"who\": \"wisp\"}", record)
+        self.assertEqual(jobs.run("wisp", "long"), 1)
         self.assertEqual(self.rows()[-1]["resumed"], 1)
         self.assertTrue(self.rows()[-1]["gave_up"])
-        self.assertFalse(jobs.due("wren", job, datetime.now()))           # gave up: its next interval
+        self.assertFalse(jobs.due("wisp", job, datetime.now()))           # gave up: its next interval
         self.assertEqual((self.state / "seen.txt").read_text().splitlines(),
                          ["0 .jobs/long/checkpoint.json", "1 .jobs/long/checkpoint.json"])
         [gave_up] = [m for m in self.inbox() if "gave up" in m]
         self.assertIn("My long job long gave up: it was stopped after 2 s 2 time(s) in a row (1 resume(s)", gave_up)
-        self.assertIn("· gave up · args", jobs.describe("wren"))
+        self.assertIn("· gave up · args", jobs.describe("wisp"))
 
     def test_a_long_job_that_times_out_without_a_new_checkpoint_is_not_resumed(self):
         self.plugin("long", self.BODY, {"every_minutes": 60, "long": True})
         (self.state / "checkpoint.json").write_text("{}")                  # an old one, from before this run
         os.utime(self.state / "checkpoint.json", (0, 0))
-        self.assertEqual(jobs.run("wren", "long"), 1)
+        self.assertEqual(jobs.run("wisp", "long"), 1)
         self.assertNotIn("resuming", self.rows()[-1])
-        self.assertEqual(jobs.entry("wren", "long")["fails"], 1)
+        self.assertEqual(jobs.entry("wisp", "long")["fails"], 1)
         self.assertEqual([m for m in self.inbox() if "gave up" in m], [])
 
     def test_one_long_job_at_a_time_per_instance(self):
@@ -310,17 +310,17 @@ class LongJobTest(JobCase):
             started.append(args[-1])
             return object()
         now = datetime.now()
-        jobs.tick(children, now, start, ["wren"], lambda n: "")
+        jobs.tick(children, now, start, ["wisp"], lambda n: "")
         self.assertEqual(started, ["a", "short"])                           # b waits, still due
-        jobs._update("wren", "short", last_start=now.isoformat())
-        children = {"job wren a": (object(), 0)}                            # a is still going
-        jobs.tick(children, now, start, ["wren"], lambda n: "")
+        jobs._update("wisp", "short", last_start=now.isoformat())
+        children = {"job wisp a": (object(), 0)}                            # a is still going
+        jobs.tick(children, now, start, ["wisp"], lambda n: "")
         self.assertEqual(started, ["a", "short"])
-        jobs.tick({}, now, start, ["wren"], lambda n: "")                   # a ended: b starts at the next tick
+        jobs.tick({}, now, start, ["wisp"], lambda n: "")                   # a ended: b starts at the next tick
         self.assertEqual(started, ["a", "short", "b"])
-        with jobs._long_slot("wren") as free:                              # `shaft job run` holds to it as well
+        with jobs._long_slot("wisp") as free:                              # `shaft job run` holds to it as well
             self.assertTrue(free)
-            self.assertEqual(jobs.run("wren", "b"), 3)
+            self.assertEqual(jobs.run("wisp", "b"), 3)
         self.assertEqual(self.rows()[-1]["skipped"], "another long job of mine is running")
 
     def test_a_non_long_job_keeps_120_s_and_30_calls_and_a_long_one_gets_the_knobs(self):
@@ -341,8 +341,8 @@ class LongJobTest(JobCase):
         with mock.patch.object(broker_mod.Broker, "__init__", init), \
                 mock.patch.object(subprocess.Popen, "communicate", communicate), \
                 mock.patch.object(jobs, "LONG_TIMEOUT_S", 900):
-            self.assertEqual(jobs.run("wren", "short"), 0)
-            self.assertEqual(jobs.run("wren", "big"), 0)
+            self.assertEqual(jobs.run("wisp", "short"), 0)
+            self.assertEqual(jobs.run("wisp", "big"), 0)
         self.assertEqual([s for s in seen if s[0] == "calls"], [("calls", 30), ("calls", jobs.LONG_CALLS)])
         self.assertIn(("timeout", 120), seen)
         self.assertIn(("timeout", 900), seen)
@@ -354,7 +354,7 @@ class LongJobTest(JobCase):
 class LongReplayTest(JobCase):
     def test_a_replay_shows_a_long_jobs_status_from_its_runs(self):
         self.plugin("long", "def run(): return ''", {"every_minutes": 60, "long": True})
-        h = jobs.declared("wren")[0][0]["hash"]
+        h = jobs.declared("wisp")[0][0]["hash"]
         rows = [{"ts": "2026-10-20T09:00:00", "plugin": "long", "seconds": 900, "exit": None, "timed_out": True,
                  "resumed": 0, "resuming": True, "hash": h}]
         e = jobs._entry_then(rows, "long", h)

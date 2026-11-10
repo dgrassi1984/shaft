@@ -100,7 +100,7 @@ struct StatusLine: View {
     }
 }
 
-/// The base URL's web page for a path (`/i/thelos/activity`, `/services`): failure links open in the browser.
+/// The base URL's web page for a path (`/i/tundra/activity`, `/services`): failure links open in the browser.
 extension ServerCredential {
     func webURL(_ path: String) -> URL? {
         URL(string: path, relativeTo: baseURL)?.absoluteURL

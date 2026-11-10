@@ -1,6 +1,6 @@
-"""The operator's Google accounts (docs/plans/PLAN-calendar.md M1): one `shaft google login` asks for gmail.readonly and
+"""The operator's Google accounts: one `shaft google login` asks for gmail.readonly and
 calendar.readonly + calendar.events together and records what Google granted; account files live in .supervisor/google/, moved there
-from docs/plans/PLAN-mail's .supervisor/mail/ by `shaft google migrate`; `shaft mail login` is gone."""
+from the old .supervisor/mail/ by `shaft google migrate`; `shaft mail login` is gone."""
 from __future__ import annotations
 
 import io
@@ -157,7 +157,7 @@ class MigrateTest(GoogleCase):
         self.old("home", home)
         # Not read from the old folder (one location): the error names the migration.
         with self.assertRaisesRegex(google.AccountError, r"'work' is not read: its file is still in .*/mail "
-                                                         r"\(docs/plans/PLAN-mail's folder\); the operator runs `shaft google "
+                                                         r"\(the old mail folder\); the operator runs `shaft google "
                                                          r"migrate`$"):
             google.Account("work", self.secrets).require(google.GMAIL)
         self.assertEqual(google.unmigrated(), ["home", "work"])

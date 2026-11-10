@@ -22,13 +22,13 @@ class BusyStateHeaderTest(unittest.TestCase):
     def test_issue_60_busy_header_renders_state_icon_accessible_name_and_sentence_without_warn(self):
         """Reverting #60 brings back the standing p.warn busy paragraph and removes the state icon from .chathead."""
         from supervisor.web_pages import icon as svg
-        # PLAN-pwa-market: an SVG icon (the emoji read as disabled and were blobs in dark mode), the state in words beside
+        # An SVG icon (the emoji read as disabled and were blobs in dark mode), the state in words beside
         # it, under the name; its notice says in plain words what a message does now (api.py work()).
         expected = [
             ("in a cycle", "busy", "Your message pauses its cycle; the cycle resumes after the reply."),
             ("working", "busy", None),
             ("sleeping", "sleep", "Your message pauses its sleep; the sleep resumes after the reply."),
-            ("paused by you", "pause", "No cycles run until you resume thelos. It still answers your messages."),
+            ("paused by you", "pause", "No cycles run until you resume tundra. It still answers your messages."),
             ("in a conversation (waiting for you)", "waiting", "A conversation with you is open, waiting for your "
                                                              "next message. A message is answered now."),
             ("reflecting", "busy", None),
@@ -40,12 +40,12 @@ class BusyStateHeaderTest(unittest.TestCase):
         fallback = "Your message is answered once it pauses or finishes what it is doing; the reply&#x27;s activity says which."
         for state, name, words in expected:
             with self.subTest(state=state):
-                body = str(web_views.chat_header("thelos", {"name": "thelos", "model": "m", "state": state},
+                body = str(web_views.chat_header("tundra", {"name": "tundra", "model": "m", "state": state},
                                                  {"id": "c1", "state": "idle"}, []))
                 self.assertNotIn('<p class="warn">', body)
                 self.assertIn(
-                    f'<h1>thelos</h1><div class="sub"><details class="menu busystate" data-key="busy-state">'
-                    f'<summary data-focus="busy" aria-label="thelos is {state}">{svg(name, 14)}<span>{state}</span>'
+                    f'<h1>tundra</h1><div class="sub"><details class="menu busystate" data-key="busy-state">'
+                    f'<summary data-focus="busy" aria-label="tundra is {state}">{svg(name, 14)}<span>{state}</span>'
                     f'</summary><div class="menubody">', body)
                 self.assertIn(words or fallback, body)
                 self.assertNotRegex(body, "[⏳💤⏸💬🕘📄☰]")
@@ -55,7 +55,7 @@ class BusyStateHeaderTest(unittest.TestCase):
 
         for state, chat in (("idle", None), ("?", None), ("in a cycle", {"id": "c1", "state": "replying"})):
             with self.subTest(state=state, chat=chat):
-                body = str(web_views.chat_header("thelos", {"name": "thelos", "model": "m", "state": state}, chat, []))
+                body = str(web_views.chat_header("tundra", {"name": "tundra", "model": "m", "state": state}, chat, []))
                 self.assertNotIn('data-key="busy-state"', body)
                 self.assertNotIn("busystate", body)
                 self.assertNotIn('<p class="warn">', body)
@@ -85,7 +85,7 @@ function makeDetails() {
 }
 makeDetails();
 const header = {
-  dataset: { poll: "/fragment/chat/thelos/header" }, isConnected: true,
+  dataset: { poll: "/fragment/chat/tundra/header" }, isConnected: true,
   classList: { add() {}, remove() {} },
   get innerHTML() { return html; },
   set innerHTML(v) {
@@ -118,7 +118,7 @@ const window = { addEventListener() {}, innerHeight: 800, scrollY: 0, getSelecti
   matchMedia: q => ({ matches: q === "(hover: none) and (pointer: coarse)" ? touch : false, addEventListener() {} }) };
 let nextBody = "v2";
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, window, URL, CustomEvent: class {}, AbortController,
-  location: { href: "https://shaft.test/i/thelos/chat" }, history: { replaceState() {} }, navigator: { onLine: true },
+  location: { href: "https://shaft.test/i/tundra/chat" }, history: { replaceState() {} }, navigator: { onLine: true },
   setInterval() {}, setTimeout: () => 1, clearTimeout() {},
   fetch: async () => ({ status: 200, ok: true, headers: { get: () => "" }, text: async () => nextBody }) });
 for (const fn of handlers.DOMContentLoaded || []) fn();

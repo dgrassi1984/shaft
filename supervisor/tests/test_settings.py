@@ -1,4 +1,4 @@
-"""The supervisor's settings (docs/plans/PLAN-webui-chat.md §4, S0): knob() reads env > .supervisor/settings.env > default,
+"""The supervisor's settings: knob() reads env > .supervisor/settings.env > default,
 `shaft settings` writes the file with the knob's own check and compare-and-set, and each service's record says which
 saved value it does not hold yet.
 

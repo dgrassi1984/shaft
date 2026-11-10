@@ -1,4 +1,4 @@
-"""Thelos review, 2026-10-28: sleep's verdict throughput and forgotten operator pauses (M2/M4)."""
+"""Tundra review, 2026-10-28: sleep's verdict throughput and forgotten operator pauses (M2/M4)."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,7 @@ from supervisor import autonomy, broker, core, metrics, panel, web_alerts, webpu
 class SleepJudgmentsTest(unittest.TestCase):
     def setUp(self):
         self.b = object.__new__(broker.Broker)
-        self.b.name, self.b.as_of = "thelos", None
+        self.b.name, self.b.as_of = "tundra", None
         self.rows = [{"episode_ts": f"2026-10-01T10:{i:02d}:00", "judged_at": f"2026-10-02T10:{i:02d}:00",
                       "goal": "a useful result", "judge": "main", "reasoning": "abc" * 900}
                      for i in range(60)]
@@ -84,7 +84,7 @@ class PauseAlertsTest(unittest.TestCase):
         self.clock.now.return_value = self.now
         self.addCleanup(clock.stop)
 
-    def flag(self, name="thelos", hours=4):
+    def flag(self, name="tundra", hours=4):
         path = self.sup / ("paused" if name == "all" else f"paused-{name}")
         path.write_text((self.now - timedelta(hours=hours)).isoformat())
         return path
@@ -94,8 +94,8 @@ class PauseAlertsTest(unittest.TestCase):
 
     def test_long_pause_alert_and_push_once_then_resume_removes_record(self):
         flag = self.flag()
-        expected = {"id": "pause:thelos:2026-10-28T08:00",
-                    "text": "thelos has been paused by the operator for 4 h (since 10-28 08:00) — shaft resume thelos"}
+        expected = {"id": "pause:tundra:2026-10-28T08:00",
+                    "text": "tundra has been paused by the operator for 4 h (since 10-28 08:00) — shaft resume tundra"}
         self.assertEqual(self.alerts(), [expected])
         self.assertEqual(web_alerts.forward_pauses(), 1)
         self.notify.assert_called_once_with({"title": "Operator pause", "body": expected["text"],
@@ -125,7 +125,7 @@ class PauseAlertsTest(unittest.TestCase):
         self.assertTrue(retired.isdisjoint(tools.STATE_CHANGING))
 
         # A future-dated legacy ledger must no longer delay a wake.
-        ledger = self.sup / "preferences" / "thelos.jsonl"
+        ledger = self.sup / "preferences" / "tundra.jsonl"
         ledger.parent.mkdir()
         ledger.write_text(json.dumps({"kind": "pause", "at": self.now.isoformat(),
                                      "from": self.now.isoformat(),
@@ -134,7 +134,7 @@ class PauseAlertsTest(unittest.TestCase):
                       mock.patch.object(autonomy, "log"),
                       mock.patch.object(autonomy, "record"),
                       mock.patch.object(autonomy, "_state", return_value={}),
-                      mock.patch.object(autonomy, "instance_names", return_value=["thelos"]),
+                      mock.patch.object(autonomy, "instance_names", return_value=["tundra"]),
                       mock.patch.object(autonomy, "update_jobs", return_value=[]),
                       mock.patch.object(autonomy, "updating", return_value=False),
                       mock.patch.object(autonomy, "wake_interval", return_value=timedelta(hours=2)),
@@ -153,18 +153,18 @@ class PauseAlertsTest(unittest.TestCase):
         with mock.patch.object(autonomy, "_start") as started:
             with self.assertRaises(StopIteration):
                 autonomy.serve()
-            started.assert_called_once_with(["wake", "thelos"])
-            self.assertEqual(autonomy.next_wake("thelos", self.now), "due")
+            started.assert_called_once_with(["wake", "tundra"])
+            self.assertEqual(autonomy.next_wake("tundra", self.now), "due")
             started.reset_mock()
             self.flag()
             with self.assertRaises(StopIteration):
                 autonomy.serve()
             started.assert_not_called()
-        self.assertEqual(self.alerts(), [{"id": "pause:thelos:2026-10-28T08:00",
-                         "text": "thelos has been paused by the operator for 4 h (since 10-28 08:00) — "
-                                 "shaft resume thelos"}])
+        self.assertEqual(self.alerts(), [{"id": "pause:tundra:2026-10-28T08:00",
+                         "text": "tundra has been paused by the operator for 4 h (since 10-28 08:00) — "
+                                 "shaft resume tundra"}])
         self.assertEqual(web_alerts.forward_pauses(), 1)
-        self.assertEqual(self.notify.call_args.args[0]["tag"], "pause:thelos:2026-10-28T08:00")
+        self.assertEqual(self.notify.call_args.args[0]["tag"], "pause:tundra:2026-10-28T08:00")
 
     def test_short_pause_does_not_alert(self):
         self.flag(hours=1)
@@ -196,7 +196,7 @@ class PauseAlertsTest(unittest.TestCase):
         os.utime(flag, (stamp, stamp))
         (self.sup / "pausedness").write_text("old format")
         self.assertEqual(core.long_pauses(self.now), [
-            {"name": "thelos", "since": datetime(2026, 10, 28, 8), "hours": 4}])
+            {"name": "tundra", "since": datetime(2026, 10, 28, 8), "hours": 4}])
 
     def test_timezone_stamp_and_failed_push_retry(self):
         flag = self.flag()

@@ -17,7 +17,7 @@ class ChannelStreamTest(unittest.TestCase):
     use = fixtures.ChannelTest.use
 
     def test_text_arrives_before_turn_completed_and_replays(self):
-        """Guard M0: Thelos's first words were held until its step ended."""
+        """Guard M0: Tundra's first words were held until its step ended."""
         self.use([[{'text': 'hello world', 'deltas': ['hello', ' world'], 'gap': .15}, {'usage': 12}]])
         stream = self.channel.stream(fixtures.body())
         first = next(stream)

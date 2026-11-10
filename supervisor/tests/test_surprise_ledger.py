@@ -220,7 +220,7 @@ class LedgerTest(unittest.TestCase):
             eps.append(ep)
             js.append(dict(prior, episode_ts=ts, unreported_surprises=[], followup_useful="yes" if n in (1, 2, 3) else "na",
                            # a v1 row carries no question (None), as the supervisor writes it; an unknown string is
-                           # excluded from calibration, never scored as v1 (PLAN-calibration-feedback)
+                           # excluded from calibration, never scored as v1
                            confidence=80, confidence_of="criterion_met=yes" if n % 2 else None))
             usage.append({"ts": ts, "purpose": "live", "model": "m", "duration_s": 10})
         base = {"frozen_at": self.since.isoformat(), "instances": {"x": {
@@ -283,7 +283,7 @@ class LedgerTest(unittest.TestCase):
 
     def test_m5_reports_v3_and_excluded_without_crashing(self):
         # calibration() also returns the excluded count, an int: m5_report iterated .items() and raised TypeError
-        # ('int' object is not subscriptable) on every report once that key existed (PLAN-calibration-feedback).
+        # ('int' object is not subscriptable) on every report once that key existed.
         eps, js, usage, base = self.trial()
         js[1] = dict(js[1], confidence_of=metrics.CONFIDENCE_V3, confidence=60, confidence_first=90)
         js[2] = dict(js[2], confidence_of="a question from the future")

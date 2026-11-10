@@ -1,4 +1,4 @@
-"""docs/plans/PLAN-pwa P0: the web UI on a phone — fields iOS does not zoom into, finger-sized targets, nothing behind hover,
+"""The web UI on a phone — fields iOS does not zoom into, finger-sized targets, nothing behind hover,
 the phone layout held sideways too, and Return as a new line where there is no Shift key."""
 from __future__ import annotations
 
@@ -56,8 +56,8 @@ class TouchTest(unittest.TestCase):
     def test_return_is_a_new_line_where_there_is_no_shift_key(self):
         self.assertIn('window.matchMedia("(hover: none) and (pointer: coarse)")', JS)
         self.assertRegex(JS, r'ev\.key === "Enter" && !ev\.isComposing && \(!touchOnly\(\) \|\| ev\.metaKey \|\| ev\.ctrlKey\)')   # modifiers: #70
-        composer = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
-        self.assertIn('placeholder="Message wren"', composer)              # no "Enter sends" in the field itself
+        composer = str(web_views.chat_page("wisp", None, [], [], {}, ["wisp"], "t"))
+        self.assertIn('placeholder="Message wisp"', composer)              # no "Enter sends" in the field itself
         self.assertIn('<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues', composer)
 
 
@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
 
 class PhoneLayoutTest(unittest.TestCase):
-    """docs/plans/PLAN-pwa P2: on a phone the chat is the whole screen."""
+    """On a phone the chat is the whole screen."""
     PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
 
     def test_the_page_is_as_tall_as_the_keyboard_leaves(self):
@@ -78,11 +78,11 @@ class PhoneLayoutTest(unittest.TestCase):
 
     def test_the_rail_and_the_documents_are_sheets(self):
         phone = block(self.PHONE)
-        self.assertIn("body:has(.chatgrid) nav, .shell > nav { display: none; }", phone)    # every page (PLAN-pwa-market)
+        self.assertIn("body:has(.chatgrid) nav, .shell > nav { display: none; }", phone)    # every page
         self.assertRegex(phone, r"body\.navopen \.shell > nav \{ display: flex;[^}]*position: fixed; inset: 0;")
-        page = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
+        page = str(web_views.chat_page("wisp", None, [], [], {}, ["wisp"], "t"))
         self.assertIn('class="navbtn iconbtn" data-toggle-nav aria-label="Chats and pages"', page)
-        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [], "", None, "none", set())))
+        self.assertIn("data-close-docs", str(web_views.docs_panel("wisp", [], "", None, "none", set())))
         self.assertIn('class="small closenav" data-toggle-nav aria-label="Close the chats"', page)  # no Escape key
         self.assertIn("showDocs(true, a);", JS)                             # a card opens the sheet
 
@@ -109,7 +109,7 @@ class PhoneLayoutTest(unittest.TestCase):
         phone = block(self.PHONE)
         self.assertIn(".chathead { flex-wrap: nowrap;", phone)
         self.assertIn(".chathead .facts, .docslabel { display: none; }", phone)
-        page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
+        page = str(web_views.chat_page("wisp", None, [], [], {"model": "m", "state": "idle"}, ["wisp"], "t"))
         self.assertIn('<p class="dim menufacts">m · idle</p>', page)        # the facts move into ⋯
 
 
@@ -131,10 +131,10 @@ class DocumentsCloseTest(unittest.TestCase):
         self.assertNotIn(".chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a)", css)
 
     def test_the_close_button_shows_beside_the_chat(self):
-        hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("PLAN-pwa P2:")[1],
+        hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("On a phone the chat is the whole screen")[1],
                            re.M)
         self.assertNotIn("closedocs", hidden.group(1))
-        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [{"path": "plan.md", "bytes": 3, "mtime": 0.0, "sha": "x"}], "", None,
+        self.assertIn("data-close-docs", str(web_views.docs_panel("wisp", [{"path": "plan.md", "bytes": 3, "mtime": 0.0, "sha": "x"}], "", None,
                                                                     "none", set())))
 
     def test_documents_and_close_really_close(self):
@@ -152,7 +152,7 @@ class DocumentsCloseTest(unittest.TestCase):
 
 
 class NetworkClientTest(unittest.TestCase):
-    """docs/plans/PLAN-pwa P3, in the page: what it sends and what it does when the network fails."""
+    """In the page: what it sends and what it does when the network fails."""
 
     def test_a_refresh_asks_for_what_changed_and_gives_up_in_time(self):
         self.assertIn('{ "If-None-Match": el.dataset.etag }', JS)
@@ -181,7 +181,7 @@ class NetworkClientTest(unittest.TestCase):
 
 
 class AccessibilityTest(unittest.TestCase):
-    """docs/plans/PLAN-pwa P5."""
+    """Accessibility on a phone."""
 
     def test_a_new_answer_and_every_toast_are_read_out(self):
         self.assertIn('region("toast", "status");', JS)                    # empty from the start: then it speaks
@@ -193,11 +193,11 @@ class AccessibilityTest(unittest.TestCase):
 
     def test_icon_only_controls_and_state_dots_have_names(self):
         from supervisor import web_pages
-        page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
-        for name in ('aria-label="Chats and pages"', 'aria-label="Documents"', 'aria-label="wren: pages and actions"',
-                     'aria-label="Message wren"'):
+        page = str(web_views.chat_page("wisp", None, [], [], {"model": "m", "state": "idle"}, ["wisp"], "t"))
+        for name in ('aria-label="Chats and pages"', 'aria-label="Documents"', 'aria-label="wisp: pages and actions"',
+                     'aria-label="Message wisp"'):
             self.assertIn(name, page)
-        rail = str(web_pages.rail(["wren"], "", {"instances": [{"name": "wren", "state": "in a cycle"}]}))
+        rail = str(web_pages.rail(["wisp"], "", {"instances": [{"name": "wisp", "state": "in a cycle"}]}))
         self.assertIn('role="img" aria-label="in a cycle"', rail)
         self.assertIn('x.setAttribute("aria-label", `remove ${f.name}`);', JS)
 

@@ -37,7 +37,7 @@ class InstanceStateTest(unittest.TestCase):
     def test_what_it_is_doing_now_and_its_goal(self):
         self.write_activity(os.getpid(), phase="tool", tool="fetch_page", args='{"url": "https://example.org"}',
                             goal="Run the rogue-AI watch")
-        s = dashboard.instance_state("wren")
+        s = dashboard.instance_state("wisp")
         self.assertEqual(s["state"], "in a cycle")
         self.assertTrue(s["doing"].startswith('fetch_page {"url": "https://example.org"} · '))
         self.assertEqual(s["goal"], "Run the rogue-AI watch")
@@ -53,7 +53,7 @@ class InstanceStateTest(unittest.TestCase):
                 with self.subTest(base_url=base_url, model=model):
                     cfg = {"LLM_BASE_URL": base_url, "LLM_MODEL": model}
                     with mock.patch.object(dashboard, "instance_config", return_value=cfg):
-                        self.assertEqual(dashboard.instance_state("wren")["model"], expected)
+                        self.assertEqual(dashboard.instance_state("wisp")["model"], expected)
 
     def test_its_judgments_are_read_once_for_both_scores(self):
         """Regression (2026-10-26): _judged and _value each parsed the judgment ledgers — twice per instance on every
@@ -62,23 +62,23 @@ class InstanceStateTest(unittest.TestCase):
                                                                          "value": 2}]
         with mock.patch.object(dashboard, "_judged", self.patches[-1].temp_original), \
                 mock.patch("supervisor.metrics.judgments", return_value=rows) as read:
-            s = dashboard.instance_state("wren")
+            s = dashboard.instance_state("wisp")
         self.assertEqual(read.call_count, 1)
         self.assertEqual((s["judged"], s["success"], s["achieved"], s["value"]), (2, 0.75, 3.0, 3.0))
         with mock.patch.object(dashboard, "_judged", self.patches[-1].temp_original), \
                 mock.patch("supervisor.metrics.judgments", side_effect=OSError("unreadable")):
-            s = dashboard.instance_state("wren")
+            s = dashboard.instance_state("wisp")
         self.assertEqual((s["judged"], s["success"], s["achieved"], s["value"]), (0, None, None, None))
 
     def test_a_dead_process_activity_is_not_shown(self):
         self.write_activity(2 ** 22 + 4321, phase="thinking", step=3, goal="old")
-        s = dashboard.instance_state("wren")
+        s = dashboard.instance_state("wisp")
         self.assertEqual((s["doing"], s["goal"]), ("", ""))
 
     def test_a_cycle_paused_for_a_conversation(self):
         self.write_activity(os.getpid(), phase="paused")
         (self.root / ".tmp" / f"paused-{os.getpid()}").write_text("1")
-        self.assertEqual(dashboard.instance_state("wren")["state"], "live paused for a conversation")
+        self.assertEqual(dashboard.instance_state("wisp")["state"], "live paused for a conversation")
 
 
 class EventsTest(unittest.TestCase):

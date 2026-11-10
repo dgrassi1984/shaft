@@ -1,4 +1,4 @@
-"""`shaft kill` and `shaft delete` (docs/plans/PLAN-kill-delete.md)."""
+"""`shaft kill` and `shaft delete`."""
 from __future__ import annotations
 
 import json
@@ -55,7 +55,7 @@ class TargetsTest(unittest.TestCase):
         self.assertEqual(kill.targets("kdx", self.table(holder, gate, plug, agent), self.root)[0], [31, 32, 33])
 
     def test_the_gates_test_runner_is_not_a_supervisor_holding_a_run_20261027(self):
-        # Regression (PLAN-gate-cache M0): `python -m supervisor.gate_suite` matched SUPERVISOR, so what it started
+        # Regression: `python -m supervisor.gate_suite` matched SUPERVISOR, so what it started
         # in an instance's folder looked like that instance's agent — the kill test's stand-in operator shell, whose
         # parent is the test runner, was stopped (-15) in the shared part and passed under `-m unittest`.
         runner = (80, 1, f"{PY} -E -s -m supervisor.gate_suite shared", "/p/.supervisor/gate-tests/ab/shaft")
@@ -314,7 +314,7 @@ class DeleteTest(unittest.TestCase):
                  "gate-logs/kdx-20261020-101010-123456.log", "evals/battery-kdx-20261020-101010.json",
                  "evals/distinct-kdx-20261020-101010.json", "datasets/kdx-20261020-101010/a.jsonl",
                  "web/comments/kdx.json", "tools/kdx.json",
-                 # PLAN-consciousness: delete once left these behind (anchoring, reply expectations, kill tests)
+                 # Delete once left these behind (anchoring, reply expectations, kill tests)
                  "judgments/kdx-anchoring.jsonl", "expectations/kdx.jsonl", "expectations/kdx-scored.jsonl",
                  "expectations/kdx-baselines.jsonl", "experiments/kdx.jsonl",
                  "experiments/kdx-workspace.jsonl",

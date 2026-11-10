@@ -1,7 +1,7 @@
 """Prompt caching on the supervisor's Claude calls (the operator, 2026-10-15: 1-hour entries), and its billing.
 
 Before this, no Claude request carried cache_control: every turn of an instance's loop re-billed its whole prompt
-(kant: 84% of its spend was input). With caching on, a reply's input_tokens is only the uncached remainder — a cost
+(kiln: 84% of its spend was input). With caching on, a reply's input_tokens is only the uncached remainder — a cost
 or cap computed from input_tokens alone would miss the cache reads and writes, and the daily cap would undercount."""
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class PricingTest(unittest.TestCase):
 
     def test_a_haiku_prompt_over_100k_tokens_is_priced_at_the_long_card_20261030(self):
         # Regression: Haiku 5.5 bills a prompt over 100K tokens (cached included) at $0.50/$2.50, 5× the short card;
-        # usd() priced every call at the short one, so the cap undercounted thelos's longest calls 5×.
+        # usd() priced every call at the short one, so the cap undercounted tundra's longest calls 5×.
         short = {"input_tokens": 100, "output_tokens": 1000, "cache_read_tokens": 99_900}
         self.assertAlmostEqual(cloudllm.usd("claude-haiku-5-5", short), (100 * 0.10 + 1000 * 0.50 + 99_900 * 0.01) / 1e6)
         long = {**short, "cache_read_tokens": 99_901}
@@ -102,13 +102,13 @@ class InstanceLoopTest(unittest.TestCase):
             sent.append(json.loads(req.data))
             return _reply(), None
         with mock.patch.object(cloudllm, "_send", side_effect=send):
-            out = cloudllm.complete("kant", {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]},
+            out = cloudllm.complete("kiln", {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]},
                                     {"ANTHROPIC_API_KEY": "k"}, {})
         self.assertEqual(sent[0]["cache_control"]["ttl"], "1h")
         rec = json.loads((self.tmp / "cloud_usage.jsonl").read_text().splitlines()[-1])
         self.assertAlmostEqual(rec["usd"], round(OPUS_USD, 6))
         self.assertEqual((rec["cache_read_tokens"], rec["cache_write_1h_tokens"]), (18000, 2000))
-        self.assertAlmostEqual(cloudllm.spent_today("kant"), round(OPUS_USD, 6))   # what the daily cap counts
+        self.assertAlmostEqual(cloudllm.spent_today("kiln"), round(OPUS_USD, 6))   # what the daily cap counts
         # the instance sizes its context from prompt_tokens: the whole prompt, not the uncached 50
         self.assertEqual(out["usage"]["prompt_tokens"], 20050)
         self.assertEqual(out["usage"]["prompt_tokens_details"]["cached_tokens"], 18000)
@@ -154,19 +154,19 @@ class CoderTest(unittest.TestCase):
             bodies.append(json.loads(req.data))
             return Resp(next(replies))
         with mock.patch.object(coder.urllib.request, "urlopen", side_effect=urlopen):
-            _, _, usage = coder.write(self.tmp, "kant", "nothing")
+            _, _, usage = coder.write(self.tmp, "kiln", "nothing")
         self.assertEqual([b["cache_control"] for b in bodies], [{"type": "ephemeral", "ttl": "1h"}] * 2)
         self.assertEqual((usage["cache_read_tokens"], usage["cache_write_1h_tokens"]), (36000, 4000))
         self.assertAlmostEqual(usage["usd"], round(2 * OPUS_USD, 4))
         rec = json.loads((self.tmp / "coder_usage.jsonl").read_text().splitlines()[-1])
-        self.assertAlmostEqual(coder.spent_today("kant"), rec["usd"])
+        self.assertAlmostEqual(coder.spent_today("kiln"), rec["usd"])
         self.assertNotEqual(rec["usd"], round(2 * (50 * 4 + 400 * 20) / 1e6, 4))   # not input/output only
 
     def test_an_unpriced_coder_model_is_refused_before_any_call(self):
         with mock.patch.object(coder, "CODER_MODEL", "claude-opus-9"), \
                 mock.patch.object(coder.urllib.request, "urlopen") as urlopen:
             with self.assertRaises(coder.CoderError):
-                coder.write(self.tmp, "kant", "x")
+                coder.write(self.tmp, "kiln", "x")
         urlopen.assert_not_called()
 
 

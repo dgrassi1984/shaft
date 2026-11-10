@@ -46,11 +46,11 @@ struct OutboxTests {
         let outbox = try Outbox(directory: folder.appending(path: "outbox"), sender: sender)
         let message = OutgoingMessage(text: "And send me the totals.", mode: .queue,
                                       files: [OutgoingFile(name: "totals.txt", mimeType: "text/plain", fileURL: picked)])
-        let result = await outbox.send(message, to: "thelos")
+        let result = await outbox.send(message, to: "tundra")
         guard case .failure(let error) = result else { Issue.record("the send did not fail"); return }
         #expect(error.isRetryable)
 
-        let entry = try #require(outbox.entries(for: "thelos").first)
+        let entry = try #require(outbox.entries(for: "tundra").first)
         #expect(entry.mid == message.mid)
         #expect(entry.state == .notSent)
         #expect(entry.reason == "The Internet connection appears to be offline.")
@@ -69,7 +69,7 @@ struct OutboxTests {
         let sender = RecordingSender(down: true)
         let outbox = try Outbox(directory: folder.appending(path: "outbox"), sender: sender)
         let message = OutgoingMessage(text: "look", files: [OutgoingFile(name: "a.png", mimeType: "image/png", fileURL: picked)])
-        await outbox.send(message, to: "thelos")
+        await outbox.send(message, to: "tundra")
 
         sender.down = false
         let result = try #require(await outbox.retry(message.mid))
@@ -88,7 +88,7 @@ struct OutboxTests {
         let sender = RecordingSender(down: true)
         let outbox = try Outbox(directory: folder, sender: sender)
         let message = OutgoingMessage(text: "Rerun the report", retryOf: 3)
-        await outbox.send(message, to: "thelos")
+        await outbox.send(message, to: "tundra")
 
         let newMid = try #require(try outbox.edit(message.mid, text: "Rerun the report for October."))
         #expect(newMid != message.mid)
@@ -111,7 +111,7 @@ struct OutboxTests {
         do {
             // Enqueued (written to disk) but never delivered: the app quit before the request ended.
             let outbox = try Outbox(directory: folder, sender: nil)
-            try outbox.enqueue(message, to: "thelos")
+            try outbox.enqueue(message, to: "tundra")
             #expect(outbox.entries.first?.state == .sending)
         }
         let sender = RecordingSender()
@@ -131,13 +131,13 @@ struct OutboxTests {
         let outbox = try Outbox(directory: folder, sender: RecordingSender(down: true))
         let arrived = OutgoingMessage(text: "the server took this one; its answer was lost")
         let other = OutgoingMessage(text: "this one never got there")
-        await outbox.send(arrived, to: "thelos")
-        await outbox.send(other, to: "thelos")
-        await outbox.send(arrived, to: "wren")
+        await outbox.send(arrived, to: "tundra")
+        await outbox.send(other, to: "tundra")
+        await outbox.send(arrived, to: "wisp")
 
-        outbox.reconcile(instance: "thelos", mids: [arrived.mid, "unrelated"])
-        #expect(outbox.entries(for: "thelos").map(\.mid) == [other.mid])
-        #expect(outbox.entries(for: "wren").map(\.mid) == [arrived.mid])
+        outbox.reconcile(instance: "tundra", mids: [arrived.mid, "unrelated"])
+        #expect(outbox.entries(for: "tundra").map(\.mid) == [other.mid])
+        #expect(outbox.entries(for: "wisp").map(\.mid) == [arrived.mid])
         #expect(try Outbox(directory: folder).entries.count == 2)
     }
 
@@ -146,7 +146,7 @@ struct OutboxTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let outbox = try Outbox(directory: folder, sender: RecordingSender(down: true))
         let message = OutgoingMessage(text: "never mind")
-        await outbox.send(message, to: "thelos")
+        await outbox.send(message, to: "tundra")
         outbox.discard(message.mid)
         #expect(outbox.entries.isEmpty)
         #expect(try Outbox(directory: folder).entries.isEmpty)
@@ -161,42 +161,42 @@ struct DraftStoreTests {
         try Data("a,b\n1,2\n".utf8).write(to: picked)
 
         let store = DraftStore(directory: folder.appending(path: "drafts"))
-        let attachment = try store.attach(picked, for: "thelos")
-        let pasted = try store.attach(data: Data([0xFF, 0xD8]), name: "photo.jpg", for: "thelos")
+        let attachment = try store.attach(picked, for: "tundra")
+        let pasted = try store.attach(data: Data([0xFF, 0xD8]), name: "photo.jpg", for: "tundra")
         let draft = Draft(text: "Both, please.",
                           quotes: [Quote(quote: "Per account or overall?", answer: "Per account", doc: "ledger.md"),
                                    Quote(quote: "Should the nightly report keep the per-account lines?")],
                           attachments: [attachment, pasted])
-        try store.save(draft, for: "thelos")
+        try store.save(draft, for: "tundra")
         try FileManager.default.removeItem(at: picked)
 
         // A new store over the same folder: the app after a quit.
         let reopened = DraftStore(directory: folder.appending(path: "drafts"))
-        let loaded = try reopened.load("thelos")
+        let loaded = try reopened.load("tundra")
         #expect(loaded == draft)
         #expect(attachment.mimeType == "text/csv")
         #expect(pasted.mimeType == "image/jpeg")
-        #expect(try Data(contentsOf: reopened.fileURL(of: loaded.attachments[0], for: "thelos")) == Data("a,b\n1,2\n".utf8))
-        #expect(reopened.outgoingFiles(loaded, for: "thelos").map(\.name) == ["q3.csv", "photo.jpg"])
-        #expect(try reopened.load("wren") == Draft())
+        #expect(try Data(contentsOf: reopened.fileURL(of: loaded.attachments[0], for: "tundra")) == Data("a,b\n1,2\n".utf8))
+        #expect(reopened.outgoingFiles(loaded, for: "tundra").map(\.name) == ["q3.csv", "photo.jpg"])
+        #expect(try reopened.load("wisp") == Draft())
     }
 
     @Test func removingAnAttachmentDeletesItsFileAndClearingDeletesAll() throws {
         let folder = try temporaryFolder("drafts")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = DraftStore(directory: folder)
-        let first = try store.attach(data: Data("1".utf8), name: "one.txt", for: "thelos")
-        let second = try store.attach(data: Data("2".utf8), name: "two.txt", for: "thelos")
-        try store.save(Draft(text: "x", attachments: [first, second]), for: "thelos")
+        let first = try store.attach(data: Data("1".utf8), name: "one.txt", for: "tundra")
+        let second = try store.attach(data: Data("2".utf8), name: "two.txt", for: "tundra")
+        try store.save(Draft(text: "x", attachments: [first, second]), for: "tundra")
 
-        try store.save(Draft(text: "x", attachments: [second]), for: "thelos")
-        #expect(!FileManager.default.fileExists(atPath: store.fileURL(of: first, for: "thelos").path))
-        #expect(FileManager.default.fileExists(atPath: store.fileURL(of: second, for: "thelos").path))
+        try store.save(Draft(text: "x", attachments: [second]), for: "tundra")
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL(of: first, for: "tundra").path))
+        #expect(FileManager.default.fileExists(atPath: store.fileURL(of: second, for: "tundra").path))
 
-        try store.clear("thelos")
-        #expect(try store.load("thelos").isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: store.fileURL(of: second, for: "thelos").path))
-        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "thelos.json").path))
+        try store.clear("tundra")
+        #expect(try store.load("tundra").isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL(of: second, for: "tundra").path))
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "tundra.json").path))
     }
 
     @Test func aNameThatIsNotAnInstanceIsRefused() throws {

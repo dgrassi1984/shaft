@@ -15,7 +15,6 @@ time. Otherwise, it can use Mimo"): a pair runs on the local model only while no
 and requeued the moment a cycle, a sleep or a conversation does; pairs still waiting after SHAFT_TRIAL_LOCAL_WAIT_H
 (or preempted twice) run on SHAFT_TRIAL_FALLBACK_MODEL. The work is done by work(), which the scheduler starts.
 
-Plan, decisions and acceptance criteria: docs/plans/PLAN-trials.md.
 """
 from __future__ import annotations
 
@@ -77,7 +76,7 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
 # mail/, gdrive/ and gchat/: downloads from the operator's accounts are copies, not state: never in the judge's diff.
-# .browser/: a browser profile a replay's `run` created (docs/plans/PLAN-browser.md) — cookies, never shown to the judge.
+# .browser/: a browser profile a replay's `run` created — cookies, never shown to the judge.
 # shaft-docs/: the supervisor's copy of SHAFT's docs, staged at the replay's start (runner.stage_docs) — not its work.
 NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", "gdrive", "gchat", ".browser", DOCS_COPY)
 LEDGER = SUP_DIR / "trial_usage.jsonl"
@@ -300,7 +299,7 @@ def state_of(project: Path, name: str, ep: dict, starts: list[str] | None = None
         return None
     # --first-parent: the branch's own line. Without it the walk also reached template commits merged later
     # (`shaft update`), and a template commit dated between the last run and t0 became the start: a replay with
-    # the template's tree and an empty mind (8 of the 50 replayed states on disk, found by docs/plans/PLAN-mind-out-of-git M0).
+    # the template's tree and an empty mind (found replaying old states).
     commit = _git(project, "log", "-1", "--first-parent", "--format=%H", f"--before={t0:%Y-%m-%dT%H:%M:%S}",
                   branch(name)).stdout.strip()
     if not commit:
@@ -380,8 +379,8 @@ def link_env(dest: Path, real: Path) -> None:
 
 def copy_attachments(src: Path, dest: Path, before: datetime) -> int:
     """Files sent to the instance before `before` (attachments/<from-who>/<YYYYmmdd-HHMMSS…>/): they are versioned
-    nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at
-    (docs/plans/PLAN-vision.md). Later ones are left out, as later mail is. Regular files only: a link is never followed."""
+    nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at.
+   Later ones are left out, as later mail is. Regular files only: a link is never followed."""
     copied = 0
     for who in list_beneath(src, "attachments"):
         for batch in list_beneath(src, f"attachments/{who}"):
@@ -1513,8 +1512,8 @@ def work(project: Path = PROJECT) -> int:
             f"FALLBACK_MODEL={FALLBACK_MODEL} [{FALLBACK_SRC}])")
         if (swept := sweep_scratch()):
             log(f"trial worker: removed {swept} scratch copies left by an earlier worker")
-        # Trials are keyed by (instance, id): ids are unique per instance only (wren's and shaft's trials made in
-        # the same second shared one, and wren's never had its tests run, 2026-10-13).
+        # Trials are keyed by (instance, id): ids are unique per instance only (wisp's and shaft's trials made in
+        # the same second shared one, and wisp's never had its tests run, 2026-10-13).
         tried: set[tuple[str, str, int]] = set()   # a preempted pair waits for the next pass
         inflight: dict = {}                         # future -> ((instance, trial id), model)
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
@@ -1595,7 +1594,7 @@ def _bytes_or_none(root: Path, rel: str) -> bytes | None:
 def match(name: str, root: Path, kept: list[str], before: dict[str, bytes]) -> dict | None:
     """The finished trial whose change is the one the instance kept: the same files, each with the same lines
     removed and added — matched on the edit, not on whole files, because the rest of a file may have moved on
-    between the trial and the adoption (wren adopted its trialled sentence on top of a template merge that had
+    between the trial and the adoption (wisp adopted its trialled sentence on top of a template merge that had
     landed in the same file meanwhile, 2026-10-13)."""
     now = {rel: _bytes_or_none(root, rel) for rel in kept}
     kept_edit = {rel: _edit(before.get(rel), now[rel]) for rel in kept}

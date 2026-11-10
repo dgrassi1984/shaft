@@ -1,5 +1,5 @@
 """self/personality.md keeps exactly one Core and one Surface block, and the core's slow pace cannot be
-bypassed by a second Core block (wren, 2026-10-13: "update_personality left a trailing duplicate ## Core")."""
+bypassed by a second Core block (wisp, 2026-10-13: "update_personality left a trailing duplicate ## Core")."""
 from __future__ import annotations
 
 import shutil
@@ -157,10 +157,10 @@ class CorePaceTest(unittest.TestCase):
         p.write_text(FILE)
         with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(runner, "log"):
             before = runner._core(root)
-            (sup / "core-changed-wren").write_text(datetime.now().isoformat())   # changed just now
+            (sup / "core-changed-wisp").write_text(datetime.now().isoformat())   # changed just now
             p.write_text(FILE + "\n## Core\n*(values and temperament — change rarely)*\n\n- new values [2026-10-12 17:24]\n")
             self.assertNotEqual(runner._core(root), before)          # the second block counts as a change
-            note = runner.enforce_core("wren", root, before)
+            note = runner.enforce_core("wisp", root, before)
         self.assertIsNotNone(note)
         text = p.read_text()
         self.assertEqual(text.count("## Core"), 1)

@@ -1,7 +1,7 @@
 {
-  "instance": "wren",
+  "instance": "wisp",
   "partial": false,
-  "version": "0f76ac8c614ba070",
+  "version": "9ed15a7b2d4c7c42",
   "live": "",
   "reply": null,
   "chat": {
@@ -29,9 +29,9 @@
       "feedback": []
     },
     {
-      "key": "s20261103-140230-118204-from-wren.md",
+      "key": "s20261103-140230-118204-from-wisp.md",
       "type": "sent",
-      "file": "20261103-140230-118204-from-wren.md",
+      "file": "20261103-140230-118204-from-wisp.md",
       "ts": "2026-11-03T14:02:30+01:00",
       "kind": "question",
       "read": false,
@@ -51,9 +51,9 @@
       "comments": []
     },
     {
-      "key": "s20261103-141100-000001-from-wren.md",
+      "key": "s20261103-141100-000001-from-wisp.md",
       "type": "sent",
-      "file": "20261103-141100-000001-from-wren.md",
+      "file": "20261103-141100-000001-from-wisp.md",
       "ts": "2026-11-03T14:11:00+01:00",
       "kind": "message",
       "read": true,
@@ -64,29 +64,29 @@
           "bytes": 20480,
           "image": true,
           "text": false,
-          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/0"
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/0"
         },
         {
           "name": "data.csv",
           "bytes": 512,
           "image": false,
           "text": true,
-          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/1"
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/1"
         },
         {
           "name": "report.pdf",
           "bytes": 90000,
           "image": false,
           "text": false,
-          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/2"
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/2"
         }
       ],
       "rating": null
     },
     {
-      "key": "s20261103-141200-000001-from-wren.md",
+      "key": "s20261103-141200-000001-from-wisp.md",
       "type": "sent",
-      "file": "20261103-141200-000001-from-wren.md",
+      "file": "20261103-141200-000001-from-wisp.md",
       "ts": "2026-11-03T14:12:00+01:00",
       "kind": "question",
       "read": true,

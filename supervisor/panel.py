@@ -1,4 +1,4 @@
-"""Data for `shaft top`'s control-panel views (docs/plans/PLAN-control-panel.md): one instance in full, the judge's
+"""Data for `shaft top`'s control-panel views: one instance in full, the judge's
 verdicts, trials, benchmarks, self-changes and probation, spending against the caps, services, alerts.
 
 Stdlib only, like dashboard.py, so every view is testable without a terminal. Each function reuses the
@@ -703,7 +703,7 @@ def dismiss(ids: list[str]) -> None:
 
 
 def _jobs_summary(name: str) -> str:
-    """'watcher every 15 min (can wake), digest every 60 min' — or why none run (docs/plans/PLAN-jobs.md)."""
+    """'watcher every 15 min (can wake), digest every 60 min' — or why none run."""
     from . import jobs
     if jobs.jobs_off(name):
         return "off (shaft jobs " + name + " on)"

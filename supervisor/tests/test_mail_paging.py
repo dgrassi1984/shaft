@@ -110,7 +110,7 @@ class PagingTest(fixtures.MailCase):
         self.long_thread()
         b = self.broker()
         args = self.next_args(self.ok(b, "mail_read", {"id": "work/abc123"}))
-        fixtures.core.set_mail_grants("wren", [])
+        fixtures.core.set_mail_grants("wisp", [])
         self.assertEqual(self.refused(b, "mail_read", args), "no mail granted to you")
 
     def test_short_thread_ends_without_next_call(self):
@@ -184,7 +184,7 @@ class SearchPagingTest(unittest.TestCase):
 
     def broker(self, accounts):
         b = fixtures.broker.Broker.__new__(fixtures.broker.Broker)
-        b.name, b.as_of = "wren", None
+        b.name, b.as_of = "wisp", None
         b.mail_grants = lambda: [{"account": alias, "label": "AssistantAccess"} for alias in accounts]
         b._mail_account = accounts.__getitem__
         b._log = lambda text: None

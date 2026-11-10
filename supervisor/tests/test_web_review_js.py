@@ -159,7 +159,7 @@ class AwayTest(unittest.TestCase):
 const sent = [];
 let state = "visible";
 const document = { get visibilityState() { return state; },
-  querySelector: q => q === ".feed[data-follow][data-poll]" ? { dataset: { poll: "/fragment/chat/wren" } } : null };
+  querySelector: q => q === ".feed[data-follow][data-poll]" ? { dataset: { poll: "/fragment/chat/wisp" } } : null };
 const Date = { now: () => 1234 };
 const fetch = (u, o) => { sent.push([u, !!o.keepalive]); return Promise.resolve(); };
 """ + function("away") + r"""
@@ -168,7 +168,7 @@ away({ type: "pagehide" });                         // leaving, though visible
 state = "hidden"; away({ type: "visibilitychange" });
 console.log(JSON.stringify(sent));
 """)
-        self.assertEqual(json.loads(out), [["/fragment/chat/wren?away=1&at=1234", True]] * 2)
+        self.assertEqual(json.loads(out), [["/fragment/chat/wisp?away=1&at=1234", True]] * 2)
         self.assertIn('"X-Shaft-At": String(Date.now())', JS)
 
 
@@ -195,16 +195,16 @@ async function click(url) { let wait; handlers.notificationclick({ notification:
         rejected, uncaught, and nothing opened; on the chat itself it reloaded it, dropping attached files."""
         node(self.HARNESS + r"""
 (async () => {
-  const there = { url: "https://shaft.test/i/wren/chat?doc=a.md", focused: 0, navigated: 0,
+  const there = { url: "https://shaft.test/i/wisp/chat?doc=a.md", focused: 0, navigated: 0,
     focus() { this.focused++; return this; }, navigate() { this.navigated++; return Promise.resolve(this); } };
   clients = [there];
-  await click("/i/wren/chat");
+  await click("/i/wisp/chat");
   assert.deepEqual([there.focused, there.navigated], [1, 0], "already on the chat: brought forward, not reloaded");
   const other = { url: "https://shaft.test/overview", focus() { return this; },
     navigate: () => Promise.reject(new TypeError("not controlled")) };
   clients = [other];
-  await click("/i/wren/chat");
-  assert.deepEqual(opened, ["https://shaft.test/i/wren/chat"], "navigate refused: a window opens instead");
+  await click("/i/wisp/chat");
+  assert.deepEqual(opened, ["https://shaft.test/i/wisp/chat"], "navigate refused: a window opens instead");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """, web_pages.service_worker())
 
@@ -212,15 +212,15 @@ async function click(url) { let wait; handlers.notificationclick({ notification:
         """M11: notificationclick focused an archive because it matched only the current chat's pathname."""
         node(self.HARNESS + r"""
 (async () => {
-  const there = {url: "https://shaft.test/i/wren/chat?id=web-old", focused:0, navigated:[],
+  const there = {url: "https://shaft.test/i/wisp/chat?id=web-old", focused:0, navigated:[],
     focus() {this.focused++; return this;},
     async navigate(url) {this.navigated.push(url); this.url=url; return this;}};
   clients = [there];
-  await click("/i/wren/chat");
-  assert.deepEqual(there.navigated, ["https://shaft.test/i/wren/chat"]);
+  await click("/i/wisp/chat");
+  assert.deepEqual(there.navigated, ["https://shaft.test/i/wisp/chat"]);
   assert.equal(there.focused, 1);
   assert.deepEqual(opened, []);
-  await click("/i/wren/chat");
+  await click("/i/wisp/chat");
   assert.equal(there.navigated.length, 1, "the current chat keeps its composer");
 })().catch(e => {console.error(e); process.exitCode = 1;});
 """, web_pages.service_worker())
@@ -258,9 +258,9 @@ async function click(url) { let wait; handlers.notificationclick({ notification:
         opened."""
         node(self.HARNESS + r"""
 (async () => {
-  clients = [{ url: "https://shaft.test/i/wren/chat", focus: () => Promise.reject(new Error("not allowed")) }];
-  await click("/i/wren/chat");
-  assert.deepEqual(opened, ["https://shaft.test/i/wren/chat"]);
+  clients = [{ url: "https://shaft.test/i/wisp/chat", focus: () => Promise.reject(new Error("not allowed")) }];
+  await click("/i/wisp/chat");
+  assert.deepEqual(opened, ["https://shaft.test/i/wisp/chat"]);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """, web_pages.service_worker())
 
@@ -415,11 +415,11 @@ const setTimeout = (fn) => { timers.set(++n, fn); return n; }, clearTimeout = id
 const box = { set textContent(v) { if (v) said.push(v); }, get textContent() { return ""; } };
 const region = () => box;
 """ + function("announce") + r"""
-announce("wren replied: one"); announce("kant replied: two");
+announce("wisp replied: one"); announce("kiln replied: two");
 for (const fn of [...timers.values()]) fn();
 console.log(JSON.stringify(said));
 """)
-        self.assertEqual(json.loads(out), ["kant replied: two"])
+        self.assertEqual(json.loads(out), ["kiln replied: two"])
 
 
 @unittest.skipUnless(NODE, "node is not installed")
@@ -428,7 +428,7 @@ class LeaveWarningJsTest(unittest.TestCase):
 const storage = new Map(JSON.parse(process.argv[2])), handlers = {}, win = {};
 const note = { textContent: "" }, sha = { type: "hidden", value: "s2", defaultValue: "s2" };
 const box = { tagName: "TEXTAREA", type: "textarea", value: "be useful", defaultValue: "be useful" };
-const form = { dataset: { keep: "drive.wren", guard: "", post: "/action/drive-set" }, isConnected: true,
+const form = { dataset: { keep: "drive.wisp", guard: "", post: "/action/drive-set" }, isConnected: true,
   querySelector: q => ({ textarea: box, "textarea[name=text]": box, "input[name=sha]": sha, "[data-keep-note]": note })[q] || null,
   querySelectorAll: q => q === "input, textarea, select" ? [sha, box] : [], closest: () => null };
 box.closest = q => q === "form[data-keep]" ? form : null;
@@ -456,13 +456,13 @@ for (const f of handlers.DOMContentLoaded) f();
         out = node(self.HARNESS + r"""
 const clean = unload();
 box.value = "be useful, and brief"; for (const f of handlers.input) f({ target: box });
-console.log(JSON.stringify({ clean, dirty: unload(), kept: JSON.parse(storage.get("shaft.draft.drive.wren")) }));
+console.log(JSON.stringify({ clean, dirty: unload(), kept: JSON.parse(storage.get("shaft.draft.drive.wisp")) }));
 """, str(STATIC / "web.js"), "[]")
         self.assertEqual(json.loads(out), {"clean": False, "dirty": True,
                                            "kept": {"text": "be useful, and brief", "sha": "s2"}})
         out = node(self.HARNESS + r"""
 console.log(JSON.stringify({ text: box.value, note: note.textContent, sha: sha.value, dirty: unload() }));
-""", str(STATIC / "web.js"), json.dumps([["shaft.draft.drive.wren", json.dumps({"text": "mine", "sha": "s1"})]]))
+""", str(STATIC / "web.js"), json.dumps([["shaft.draft.drive.wisp", json.dumps({"text": "mine", "sha": "s1"})]]))
         self.assertEqual(json.loads(out), {"text": "mine", "sha": "s2", "dirty": True,
                                            "note": "Unsaved edit restored — begun on an older version: check the diff "
                                                    "before Apply"})
@@ -477,7 +477,7 @@ answers.push({ ok: true, status: 200, headers: { get: () => null }, text: async 
 (async () => {
   for (const f of handlers.submit) await f({ target: { closest: q => q === "form[data-post]" ? form : null },
                                             preventDefault() {}, submitter: null });
-  console.log(JSON.stringify({ dirty: unload(), kept: storage.has("shaft.draft.drive.wren"), base: box.defaultValue }));
+  console.log(JSON.stringify({ dirty: unload(), kept: storage.has("shaft.draft.drive.wisp"), base: box.defaultValue }));
 })();
 """, str(STATIC / "web.js"), "[]")
         self.assertEqual(json.loads(out), {"dirty": False, "kept": False, "base": "saved now"})

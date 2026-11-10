@@ -1,6 +1,6 @@
 # SHAFT for iPhone, iPad and Mac
 
-The native chat apps ([docs/plans/PLAN-native-apps.md](../../docs/plans/PLAN-native-apps.md)): one SwiftUI codebase, an iOS app
+The native chat apps: one SwiftUI codebase, an iOS app
 for iPhone and iPad, a native macOS app (not Catalyst), and a notification service extension for each. They talk to
 the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), over the tailnet.
 
@@ -75,7 +75,7 @@ Each app scheme builds its notification extension too.
 ## Try it against a fixture server
 
 `DevServer/fixture_server.py` runs the web service's own `/app/v1` (app_api, web_chat, documents, comments,
-feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances (`thelos`, `wren`, `ada`), a chat with every item
+feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances (`INSTANCES` in the fixture), a chat with every item
 kind, an earlier chat, documents with comment threads. It fakes only what lies outside the web service: the tailnet
 login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute, "wide" exercises wide tables and code),
 APNs (each push is written to `<dir>/pushes/` with apns.py's payload, and handed to a simulator with `--simctl`) and
@@ -88,7 +88,7 @@ python3 apps/shaft/DevServer/fixture_server.py pair --dir /tmp/shaft-fixture --p
 python3 apps/shaft/DevServer/fixture_server.py act --dir /tmp/shaft-fixture --port 8899 question <name> "Archive it?"
 ```
 
-Use `thelos`, `wren`, or `ada` for `<name>`; `act` defaults to `thelos` when the name is omitted.
+Use one of the seeded names for `<name>`; `act` defaults to the first when the name is omitted.
 The fixture accepts each device's APNs topic unless `SHAFT_APNS_TOPIC` is set, which restricts registration to that topic.
 `serve` prints a pairing link; type or paste it into the app. `act` (with the same `--dir`, `--port` and `--simctl`)
 makes an instance send a message or a question (with its push), change its state, write a document, or have a chat
@@ -143,8 +143,8 @@ the window takes no mouse moves (hover) and runs no animations (an inspector ope
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's) instead.
 
-To check the document-opening crash, seed a long chat with `fixture_server.py act ... long thelos 120`
-(`mac-doc-open.drive` opens `thelos`).
+To check the document-opening crash, seed a long chat with `fixture_server.py act ... long <name> 120`
+for the instance `mac-doc-open.drive` opens.
 Run the Release build with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` and Debug's
 `NSAppTransportSecurity.NSAllowsLocalNetworking=true` Info.plist entry, then set
 `SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` and repeat. The `MacDev*` helpers require `#if DEBUG`.

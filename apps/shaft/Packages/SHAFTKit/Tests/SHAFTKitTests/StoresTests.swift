@@ -38,7 +38,7 @@ struct StoresTests {
         #expect(reported == [0, 0, 0])
 
         server.setAnswer { _ in .json(200, #"{"unread": false, "badge": 0}"#) }
-        #expect(await store.markSeen("wren", version: "shown"))
+        #expect(await store.markSeen("wisp", version: "shown"))
         #expect(store.badge == 0)
         #expect(reported == [0, 0, 0, 0])
     }
@@ -59,16 +59,16 @@ struct StoresTests {
         let store = try makeStore(server, folder: folder)
         await store.refresh()
         #expect(store.badge == 1)
-        #expect(store.row("wren")?.unread == true)
+        #expect(store.row("wisp")?.unread == true)
 
-        #expect(await store.markSeen("wren", version: "old") == false)
+        #expect(await store.markSeen("wisp", version: "old") == false)
         #expect(store.error == nil)
-        #expect(store.row("wren")?.unread == true)
+        #expect(store.row("wisp")?.unread == true)
 
-        #expect(await store.markSeen("wren", version: "9f2c4e1ab07d3c55"))
+        #expect(await store.markSeen("wisp", version: "9f2c4e1ab07d3c55"))
         #expect(store.badge == 0)
-        #expect(store.row("wren")?.unread == false)
-        #expect(server.requests.last?.path == "/app/v1/chat/wren/seen")
+        #expect(store.row("wisp")?.unread == false)
+        #expect(server.requests.last?.path == "/app/v1/chat/wisp/seen")
     }
 
     @Test func aListPollThatBeganBeforeSeenLandedDoesNotBringTheDotBack() async throws {
@@ -80,7 +80,7 @@ struct StoresTests {
         var badges: [Int] = []
         store.onBadge = { badges.append($0) }
         await store.refresh()
-        #expect(store.row("wren")?.unread == true)
+        #expect(store.row("wisp")?.unread == true)
 
         let began = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
@@ -96,11 +96,11 @@ struct StoresTests {
         }
         let poll = Task { await store.refresh() }
         for await _ in began.stream { break }
-        #expect(await store.markSeen("wren", version: "shown"))
+        #expect(await store.markSeen("wisp", version: "shown"))
         release.continuation.yield(())
         await poll.value
 
-        #expect(store.row("wren")?.unread == false)
+        #expect(store.row("wisp")?.unread == false)
         #expect(store.badge == 0)
         #expect(badges == [1, 0])
         server.setAnswer { _ in .notModified }
@@ -124,17 +124,17 @@ struct StoresTests {
                                    drafts: DraftStore(directory: folder.appending(path: "drafts")),
                                    sleep: { steps.sleep($0) })
         await store.refresh()
-        let chat = store.chat("wren")
+        let chat = store.chat("wisp")
         chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
 
         #expect(await chat.markSeenUntilDone())
         #expect(steps.sleeps == [.seconds(2)])
-        #expect(store.row("wren")?.unread == false)
+        #expect(store.row("wisp")?.unread == false)
         #expect(store.badge == 0)
         let posts = server.requests.filter { $0.method == "POST" }
         #expect(posts.count == 2)
-        #expect(posts.allSatisfy { $0.path == "/app/v1/chat/wren/seen" })
-        #expect(posts.allSatisfy { $0.json?["version"] as? String == "4749b203e1101494" })
+        #expect(posts.allSatisfy { $0.path == "/app/v1/chat/wisp/seen" })
+        #expect(posts.allSatisfy { $0.json?["version"] as? String == "55edd8cc46b944f6" })
     }
 
     @Test func markingSeenStopsWhenCancelled() async throws {
@@ -152,7 +152,7 @@ struct StoresTests {
                                        sleeping.continuation.yield(())
                                        try await Task.sleep(for: duration)
                                    })
-        let chat = store.chat("wren")
+        let chat = store.chat("wisp")
         chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
         let task = Task { await chat.markSeenUntilDone() }
         for await _ in sleeping.stream { break }
@@ -161,7 +161,7 @@ struct StoresTests {
         #expect(await task.value == false)
         #expect(steps.sleeps == [.seconds(2)])
         #expect(server.requests.count == 1)
-        #expect(server.requests.first?.path == "/app/v1/chat/wren/seen")
+        #expect(server.requests.first?.path == "/app/v1/chat/wisp/seen")
     }
 
     /// Bug: leaving a chat, or the Mac window losing focus, cancelled a seen request in flight, and the list showed
@@ -180,7 +180,7 @@ struct StoresTests {
         let reply = held
         let server = StubServer { _ in reply }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("wren")
+        let chat = store.chat("wisp")
         chat.apply(.feed(try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)))
         let task = Task { await chat.markSeenUntilDone() }
         for await _ in began.stream { break }
@@ -196,15 +196,15 @@ struct StoresTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("thelos")
-        let file = try store.drafts.attach(data: Data("x".utf8), name: "note.txt", for: "thelos")
+        let chat = store.chat("tundra")
+        let file = try store.drafts.attach(data: Data("x".utf8), name: "note.txt", for: "tundra")
         chat.draft = Draft(text: "Rerun it", quotes: [Quote(quote: "Ship it?", answer: "Yes")], attachments: [file])
-        #expect(try store.drafts.load("thelos").text == "Rerun it")
+        #expect(try store.drafts.load("tundra").text == "Rerun it")
 
         let result = await chat.send(mode: .queue)
         guard case .failure = result else { Issue.record("the send did not fail"); return }
         #expect(chat.draft.isEmpty)
-        #expect(try store.drafts.load("thelos").isEmpty)
+        #expect(try store.drafts.load("tundra").isEmpty)
         let unsent = try #require(chat.unsent.first)
         #expect(unsent.text == "Rerun it")
         #expect(unsent.mode == .queue)
@@ -234,7 +234,7 @@ struct CyclesStoresTests {
         page["next"] = next.map { $0 as Any } ?? NSNull()
         let cycles = fixtureText(try JSONSerialization.data(withJSONObject: page))
         return StubServer { request in
-            request.path == "/app/v1/plan/wren"
+            request.path == "/app/v1/plan/wisp"
                 ? .json(200, plan, headers: ["ETag": "\"plan\""])
                 : .json(200, cycles, headers: ["ETag": "\"page\""])
         }
@@ -242,7 +242,7 @@ struct CyclesStoresTests {
 
     @Test func overlappingEarlierLoadsDoNotAppendTheSameDateTwice() async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let began = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
@@ -279,7 +279,7 @@ struct CyclesStoresTests {
     @Test(arguments: [200, 500])
     func refreshMakesAHeldEarlierPageStaleWithoutDuplicatingDates(_ status: Int) async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let original = store.days
         let began = AsyncStream<Void>.makeStream()
@@ -309,7 +309,7 @@ struct CyclesStoresTests {
 
     @Test func changingFilterStartsLoadingBeforeClearingDays() async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         withObservationTracking {
             _ = store.days
@@ -321,7 +321,7 @@ struct CyclesStoresTests {
 
     @Test func anEarlierPageForThePreviousFilterIsDiscarded() async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let began = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
@@ -345,7 +345,7 @@ struct CyclesStoresTests {
 
     @Test func refreshKeepsTheListOnA304() async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         #expect(store.days.count == 1)
         let days = store.days
@@ -362,7 +362,7 @@ struct CyclesStoresTests {
     @Test(arguments: [200, 500])
     func aStaleEarlierPageCannotFinishTheFilterRefresh(_ status: Int) async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let failure = #"{"error":{"code":"internal","message":"List failed"}}"#
         server.setAnswer { _ in .json(500, failure) }
@@ -393,7 +393,7 @@ struct CyclesStoresTests {
         let heldRefresh = refreshResponse
         server.setAnswer { request in
             if request.query("before") != nil { return heldEarlier }
-            return request.path == "/app/v1/plan/wren" ? .notModified : heldRefresh
+            return request.path == "/app/v1/plan/wisp" ? .notModified : heldRefresh
         }
         let earlier = Task { await store.loadEarlier() }
         for await _ in earlierBegan.stream { break }
@@ -413,7 +413,7 @@ struct CyclesStoresTests {
 
     @Test func twoFilterChangesKeepOnlyTheNewestPage() async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         let began = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         defer { began.continuation.finish(); release.continuation.finish() }
@@ -427,7 +427,7 @@ struct CyclesStoresTests {
         let held = oldResponse
         let newest = fixtureText(try DecodingTests.fixture("cycles"))
         server.setAnswer { request in
-            if request.path == "/app/v1/plan/wren" { return .notModified }
+            if request.path == "/app/v1/plan/wisp" { return .notModified }
             if request.query("filter") == "short" { return held }
             return .json(200, newest, headers: ["ETag": "\"newest\""])
         }
@@ -448,7 +448,7 @@ struct CyclesStoresTests {
     @Test(arguments: [200, 500], [false, true])
     func aStaleDetailLoadCannotChangeTheNewestSelection(_ status: Int, _ olderFinishesLast: Bool) async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"Initial failed"}}"#) }
         await store.load("2026-11-03T13:00:00")
         #expect(store.detailError?.message == "Initial failed")
@@ -506,7 +506,7 @@ struct CyclesStoresTests {
 
     @Test func aFailedDetailLoadDoesNotChangeListState() async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         let began = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         defer { began.continuation.finish(); release.continuation.finish() }
@@ -533,7 +533,7 @@ struct CyclesStoresTests {
 
     @Test func aSuccessfulDetailLoadKeepsAListFailure() async throws {
         let server = try server()
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"List failed"}}"#) }
         await store.refresh()
         let detail = fixtureText(try DecodingTests.fixture("cycle"))
@@ -547,7 +547,7 @@ struct CyclesStoresTests {
 
     @Test func loadEarlierAppendsAndAdvancesNext() async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let page = fixtureText(try DecodingTests.fixture("cycles"))
             .replacingOccurrences(of: "2026-11-03", with: "2026-11-02")
@@ -564,7 +564,7 @@ struct CyclesStoresTests {
 
     @Test func setFilterSendsItAndClearsTheOldDays() async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         server.setAnswer { _ in .notModified }
         await store.setFilter("short")
@@ -579,13 +579,13 @@ struct CyclesStoresTests {
 
     @Test func aFailureKeepsWhatIsShownAndSetsError() async throws {
         let server = try server(next: "2026-11-02")
-        let store = CyclesStore(client: server.client, instance: "wren")
+        let store = CyclesStore(client: server.client, instance: "wisp")
         await store.refresh()
         let detail = fixtureText(try DecodingTests.fixture("cycle"))
         server.setAnswer { _ in .json(200, detail) }
         await store.load("2026-11-03T13:58:40")
         #expect(store.open?.id == "2026-11-03T13:58:40")
-        #expect(server.requests.last?.path == "/app/v1/cycles/wren/2026-11-03T13:58:40")
+        #expect(server.requests.last?.path == "/app/v1/cycles/wisp/2026-11-03T13:58:40")
         #expect(server.requests.last?.header("If-None-Match") == nil)
         let plan = store.plan
         let days = store.days

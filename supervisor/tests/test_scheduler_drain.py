@@ -406,8 +406,8 @@ class RestartVerbTest(unittest.TestCase):
         req = autonomy.request_restart(111)
         self.assertIn("taken up at its next tick", autonomy.drain_line())
         autonomy._write_json(self.sup / "scheduler-drain.json",
-                             {**req, "pid": os.getpid(), "state": "draining", "waiting": ["wake thelos"]})
-        self.assertRegex(autonomy.drain_line(), r"scheduler restarting .*waiting for wake thelos; by \d\d:\d\d")
+                             {**req, "pid": os.getpid(), "state": "draining", "waiting": ["wake tundra"]})
+        self.assertRegex(autonomy.drain_line(), r"scheduler restarting .*waiting for wake tundra; by \d\d:\d\d")
 
 
 class FakeProc:

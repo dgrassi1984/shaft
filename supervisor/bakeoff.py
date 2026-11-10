@@ -17,8 +17,8 @@ web answers are not kept on disk), and a pair the judge failed on is judged agai
 
 The judge can also be Claude Code subagents instead of the API (no API cost): replay with --replay-only, export the
 blind cases (export_cases: model names redacted, both orders as separate cases), have one subagent judge each case
-into verdicts/<case>.json, then import_verdicts decides each pair as the API judge's would. Past bake-offs, what
-they found and what to reuse: docs/bakeoffs/README.md.
+into verdicts/<case>.json, then import_verdicts decides each pair as the API judge's would. How to run one and what
+to reuse: docs/bakeoffs/README.md.
 """
 from __future__ import annotations
 
@@ -863,7 +863,7 @@ def operator_record(b: dict, i: int, pair: tuple[str, str], choice: str, note: s
 
 ELO = 400 / math.log(10)
 ELO_START = 1000
-PRIOR_SD = 2.0   # logits (about 350 Elo), as docs/bakeoffs/parity_score.py: weak, so a few pairs move a model
+PRIOR_SD = 2.0   # logits (about 350 Elo): weak, so a few pairs move a model
 
 
 def bradley_terry(games: list[tuple[str, str, float]], arms: list[str]) -> dict[str, dict]:

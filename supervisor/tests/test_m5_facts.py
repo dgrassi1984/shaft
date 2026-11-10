@@ -133,7 +133,7 @@ class FactsTest(InstanceFixture, unittest.TestCase):
             self.assertIn("Older:", sleep.fact_candidates(self.root))
         self.path.write_text("\n".join(f"- [2026-10-{day:02d} 09:12] Today is day {day}" for day in range(1, 20)))
         self.assertEqual(sleep.fact_candidates(self.root).count("- Older:"), 15)
-        # #143: a name most facts share pairs everything with everything (on thelos's real facts, "Daniele" filled
+        # #143: a name most facts share pairs everything with everything (on tundra's real facts, "Daniele" filled
         # all 15 pairs); only rare keys count, and an older fact gets one pair
         self.path.write_text("\n".join(f"- [2026-10-{day:02d} 09:12] Daniele said item{day} is fine" for day in range(1, 9))
                              + "\n- [2026-10-09 09:12] Rizzo moved the bank meeting\n- [2026-10-10 09:12] Rizzo cancelled it")

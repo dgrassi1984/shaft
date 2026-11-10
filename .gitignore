@@ -19,7 +19,7 @@ __pycache__/
 /.venv-bonsai/
 /.venv-ui/
 
-# the Chromium every instance browses with (shaft browser install, docs/plans/PLAN-browser.md); .new/.old while it is replaced
+# the Chromium every instance browses with (shaft browser install); .new/.old while it is replaced
 /.browsers/
 /.browsers.new/
 /.browsers.old/
@@ -80,6 +80,9 @@ __pycache__/
 /.opencode/skills/work-issue-batch/
 /.opencode/skills/work-issue/
 # END agent-workflows
+
+# the maintainer's local workflow bindings, not part of SHAFT
+/agent-overlay.yaml
 
 # Local Apple signing settings
 /apps/shaft/Signing.local.yml

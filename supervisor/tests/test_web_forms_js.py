@@ -117,7 +117,7 @@ class FormJsTest(unittest.TestCase):
         result = self.run_js(r"""
 sandbox.fetch = async () => { const e = new Error("The operation was aborted"); e.name = "AbortError"; throw e; };
 (async () => {
-  const cancel = formOf({ mid: true, check: "the chat (is it still queued?)", post: "/chat/wren/unqueue" });
+  const cancel = formOf({ mid: true, check: "the chat (is it still queued?)", post: "/chat/wisp/unqueue" });
   cancel.midInput.value = "q-1";
   await submit(cancel);
   assert.match(toasts.at(-1), /it may still have happened — check the chat \(is it still queued\?\)/);
@@ -134,7 +134,7 @@ sandbox.fetch = async () => { const e = new Error("The operation was aborted"); 
         result = self.run_js(r"""
 sandbox.fetch = async () => { const e = new Error("The operation was aborted"); e.name = "AbortError"; throw e; };
 (async () => {
-  const chat = formOf({ mid: true, multipart: true, post: "/chat/wren/send" });
+  const chat = formOf({ mid: true, multipart: true, post: "/chat/wisp/send" });
   await submit(chat);
   assert.equal(toasts.at(-1), "No answer: sending it again is safe (it is not sent twice)");
   assert.equal(chat.midInput.value, "mid-1");          // the id is filled before the send, so a retry is the same one
@@ -172,7 +172,7 @@ sandbox.fetch = async () => { const e = new Error("aborted"); e.name = "AbortErr
   const plain = await submit(formOf({ check: "Overview" }));
   assert.equal(plain[0], 30000);
   assert.match(toasts.at(-1), /within 30s/);
-  const files = await submit(formOf({ multipart: true, post: "/chat/wren/send", mid: true }));
+  const files = await submit(formOf({ multipart: true, post: "/chat/wisp/send", mid: true }));
   assert.equal(files[0], 180000);                       // a chat with files keeps its longer wait
   const over = await submit(formOf({ multipart: true, timeout: 10, check: "Services" }));
   assert.equal(over[0], 10000);                         // a stated data-timeout wins over either default
@@ -200,7 +200,7 @@ const applyBtn = { disabled: false, hasAttribute: (name) => name === "data-diff-
 const backBtn = { hasAttribute: (name) => name === "data-diff-back" };
 const box = { name: "text", tagName: "TEXTAREA", value: "the new drive" };
 const form = {
-  dataset: { post: "/action/drive-set", diff: "/preview/drive/wren", confirm: "Replace the drive?" },
+  dataset: { post: "/action/drive-set", diff: "/preview/drive/wisp", confirm: "Replace the drive?" },
   querySelector(sel) {
     return ({
       "[data-diff-out]": out, "[data-diff-step]": step, "[data-diff-ask]": ask,
@@ -216,7 +216,7 @@ box.closest = (sel) => sel === "form[data-diff]" ? form : null;
 (async () => {
   await submit(form, showBtn);
   assert.deepEqual(confirms, []);                      // the diff is not covered by a dialog
-  assert.deepEqual(calls, ["/preview/drive/wren"]);    // nothing saved
+  assert.deepEqual(calls, ["/preview/drive/wisp"]);    // nothing saved
   assert.equal(out.textContent, "+a new line");
   assert.equal(step.hidden, false);
   assert.equal(ask.hidden, true);
@@ -227,7 +227,7 @@ box.closest = (sel) => sel === "form[data-diff]" ? form : null;
   assert.equal(step.hidden, true);                     // Back
   assert.equal(out.textContent, "");
   assert.equal(box.value, "the new drive");            // the text is kept
-  assert.deepEqual(calls, ["/preview/drive/wren"]);
+  assert.deepEqual(calls, ["/preview/drive/wisp"]);
   assert.deepEqual(confirms, []);
 
   await submit(form, showBtn);
@@ -242,7 +242,7 @@ box.closest = (sel) => sel === "form[data-diff]" ? form : null;
   await submit(form, showBtn);
   await submit(form, applyBtn);
   assert.deepEqual(confirms, []);                      // Apply does not ask either
-  assert.deepEqual(calls, ["/preview/drive/wren", "/action/drive-set"]);
+  assert.deepEqual(calls, ["/preview/drive/wisp", "/action/drive-set"]);
   assert.equal(step.hidden, true);                     // saved: back to the text, still kept
   assert.equal(box.value, "the new drive");
 })().catch(e => { console.error(e); process.exitCode = 1; });

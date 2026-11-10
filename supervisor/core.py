@@ -20,7 +20,7 @@ from .jsonl import jsonl_lines  # noqa: F401  (re-exported)
 PROJECT = Path(__file__).resolve().parent.parent
 # What a network call can raise when the far end is unreachable, resets, or stops mid-answer: http.client's
 # IncompleteRead and RemoteDisconnected are HTTPExceptions, not OSErrors, so a retry on (URLError, OSError) let a
-# reply cut short by OpenRouter escape — it crashed the broker's handler and wren's sleep of 2026-10-15 04:34.
+# reply cut short by OpenRouter escape — it crashed the broker's handler and wisp's sleep of 2026-10-15 04:34.
 NETWORK_ERRORS = (urllib.error.URLError, OSError, http.client.HTTPException)
 # The system interpreter, even when the supervisor itself runs inside a venv (the terminal client
 # runs in .venv-ui): sandboxed agents cannot read a venv inside the home folder, and agents and
@@ -31,10 +31,10 @@ TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
 # The mind: what an instance remembers and writes for itself. Never in the project's git (which can be pushed):
-# versioned in its private mind store (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md).
+# versioned in its private mind store (supervisor/mind.py).
 MIND_PATHS = ("self", "memory", "notes", "inbox")
 # The non-code state the instance's branch still holds: skills/ is a gene (evolution recombines it, the template
-# ships one), not memory (docs/plans/PLAN-mind-out-of-git.md D2).
+# ships one), not memory.
 SKILL_PATHS = ("skills",)
 # The supervisor's copy of SHAFT's own docs in each instance folder (runner.stage_docs), read-only to the instance:
 # refreshed at every start from the project, so never staged on its branch (an exam's copy of the instance holds it
@@ -48,7 +48,7 @@ DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
-# -- knobs: the supervisor's settings (docs/plans/PLAN-webui-chat.md §4) ---------------------------------------------------------
+# -- knobs: the supervisor's settings ---------------------------------------------------------
 # Each is read once, when a process starts: from its environment, else the operator's settings file, else its default
 # (env > file > default). The launchd services run with PATH alone in their environment, so for them the file is what
 # sets a knob; `shaft settings` writes it (settings.py), the web UI's Settings page runs that verb.
@@ -405,7 +405,7 @@ def long_pauses(now: datetime | None = None) -> list[dict]:
 
 def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator") -> None:
     """Set or lift a pause flag (`.supervisor/paused-<name>`, or `paused` for all), then tell each instance it touches
-    in a journal note: the scheduler leaves a paused instance out without a word, and thelos took an operator pause
+    in a journal note: the scheduler leaves a paused instance out without a word, and tundra took an operator pause
     (2026-10-25 12:42 to 26 14:36) for the scheduler silently skipping its wakes. Re-pausing writes nothing; notes
     are best effort and never stop the pause, resume, kill or delete that called this."""
     flag = SUP_DIR / (f"paused-{name}" if name else "paused")
@@ -500,7 +500,7 @@ def config_set_line(key: str, value, comment: str = "") -> str:
 def config_lock(path: Path):
     """One writer of a config.env at a time, across processes: the broker's set_config, the gate undoing it and the
     operator's `shaft config` each read the file, change one line and write it back. Without the lock an operator
-    write landing between set_config's read and write was lost (docs/plans/PLAN-webui.md M3)."""
+    write landing between set_config's read and write was lost."""
     import fcntl
     locks = SUP_DIR / "locks"
     locks.mkdir(parents=True, exist_ok=True)
@@ -635,7 +635,7 @@ def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
     return path
 
 
-# -- the operator's mail an instance may read (docs/plans/PLAN-mail.md) ------------------------------------------------------
+# -- the operator's mail an instance may read ------------------------------------------------------
 # an instance they pick reads the Gmail threads carrying a label they pick. No Gmail credential can
 # be limited to a label, so the grant and the credential stay here and supervisor/mail.py enforces the label.
 def mail_grants(name: str) -> list[dict]:
@@ -740,14 +740,14 @@ def remove_gchat_copies(name: str, alias: str = "") -> None:
     _remove_google_copies(name, "gchat", alias)
 
 
-# -- the operator's calendars an instance may read (docs/plans/PLAN-calendar.md) ----------------------------------------------
+# -- the operator's calendars an instance may read ----------------------------------------------
 # several instances, each with its own grants, one calendar per grant, full event details. A
 # calendar token opens every calendar the account can see, so the grant stays here and supervisor/calendar.py makes
 # every API call name a granted calendar. Stored by calendar ID (it survives a rename), with its title at grant time.
 def calendar_grants(name: str) -> list[dict]:
     """The calendars this instance may read (`shaft calendar <name> grant <alias> <calendar>`):
     [{account, calendar (its ID), name (its title when granted), write?}].
-    PLAN-calendar-write M0: write implies read because both levels share one record; removing write keeps read."""
+    Write implies read because both levels share one record; removing write keeps read."""
     raw = _tool_settings(name).get("calendar")
     return [{"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"],
              **({"write": True} if g.get("write") is True else {})}
@@ -841,7 +841,7 @@ def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str
 
 
 def store_google_key(root: Path, key: str, data: dict) -> None:
-    """An instance's own Google login (docs/plans/PLAN-own-mail.md), made by `shaft secret <name> google`: a refresh token the
+    """An instance's own Google login, made by `shaft secret <name> google`: a refresh token the
     broker turns into an access token and adds like any key, only to its hosts. It has no `value`: the token it adds
     is made per run and never stored."""
     if not SECRET_NAME_RE.match(key):

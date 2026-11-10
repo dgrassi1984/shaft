@@ -1,4 +1,4 @@
-"""The web UI's pages (docs/plans/PLAN-webui.md), as plain functions from the supervisor's own data to HTML. Stdlib only.
+"""The web UI's pages, as plain functions from the supervisor's own data to HTML. Stdlib only.
 
 Instance-written text is everywhere here (goals, messages, journal lines, verdicts), and this UI can change an
 instance's config, so nothing an instance wrote may ever run as markup. Every value goes through `esc` unless it is
@@ -62,7 +62,7 @@ def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
 STATIC_VERSION = _static_version()      # read once at start: the service is restarted to load new code anyway
 
 
-# The UI's one icon set (docs/plans/PLAN-pwa-market M1): line icons on a 24-unit grid, drawn in the text's colour. Colour
+# The UI's one icon set: line icons on a 24-unit grid, drawn in the text's colour. Colour
 # emoji as controls rendered as pale blobs in dark mode and read as disabled (iPhone review I10).
 ICON_PATHS = {
     "thumb-up": '<path d="M7 10v11H3V10h4Zm0 0 5-8c3 0 3 3 2 7h5a2 2 0 0 1 2 2l-2 9a2 2 0 0 1-2 1H7"/>',
@@ -124,7 +124,7 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
     return h('<!doctype html><html lang="en"><head><meta charset="utf-8">'
              '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
              '<meta name="color-scheme" content="light dark">{meta}<title>{title} · SHAFT</title>'
-             # an app on the Home Screen (docs/plans/PLAN-pwa P1): its manifest, its name, its bar and colours
+             # an app on the Home Screen: its manifest, its name, its bar and colours
              '<link rel="manifest" href="/manifest.webmanifest">'
              '<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">'
              '<meta name="apple-mobile-web-app-title" content="{app}">'
@@ -153,7 +153,7 @@ MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/prop
 
 
 def rail(names: list[str], current: str = "", snap: dict | None = None, chats: dict | None = None) -> Html:
-    """The left rail (docs/plans/PLAN-webui-chat §1): a chat per instance first, then the pages used now and then. Without `snap`
+    """The left rail: a chat per instance first, then the pages used now and then. Without `snap`
     (a page's first render) it lists the names; web.js refreshes it from /fragment/rail at once, with each instance's
     state, its last line and when it last answered (data-last: the browser marks a reply it has not seen)."""
     live = {i["name"]: i for i in (snap or {}).get("instances", [])}
@@ -234,7 +234,7 @@ def message_page(title: str, text: str, detail: str = "") -> Html:
                          t=title, text=text, extra=extra))
 
 
-# -- the app's shell (docs/plans/PLAN-pwa P1): served before pairing, nothing private in it -----------------------------------
+# -- the app's shell: served before pairing, nothing private in it -----------------------------------
 def manifest() -> str:
     """The web app manifest: what Add to Home Screen installs. start_url / reopens the last chat (its cookie)."""
     import json
@@ -248,7 +248,7 @@ def manifest() -> str:
                   icon("icon-180.png", 180)]}, indent=1)
 
 
-SW = """// SHAFT's service worker (docs/plans/PLAN-pwa P1), written by web_pages.service_worker() for static version @V@.
+SW = """// SHAFT's service worker, written by web_pages.service_worker() for static version @V@.
 // It keeps only what never changes under a URL — the versioned static files — and an offline page. Every page,
 // fragment, file and POST goes to the server as it always did: nothing private is ever cached.
 const VERSION = "@V@";
@@ -288,9 +288,9 @@ self.addEventListener("fetch", (ev) => {
   }
 });
 
-// A push (docs/plans/PLAN-pwa P4) carries nothing: what to say is fetched from SHAFT over the tailnet, with this device's own
+// A push carries nothing: what to say is fetched from SHAFT over the tailnet, with this device's own
 // cookie, so the push service never sees it — every event waiting for this device (a reply, a message an instance sent
-// you: docs/plans/PLAN-operator-channel.md), each its own notification. iOS requires every push to show one: one always shows.
+// you), each its own notification. iOS requires every push to show one: one always shows.
 self.addEventListener("push", (ev) => {
   ev.waitUntil((async () => {
     let shown = [{ title: "SHAFT", body: "Something new", url: "/", tag: "shaft" }];

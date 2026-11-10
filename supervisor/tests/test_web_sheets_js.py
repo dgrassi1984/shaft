@@ -12,7 +12,7 @@ JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 HARNESS = r"""
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const handlers = {}, media = [], observers = [], requests = [];
-const feed = {dataset:{poll:"/fragment/chat/wren"}};
+const feed = {dataset:{poll:"/fragment/chat/wisp"}};
 let phone = true, narrow = true;
 const classes = () => { const s = new Set(); return { contains:k=>s.has(k), add:k=>s.add(k), remove:k=>s.delete(k),
   toggle(k,on){ if(on === undefined) on=!s.has(k); on?s.add(k):s.delete(k); return on; } }; };
@@ -48,7 +48,7 @@ class Element {
 }
 const body=new Element('body'), shell=new Element('shell',body), nav=new Element('nav',shell), main=new Element('main',shell);
 const header=new Element('header',main), head=new Element('head',header), grid=new Element('grid',main);
-const chat=new Element('chat',grid), docs=new Element('docs',grid); docs.id='docs'; docs.dataset.poll='/fragment/docs/wren';
+const chat=new Element('chat',grid), docs=new Element('docs',grid); docs.id='docs'; docs.dataset.poll='/fragment/docs/wisp';
 const control=(name,parent)=>{const el=new Element(name,parent);el.control=true;return el;};
 let navbtn=control('navbtn',head), docbtn=control('docbtn',head), navclose=control('navclose',nav);
 const navlink=control('navlink',nav), docclose=control('docclose',docs), doclast=control('doclast',docs);
@@ -62,7 +62,7 @@ const document={readyState:'loading',body,activeElement:composer,
   getElementById(id){return ({docs,toast,announce})[id]||body.children.find(el=>el.id===id)||null;}};
 const window={addEventListener(){},matchMedia(q){assert.equal(q,'(max-width: 720px), (pointer: coarse) and (max-height: 520px)');
   return {addEventListener(k,fn){assert.equal(k,'change');media.push(fn);}};}};
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{document,window,URL,location:{href:'https://shaft.test/i/wren/chat'},history:{replaceState(){}},navigator:{},fetch:(url,opts)=>{requests.push([url,opts]);return Promise.resolve();},setInterval(){},setTimeout(){},clearTimeout(){},
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{document,window,URL,location:{href:'https://shaft.test/i/wisp/chat'},history:{replaceState(){}},navigator:{},fetch:(url,opts)=>{requests.push([url,opts]);return Promise.resolve();},setInterval(){},setTimeout(){},clearTimeout(){},
   localStorage:{getItem(){return null;},setItem(){},removeItem(){}},
   getComputedStyle(el){return {position:el===nav?(phone?'fixed':'static'):(phone||narrow||grid.classList.contains('docfullscreen')?'fixed':'static')};},
   ResizeObserver:class {constructor(fn){observers.push(fn);} observe(el){assert.equal(el,main);}}});
@@ -95,7 +95,7 @@ for (const opener of [docbtn, navbtn]) {
   requests.length = 0;
   await click(opener);
   assert.equal(requests.length, 1);
-  assert.match(requests[0][0], /^\/fragment\/chat\/wren\?away=1&at=\d+$/);
+  assert.match(requests[0][0], /^\/fragment\/chat\/wisp\?away=1&at=\d+$/);
   assert.equal(requests[0][1].keepalive, true);
   await key('Escape');
 }

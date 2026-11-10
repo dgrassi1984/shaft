@@ -30,7 +30,7 @@ const assert = require('node:assert/strict');
 for (const changed of [true, false]) {
   let submit, finish, closed = false, refreshed = 0;
   const textarea = {value: 'first version'}, save = {}, result = {}, fields = {pid: 'p-1'};
-  const draftKey = 'draft', mode = 'new', name = 'wren', when = () => 'now';
+  const draftKey = 'draft', mode = 'new', name = 'wisp', when = () => 'now';
   const storage = new Map(), localStorage = {getItem:k=>storage.get(k), removeItem:k=>storage.delete(k)};
   const draftValue = () => JSON.stringify({text:textarea.value});
   const form = {dataset:{}, addEventListener:(type, fn)=>{submit=fn;},
@@ -66,14 +66,14 @@ for (const changed of [true, false]) {
         self.node(r'''
 const assert = require('node:assert/strict');
 let sheet = {kind:'docs'}, seen = {}, headers;
-const item = {dataset:{seenInst:'wren', seenReply:'2026-10-27T10:00:00'},
+const item = {dataset:{seenInst:'wisp', seenReply:'2026-10-27T10:00:00'},
   getClientRects:()=>[1], closest:()=>null, getBoundingClientRect:()=>({top:10,bottom:20})};
 const document = {visibilityState:'visible', querySelectorAll:()=>[item], addEventListener(){}};
 const window = {innerHeight:800, addEventListener(){}};
 const seenGet = () => ({...seen}), seenSet = v => {seen=v;};
 const POLL_LIMIT_MS = 15000, net = {down:new Set()}, navigator = {onLine:true};
 const busyIn=()=>false, checkVersion=()=>{}, pairAgain=()=>false, fresh=()=>{}, netNote=()=>{};
-const el = {dataset:{poll:'/fragment/chat/wren',follow:'1'}, isConnected:true,
+const el = {dataset:{poll:'/fragment/chat/wisp',follow:'1'}, isConnected:true,
   querySelectorAll:()=>[], closest:()=>null};
 const fetch = async (url, opts) => {headers=opts.headers; return {status:304, headers:{get:()=>''}};};
 const setTimeout = () => 1, clearTimeout = () => {};
@@ -88,7 +88,7 @@ eval(process.argv[1]);
     assert.ok(Number(headers['X-Shaft-At']) > 0);
   }
   sheet = null; seenFeed();
-  assert.equal(seen.wren, '2026-10-27T10:00:00');
+  assert.equal(seen.wisp, '2026-10-27T10:00:00');
   await el._tick();
   assert.notEqual(headers['X-Shaft-Watching'], '0');
 })().then(()=>console.log("ok")).catch(e=>{console.error(e);process.exitCode=1;});
@@ -111,7 +111,7 @@ for (const mode of ['fetch stalls', 'body stalls', 'success']) {
     if (mode === 'fetch stalls') return stall();
     return {ok:true, json:async()=>{
       if (mode === 'body stalls') return stall();
-      return {events:[{title:'wren',body:'A reply',url:'/i/wren/chat',tag:'reply'}]};
+      return {events:[{title:'wisp',body:'A reply',url:'/i/wisp/chat',tag:'reply'}]};
     }};
   };
   vm.runInNewContext(process.argv[1], {self, fetch, URL, AbortController,
@@ -128,7 +128,7 @@ for (const mode of ['fetch stalls', 'body stalls', 'success']) {
   await pending;
   assert.equal(timers.size, 0, 'clear the deadline on success and failure');
   assert.equal(shown.length, 1);
-  assert.equal(shown[0][0], mode === 'success' ? 'wren' : 'SHAFT');
+  assert.equal(shown[0][0], mode === 'success' ? 'wisp' : 'SHAFT');
   assert.equal(shown[0][1].body, mode === 'success' ? 'A reply' : 'Something new');
 }
 })().then(()=>console.log("ok")).catch(e=>{console.error(e);process.exitCode=1;});

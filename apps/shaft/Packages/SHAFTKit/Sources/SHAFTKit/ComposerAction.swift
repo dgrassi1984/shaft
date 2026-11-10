@@ -1,4 +1,4 @@
-/// What the composer's one button does (PLAN-native-design §3). While a reply runs it stops that reply, until there is
+/// What the composer's one button does. While a reply runs it stops that reply, until there is
 /// something to send: then it sends, so interjecting keeps working.
 public enum ComposerAction: Sendable, Equatable {
     case send

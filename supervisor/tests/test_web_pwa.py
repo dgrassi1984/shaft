@@ -1,4 +1,4 @@
-"""docs/plans/PLAN-pwa P1: the web UI as an app on the Home Screen — its manifest, icons, service worker and offline page,
+"""The web UI as an app on the Home Screen — its manifest, icons, service worker and offline page,
 pairing from inside the app, a cookie that does not lapse, and a page that knows the server was updated."""
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class PairInTheAppTest(WebTest):
                         headers={"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded"})
 
     def test_the_refusal_page_takes_the_pasted_link(self):
-        r = self.req("/i/wren/chat")
+        r = self.req("/i/wisp/chat")
         self.assertEqual(r.status, 403)
         self.assertIn('<form method="post" action="/pair" class="pairform"><input name="link"', r.body.decode())
 

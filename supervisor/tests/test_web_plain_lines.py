@@ -34,7 +34,7 @@ class SummariesTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def chat(self, content: str) -> dict:
-        chat = {"id": "web-0123456789abcdef", "instance": "wren", "created": "2026-10-25T10:00:00", "state": "idle",
+        chat = {"id": "web-0123456789abcdef", "instance": "wisp", "created": "2026-10-25T10:00:00", "state": "idle",
                 "turns": [{"role": "user", "content": "q", "ts": "2026-10-25T10:00:00"},
                           {"role": "assistant", "content": content, "ts": "2026-10-25T10:00:05"}], "reply": None}
         web_chat.save(chat)
@@ -42,12 +42,12 @@ class SummariesTest(unittest.TestCase):
 
     def test_the_rail_shows_the_reply_as_text(self):
         self.chat("Finished the **smoke** reply, see [the plan](https://a.example) <b>")
-        self.assertEqual(web_chat.summary("wren")["line"], "Finished the smoke reply, see the plan <b>")
-        rail = str(web_pages.rail(["wren"], "", {"instances": []}, {"wren": web_chat.summary("wren")}))
+        self.assertEqual(web_chat.summary("wisp")["line"], "Finished the smoke reply, see the plan <b>")
+        rail = str(web_pages.rail(["wisp"], "", {"instances": []}, {"wisp": web_chat.summary("wisp")}))
         self.assertIn("Finished the smoke reply, see the plan &lt;b&gt;", rail)        # escaped once, as text
-        sent = {"ts": "2026-10-25T11:00:00", "from": "wren", "to": "operator", "file": "m.md", "read": False,
+        sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "read": False,
                 "text": "## Question: **which** one?"}
-        self.assertEqual(web_chat.summary("wren", [sent])["line"], "Question: which one?")
+        self.assertEqual(web_chat.summary("wisp", [sent])["line"], "Question: which one?")
 
     def test_rail_lines_cut_at_80_characters_end_in_an_ellipsis(self):
         for count in (79, 80, 81):
@@ -55,30 +55,30 @@ class SummariesTest(unittest.TestCase):
                 text = "x" * count
                 expected = "x" * min(count, 80) + ("…" if count > 80 else "")
                 chat = self.chat(text)
-                self.assertEqual(web_chat.summary("wren")["line"], expected)
+                self.assertEqual(web_chat.summary("wisp")["line"], expected)
                 chat["turns"][-1].update(role="user", content=text)
                 web_chat.save(chat)
-                self.assertEqual(web_chat.summary("wren")["line"], ("you: " + text)[:80] + "…")
+                self.assertEqual(web_chat.summary("wisp")["line"], ("you: " + text)[:80] + "…")
                 self.assertEqual(web_chat.excerpt({"turns": [{"role": "user", "content": text}]}), (expected, 1))
-                sent = {"ts": "2026-10-25T11:00:00", "from": "wren", "to": "operator", "read": False, "text": text}
-                self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+                sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "read": False, "text": text}
+                self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
                 chat["cleared"] = "2026-10-25T10:30:00"
                 web_chat.save(chat)
-                self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+                self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
                 with mock.patch.object(web_chat, "chats", return_value=[]):
-                    self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+                    self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
 
     def test_a_push_says_it_as_text(self):
         self.assertEqual(web_chat.reply_event(self.chat(REPLY))["body"], "x = 1")
         self.assertEqual(web_chat.reply_event(self.chat("**Done**: `3` files"))["body"], "Done: 3 files")
-        self.assertEqual(web_alerts.event({"from": "wren", "file": "m.md", "text": "- [ ] **check** this"})["body"],
+        self.assertEqual(web_alerts.event({"from": "wisp", "file": "m.md", "text": "- [ ] **check** this"})["body"],
                          "☐ check this")
 
     def test_the_overview_and_messages_lists_show_text(self):
-        m = {"ts": "2026-10-25T11:00:00", "from": "wren", "to": "operator", "file": "m.md", "read": True,
+        m = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "read": True,
              "kind": "note", "text": "**Heads up**: `deploy` *now*"}
         self.assertIn(">Heads up: deploy now<", str(web_pages.message_line(m)))
-        page = str(web_views.messages_page([m], "", ["wren", "operator"], ["wren"], "t"))
+        page = str(web_views.messages_page([m], "", ["wisp", "operator"], ["wisp"], "t"))
         self.assertIn("Heads up: deploy now", page)
         self.assertNotIn("**Heads up**", page)
 

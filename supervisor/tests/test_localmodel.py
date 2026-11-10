@@ -23,7 +23,7 @@ class IdleRuleTest(unittest.TestCase):
         self.assertTrue(localmodel.idle_exit_due(1000 + quiet, 1000, 0, [], 15))
         self.assertFalse(localmodel.idle_exit_due(1000 + quiet - 1, 1000, 0, [], 15))   # not quiet long enough
         self.assertFalse(localmodel.idle_exit_due(1000 + quiet, 1000, 1, [], 15))       # a reply is being written
-        self.assertFalse(localmodel.idle_exit_due(1000 + quiet, 1000, 0, ["kant"], 15)) # an instance is on it
+        self.assertFalse(localmodel.idle_exit_due(1000 + quiet, 1000, 0, ["kiln"], 15)) # an instance is on it
         self.assertFalse(localmodel.idle_exit_due(10 ** 9, 1000, 0, [], 0))            # 0 = never
 
     def test_pinned_by_the_instances_configured_straight_on_it_paused_or_not(self):
@@ -77,7 +77,7 @@ class ServerIdleExitTest(unittest.TestCase):
         self.assertEqual(self.exits, [])
 
     def test_a_pinned_server_never_exits(self):
-        self.pinned = ["kant"]
+        self.pinned = ["kiln"]
         self.now = 10 ** 6
         self.assertFalse(self.check())
         self.assertEqual(self.exits, [])
@@ -141,26 +141,26 @@ class EnsureTest(unittest.TestCase):
 
     def test_a_running_server_is_left_alone(self):
         with mock.patch.object(localmodel, "answers", return_value=True):
-            localmodel.ensure("kant's live")
+            localmodel.ensure("kiln's live")
         self.assertEqual(self.calls, [])
 
     def test_an_idle_server_is_started_and_waited_for(self):
         (self.dir / "com.shaft.model.plist").write_text("x")
         with mock.patch.object(localmodel, "answers", side_effect=[False, False, True]):
-            localmodel.ensure("kant's live")
+            localmodel.ensure("kiln's live")
         self.assertEqual(self.calls, ["kickstart"])
 
     def test_not_installed_fails_and_says_how_to_install(self):
         with mock.patch.object(localmodel, "answers", return_value=False):
             with self.assertRaises(RuntimeError) as ctx:
-                localmodel.ensure("kant's live")
+                localmodel.ensure("kiln's live")
         self.assertIn("shaft model on", str(ctx.exception))
 
     def test_a_server_that_never_answers_fails_instead_of_hanging(self):
         (self.dir / "com.shaft.model.plist").write_text("x")
         with mock.patch.object(localmodel, "answers", return_value=False):
             with self.assertRaises(RuntimeError) as ctx:
-                localmodel.ensure("kant's live", timeout_s=0)
+                localmodel.ensure("kiln's live", timeout_s=0)
         self.assertIn("did not answer", str(ctx.exception))
 
 
@@ -196,14 +196,14 @@ class CallersTest(unittest.TestCase):
 
         class Stop(Exception):
             pass
-        cfgs = {"kant": {"LLM_BASE_URL": LOCAL}, "wren": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"}}
+        cfgs = {"kiln": {"LLM_BASE_URL": LOCAL}, "wisp": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"}}
         with mock.patch.object(runner, "instance_config", side_effect=cfgs.__getitem__), \
                 mock.patch.object(runner, "Broker", side_effect=Stop), \
                 mock.patch.object(localmodel, "ensure") as ensure:
             for name in cfgs:
                 with self.assertRaises(Stop):
                     runner._launch(name, Path("/nonexistent"), "live", ["live"], None)
-        ensure.assert_called_once_with("kant's live")
+        ensure.assert_called_once_with("kiln's live")
 
 
 class StatusTest(unittest.TestCase):

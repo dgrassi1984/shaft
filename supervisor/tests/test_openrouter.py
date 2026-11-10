@@ -112,7 +112,7 @@ class OpenRouterTest(_Base):
         self.assertGreater(rec["usd"], 0)   # the daily cap counts real money, not a price-table guess
 
     def test_the_instance_s_reasoning_settings_reach_openrouter_20261030(self):
-        # Regression (thelos and wren, 2026-10-29..30): LLM_REASONING_EFFORT went out only as template kwargs, which
+        # Regression (tundra and wisp, 2026-10-29..30): LLM_REASONING_EFFORT went out only as template kwargs, which
         # are dropped for OpenRouter; every sleep since 10-29 ended "cut off at max_tokens=32768 twice".
         cases = (({"preserve_thinking": False, "reasoning_effort": "medium"}, {"effort": "medium"}),
                  ({"preserve_thinking": False, "enable_thinking": False}, {"enabled": False}),
@@ -153,7 +153,7 @@ class OpenRouterTest(_Base):
         # None (12 of 42,000 mimo calls): neither the failure nor the unbooked spend was visible in the usage log.
         self.fake(reply={"choices": [{"message": {"role": "assistant", "content": "half"}, "finish_reason": "error"}],
                          "usage": {"prompt_tokens": 24754, "completion_tokens": 396}})
-        cloudllm.complete("thelos", dict(self.BODY, stream=False), {"OPENROUTER_API_KEY": "k"}, {})
+        cloudllm.complete("tundra", dict(self.BODY, stream=False), {"OPENROUTER_API_KEY": "k"}, {})
         rec = json.loads(self.usage.read_text())
         self.assertIsNone(rec["usd"])
         self.assertIn("finish_reason=error", rec["error"])
@@ -194,13 +194,13 @@ class OpenRouterTest(_Base):
 
 
 class StreamingTest(_Base):
-    def test_wren_sees_its_reply_as_it_is_written(self):
-        # the operator: "wren does not use streaming in its response (mimo)" — the broker called OpenRouter without
+    def test_wisp_sees_its_reply_as_it_is_written(self):
+        # the operator: "wisp does not use streaming in its response (mimo)" — the broker called OpenRouter without
         # streaming and replayed the finished reply in one burst.
         from supervisor.broker import Broker
         f = self.fake()
         root = Path(tempfile.mkdtemp(prefix="shaft-proj-"))
-        b = Broker("wren", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
+        b = Broker("wisp", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
         base = b.start()
         self.addCleanup(b.stop)
         req = urllib.request.Request(base + "/llm/v1/chat/completions", data=json.dumps(self.BODY).encode(),
@@ -226,7 +226,7 @@ class StreamingTest(_Base):
         f = self.fake()
         f.paused.set()
         root = Path(tempfile.mkdtemp(prefix="shaft-proj-"))
-        b = Broker("wren", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
+        b = Broker("wisp", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
         base = b.start()
         self.addCleanup(b.stop)
         chunks = []

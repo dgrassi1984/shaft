@@ -89,11 +89,11 @@ class TemplateReasoningTest(unittest.TestCase):
                 {"role": "user", "content": "first question"},
                 {"role": "assistant", "content": "old answer", "reasoning_content": "OLD-THOUGHT"},
                 {"role": "user", "content": "build something"},
-                {"role": "assistant", "content": "Let me look.", "reasoning_content": "docs/plans/PLAN-STEP-1",
+                {"role": "assistant", "content": "Let me look.", "reasoning_content": "docs/notes/STEP-1",
                  "tool_calls": [call]},
                 {"role": "tool", "tool_call_id": "1", "content": "plugins/"}]
         text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, preserve_thinking=False)
-        self.assertIn("docs/plans/PLAN-STEP-1", text)        # this reply's earlier step: kept
+        self.assertIn("docs/notes/STEP-1", text)        # this reply's earlier step: kept
         self.assertNotIn("OLD-THOUGHT", text)     # a finished turn's thinking: dropped
 
 

@@ -1,6 +1,6 @@
 # The Mac app
 
-The native macOS app (SwiftUI, not Catalyst; docs/plans/PLAN-native-apps.md M5) over the shared views in `../Shared/`.
+The native macOS app (SwiftUI, not Catalyst) over the shared views in `../Shared/`.
 
 | File | What |
 |---|---|

@@ -1,5 +1,5 @@
 """Where an instance's message to the operator reaches them: the web UI (a push to their devices) or Telegram (from the
-instance's own bot) — docs/plans/PLAN-operator-channel.md. Stdlib only.
+instance's own bot). Stdlib only.
 
 Every message to the operator is written to the operator inbox, which the web UI shows, whatever is chosen here; this
 decides only which channel alerts them, so that they pick the conversation up there. One decision, made when the

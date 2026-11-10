@@ -122,10 +122,10 @@ class DocsSortRouteTest(test_web.WebTest):
         super().setUp()
         self.inst = Path(tempfile.mkdtemp(prefix="shaft-sort-inst-")).resolve()
         self.addCleanup(shutil.rmtree, self.inst, True)
-        self.docs = self.inst / "wren" / "notes" / "docs"
+        self.docs = self.inst / "wisp" / "notes" / "docs"
         self.docs.mkdir(parents=True)
         from supervisor import docs
-        for p in (mock.patch.object(web, "_names", return_value=["wren"]),
+        for p in (mock.patch.object(web, "_names", return_value=["wisp"]),
                   mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(web, "_sent_during", return_value=[]),
                   mock.patch("supervisor.core.INSTANCES", self.inst),
                   mock.patch.object(docs, "instance_root", lambda n: self.inst / n)):
@@ -137,7 +137,7 @@ class DocsSortRouteTest(test_web.WebTest):
             os.utime(self.docs / name, (NOW - k * 60, NOW - k * 60))       # zeta newest, mid oldest
 
     def listed(self, query="", cookie=""):
-        body = self.req(f"/fragment/docs/wren?list=1{query}", cookie=self.cookie + cookie).body.decode()
+        body = self.req(f"/fragment/docs/wisp?list=1{query}", cookie=self.cookie + cookie).body.decode()
         return order(body, ("zeta.md", "alpha.md", "mid.md"))
 
     def test_the_cookie_orders_every_listing_and_a_query_outranks_it(self):
@@ -149,13 +149,13 @@ class DocsSortRouteTest(test_web.WebTest):
 
     def test_a_sort_link_followed_without_the_script_sorts_the_list_not_opens_the_chats_document(self):
         """Codex's review: ?sort=name alone made the page open what this chat last changed instead of the list."""
-        chat = web_chat.new_chat("wren", test_web.ME)
+        chat = web_chat.new_chat("wisp", test_web.ME)
         chat.update(turns=[{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                            {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
                             "docs": [{"path": "mid.md", "created": True}]}], state="idle")
         web_chat.save(chat)
-        self.assertIn('data-doc="mid.md"', self.req("/i/wren/chat", cookie=self.cookie).body.decode())  # as before
-        page = self.req("/i/wren/chat?list=1&sort=name", cookie=self.cookie).body.decode()
+        self.assertIn('data-doc="mid.md"', self.req("/i/wisp/chat", cookie=self.cookie).body.decode())  # as before
+        page = self.req("/i/wisp/chat?list=1&sort=name", cookie=self.cookie).body.decode()
         self.assertNotIn('class="docview"', page)
         panel = page.split('id="docs"')[1]                                         # past the reply's own mid.md card
         self.assertEqual(order(panel, ("zeta.md", "alpha.md", "mid.md")), ["alpha.md", "mid.md", "zeta.md"])
@@ -164,10 +164,10 @@ class DocsSortRouteTest(test_web.WebTest):
         self.assertIn("sort=name", aside)
 
     def test_the_chat_page_lists_in_the_cookie_order_and_polls_a_query_order(self):
-        page = self.req("/i/wren/chat?dir=", cookie=self.cookie + "; shaft_docsort=name-desc").body.decode()
+        page = self.req("/i/wisp/chat?dir=", cookie=self.cookie + "; shaft_docsort=name-desc").body.decode()
         self.assertEqual(order(page, ("zeta.md", "alpha.md", "mid.md")), ["zeta.md", "mid.md", "alpha.md"])
         self.assertNotIn("sort=", page.split('id="docs"')[1].split(">")[0])        # the poll asks the cookie each time
-        page = self.req("/i/wren/chat?sort=size", cookie=self.cookie).body.decode()
+        page = self.req("/i/wisp/chat?sort=size", cookie=self.cookie).body.decode()
         self.assertIn("&amp;sort=size\"", page.split('id="docs"')[1].split(">")[0])  # a followed link keeps its order
 
 
@@ -178,11 +178,11 @@ class DocsSortJsTest(unittest.TestCase):
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const handlers = {};
 let ticks = 0, replaced = "", prevented = false;
-const panel = { dataset: { poll: "/fragment/docs/wren?list=1&dir=ucg&sort=name", etag: "x" }, _tick() { ticks++; } };
+const panel = { dataset: { poll: "/fragment/docs/wisp?list=1&dir=ucg&sort=name", etag: "x" }, _tick() { ticks++; } };
 const document = { readyState: "loading", cookie: "", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
   querySelector: () => null, querySelectorAll: () => [], getElementById: id => id === "docs" ? panel : null };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, setInterval() {}, setTimeout() {},
-  location: { href: "https://shaft.test/i/wren/chat?dir=ucg&sort=name" }, navigator: {},
+  location: { href: "https://shaft.test/i/wisp/chat?dir=ucg&sort=name" }, navigator: {},
   history: { replaceState(a, b, u) { replaced = String(u); } }, window: { addEventListener() {} } });
 const head = { dataset: { sortDocs: "size-asc" } };
 const target = { closest: q => q === "[data-sort-docs]" ? head : null };
@@ -190,8 +190,8 @@ const target = { closest: q => q === "[data-sort-docs]" ? head : null };
   for (const fn of handlers.click) await fn({ target, preventDefault() { prevented = true; } });
   assert.ok(prevented);
   assert.match(document.cookie, /^shaft_docsort=size-asc; Path=\/; Max-Age=\d+; Secure; SameSite=Strict$/);
-  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg");     // the cookie decides from now on
-  assert.equal(replaced, "https://shaft.test/i/wren/chat?dir=ucg");
+  assert.equal(panel.dataset.poll, "/fragment/docs/wisp?list=1&dir=ucg");     // the cookie decides from now on
+  assert.equal(replaced, "https://shaft.test/i/wisp/chat?dir=ucg");
   assert.equal(panel.dataset.etag, undefined);
   assert.equal(ticks, 1);
 })().catch(e => { console.error(e); process.exitCode = 1; });

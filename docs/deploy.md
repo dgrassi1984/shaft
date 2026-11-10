@@ -1,11 +1,9 @@
-# Maintainer release-deploy runbook
+# Deploying a release
 
-This is the maintainer's release-deploy runbook, not an installation guide.
+How to move a running setup onto a new release tag. It is not an installation guide (see the README) and not a
+bump or tag procedure.
 
-The release workflow tags `main`; this file is what comes after the tag, when the operator has asked for a deploy.
-It is not a bump or tag procedure (agent-overlay.yaml `ship.procedure` points here for deploy and verify only).
-
-SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its `template` worktree:
+SHAFT runs from the primary checkout (the clone you installed from, on `main`) and its `template` worktree:
 
 - every wake, sleep, job and replay is a fresh `python -m supervisor` started by the scheduler in that checkout,
   so the deployed release reaches the instances at their next wake;
@@ -16,12 +14,12 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
 
 ## Steps
 
-1. **Fast-forward the primary checkout and the template worktree** to the tagged commits. Only a fast-forward:
-   the primary checkout holds other sessions' untracked files, which a fast-forward leaves alone.
+1. **Fast-forward the primary checkout and the template worktree** to the tagged commits. Only a fast-forward,
+   which leaves untracked files alone.
 
    ```bash
    # Set RELEASE_TAG to the exact release tag and TEMPLATE_COMMIT to its matching template commit.
-   cd ~/Development/shaft
+   cd <primary checkout>
    git fetch origin --tags
    git status -sb                       # on main; no tracked changes
    git merge --ff-only "$RELEASE_TAG"
@@ -82,7 +80,7 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
 
 ## Verify
 
-- `git -C ~/Development/shaft rev-parse HEAD` equals the selected release tag's commit; `template` equals the selected matching template commit.
+- In the primary checkout, `git rev-parse HEAD` equals the selected release tag's commit; `template` equals the selected matching template commit.
 - `launchctl list | grep com.shaft`: each restarted service has a new PID. Its exit status is 0, or -15 for the
   scheduler: its drain ends with its own `kickstart -k`, which stops it with SIGTERM once no run is left.
 - The scheduler's log has `scheduler: drained after N min — restarting on <commit>`, and no run of it "stopped with

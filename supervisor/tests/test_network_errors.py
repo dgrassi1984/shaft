@@ -1,4 +1,4 @@
-"""A reply cut short upstream is retried, and the broker always answers (wren's sleep, 2026-10-15 04:34).
+"""A reply cut short upstream is retried, and the broker always answers (wisp's sleep, 2026-10-15 04:34).
 
 OpenRouter stopped MiMo's chunked reply after 220 bytes. http.client raised IncompleteRead — an HTTPException, not an
 OSError — so cloudllm's retry on (URLError, OSError) let it escape, the broker's model handler crashed without
@@ -88,7 +88,7 @@ class RetryTest(unittest.TestCase):
         up = CutShort(cut=1)
         self.addCleanup(up.close)
         with mock.patch.object(cloudllm, "OPENROUTER_API", up.url):
-            out = cloudllm.complete("wren", {"model": "openrouter/xiaomi/mimo-v2.6-pro",
+            out = cloudllm.complete("wisp", {"model": "openrouter/xiaomi/mimo-v2.6-pro",
                                              "messages": [{"role": "user", "content": "sleep"}]},
                                     {"OPENROUTER_API_KEY": "k"}, {})
         self.assertEqual(out["choices"][0]["message"]["content"], "Consolidated.")
@@ -98,7 +98,7 @@ class RetryTest(unittest.TestCase):
         up = CutShort(cut=99)
         self.addCleanup(up.close)
         with mock.patch.object(cloudllm, "OPENROUTER_API", up.url), self.assertRaises(cloudllm.CloudError) as e:
-            cloudllm.complete("wren", {"model": "openrouter/xiaomi/mimo-v2.6-pro",
+            cloudllm.complete("wisp", {"model": "openrouter/xiaomi/mimo-v2.6-pro",
                                        "messages": [{"role": "user", "content": "sleep"}]}, {"OPENROUTER_API_KEY": "k"}, {})
         self.assertEqual(e.exception.status, 502)
         self.assertIn("IncompleteRead", str(e.exception))
@@ -110,11 +110,11 @@ class BrokerAnswersTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-net-")).resolve()
-        (self.tmp / "instances" / "wren").mkdir(parents=True)
+        (self.tmp / "instances" / "wisp").mkdir(parents=True)
         p = mock.patch.object(core, "SUP_DIR", self.tmp / "sup")
         p.start()
         self.addCleanup(p.stop)
-        self.b = broker.Broker("wren", self.tmp, {"OPENROUTER_API_KEY": "k"}, self.tmp / "broker.log")
+        self.b = broker.Broker("wisp", self.tmp, {"OPENROUTER_API_KEY": "k"}, self.tmp / "broker.log")
         self.url = self.b.start()
         self.addCleanup(self.b.stop)
 

@@ -87,7 +87,7 @@
     "body": {
       "error": {
         "code": "too_big",
-        "message": "notes/docs/huge.md is 257 KB: too big to show or edit here (at most 256 KB): download it instead (/app/v1/docs/wren/raw)."
+        "message": "notes/docs/huge.md is 257 KB: too big to show or edit here (at most 256 KB): download it instead (/app/v1/docs/wisp/raw)."
       }
     }
   },
@@ -97,7 +97,7 @@
       "error": {
         "code": "stale_version",
         "message": "The chat moved since it was drawn: mark it seen once the new version is on screen.",
-        "version": "41593303c00c84a8"
+        "version": "e9604078c3abc865"
       }
     }
   },
@@ -106,7 +106,7 @@
     "body": {
       "error": {
         "code": "not_replying",
-        "message": "wren is not replying: nothing to stream."
+        "message": "wisp is not replying: nothing to stream."
       }
     }
   },
@@ -124,7 +124,7 @@
     "body": {
       "error": {
         "code": "internal",
-        "message": "/app/v1/chat/wren failed: RuntimeError: boom"
+        "message": "/app/v1/chat/wisp failed: RuntimeError: boom"
       }
     }
   },

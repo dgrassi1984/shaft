@@ -1,18 +1,18 @@
 {
   "events": [
     {
-      "title": "wren replied",
+      "title": "wisp replied",
       "body": "Done.",
-      "url": "/i/wren/chat",
-      "tag": "wren",
-      "instance": "wren"
+      "url": "/i/wisp/chat",
+      "tag": "wisp",
+      "instance": "wisp"
     },
     {
-      "title": "wren asks",
+      "title": "wisp asks",
       "body": "Should the nightly report keep the per-account lines?",
-      "url": "/i/wren/chat",
-      "tag": "wren-ask",
-      "instance": "wren"
+      "url": "/i/wisp/chat",
+      "tag": "wisp-ask",
+      "instance": "wisp"
     }
   ],
   "badge": 1

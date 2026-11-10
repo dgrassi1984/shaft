@@ -37,7 +37,7 @@
         },
         {
           "pid": "p-9a8b7c6d5e4f3021",
-          "by": "wren",
+          "by": "wisp",
           "text": "Per account, then summed.",
           "ts": "2026-11-03T14:01:12+01:00",
           "unsent": false,
@@ -50,7 +50,7 @@
     {
       "id": "c2",
       "doc": "ledger.md",
-      "by": "wren",
+      "by": "wisp",
       "state": "resolved",
       "created": "2026-11-03T13:00:00+01:00",
       "anchor": null,
@@ -61,12 +61,12 @@
       "posts": [
         {
           "pid": "p-0000000000000002",
-          "by": "wren",
+          "by": "wisp",
           "text": "Is this the right place?",
           "ts": "2026-11-03T13:00:00+01:00",
           "unsent": false,
           "sent": null,
-          "turn": "message:20261103-130000-1-from-wren.md",
+          "turn": "message:20261103-130000-1-from-wisp.md",
           "seen": null
         }
       ]

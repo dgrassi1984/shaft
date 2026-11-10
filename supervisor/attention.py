@@ -1,4 +1,4 @@
-"""The attention schema (docs/plans/PLAN-consciousness.md M5, B3), scored against the tool log.
+"""The attention schema, scored against the tool log.
 
 A live cycle may declare in `declare_intent` where it expects to look: up to four {source, why}. Graziano's attention
 schema theory says a model of one's own attention is for controlling it; the agent uses the declaration as a top-down

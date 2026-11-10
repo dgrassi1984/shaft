@@ -37,7 +37,7 @@ class Fixture:
             (self.root / folder).mkdir()
         self.state = State(self.root)
         self.cfg = config.load(self.root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake",
-                                                 "NAME": "wren", "CURIOSITY_EVERY_CYCLES": "0"})
+                                                 "NAME": "wisp", "CURIOSITY_EVERY_CYCLES": "0"})
         self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root), "SHAFT_NOW": NOW.isoformat()},
                                           clear=True))
         self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
@@ -65,7 +65,7 @@ class InboxTest(Fixture, unittest.TestCase):
 
     def message(self, name, sender, body, **headers):
         extra = "".join(f"{k}: {v}\n" for k, v in headers.items())
-        (self.root / "inbox" / name).write_text(f"From: {sender}\nTo: wren\n{extra}Date: 2026-11-03 09:00\n\n{body}\n")
+        (self.root / "inbox" / name).write_text(f"From: {sender}\nTo: wisp\n{extra}Date: 2026-11-03 09:00\n\n{body}\n")
 
     def test_operator_message_whole_even_past_the_budget(self):
         """Integration review 2026-11-03: the operator's message showed as its first 200 characters and was archived
@@ -88,7 +88,7 @@ class InboxTest(Fixture, unittest.TestCase):
         self.assertLess(len(text), self.cfg.INBOX_CHARS + 400)   # the old inbox: about 30,000 characters
         self.assertTrue(rows[0].startswith("- inbox/20261103-095000-000000-from-operator.md — From: operator"))
         self.assertEqual(rows[1], "Please check row 7 " + "y" * 900)   # the operator's message whole, never a line
-        self.assertNotIn("To: wren", text)
+        self.assertNotIn("To: wisp", text)
         self.assertIn("You have 15 new message(s): the operator's whole, the others one line each; read_file inbox/<file> "
                       "shows one whole.", text)
         self.assertRegex(rows[-1], r"^- … and \d+ more message\(s\), past my inbox budget of 4000 characters: "
@@ -152,7 +152,7 @@ class InboxTest(Fixture, unittest.TestCase):
     def test_the_live_prompt_lists_the_line_and_an_attached_image_still_reaches_the_model(self):
         (self.root / "attachments").mkdir()
         (self.root / "attachments" / "row.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
-        self.message("20261103-090000-000000-from-thelos.md", "thelos",     # the operator's is shown whole
+        self.message("20261103-090000-000000-from-tundra.md", "tundra",     # the operator's is shown whole
                      "Look at this row " + "w" * 400 + "\n\nAttachments:\n- attachments/row.png (72 B)", Kind="message")
         with mock.patch.dict(os.environ, {"SHAFT_VISION": "1"}):
             fake = self.live([{"content": "ok"}])
@@ -355,9 +355,9 @@ class GoalSlateTest(Fixture, unittest.TestCase):
 
     def records(self):
         (self.root / "inbox" / "20261103-090000-000000-from-operator.md").write_text(
-            "From: operator\nTo: wren\nKind: message\nDate: 2026-11-03 09:00\n\nPlease survey the orchard rows again")
+            "From: operator\nTo: wisp\nKind: message\nDate: 2026-11-03 09:00\n\nPlease survey the orchard rows again")
         (self.root / "inbox" / "20261103-080000-000000-from-watcher.md").write_text(
-            "From: watcher\nTo: wren\nKind: job\nDate: 2026-11-03 08:00\n\nNew greenhouse sensor log ready")
+            "From: watcher\nTo: wisp\nKind: job\nDate: 2026-11-03 08:00\n\nNew greenhouse sensor log ready")
         (self.root / "memory" / "commitments.jsonl").write_text(json.dumps(
             {"event": "made", "id": "c1101-0900-1", "promise": "send the row count", "due": "2026-11-02T12:00:00",
              "criterion": "a message", "made_to": "operator", "source": "cycle", "at": "2026-11-01T09:00:00"}) + "\n")

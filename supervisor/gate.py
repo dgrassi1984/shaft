@@ -4,7 +4,7 @@ The supervisor never imports agent code. It snapshots the instance's code
 before a run; if the run changed it, the test suites run, and failing changes
 are restored byte-for-byte from the snapshot.
 The supervisor's own tests run in two parts; the shared part's pass is recorded
-per commit (docs/plans/PLAN-gate-cache.md). A failed gate says whether the change
+per commit. A failed gate says whether the change
 or the supervisor's side (the baseline) failed it (Output); a baseline failure's
 change is held and re-gated once the baseline is green (gate_held, runner.regate_held).
 """
@@ -33,7 +33,7 @@ GATE_WORKERS, _ = knob(
 # .python-version and requirements.txt declare the instance's own Python environment (supervisor/pyenv.py): code
 # like the rest, tested when changed and committed when kept, so a lost .venv/ can be rebuilt from them.
 CODE_PATHS = ("shaft", "tests", "plugins", ".python-version", "requirements.txt")
-# Not config.env: the operator edits it too, at any time — kant's mid-cycle switch to Opus was reverted as the
+# Not config.env: the operator edits it too, at any time — kiln's mid-cycle switch to Opus was reverted as the
 # instance's change when its plugin failed the tests (2026-10-13). The instance changes it only through the
 # broker's set_config (its sandbox cannot write the file), which records each line it set; revert_config undoes
 # exactly those, and everything else in the file is the operator's.
@@ -496,7 +496,7 @@ def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None
 
 SPLIT_RUNNER = "supervisor/gate_suite.py"   # in the committed tree: runs the instance part or the shared part
 SHARED_RECORD = "shared-passed-{}.json"     # beside a committed tree, one per key: its shared part passed
-                                            # (docs/plans/PLAN-gate-cache.md)
+                                            #
 SHARED_LOCK = "shared.lock"                 # beside it too: one run of the shared part per commit at a time
 WARM_REFRESH_S = TREE_IDLE_S // 2           # a record this old is run again by the warm-up while gates still take it
 WARM_TIMED_OUT = 4                          # retryable: no test verdict within the operator's budget
@@ -675,7 +675,7 @@ TEST_BUDGET_S = 10   # and no one supervisor test may take longer: the change th
 
 
 def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
-    """`shaft gate budget`, the check before a merge (agent-overlay.yaml's gate, docs/plans/PLAN-gate-5min.md): both
+    """`shaft gate budget`, the check before a merge: both
     parts of the supervisor's tests on the last commits, the way a gate runs them (committed_tree, _part), the
     instance part against the template, its own cases included. Fails when a part fails, takes more than
     1/BUDGET_SHARE of the stage limit, holds a test slower than TEST_BUDGET_S, or runs a test twice; prints where the
@@ -717,7 +717,7 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
 
 def _supervisor_tests(instance_root: Path, tree: Path, label: str,
                       timeout_s: int) -> tuple[str, str, list[str] | None, list[str] | None]:
-    """The supervisor's own tests against this instance (docs/plans/PLAN-gate-cache.md): the shared part from its
+    """The supervisor's own tests against this instance: the shared part from its
     record when this commit's passed already, else run (and recorded when it passes); then the instance part, every
     time. (the section for the output, the whole output for the kept log, the shared part's failing tests, the
     instance part's): None for a part that passed, its failing names (maybe none) for one that failed."""
@@ -748,7 +748,7 @@ def instance_part_failures(instance_root: Path, timeout_s: int = GATE_TIMEOUT_S)
 
 
 class Output(str):
-    """run_tests' output, carrying whose failure a failed gate is (docs/plans/PLAN-thelos-review-2.md M2, S2).
+    """run_tests' output, carrying whose failure a failed gate is.
     `cause`: None (passed); "baseline" — the supervisor's side failed, not the change: the shared supervisor tests
     (they never read the instance), a stage of theirs that ran out of time, the gate's own machinery; or "candidate" —
     a check that reads the change failed (the instance part, the plugins, the instance's own tests). `why`: one line
@@ -776,8 +776,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
               env_root: Path | None = None, data_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself) in two parts (_supervisor_tests): the modules that
-    read the instance, every time, and the rest once per commit, their pass recorded beside the committed tree
-    (docs/plans/PLAN-gate-cache.md). Then its plugins' check and its own tests inside
+    read the instance, every time, and the rest once per commit, their pass recorded beside the committed tree.
+   Then its plugins' check and its own tests inside
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
     `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out,
     and any error of the gate's own, fails the gate, named in the output and the supervisor log: raised instead, it
@@ -786,8 +786,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     the caller's revert. `data_root`: the instance itself when `instance_root` is its protected code copy (#86, linked
     to its data by protected._link_data): the tests read and write its folder as they did before the copy, never its
     code paths or its Python environment, and only read the copy but for its .tmp.
-    The output is an Output: a failed gate says whether the change failed it or the supervisor's side did (M2 of
-    docs/plans/PLAN-thelos-review-2.md); either way it failed."""
+    The output is an Output: a failed gate says whether the change failed it or the supervisor's side did; either
+    way it failed."""
     from . import pyenv
     from .runner import RunRefused
     from .core import safe_mkdir
@@ -830,7 +830,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         section, sup_full, shared_bad, inst_bad = _supervisor_tests(instance_root, tree, label, timeout_s)
         outputs.append(f"== supervisor invariants ({label}) ==\n" + section)
         full.append(f"== supervisor invariants ({label}) ==\n" + sup_full)
-        if shared_bad is not None:   # they never read the instance (PLAN-gate-cache's guards): never the change's
+        if shared_bad is not None:   # they never read the instance (the cache's guards): never the change's
             baseline.append("the shared supervisor tests fail" + (f": {_names(shared_bad)}" if shared_bad else ""))
             failing += shared_bad
         if inst_bad is not None:
@@ -934,14 +934,14 @@ def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, time
 
 def _instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int) -> tuple[bool, str, str]:
     """run_instance_tests, with the whole stderr for the kept log: (passed, section, whole). The section names every
-    failed test ahead of its cut, as the supervisor stage's does: cut alone, on 2026-10-29 it named 2 of thelos's 11
+    failed test ahead of its cut, as the supervisor stage's does: cut alone, on 2026-10-29 it named 2 of tundra's 11
     failures and 3 of its 6 errors, in the note and in the "full" log alike."""
     top = ["-t", "."] if (instance_root / "tests" / "__init__.py").exists() else []
     agent = _stage("instance tests", sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests",
                                                          *top]), timeout_s, cwd=instance_root, env=env)
     section = "".join(f"{t}\n" for t in failing_tests(agent.stderr)) + agent.stderr[-3000:]
     if agent.returncode == NO_TESTS_RAN:
-        # A tests/ folder with nothing in it (kant's held only a stale __pycache__) is not a failing suite: read as
+        # A tests/ folder with nothing in it (kiln's held only a stale __pycache__) is not a failing suite: read as
         # one, it rolled back every update and self-change. A test file that fails to import still fails (exit 1).
         note = "\n(no tests in tests/: nothing to fail)"
         return True, section + note, agent.stderr + note

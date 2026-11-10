@@ -86,14 +86,14 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 
 ## Google accounts (`shaft google …`)
 
-Mail, Calendar, Drive, and Google Chat share your Google accounts ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)). An instance never holds a
+Mail, Calendar, Drive, and Google Chat share your Google accounts. An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
 for `gmail.readonly`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
 `chat.messages.readonly`, and `chat.memberships.readonly` together and records the scopes Google actually granted
 (the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
 the login to run again; it never returns an empty result. The operator's mailbox access stays read-only; calendar
-writes require per-instance write grants ([calendar write plan](../docs/plans/PLAN-calendar-write.md)).
+writes require per-instance write grants (calendar write plan).
 
 Before re-login, add `https://www.googleapis.com/auth/calendar.events` in Google Cloud → Google Auth Platform →
 Data Access for each OAuth project. Then run `shaft google login <alias> <address>` again for each operator account
@@ -126,7 +126,7 @@ suffix to the web credential names, because a refresh token must use the client 
 The CLI re-login command still names the base desktop client and can replace a web login with a desktop login.
 
 Google's quotas are per user per minute, shared by every instance on the account. A call over
-quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (docs/plans/PLAN-mail) kept their files in
+quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar kept their files in
 `.supervisor/mail/`: `shaft google migrate` moves them (until then they are not read, and the error says so).
 
 Source: [Google account login](../supervisor/google.py).
@@ -136,7 +136,7 @@ Source: [Google account login](../supervisor/google.py).
 These operator-mail tools remain read-only under the [action class model](safety.md#operator-action-classes).
 They still check the granted label on each thread. There is no operator mail-send broker tool.
 
-An instance you pick may read the Gmail threads that carry a label you pick ([docs/plans/PLAN-mail.md](../docs/plans/PLAN-mail.md)), on an
+An instance you pick may read the Gmail threads that carry a label you pick, on an
 account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,
 reads or downloads from is checked again before anything of it is shown. A thread is visible while any of its
 messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
@@ -185,8 +185,8 @@ Source: [mail grants and reads](../supervisor/mail.py).
 
 ## An instance's own Gmail (`shaft secret <name> google …`)
 
-An instance may have a Google account of its own, such as `assistant@example.com`
-([docs/plans/PLAN-own-mail.md](../docs/plans/PLAN-own-mail.md)). It reads the whole mailbox and sends from it through its own plugin, calling the
+An instance may have a Google account of its own, such as `assistant@example.com`.
+It reads the whole mailbox and sends from it through its own plugin, calling the
 Gmail API with `http_request(auth=…)`. The supervisor holds the login as a **Google key** in the instance's key store
 (`secrets/`, never readable by the instance). Each run, the broker makes an access token from the key's refresh token,
 adds it like any key and only to the key's hosts, and masks it in answers. Sign it in once, in a browser signed in as
@@ -213,7 +213,7 @@ Sources: [scope and host bindings](../supervisor/google.py),
 
 ## An instance's own Drive, Sheets, Docs and Slides (`shaft secret <name> google … --scope drive`)
 
-The same account's files ([docs/plans/PLAN-own-drive.md](../docs/plans/PLAN-own-drive.md)): a second Google key on the instance's own account,
+The same account's files: a second Google key on the instance's own account,
 used the same way (its own plugins, `http_request(auth="drive")`). Sign it in once, as that account:
 
     shaft secret example google drive assistant@example.com --client personal --scope drive
@@ -235,14 +235,14 @@ Source: [Drive scope bundle](../supervisor/google.py).
 
 ## Calendar (`shaft calendar …`)
 
-For instances in `SHAFT_ACTION_INSTANCES` (default `thelos`), the [action classes](safety.md#operator-action-classes)
+For instances in `SHAFT_ACTION_INSTANCES` (default: none), the [action classes](safety.md#operator-action-classes)
 preserve the initial calendar behavior: changes that tell nobody run directly; supplied attendees, invitations,
 incomplete attendee lists and RSVPs require proposals. An over-reach can make direct changes require approval or
 make a staged class refused. `shaft actions <name>` shows class state, history and proposals; `restore <class>`
 restores the initial rule. All classes share the existing `/calendar/proposals` queue, expiry and approval checks.
 Other instances keep their current calendar behavior.
 
-An instance you pick may read the calendars you pick, one per grant ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)), with full
+An instance you pick may read the calendars you pick, one per grant, with full
 event details: title, time and time zone, location, description, organiser, attendees and their responses, your
 response, conference link, recurrence, attachment links (never downloaded). Private events on a granted calendar are
 shown; declined ones are shown and marked. `shaft calendar calendars work` lists the account's calendars;
@@ -250,7 +250,7 @@ shown; declined ones are shown and marked. `shaft calendar calendars work` lists
 `.supervisor/tools/example.json`. A title shared by two calendars is refused, both listed: grant by ID. `revoke` and
 `off` hold from the instance's next calendar call. `grant-write` adds write access to one calendar and implies read;
 `revoke-write` keeps read access. See [calendar write safety](safety.md) and
-[calendar write plan](../docs/plans/PLAN-calendar-write.md) for direct writes and operator-approved proposals.
+calendar write plan for direct writes and operator-approved proposals.
 
 Every Calendar API call names a granted calendar in its path, and nothing an instance calls spans calendars (no
 free/busy, no calendar list). An event's id is `<alias>/<hash of the calendar>/<event>`, resolved against the
@@ -299,7 +299,7 @@ Source: [calendar tools](../supervisor/calendar.py).
 An instance may search, read, and download files from your Google accounts through `drive_search`, `drive_read`,
 and `drive_download`. Access is read-only. The supervisor holds the credential and checks the account grant and
 file reach before returning content. This is separate from [an instance's own Drive](#an-instances-own-drive-sheets-docs-and-slides-shaft-secret-name-google----scope-drive).
-See [Drive tools](../supervisor/broker.py), [Drive access checks](../supervisor/gdrive.py), and the [plan](../docs/plans/PLAN-operator-drive.md).
+See [Drive tools](../supervisor/broker.py), [Drive access checks](../supervisor/gdrive.py), and the plan.
 
 Enable the **Google Drive API** in each account's OAuth project. In Google Auth Platform → **Data Access**, add
 `https://www.googleapis.com/auth/drive.readonly`. Run `shaft google login` again and tick Drive on the consent page.
@@ -370,10 +370,9 @@ It does not erase memories or copies the instance made elsewhere.
    email anyone, share its own files with anyone, or reach the public internet can send what it reads through those channels.
    Nothing blocks those sends after a Drive read. `own` is the only limit on which files it can read here,
    and it is weaker than mail's label limit.
-3. **Reads may leave a mark in the company's audit log.** On Workspace, Drive API reads should appear in the admin
-   audit log as "Item content accessed", with the app's OAuth client ID, per Google's documentation. This has not
-   been checked in the log itself. On two real accounts, a read did not change "last viewed" (`viewedByMeTime`)
-   or "modified" (`modifiedTime`) 20 seconds later, for one Doc export and one file download on each account.
+3. **Reads may leave a mark in a Workspace audit log.** On Workspace, Drive API reads should appear in the admin
+   audit log as "Item content accessed", with the app's OAuth client ID, per Google's documentation. A read is
+   not expected to change "last viewed" (`viewedByMeTime`) or "modified" (`modifiedTime`).
 
 ## The operator's Google Chat (`shaft gchat`)
 
@@ -381,7 +380,7 @@ An instance may search and read every conversation on a granted Google Chat acco
 spaces, and the operator's own messages. It can download uploaded files. Access is read-only, with no per-conversation
 hide list. The supervisor holds the credential and checks the account grant on every call.
 See [Chat tools](../supervisor/broker.py), [Chat reads](../supervisor/gchat.py), and the
-[plan](../docs/plans/PLAN-operator-chat.md).
+plan.
 
 Enable the **Google Chat API** in the account's Google Cloud project. In Google Auth Platform → **Data Access**, add:
 
@@ -433,19 +432,19 @@ Source: [watch](../supervisor/watch.py).
 
 ### The Chat risks you accept
 
-1. **Colleagues' messages reach model providers** (example-b's model, the judges), and what example-b writes from them
+1. **Colleagues' messages reach model providers** (the instance's model, the judges), and what the instance writes from them
    stays in its mind store. Its own conversation episodes and tool logs also hold what it read, as with mail. The
    rule that no log holds Chat content covers the supervisor's logs (`broker.log`, the watch's log lines), not the
-   instance's own records. This is company data; whether the company's policy allows it is yours to judge.
-2. **Anyone who can message you can write instructions to example-b.** The marking helps; it is not a guarantee.
-   example-b has the internet, so anything it reads it could send anywhere.
+   instance's own records. This may be workplace data; whether your organisation's policy allows it is yours to judge.
+2. **Anyone who can message you can write instructions to the instance.** The marking helps; it is not a guarantee.
+   The instance has the internet, so anything it reads it could send anywhere.
 3. **Downloads in `gchat/` are deleted on revoke; memories formed from them are not.**
-4. **The company's admin may see the OAuth client** in the Admin console's app access list, and can block it at any time
+4. **A Workspace admin may see the OAuth client** in the Admin console's app access list, and can block it at any time
    (the tools would then refuse with Google's reason).
 
 ## Scheduled jobs (`shaft jobs …`)
 
-An instance can run one of its own plugins on a timer ([docs/plans/PLAN-jobs.md](../docs/plans/PLAN-jobs.md)), for example a watcher that
+An instance can run one of its own plugins on a timer, for example a watcher that
 checks the tagged mail every 15 minutes. It declares the job in the plugin's own manifest:
 `"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}` in `plugins/<name>/plugin.json`. A cycle
 writes it, the gate tests it, and the commit records it. No launchd job is installed: SHAFT's scheduler service runs
@@ -467,7 +466,7 @@ For new mail, calendar changes, or Google Chat messages a job is not needed. The
 (`WATCH_MAIL`, `WATCH_CALENDAR`, `WATCH_GCHAT`, in the corresponding sections) checks every minute and wakes through
 the same path.
 
-A job's work reaches the instance whole ([docs/plans/PLAN-thelos-review-2.md](../docs/plans/PLAN-thelos-review-2.md) M1):
+A job's work reaches the instance whole:
 - **Hand-off.** `{"message": …, "files": ["brief.md", …]}`: up to 5 files of at most 256 KB from `.jobs/<plugin>/`
   (a path relative to it, or starting with `.jobs/<plugin>/`; no link is followed) are copied beside the message,
   into `inbox/<stamp>-from-job-<plugin>.files/`. The message lists each with its size and names each refused one
@@ -496,7 +495,7 @@ Source: [jobs execution and scheduling](../supervisor/jobs.py).
 
 ## Images
 
-Instances can see images ([docs/plans/PLAN-vision.md](../docs/plans/PLAN-vision.md)). There are two ways:
+Instances can see images. There are two ways:
 - **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
   message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
 - **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
@@ -529,8 +528,8 @@ Sources: [vision validation](../supervisor/vision.py),
 
 ## A real browser (`shaft browser …`)
 
-Instances can drive a headless Chromium: pages that need JavaScript, logins, forms, clicks
-([docs/plans/PLAN-browser.md](../docs/plans/PLAN-browser.md)). The supervisor provides only these:
+Instances can drive a headless Chromium: pages that need JavaScript, logins, forms, clicks.
+The supervisor provides only these:
 - **One Chromium for every instance.** `shaft browser install [--playwright X.Y.Z]` downloads Playwright's
   Chromium builds into `.browsers/`, swapped in whole and gitignored. `shaft browser` shows the install and each
   instance's profile.

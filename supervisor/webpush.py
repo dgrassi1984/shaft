@@ -1,4 +1,4 @@
-"""Web Push for the web UI (docs/plans/PLAN-pwa P4): "thelos replied" on a phone whose app is closed or locked.
+"""Web Push for the web UI: "tundra replied" on a phone whose app is closed or locked.
 
 An iPhone stops a page's scripts while its app is in the background, so nothing in the page can say a reply landed.
 Only a push can: the browser's push service (Apple's for an iPhone, iOS 16.4+, Home Screen apps only) wakes the app's

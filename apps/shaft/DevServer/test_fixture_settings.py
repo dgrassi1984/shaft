@@ -52,7 +52,7 @@ class FixtureSettingsTest(unittest.TestCase):
                     self.assertEqual(status, expected, body)
                     return body
 
-                path = "/app/v1/settings/thelos"
+                path = "/app/v1/settings/tundra"
                 settings = api(path)
                 self.assertEqual(settings["operator_name"]["value"], "Operator")
                 for field, value in (("operator_name", "Fixture operator"), ("wake_interval", 0),
@@ -60,26 +60,26 @@ class FixtureSettingsTest(unittest.TestCase):
                                      ("cloud_cap", 2.5), ("channel", "telegram"), ("cloud_cap", None)):
                     settings = api(path, "POST", {"field": field, "value": value, "expect": settings[field]["value"]})["settings"]
                     self.assertEqual(settings[field]["value"], value)
-                self.assertEqual(core.instance_root("thelos"), base / "instances" / "thelos")
-                self.assertEqual(opconfig.instance_root("thelos"), base / "instances" / "thelos")
-                self.assertEqual(core._tool_settings("thelos")["channel"], "telegram")
-                self.assertNotIn("cloud_daily_usd", core._tool_settings("thelos"))
+                self.assertEqual(core.instance_root("tundra"), base / "instances" / "tundra")
+                self.assertEqual(opconfig.instance_root("tundra"), base / "instances" / "tundra")
+                self.assertEqual(core._tool_settings("tundra")["channel"], "telegram")
+                self.assertNotIn("cloud_daily_usd", core._tool_settings("tundra"))
                 # HTML access-page actions still need the limits/channel command stubs.
-                self.assertEqual(web_config.run("limit", "thelos", {"limit": "cloud-cap", "value": "3.5"})[0], 200)
-                self.assertEqual(core._tool_settings("thelos")["cloud_daily_usd"], 3.5)
-                self.assertEqual(web_config.run("channel", "thelos", {"value": "web"})[0], 200)
-                self.assertEqual(core._tool_settings("thelos")["channel"], "web")
+                self.assertEqual(web_config.run("limit", "tundra", {"limit": "cloud-cap", "value": "3.5"})[0], 200)
+                self.assertEqual(core._tool_settings("tundra")["cloud_daily_usd"], 3.5)
+                self.assertEqual(web_config.run("channel", "tundra", {"value": "web"})[0], 200)
+                self.assertEqual(core._tool_settings("tundra")["channel"], "web")
                 self.assertTrue(api(path + "/pause", "POST")["settings"]["paused"])
                 self.assertFalse(api(path + "/resume", "POST")["settings"]["paused"])
 
                 services = api("/app/v1/services")["services"]
                 self.assertEqual([s["pid"] for s in services], [os.getpid(), os.getpid()])
                 self.assertTrue(all(s["running"] for s in services))
-                fixture.act(base, web, chat, messages, push, "services", ["busy", "thelos replying"])
+                fixture.act(base, web, chat, messages, push, "services", ["busy", "tundra replying"])
                 api("/app/v1/services/api/restart", "POST", expected=409)
                 self.assertEqual(version.service("api", stale=False)["pid"], os.getpid())
                 pending = api("/app/v1/services/scheduler/restart", "POST")["services"][1]["drain"]
-                self.assertEqual(pending["waiting"], ["thelos replying"])
+                self.assertEqual(pending["waiting"], ["tundra replying"])
                 at = autonomy.restart_request()["at"]
                 api("/app/v1/services/scheduler/restart", "POST")
                 self.assertEqual(autonomy.restart_request()["at"], at)

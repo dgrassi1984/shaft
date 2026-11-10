@@ -80,8 +80,8 @@ class InstanceTestsTest(unittest.TestCase):
         return gate.run_instance_tests(root, prof, sandbox.agent_env(os.environ, TMPDIR=str(root)), sys.executable)
 
     def test_a_tests_folder_with_no_tests_passes(self):
-        # Regression (2026-10-13): kant's tests/ held only a stale __pycache__. unittest exits 5 ("NO TESTS
-        # RAN"), the gate read that as a failure, and every template update and every change kant made to its
+        # Regression (2026-10-13): kiln's tests/ held only a stale __pycache__. unittest exits 5 ("NO TESTS
+        # RAN"), the gate read that as a failure, and every template update and every change kiln made to its
         # own code was rolled back.
         ok, out = self._run({"__pycache__/x.cpython-312.pyc": ""})
         self.assertTrue(ok, out)
@@ -129,7 +129,7 @@ class FakeProjectCase(unittest.TestCase):
             "                             capture_output=True, text=True).stdout.strip()\n"
             "        self.assertEqual(Path(top).resolve(), project)\n")
         (self.project / ".gitignore").write_text("/instances/\n/.supervisor/\n.env\n")
-        (self.project / "instances" / "kant").mkdir(parents=True)
+        (self.project / "instances" / "kiln").mkdir(parents=True)
         (self.project / ".env").write_text("KEY=secret\n")
         git(self.project, "init", "-q")
         git(self.project, "add", "-A")
@@ -227,8 +227,8 @@ class SharedFixtureCase(FakeProjectCase):
 
 
 class SharedRecordTest(SharedFixtureCase):
-    """PLAN-gate-cache M1: the shared part of the supervisor's tests runs once per commit, its pass recorded beside the
-    committed tree; the instance part runs at every gate. Regression for 2026-10-27 14:13–14:23: thelos's settle held
+    """The shared part of the supervisor's tests runs once per commit, its pass recorded beside the
+    committed tree; the instance part runs at every gate. Regression for 2026-10-27 14:13–14:23: tundra's settle held
     the instance for 10 minutes re-running 2,000 supervisor tests that had not changed."""
 
     def test_a_second_gate_on_the_same_commit_does_not_run_the_shared_part_again(self):
@@ -374,7 +374,7 @@ class SharedRecordTest(SharedFixtureCase):
 
 
 class WarmTest(SharedFixtureCase):
-    """PLAN-gate-cache M2: the scheduler's warm-up runs the shared part when a commit has no record (or one past half its
+    """The scheduler's warm-up runs the shared part when a commit has no record (or one past half its
     life), so the first gate after a merge does not pay for it while holding its instance."""
 
     def warm(self, timeout_s: int = 120) -> tuple[int, list[str]]:
@@ -632,7 +632,7 @@ class StageProcessGroupTest(FakeProjectCase):
         self.assertTrue((self.inst / "started").exists(), out)            # the worker did start: not a vacuous pass
         # Watched past the moment it would have written: its own start (time.monotonic is the system's clock, the
         # same in every process) + late_s, and 2 s more. Counted from the gate's return, it waited out the whole
-        # stage again: 10.8 s, over the suite's per-test budget (docs/plans/PLAN-gate-5min.md).
+        # stage again: 10.8 s, over the suite's per-test budget.
         would_write = float((self.inst / "started").read_text()) + late_s
         while True:
             self.assertFalse((self.inst / target).exists(),
@@ -672,7 +672,7 @@ REACH_OUT = (   # tries the operator's listener, says what happened in a file th
 
 
 class GateLocalhostTest(FakeProjectCase):
-    """Regression (found 2026-10-18, planning docs/plans/PLAN-browser.md): the gate sandboxed an instance's plugin check and its
+    """Regression (found 2026-10-18, planning the browser): the gate sandboxed an instance's plugin check and its
     own tests with network* allowed on "localhost:*", so instance-written code could connect to any service on the
     operator's Mac — his dev servers, databases, Jupyter, the model and embedding servers. Nothing of his may be
     reachable from an instance. A listener the gate's sandbox did not open, started here outside it, must see no

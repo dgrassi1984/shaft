@@ -1,4 +1,4 @@
-"""The web UI's front door (docs/plans/PLAN-webui.md M0): who may use it (a tailnet login in SHAFT_API_LOGINS and a paired
+"""The web UI's front door: who may use it (a tailnet login in SHAFT_API_LOGINS and a paired
 browser), forged requests refused, instance-written text never running as markup, and a port no run can reach."""
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ ME = "operator@example.com"
 
 
 def snap(**inst) -> dict:
-    i = {"name": "wren", "state": "idle", "since": "", "doing": "", "goal": "", "model": "cloud mimo-v2.6-pro",
+    i = {"name": "wisp", "state": "idle", "since": "", "doing": "", "goal": "", "model": "cloud mimo-v2.6-pro",
          "every": "5 min", "next_wake": "12:05", "conversations": 0, "calls_today": 3, "tokens_today": 12_000,
          "usd_today": 0.12, "judged": 4, "success": 0.5, "achieved": 2.0, "value": 3.0, "tools_off": [],
          "trial": "", "recap": {"running": False}, **inst}
     return {"at": "12:00:00", "services": [{"name": "api", "running": True, "detail": "abc since 09:00"},
                                           {"name": "web", "running": False, "detail": ""}],
-            "instances": [i], "events": ["12:00:00 wren: cycle done"], "messages": [], "alerts": [], "spend": 0.42}
+            "instances": [i], "events": ["12:00:00 wisp: cycle done"], "messages": [], "alerts": [], "spend": 0.42}
 
 
 class WebTest(unittest.TestCase):
@@ -73,12 +73,12 @@ class WhoMayUseItTest(WebTest):
         r = self.req()
         self.assertEqual(r.status, 403)
         self.assertIn(b"shaft web pair", r.body)
-        self.assertNotIn(b"wren", r.body)          # nothing of the instances before pairing
+        self.assertNotIn(b"wisp", r.body)          # nothing of the instances before pairing
 
     def test_a_paired_browser_sees_the_overview(self):
         r = self.req("/overview", cookie=self.paired())
         self.assertEqual(r.status, 200)
-        self.assertIn(b"wren", r.body)
+        self.assertIn(b"wisp", r.body)
 
     def test_a_forged_device_cookie_refused(self):
         dev, _ = self.paired().split("=", 1)[1].split(".")
@@ -129,7 +129,7 @@ class PairingTest(WebTest):
         self.assertEqual(r.status, 403)
 
     def test_the_cookie_is_httponly_secure_and_lax(self):
-        """Lax, not Strict (docs/plans/PLAN-pwa P1): a link to the UI opened from Telegram or Messages is a cross-site navigation
+        """Lax, not Strict: a link to the UI opened from Telegram or Messages is a cross-site navigation
         and a Strict cookie was not sent. Every POST still needs the page's token and same-origin (ForgedRequestsTest)."""
         url = web.new_pairing("laptop")
         r = self.req("/pair", "POST", body=f"t={url.split('t=')[1]}".encode(), headers={"sec-fetch-site": "same-origin"})
@@ -203,10 +203,10 @@ class EscapingTest(WebTest):
     EVIL = '<script>alert(1)</script><img src=x onerror="alert(2)">'
 
     def test_instance_written_text_never_runs_as_markup(self):
-        s = snap(goal=self.EVIL, doing=self.EVIL, name="wren", trial=self.EVIL,
+        s = snap(goal=self.EVIL, doing=self.EVIL, name="wisp", trial=self.EVIL,
                  recap={"ts": "2026-10-19T11:59:00", "text": self.EVIL, "running": False})
         s["events"] = [self.EVIL]
-        s["messages"] = [{"ts": "2026-10-19T11:00:00", "from": "wren", "to": "operator", "read": True,
+        s["messages"] = [{"ts": "2026-10-19T11:00:00", "from": "wisp", "to": "operator", "read": True,
                           "kind": "note", "text": self.EVIL, "file": "m.md"}]
         s["alerts"] = [{"id": "x", "text": self.EVIL}]
         with mock.patch.object(web, "overview", return_value=s):
@@ -237,7 +237,7 @@ class OverviewTest(WebTest):
         for text in ("in a cycle", "since 11:58", "read_file notes.md · 3s", "tidy the notes", "t3 running: 2/6 pairs",
                      "off: delegate_coding", "service model is not running", "$0.42", "3 model calls", "12k tokens",
                      "$0.12", "value 3.0/5", "achieved 2.0/5", "success 50%", "wakes every 5 min", "next 12:05",
-                     "12:00:00 wren: cycle done", "web"):
+                     "12:00:00 wisp: cycle done", "web"):
             self.assertIn(text, out, text)
 
     def test_the_overview_says_so_when_its_data_failed(self):
@@ -381,13 +381,13 @@ class BakeoffJudgePagesTest(WebTest):
             "output_tail": "", "episode": {"intent": {"goal": "<b>goal</b>"}, "finish": {"what_happened": text}},
             "trace": [{"tool": "send_message", "args": json.dumps({"to": "operator", "text": text}), "ok": True,
                        "result": "delivered", "tags": []}], "diff": ""}
-        b = {"id": "x1", "name": "wren", "created": "2026-11-09T09:00:00", "judge": "j", "code_rev": "abc",
+        b = {"id": "x1", "name": "wisp", "created": "2026-11-09T09:00:00", "judge": "j", "code_rev": "abc",
              "arms": [{"label": "codex/gpt-6.1-sol", "model": "codex/gpt-6.1-sol", "env": {}},
                       {"label": "openrouter/deepseek/deepseek-v4.1-flash", "model": "m", "env": {}}],
              "states": [{"ts": "2026-11-08T10:00:00", "t0": "2026-11-08T09:55:00", "stratum": "check", "outcomes": {},
                          "arms": {"codex/gpt-6.1-sol": rec("a", "Sol <script>alert(1)</script>"),
                                   "openrouter/deepseek/deepseek-v4.1-flash": rec("b", "deepseek did it")}}]}
-        (d / "wren-x1.json").write_text(json.dumps(b))
+        (d / "wisp-x1.json").write_text(json.dumps(b))
         for p in (mock.patch.object(bakeoff, "DIR", d), mock.patch.object(trial, "state_context", return_value="ctx")):
             p.start()
             self.addCleanup(p.stop)
@@ -395,59 +395,59 @@ class BakeoffJudgePagesTest(WebTest):
 
     def test_list_bakeoff_and_judge_pages_render_blind_and_escaped(self):
         cookie = self.paired()
-        self.assertIn(b"/bakeoffs/wren/x1", self.req("/bakeoffs", cookie=cookie).body)
-        page = self.req("/bakeoffs/wren/x1", cookie=cookie)
+        self.assertIn(b"/bakeoffs/wisp/x1", self.req("/bakeoffs", cookie=cookie).body)
+        page = self.req("/bakeoffs/wisp/x1", cookie=cookie)
         self.assertEqual(page.status, 200)
         self.assertIn(b"Judge pairs", page.body)
-        judge = self.req("/bakeoffs/wren/x1/judge", cookie=cookie)   # nothing ticked: every model
+        judge = self.req("/bakeoffs/wisp/x1/judge", cookie=cookie)   # nothing ticked: every model
         self.assertEqual(judge.status, 200)
         self.assertIn(b"Run A", judge.body)
         self.assertNotIn(b"<script>alert", judge.body)          # instance-written text never runs as markup
         self.assertIn(b"&lt;script&gt;alert(1)&lt;/script&gt;", judge.body)   # ...and is still shown, escaped
-        self.assertEqual(self.req("/bakeoffs/wren/x1/judge?vs=%C2%B2&vs=9999", cookie=cookie).status, 200)
+        self.assertEqual(self.req("/bakeoffs/wisp/x1/judge?vs=%C2%B2&vs=9999", cookie=cookie).status, 200)
         self.assertNotIn(b"deepseek", judge.body.lower())      # blind: the run's own words name no model
         self.assertIn(b"1 left", judge.body)
-        self.assertEqual(self.req("/bakeoffs/wren/nope", cookie=cookie).status, 404)
-        self.assertEqual(self.req("/bakeoffs/wren/x1", login=None).status, 403)   # not on the tailnet login list
+        self.assertEqual(self.req("/bakeoffs/wisp/nope", cookie=cookie).status, 404)
+        self.assertEqual(self.req("/bakeoffs/wisp/x1", login=None).status, 403)   # not on the tailnet login list
 
     def test_a_verdict_posts_with_the_token_and_the_pair_leaves_the_queue(self):
         cookie = self.paired()
         post = lambda body, token=True: self.req(   # noqa: E731
-            "/bakeoffs/wren/x1/judge", "POST", cookie=cookie, body=body.encode(),
+            "/bakeoffs/wisp/x1/judge", "POST", cookie=cookie, body=body.encode(),
             headers={"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded",
                      **({"x-csrf-token": self.csrf(cookie)} if token else {})})
         pair = ("codex/gpt-6.1-sol", "openrouter/deepseek/deepseek-v4.1-flash")
-        runs = self.bakeoff.operator_case(self.bakeoff.load("wren", "x1"), 0, pair)["runs"]
+        runs = self.bakeoff.operator_case(self.bakeoff.load("wisp", "x1"), 0, pair)["runs"]
         self.assertEqual(post(f"state=0&x=0&y=1&choice=A&runs={runs}", token=False).status, 403)
         self.assertEqual(post("state=0&x=0&y=1&choice=A").status, 409)            # no fingerprint of what was shown
         self.assertEqual(post("state=0&x=0&y=1&choice=A&runs=stale").status, 409)
         self.assertEqual(post(f"state=0&x=0&y=1&choice=maybe&runs={runs}").status, 409)
         self.assertEqual(post(f"state=0&x=1&y=1&choice=A&runs={runs}").status, 409)   # a model against itself
         self.assertEqual(post(f"state=0&x=1&y=0&choice=A&note=crisper&runs={runs}").status, 200)
-        b = self.bakeoff.load("wren", "x1")
+        b = self.bakeoff.load("wisp", "x1")
         v = self.bakeoff.operator_verdicts(b)[(0, pair)]
         self.assertEqual((v["choice"], v["note"], v["by"]), ("A", "crisper", ME))
-        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/x1/judge", cookie=cookie).body)
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wisp/x1/judge", cookie=cookie).body)
         ds_won = self.bakeoff._flipped(b, 0, pair)   # A was the second of the pair in name order: deepseek
         self.assertEqual(v["winner"], pair[1] if ds_won else pair[0])
-        page = self.req("/bakeoffs/wren/x1", cookie=cookie).body.decode()
+        page = self.req("/bakeoffs/wisp/x1", cookie=cookie).body.decode()
         self.assertIn('deepseek-v4.1-flash</td><td data-label="Your pairs">1</td><td data-label="Its W–L–T">'
                       + ("1–0–0" if ds_won else "0–1–0"), page)
-        self.assertIn("<h2>Ranking of wren</h2>", page)             # the instance's ranking, updated by this verdict
+        self.assertIn("<h2>Ranking of wisp</h2>", page)             # the instance's ranking, updated by this verdict
         ds = re.search(r"deepseek-v4.1-flash</td><td data-label=\"Your Elo \[90%\]\">(\d+) \[", page)
         self.assertTrue(ds and (int(ds[1]) > 1000) == ds_won, page[-3000:])   # moved from 1000 by the verdict
 
     def test_judging_across_all_bake_offs_of_the_instance(self):
         cookie = self.paired()
-        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wren/judge-all", cookie=cookie).body)   # none started
-        b = self.bakeoff.load("wren", "x1")
+        self.assertIn(b"Nothing left to judge", self.req("/bakeoffs/wisp/judge-all", cookie=cookie).body)   # none started
+        b = self.bakeoff.load("wisp", "x1")
         pair = ("codex/gpt-6.1-sol", "openrouter/deepseek/deepseek-v4.1-flash")
         self.bakeoff.operator_path(b).parent.mkdir(parents=True, exist_ok=True)
         self.bakeoff.operator_path(b).write_text("")   # judging started on it
-        page = self.req("/bakeoffs/wren/judge-all", cookie=cookie)
+        page = self.req("/bakeoffs/wisp/judge-all", cookie=cookie)
         self.assertEqual(page.status, 200)
         self.assertIn(b"Run A", page.body)
-        self.assertIn(b'data-post="/bakeoffs/wren/x1/judge"', page.body)   # the verdict goes to the pair's bake-off
-        self.assertIn(b"/bakeoffs/wren/judge-all", self.req("/bakeoffs", cookie=cookie).body)
+        self.assertIn(b'data-post="/bakeoffs/wisp/x1/judge"', page.body)   # the verdict goes to the pair's bake-off
+        self.assertIn(b"/bakeoffs/wisp/judge-all", self.req("/bakeoffs", cookie=cookie).body)
         self.assertEqual(self.req("/bakeoffs/nobody/judge-all", cookie=cookie).status, 404)
 

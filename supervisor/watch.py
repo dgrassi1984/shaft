@@ -1,5 +1,5 @@
-"""The supervisor's mail, calendar and Google Chat watch (docs/plans/PLAN-thelos-review-2.md M6, S10; the operator's
-Google Chat: PLAN-operator-chat, "The watch", D8-D10): new mail under an instance's granted labels, changed events on
+"""The supervisor's mail, calendar and Google Chat watch (the operator's
+Google Chat included): new mail under an instance's granted labels, changed events on
 its granted calendars and new messages in its granted Google Chat accounts reach its inbox, and may wake it, without
 the instance polling with a scheduled plugin every five minutes or more.
 

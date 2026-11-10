@@ -1,4 +1,4 @@
-"""Remove an instance and every trace of it (`shaft delete <name>`, docs/plans/PLAN-kill-delete.md).
+"""Remove an instance and every trace of it (`shaft delete <name>`).
 
 Refused while anything runs for it (`shaft kill <name>` first). Then, holding its run lock so no reply or wake can
 start: an archive in .supervisor/deleted/<name>-<stamp>.tar.gz (unless --no-archive) — its mind store, a git bundle of
@@ -39,7 +39,7 @@ class Refused(Exception):
 
 # -- what belongs to it ----------------------------------------------------------------------------------------------
 def _matching(folder: Path, pattern: str) -> list[Path]:
-    """Entries of `folder` whose whole name matches `pattern` (a regex: `wren-*` must not take `wren-2`'s files)."""
+    """Entries of `folder` whose whole name matches `pattern` (a regex: `wisp-*` must not take `wisp-2`'s files)."""
     rx = re.compile(pattern)
     return sorted(p for p in folder.iterdir() if rx.fullmatch(p.name)) if folder.is_dir() else []
 
@@ -125,7 +125,7 @@ def _jsonl(pred) -> Callable[[str], tuple[str, list]]:
 
 def _log_lines(name: str) -> Callable[[str], tuple[str, list]]:
     """A text log's lines about the instance: those whose subject — the word after the timestamp — is it
-    ('[2026-10-20 14:18:52] wren: start live', '… wren http_request …', '… wren@trial:…'). A line that only mentions
+    ('[2026-10-20 14:18:52] wisp: start live', '… wisp http_request …', '… wisp@trial:…'). A line that only mentions
     it in passing is another subject's."""
     rx = re.compile(rf"^\[[^\]]*\] {re.escape(name)}(:|@|\s|$)")
 
@@ -168,7 +168,7 @@ def _all(*fns):
 def shared_edits(name: str) -> list[Edit]:
     from . import autonomy, battery, consult, jobs
     s = SUP_DIR
-    mine = lambda v: v == name or (isinstance(v, str) and v.startswith(name + "@"))   # 'wren@trial:t-…:0A' too
+    mine = lambda v: v == name or (isinstance(v, str) and v.startswith(name + "@"))   # 'wisp@trial:t-…:0A' too
 
     def jobs_state(data):
         taken = _all(_pop("jobs", name), _pop("wake", name))(data) or []

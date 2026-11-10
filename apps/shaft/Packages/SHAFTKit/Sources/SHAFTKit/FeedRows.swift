@@ -73,7 +73,7 @@ public enum FeedRows {
         return feed.content?.items.last?.key
     }
 
-    /// The answers (and messages) that `newer` holds and `older` did not: what to announce for VoiceOver ("thelos
+    /// The answers (and messages) that `newer` holds and `older` did not: what to announce for VoiceOver ("tundra
     /// replied"). Empty on the first load (`older` nil) and for the operator's own items.
     public static func arrivals(from older: Feed?, to newer: Feed) -> [FeedItem] {
         guard let old = older?.content, let new = newer.content else { return [] }

@@ -12,8 +12,7 @@ By Daniele Grassi. [MIT licensed](LICENSE).
 
 ## Status
 
-- **Personal research project.** The author runs it every day on one Mac mini, with several agents on cloud and local
-  models. Interfaces, defaults and model dependencies change often; the [release tags](https://github.com/dgrassi1984/shaft/tags) say what changed.
+- **Personal research project.** Interfaces, defaults and model dependencies change often; the [release tags](https://github.com/dgrassi1984/shaft/tags) say what changed.
 - **macOS only.** It relies on `sandbox-exec`, `launchd` and, for local models, Apple Silicon.
 - **Expect breakage.** Start with one agent, talk to it, run a few cycles by hand, and read what it did before you let
   it run on its own.
@@ -208,9 +207,8 @@ services, as [moving SHAFT to a new Mac](docs/migration.md) describes, including
 | [Integrations](docs/integrations.md) | Telegram, Google mail/calendar/Drive/Chat, jobs, images, browser |
 | [Local models](docs/local-model.md) | Local MLX model, self-hosted servers, Codex and Grok plans |
 | [Moving to a new Mac](docs/migration.md) | Backup and migration |
-| [Deploying a release](docs/deploy.md) | The maintainer's runbook for updating a running setup |
-| [Design plans](docs/plans/PLAN.md) | Dated design records; their status lines describe the plan when it was written |
-| [Model bake-offs](docs/bakeoffs/README.md) | How models are compared for an instance, and the results |
+| [Deploying a release](docs/deploy.md) | Moving a running setup onto a new release |
+| [Model bake-offs](docs/bakeoffs/README.md) | How models are compared for an instance |
 | [Security policy](SECURITY.md) | Threat model and how to report a vulnerability |
 
 ## Development

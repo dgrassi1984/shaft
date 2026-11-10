@@ -881,7 +881,7 @@ class WarmState:
 
 
 def gate_warm(children: dict, st: WarmState, start, now: float | None = None) -> None:
-    """Start `shaft gate warm` (gate.warm, docs/plans/PLAN-gate-cache.md) when main has moved to commits with no warm-up
+    """Start `shaft gate warm` (gate.warm) when main has moved to commits with no warm-up
     yet, and hourly for the same ones, so the first gate after a merge reads the shared supervisor tests' pass instead
     of running them while holding its instance. A test failure is not tried again on its commits; a timeout is
     retried hourly after it ends. Every gate on unrecorded commits runs the shared part anyway."""
@@ -956,7 +956,7 @@ def regate_recorded(children: dict, st: WarmState, start) -> None:
 
 def regate_after_warm(children: dict, start) -> None:
     """A warm-up found the gate's baseline green: start `shaft gate regate` (runner.regate_held) when an instance has a
-    code change held while it was red (docs/plans/PLAN-thelos-review-2.md M2). One at a time; nothing here raises into
+    code change held while it was red. One at a time; nothing here raises into
     the scheduler's loop."""
     if "gate regate" in children:
         return

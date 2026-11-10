@@ -7,7 +7,7 @@ conversations, autonomous cycles, evaluation, and access grants. Read README.md 
 
 - `supervisor/`: supervisor code and `supervisor/tests/`. Python standard library.
 - `apps/`: client apps.
-- `docs/`: operator reference, architecture, and plans.
+- `docs/`: operator reference and architecture.
 - `template` branch: agent code, checked out in `template/` by setup.
 - `bin/shaft`: CLI entry point.
 
@@ -60,11 +60,8 @@ into each instance's `shaft-docs/`. Do not rename or move README.md or the refer
 `docs/local-model.md`, `docs/safety.md`, and `docs/web-and-api.md`. The template's
 `skills/helping-the-operator-configure.md` names them.
 Keep the README heading that produces `#quickstart-cloud-only`.
-Outside README and `docs/plans/`, name plans as `docs/plans/PLAN-…`.
-Run `python3 docs/plans/check_references.py`. Keep relative links and GitHub anchors valid.
-`docs/CODEMAP.md` and `agent-overlay.yaml` belong to maintainer tooling and need not
-be edited by hand.
+Keep relative links and GitHub anchors valid.
+`docs/CODEMAP.md` is generated and need not be edited by hand.
 
 Use plain declarative English, short sentences, and honest statements of limits.
-Say "the operator". Examples use `<name>` or `example`. Use live instance names only
-where the code uses them as defaults. In docs, cite modules and symbols, not line numbers.
+Say "the operator". Examples use `<name>` or `example`; never name a real instance or say what one does. In docs, cite modules and symbols, not line numbers.

@@ -1,4 +1,4 @@
-"""PLAN-voice M1, lane L6, the instance's side of the warm voice session (§7): `answer --loop` answers each request of
+"""Lane L6, the instance's side of the warm voice session (§7): `answer --loop` answers each request of
 one conversation in one process, keeps one system prompt for all of them (so the supervisor's Codex channel keeps one
 model session), and brings what changed between turns with each message instead."""
 from __future__ import annotations
@@ -36,7 +36,7 @@ def request(messages: list[dict]) -> dict:
 def cycle_in_the_pause(root: Path, state: State) -> None:
     """What a cycle leaves that each message brings: a journal entry and an inbox message."""
     state.append_journal("Cycle: watered the orchard", "The north row needed twice the water: ORCHARD-NOTE.")
-    (root / "inbox" / "20261109-101500-from-wren.md").write_text("From: wren\n\nThe weather API is back.\n")
+    (root / "inbox" / "20261109-101500-from-wisp.md").write_text("From: wisp\n\nThe weather API is back.\n")
 
 
 def two_turns(held: dict | None, pause=cycle_in_the_pause, orders: list[str] | None = None
@@ -89,7 +89,7 @@ class WarmPromptTest(unittest.TestCase):
         self.assertTrue(first.endswith("[the operator]\n\nWeather in Rome?"), first[-80:])   # theirs, last
         self.assertIn("It is now", second)
         self.assertIn("ORCHARD-NOTE", second)                               # the cycle's entry, read again
-        self.assertIn("20261109-101500-from-wren.md", second)               # the message that came in the pause
+        self.assertIn("20261109-101500-from-wisp.md", second)               # the message that came in the pause
         self.assertNotIn("Cycle: pruned the reading list", second)          # said once, at the turn it was new
         self.assertIn("And tomorrow?", second)
         self.assertEqual(bodies[1]["messages"][1], {"role": "user", "content": "Weather in Rome?"})   # as resent

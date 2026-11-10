@@ -16,7 +16,7 @@ from unittest import mock
 
 from supervisor import messages, pushes, telegram, core, reply_links
 
-TOK = {"wren": "111:wren-secret", "shaft": "222:shaft-secret"}
+TOK = {"wisp": "111:wisp-secret", "shaft": "222:shaft-secret"}
 ME, STRANGER = {"id": 42, "username": "operator"}, {"id": 666, "username": "someone"}
 
 
@@ -57,7 +57,7 @@ class FakeBotAPI:
                 elif fake.reject_html and params.get("parse_mode"):
                     body, code = {"ok": False, "description": "Bad Request: can't parse entities: bad tag"}, 400
                 elif method == "getMe":
-                    body, code = {"ok": True, "result": {"username": "wren_shaft_bot"}}, 200
+                    body, code = {"ok": True, "result": {"username": "wisp_shaft_bot"}}, 200
                 elif method in ("sendMessage", "sendPhoto", "sendDocument"):
                     fake.next_id += 1
                     body, code = {"ok": True, "result": {"message_id": fake.next_id}}, 200
@@ -92,8 +92,8 @@ class PlannedStatusTest(unittest.TestCase):
         with mock.patch.object(telegram, "paired_id", return_value=42), \
                 mock.patch.object(telegram, "tokens", return_value=TOK), \
                 mock.patch.object(telegram, "send") as send:
-            telegram._planned("wren", "up to 8 calls / 200 s: Read sources")
-            send.assert_called_once_with(TOK["wren"], 42, "planned · up to 8 calls / 200 s: Read sources")
+            telegram._planned("wisp", "up to 8 calls / 200 s: Read sources")
+            send.assert_called_once_with(TOK["wisp"], 42, "planned · up to 8 calls / 200 s: Read sources")
 
     def test_failed_plan_notice_does_not_discard_the_reply(self):
         """Guard a failed Telegram plan notice aborting an otherwise successful conversation reply."""
@@ -101,7 +101,7 @@ class PlannedStatusTest(unittest.TestCase):
                 mock.patch.object(telegram, "tokens", return_value=TOK), \
                 mock.patch.object(telegram, "send", side_effect=telegram.TelegramError("offline")), \
                 mock.patch.object(telegram, "log") as log:
-            telegram._planned("wren", "up to 8 calls / 200 s: Read sources")
+            telegram._planned("wisp", "up to 8 calls / 200 s: Read sources")
             log.assert_called_once()
 
 
@@ -118,7 +118,7 @@ class TelegramTest(unittest.TestCase):
         env = {telegram.token_key(n): t for n, t in TOK.items()}
         for p in (mock.patch.object(telegram, "SUP_DIR", self.sup), mock.patch.object(telegram, "API_BASE", self.api.url),
                   mock.patch.object(telegram, "secrets_env", lambda: env),
-                  mock.patch.object(telegram, "instance_names", lambda: ["shaft", "wren", "kant"]),
+                  mock.patch.object(telegram, "instance_names", lambda: ["shaft", "wisp", "kiln"]),
                   mock.patch.object(telegram, "log", lambda *_: None),
                   mock.patch.object(telegram, "ask_api", self._ask),
                   mock.patch.object(messages, "SUP_DIR", self.sup),
@@ -128,14 +128,14 @@ class TelegramTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         messages._cache.update(key=None, rows=[])
-        self.chat = telegram.Chat("wren", TOK["wren"])
+        self.chat = telegram.Chat("wisp", TOK["wisp"])
 
     def _ask(self, name, history, request_id=""):
         self.asked.append((name, [dict(h) for h in history]))
         return f"answer {len(self.asked)}", 0
 
     def upd(self, u, chat=None):
-        telegram.handle_update("wren", TOK["wren"], chat or self.chat, u)
+        telegram.handle_update("wisp", TOK["wisp"], chat or self.chat, u)
 
     def pair(self):
         code = telegram.new_pairing_code()
@@ -151,7 +151,7 @@ class TelegramTest(unittest.TestCase):
         self.assertIn("Paired", self.api.sent()[-1][1]["text"])
         n = len(self.api.calls)
         self.upd(_msg(STRANGER, f"/pair {code}", mid=5))              # the code is spent; a second account never pairs
-        self.upd(_msg(STRANGER, "hi wren", mid=6))
+        self.upd(_msg(STRANGER, "hi wisp", mid=6))
         self.assertEqual(len(self.api.calls), n)                      # nothing answered, nothing asked
         self.assertEqual(self.asked, [])
         self.assertEqual(telegram.paired_id(), 42)
@@ -171,7 +171,7 @@ class TelegramTest(unittest.TestCase):
         self.upd(_msg(ME, "what did you find?", mid=10))
         self.upd(_msg(ME, "and then?", mid=11))
         self.assertEqual([h["content"] for h in self.asked[1][1]], ["what did you find?", "answer 1", "and then?"])
-        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wren"])][-2:], ["answer 1", "answer 2"])
+        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wisp"])][-2:], ["answer 1", "answer 2"])
         self.chat.last -= telegram.IDLE_MINUTES * 60 + 1                 # idle: the API wrote it up — a new one
         self.upd(_msg(ME, "new topic", mid=12))
         self.assertEqual([h["content"] for h in self.asked[2][1]], ["new topic"])
@@ -206,22 +206,22 @@ class TelegramTest(unittest.TestCase):
 
         def settle():
             for _ in range(200):
-                if not (telegram.load().get("pending") or {}).get("wren"):
+                if not (telegram.load().get("pending") or {}).get("wisp"):
                     return
                 time.sleep(0.02)
         with mock.patch.object(telegram.Chat, "handle", handle):
             stop, call = service([_msg(ME, "are you there?", mid=7)])
             with mock.patch.object(telegram, "call", call):
-                telegram.poll("wren", TOK["wren"], stop)
+                telegram.poll("wisp", TOK["wisp"], stop)
                 for _ in range(200):
                     if first:
                         break
                     time.sleep(0.02)
-            self.assertEqual(telegram.load()["offsets"]["wren"], 8)        # taken: Telegram will not send it again
+            self.assertEqual(telegram.load()["offsets"]["wisp"], 8)        # taken: Telegram will not send it again
             for _ in range(2):                                            # the restarted service, then another one
                 stop, call = service([])
                 with mock.patch.object(telegram, "call", call):
-                    telegram.poll("wren", TOK["wren"], stop)
+                    telegram.poll("wisp", TOK["wisp"], stop)
                     settle()
         self.assertEqual([h[1][-1]["content"] for h in self.asked], ["are you there?"])   # answered, and only once
         self.assertEqual(telegram.load().get("pending") or {}, {})
@@ -277,12 +277,12 @@ class TelegramTest(unittest.TestCase):
             return [_msg(ME, "and skip Friday", mid=31)]
 
         def pending():
-            return sorted((telegram.load().get("pending") or {}).get("wren") or {})
+            return sorted((telegram.load().get("pending") or {}).get("wisp") or {})
         with mock.patch.object(telegram, "ask_api", ask), mock.patch.object(telegram, "interject_api", interject), \
                 mock.patch.object(telegram, "send", send):
             stop, call = service([[_msg(ME, "check my calendar", mid=30)], b_once_a_is_replying])
             with mock.patch.object(telegram, "call", call):
-                telegram.poll("wren", TOK["wren"], stop)
+                telegram.poll("wisp", TOK["wisp"], stop)
                 for _ in range(200):                             # until the service would stop
                     if (heard and getattr(send, "once", False)) or (not heard and len(asks) == 2):
                         break
@@ -290,7 +290,7 @@ class TelegramTest(unittest.TestCase):
             at_restart = pending()
             stop, call = service([])
             with mock.patch.object(telegram, "call", call):
-                telegram.poll("wren", TOK["wren"], stop)
+                telegram.poll("wisp", TOK["wisp"], stop)
                 for _ in range(200):
                     if not pending():
                         break
@@ -304,13 +304,13 @@ class TelegramTest(unittest.TestCase):
         replay carries A's update id, by which the API answers it from what it already answered (no second run)."""
         asks, at_restart = self.restart_while(heard=True)
         self.assertEqual(at_restart, ["30"])                     # B was heard: done; A was not answered yet
-        self.assertEqual(asks, [("check my calendar", "telegram-wren-30"), ("check my calendar", "telegram-wren-30")])
+        self.assertEqual(asks, [("check my calendar", "telegram-wisp-30"), ("check my calendar", "telegram-wisp-30")])
 
     def test_a_restart_before_a_late_interjection_is_answered_answers_it(self):
         """Too late for A's reply, B lived only in memory until its own reply: a restart then lost it."""
         asks, at_restart = self.restart_while(heard=False)
         self.assertEqual(at_restart, ["31"])                     # A was answered; B was not yet
-        self.assertEqual([rid for _, rid in asks], ["telegram-wren-30", "telegram-wren-31", "telegram-wren-31"])
+        self.assertEqual([rid for _, rid in asks], ["telegram-wisp-30", "telegram-wisp-31", "telegram-wisp-31"])
         self.assertEqual(asks[-1][0], "and skip Friday")
 
     def services(self, first: list, ask, send=None, interject=None, until=lambda: True):
@@ -332,7 +332,7 @@ class TelegramTest(unittest.TestCase):
             return stop, call
 
         def pending():
-            return sorted((telegram.load().get("pending") or {}).get("wren") or {})
+            return sorted((telegram.load().get("pending") or {}).get("wisp") or {})
         patches = [mock.patch.object(telegram, "ask_api", ask)]
         if send:
             patches.append(mock.patch.object(telegram, "send", send))
@@ -343,7 +343,7 @@ class TelegramTest(unittest.TestCase):
         try:
             stop, call = service(list(first))
             with mock.patch.object(telegram, "call", call):
-                telegram.poll("wren", TOK["wren"], stop)
+                telegram.poll("wisp", TOK["wisp"], stop)
                 for _ in range(200):
                     if until():
                         break
@@ -351,7 +351,7 @@ class TelegramTest(unittest.TestCase):
             at_restart = pending()
             stop, call = service([])
             with mock.patch.object(telegram, "call", call):
-                telegram.poll("wren", TOK["wren"], stop)
+                telegram.poll("wisp", TOK["wisp"], stop)
                 for _ in range(200):
                     if not pending():
                         break
@@ -384,8 +384,8 @@ class TelegramTest(unittest.TestCase):
             at_restart = self.services([[_msg(ME, "check my calendar", mid=30)]], ask, send=send,
                                        until=lambda: len(failed) >= 3)
         self.assertEqual(at_restart, ["30"], "an answer never delivered was marked done")
-        self.assertEqual(asks, ["telegram-wren-30", "telegram-wren-30"])
-        self.assertIn("answer A", [p["text"] for _, p in self.api.sent(TOK["wren"])])
+        self.assertEqual(asks, ["telegram-wisp-30", "telegram-wisp-30"])
+        self.assertIn("answer A", [p["text"] for _, p in self.api.sent(TOK["wisp"])])
 
     def test_a_chat_telegram_refuses_for_good_is_logged_and_done(self):
         self.pair()
@@ -443,7 +443,7 @@ class TelegramTest(unittest.TestCase):
             at_restart = self.services([[_msg(ME, "check my calendar", mid=30)], b_once_a_is_replying], ask,
                                        interject=interject, until=stop_first)
         self.assertEqual(at_restart, ["30", "31"])
-        self.assertEqual(asks[1:], [("check my calendar", "telegram-wren-30")], "B ran again after the restart")
+        self.assertEqual(asks[1:], [("check my calendar", "telegram-wisp-30")], "B ran again after the restart")
 
     def failing_send(self, fail_times: int, during=None):
         """telegram.send failing (503) the first `fail_times` times it sends an answer; `during()` runs at the first."""
@@ -554,7 +554,7 @@ class TelegramTest(unittest.TestCase):
         at_restart = self.services([[_msg(ME, "check my calendar", mid=30)], b_and_c], ask, interject=interject,
                                    until=lambda: len(asks) >= 2)
         self.assertEqual(at_restart, ["31", "32"])
-        self.assertEqual(asks[2], ("and skip Friday\n\nand Monday", "telegram-wren-31"), "the replay lost C")
+        self.assertEqual(asks[2], ("and skip Friday\n\nand Monday", "telegram-wisp-31"), "the replay lost C")
 
     def test_an_update_whose_handler_keeps_failing_is_quarantined_after_three_starts(self):
         """Codex on de2191f: a handler that kept failing was retried at every start, forever."""
@@ -577,11 +577,11 @@ class TelegramTest(unittest.TestCase):
                         return []
                     return batches.pop(0)
                 with mock.patch.object(telegram, "call", call):
-                    telegram.poll("wren", TOK["wren"], stop)
+                    telegram.poll("wisp", TOK["wisp"], stop)
                     time.sleep(0.3)
         self.assertEqual(tries, [77, 77, 77], "retried at every start")
         self.assertEqual(telegram.load().get("pending") or {}, {})
-        self.assertIn("77", (telegram.load().get("quarantined") or {}).get("wren") or {})
+        self.assertIn("77", (telegram.load().get("quarantined") or {}).get("wisp") or {})
         self.assertTrue(any("FAILED" in l and "77" in l and "quarantine" in l for l in logged), logged)
 
     def test_api_failure_is_said_not_swallowed(self):
@@ -593,7 +593,7 @@ class TelegramTest(unittest.TestCase):
 
     # the operator, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
     # message, it should be injected immediately into it." Before, it waited on the chat's lock for the whole first
-    # reply and got its own reply after it; the running reply never saw it (docs/plans/PLAN-interject.md).
+    # reply and got its own reply after it; the running reply never saw it.
     def _slow_reply(self, heard):
         """The first reply runs until released and says it heard `heard` of the messages sent meanwhile."""
         self.release, self.interjected = threading.Event(), []
@@ -632,7 +632,7 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(len(self.asked), 1)                          # one reply covered both: none answered twice
         self.assertEqual([h["content"] for h in self.chat.history],
                          ["check my calendar", "and skip Friday", "answer 1"])
-        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wren"])][-1:], ["answer 1"])
+        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wisp"])][-1:], ["answer 1"])
         self.assertIsNone(self.chat.inflight)
 
     def test_a_message_the_reply_did_not_hear_is_answered_straight_after(self):
@@ -644,7 +644,7 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(len(self.asked), 2)
         self.assertEqual([h["content"] for h in self.asked[1][1]],
                          ["check my calendar", "answer 1", "and skip Friday\n\nand Monday"])
-        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wren"])][-2:], ["answer 1", "answer 2"])
+        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wisp"])][-2:], ["answer 1", "answer 2"])
         self.assertIsNone(self.chat.inflight)
 
     def test_new_during_a_reply_does_not_pull_the_conversation_from_under_it(self):
@@ -660,25 +660,25 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(telegram.forward_new(), 0)                  # first run: from now on, no backlog
         inbox = self.sup / "operator-inbox"
         inbox.mkdir()
-        for who, kind, text, alert in (("wren", "question", "Notify once or every time?", "telegram"),
-                                       ("kant", "note", "no bot", "telegram"),
-                                       ("wren", "note", "routed to the web UI", "web")):
+        for who, kind, text, alert in (("wisp", "question", "Notify once or every time?", "telegram"),
+                                       ("kiln", "note", "no bot", "telegram"),
+                                       ("wisp", "note", "routed to the web UI", "web")):
             path = inbox / f"20991231-235959-0000{len(text):02d}-from-{who}.md"
             path.write_text(f"From: {who}\nKind: {kind}\n\n{text}\n")
             messages.record(self.sup, path, who, "operator", kind, datetime(2099, 12, 31, 23, 59, 59), text,
                             alert=(alert, "test"))
-        # kant has no bot: skipped, not stuck; wren's note was routed to the web (channel.py): not sent here
+        # kiln has no bot: skipped, not stuck; wisp's note was routed to the web (channel.py): not sent here
         self.assertEqual(telegram.forward_new(), 1)
-        self.assertNotIn("routed to the web UI", [p["text"] for _, p in self.api.sent(TOK["wren"])])
-        (tok, p), = self.api.sent(TOK["wren"])[-1:]
+        self.assertNotIn("routed to the web UI", [p["text"] for _, p in self.api.sent(TOK["wisp"])])
+        (tok, p), = self.api.sent(TOK["wisp"])[-1:]
         self.assertEqual(p["chat_id"], 42)
-        self.assertEqual(p["text"], "❓ <b>Question</b>\n\nNotify once or every time?")   # its own bot: no "from wren"
+        self.assertEqual(p["text"], "❓ <b>Question</b>\n\nNotify once or every time?")   # its own bot: no "from wisp"
         self.assertEqual(telegram.forward_new(), 0)                  # sent once
         mid = self.api.next_id
         shown = "❓ Question\n\nNotify once or every time?"     # Telegram quotes the rendered text
         self.upd(_msg(ME, "Once.", mid=30, reply_to={"message_id": mid, "text": shown}))
         self.assertTrue(self.asked[-1][1][-1]["content"].startswith("> ❓ Question"))
-        left = sorted(p.read_text() for p in inbox.glob("*-from-wren.md"))
+        left = sorted(p.read_text() for p in inbox.glob("*-from-wisp.md"))
         self.assertEqual(len(left), 1)                               # the question, answered, is archived
         self.assertIn("routed to the web UI", left[0])                # the note stays
 
@@ -687,15 +687,15 @@ class TelegramTest(unittest.TestCase):
         telegram.forward_new()
         inbox = self.sup / "operator-inbox"
         inbox.mkdir()
-        path = inbox / "20991231-235959-000001-from-wren.md"
+        path = inbox / "20991231-235959-000001-from-wisp.md"
         path.write_text("x")
-        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "later",
+        messages.record(self.sup, path, "wisp", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "later",
                         alert=("telegram", "test"))
         self.api.fail.add("sendMessage")
         self.assertEqual(telegram.forward_new(), 0)
         self.api.fail.clear()
         self.assertEqual(telegram.forward_new(), 1)
-        self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], "later")   # a note is just its text, no "📝 Note from wren" header
+        self.assertEqual(self.api.sent(TOK["wisp"])[-1][1]["text"], "later")   # a note is just its text, no "📝 Note from wisp" header
 
     def test_a_message_logged_after_a_later_stamped_one_is_still_forwarded(self):
         """Codex review 2026-10-20: forward_new skipped every row stamped before the last one it sent — but a message is
@@ -706,11 +706,11 @@ class TelegramTest(unittest.TestCase):
         inbox.mkdir()
         for k, (at, text) in enumerate(((datetime(2099, 12, 31, 23, 59, 59), "stamped second, logged first"),
                                         (datetime(2099, 12, 31, 23, 59, 58), "stamped first, logged second"))):
-            path = inbox / f"2099123{k}-from-wren.md"
+            path = inbox / f"2099123{k}-from-wisp.md"
             path.write_text("x")
-            messages.record(self.sup, path, "wren", "operator", "note", at, text, alert=("telegram", "test"))
+            messages.record(self.sup, path, "wisp", "operator", "note", at, text, alert=("telegram", "test"))
             self.assertEqual(telegram.forward_new(), 1)
-            self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], text)
+            self.assertEqual(self.api.sent(TOK["wisp"])[-1][1]["text"], text)
 
     def test_the_older_timestamp_cursor_resumes_where_it_was(self):
         """A state saved before the log offsets (sent_cursor "ts|file") resumes at the first row logged after it."""
@@ -718,21 +718,21 @@ class TelegramTest(unittest.TestCase):
         inbox = self.sup / "operator-inbox"
         inbox.mkdir()
         for k, text in enumerate(("sent before", "not yet sent")):
-            path = inbox / f"2099123{k}-from-wren.md"
+            path = inbox / f"2099123{k}-from-wisp.md"
             path.write_text("x")
-            messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, k), text,
+            messages.record(self.sup, path, "wisp", "operator", "note", datetime(2099, 12, 31, 23, 59, k), text,
                             alert=("telegram", "test"))
         telegram.update(lambda s: (s.pop("sent_offset", None),
-                                   s.__setitem__("sent_cursor", "2099-12-31T23:59:00|20991230-from-wren.md")))
+                                   s.__setitem__("sent_cursor", "2099-12-31T23:59:00|20991230-from-wisp.md")))
         self.assertEqual(telegram.forward_new(), 1)
-        self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], "not yet sent")
+        self.assertEqual(self.api.sent(TOK["wisp"])[-1][1]["text"], "not yet sent")
         self.assertNotIn("sent_cursor", telegram.load())
 
     def test_commands(self):
         self.pair()
-        with mock.patch("supervisor.autonomy.start_wake", return_value="started a cycle for wren"):
+        with mock.patch("supervisor.autonomy.start_wake", return_value="started a cycle for wisp"):
             self.upd(_msg(ME, "/wake", mid=40))
-        self.assertEqual(self.api.sent()[-1][1]["text"], "started a cycle for wren")
+        self.assertEqual(self.api.sent()[-1][1]["text"], "started a cycle for wisp")
         with mock.patch("supervisor.dashboard.instance_state", return_value={
                 "state": "idle", "since": "", "doing": "", "goal": "", "next_wake": "21:30", "calls_today": 3,
                 "usd_today": 0.12}):
@@ -743,25 +743,25 @@ class TelegramTest(unittest.TestCase):
     def test_the_token_never_reaches_an_error_or_log(self):
         with mock.patch.object(telegram, "API_BASE", "http://127.0.0.1:9"):   # nothing listens there
             with self.assertRaises(telegram.TelegramError) as ctx:
-                telegram.call(TOK["wren"], "getMe", http_timeout=2)
-        self.assertNotIn("wren-secret", str(ctx.exception))
+                telegram.call(TOK["wisp"], "getMe", http_timeout=2)
+        self.assertNotIn("wisp-secret", str(ctx.exception))
         with self.assertRaises(telegram.TelegramError) as ctx:
             telegram.call("999:bad", "getMe")
         self.assertNotIn("999:bad", str(ctx.exception))
 
     def test_long_answers_are_split(self):
-        ids = telegram.send(TOK["wren"], 42, "x" * (telegram.MAX_TEXT * 2 + 10))
+        ids = telegram.send(TOK["wisp"], 42, "x" * (telegram.MAX_TEXT * 2 + 10))
         self.assertEqual(len(ids), 3)
         self.assertTrue(all(len(p["text"]) <= telegram.MAX_TEXT for _, p in self.api.sent()))
 
     def test_markdown_arrives_formatted_and_a_refused_part_as_plain_text(self):
         """the operator, 2026-10-13: "It currently is raw markdown"."""
-        telegram.send(TOK["wren"], 42, "**Done**: `a < b` — see [PR](https://x.org/p?a=1&b=2)")
+        telegram.send(TOK["wisp"], 42, "**Done**: `a < b` — see [PR](https://x.org/p?a=1&b=2)")
         (_, p), = self.api.sent()
         self.assertEqual(p["parse_mode"], "HTML")
         self.assertEqual(p["text"], '<b>Done</b>: <code>a &lt; b</code> — see <a href="https://x.org/p?a=1&amp;b=2">PR</a>')
         self.api.reject_html = True
-        telegram.send(TOK["wren"], 42, "**odd** text")
+        telegram.send(TOK["wisp"], 42, "**odd** text")
         last = self.api.sent()[-1][1]
         self.assertNotIn("parse_mode", last)                     # sent again, plain: never lost
         self.assertEqual(last["text"], "**odd** text")
@@ -771,19 +771,19 @@ class TelegramTest(unittest.TestCase):
         saved = {}
         with mock.patch("supervisor.api._set_secret", lambda k, v: saved.update({k: v})), \
                 mock.patch("sys.stdin", io.StringIO("999:bad\n")), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
-            self.assertEqual(telegram.command("token", "wren"), 1)
+            self.assertEqual(telegram.command("token", "wisp"), 1)
         self.assertEqual(saved, {})
         self.assertIn("not saved", out.getvalue())
         with mock.patch("supervisor.api._set_secret", lambda k, v: saved.update({k: v})), \
-                mock.patch("sys.stdin", io.StringIO(TOK["wren"] + "\n")), mock.patch("sys.stdout", new_callable=io.StringIO):
-            self.assertEqual(telegram.command("token", "wren"), 0)
-        self.assertEqual(saved, {"TELEGRAM_TOKEN_WREN": TOK["wren"]})
+                mock.patch("sys.stdin", io.StringIO(TOK["wisp"] + "\n")), mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(telegram.command("token", "wisp"), 0)
+        self.assertEqual(saved, {"TELEGRAM_TOKEN_WISP": TOK["wisp"]})
 
 
 class ReplyIdentityTest(unittest.TestCase):
     def test_every_forwarded_part_names_its_message(self):
         state = {"sent_offset": 0}
-        row = {"from": "wren", "to": "operator", "alert": "telegram", "file": "stable.md", "text": "Keep?"}
+        row = {"from": "wisp", "to": "operator", "alert": "telegram", "file": "stable.md", "text": "Keep?"}
         with mock.patch.object(telegram, "load", return_value=state), \
              mock.patch.object(telegram, "paired_id", return_value=42), \
              mock.patch.object(telegram, "update", side_effect=lambda f: f(state)), \
@@ -791,17 +791,17 @@ class ReplyIdentityTest(unittest.TestCase):
              mock.patch.object(telegram, "send", return_value=[101, 102]), \
              mock.patch.object(pushes, "digest", return_value=0):
             self.assertEqual(telegram.forward_new(TOK), 1)
-        self.assertEqual(state["replies"], {"wren:101": "stable.md", "wren:102": "stable.md"})
+        self.assertEqual(state["replies"], {"wisp:101": "stable.md", "wisp:102": "stable.md"})
 
     def test_reply_to_forwarded_message_records_identity_without_network(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(core, "SUP_DIR", Path(tmp)):
-            row = {"file": "stable.md", "from": "wren", "to": "operator", "text": "Keep?",
+            row = {"file": "stable.md", "from": "wisp", "to": "operator", "text": "Keep?",
                    "ts": datetime.now().isoformat()}
             (Path(tmp) / "messages.jsonl").write_text(json.dumps(row) + "\n")
-            with mock.patch.object(telegram, "load", return_value={"replies": {"wren:101": "stable.md"}}), \
+            with mock.patch.object(telegram, "load", return_value={"replies": {"wisp:101": "stable.md"}}), \
                  mock.patch.object(telegram, "answer_question"), \
                  mock.patch.object(telegram.Chat, "_converse", return_value=True):
-                chat = telegram.Chat("wren", TOK["wren"])
+                chat = telegram.Chat("wisp", TOK["wisp"])
                 chat.handle(_msg(ME, "Yes", mid=102, reply_to={"message_id": 101, "text": "Keep?"})["message"])
             self.assertEqual(reply_links.records()[0]["in_reply_to"], "stable.md")
 
@@ -838,31 +838,31 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
     def test_send_message_names_the_bot_only_when_it_works(self):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
-        b.name, b.disabled, b.grants_allowed = "wren", set(), False
+        b.name, b.disabled, b.grants_allowed = "wisp", set(), False
         b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         from supervisor import channel
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
-                mock.patch.object(channel, "route", return_value=("telegram", "the operator last wrote to wren there")):
+                mock.patch.object(channel, "route", return_value=("telegram", "the operator last wrote to wisp there")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertIn("Your own Telegram bot is @SampleAssistantBot", spec["function"]["description"])
-        self.assertIn("routes device notifications to them on Telegram (the operator last wrote to wren there)",
+        self.assertIn("routes device notifications to them on Telegram (the operator last wrote to wisp there)",
                       spec["function"]["description"])
         self.assertNotIn("@SampleAssistantBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
         with mock.patch.object(telegram, "reachable", return_value=""), \
-                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
+                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wisp")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertNotIn("Telegram bot", spec["function"]["description"])
-        self.assertIn("routes device notifications to them in the web UI (the operator set it for wren)", spec["function"]["description"])
+        self.assertIn("routes device notifications to them in the web UI (the operator set it for wisp)", spec["function"]["description"])
 
     def test_a_bot_does_not_make_the_instance_think_its_messages_go_to_telegram(self):
         """The bug (2026-10-20): with a bot set up, send_message said every message to the operator reached them "at
         once on their phone, on Telegram" — even for an instance the operator wants to hear from in the web UI."""
         from supervisor import broker, channel
         b = broker.Broker.__new__(broker.Broker)
-        b.name, b.disabled, b.grants_allowed = "wren", set(), False
+        b.name, b.disabled, b.grants_allowed = "wisp", set(), False
         b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
-                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
+                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wisp")):
             text = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")["function"]["description"]
         self.assertNotIn("at once on their phone, on Telegram", text)
         self.assertIn("in the web UI", text)
@@ -870,17 +870,17 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
     def test_reachable_needs_token_bot_pairing_and_the_service(self):
         sup = Path(tempfile.mkdtemp(prefix="shaft-tg-"))
         self.addCleanup(shutil.rmtree, sup, True)
-        env = {telegram.token_key("wren"): TOK["wren"]}
+        env = {telegram.token_key("wisp"): TOK["wisp"]}
         with mock.patch.object(telegram, "SUP_DIR", sup), mock.patch.object(telegram, "secrets_env", lambda: env), \
                 mock.patch("supervisor.version.service", return_value={"pid": 1}) as svc:
-            self.assertEqual(telegram.reachable("wren"), "")              # no bot name, not paired
-            telegram.remember_bot("wren", "SampleAssistantBot")
-            self.assertEqual(telegram.reachable("wren"), "")              # not paired
+            self.assertEqual(telegram.reachable("wisp"), "")              # no bot name, not paired
+            telegram.remember_bot("wisp", "SampleAssistantBot")
+            self.assertEqual(telegram.reachable("wisp"), "")              # not paired
             telegram.update(lambda s: s.__setitem__("paired", {"user_id": 42}))
-            self.assertEqual(telegram.reachable("wren"), "@SampleAssistantBot")
+            self.assertEqual(telegram.reachable("wisp"), "@SampleAssistantBot")
             self.assertEqual(telegram.reachable("shaft"), "")             # no token for shaft here
             svc.return_value = None
-            self.assertEqual(telegram.reachable("wren"), "")              # service down
+            self.assertEqual(telegram.reachable("wisp"), "")              # service down
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 """The instance's mind store: a private git repository per instance, never the project's.
 
 An instance's mind — self/, memory/, notes/, inbox/ (core.MIND_PATHS) — is what it remembers and writes for
-itself, and may hold what it read (mail, docs/plans/PLAN-mail.md). It is not committed to the project repository, which can
+itself, and may hold what it read (mail). It is not committed to the project repository, which can
 be pushed to GitHub. The supervisor still keeps the mind as it was at every cycle (trial replays, drift, the
 instance's own `history` tool) in `.supervisor/minds/<name>.git`: a bare repository whose work tree is the
 instance's folder and whose index holds only the mind paths. It has no remote, ever (every commit checks), and a
-pre-push hook that always fails. skills/ stays in the project's git (it is a gene: docs/plans/PLAN-mind-out-of-git.md D2).
+pre-push hook that always fails. skills/ stays in the project's git (it is a gene).
 
 Every git call on a mind store goes through `git` here: hooks, fsmonitor, the user's and the system's git
 configuration and the instance's own .gitattributes are all off, and paths are added with `-f` so the instance's
@@ -13,7 +13,7 @@ own .gitignore files cannot hide part of its mind. Nothing in the instance's fol
 
 The past is backfilled from the instance's branch (backfill): every branch commit that changed the mind gets a
 twin here with the same mind tree, author, committer, dates and message, so a replay of any past cycle reads its
-mind from one place. Plan, decisions and the cutover: docs/plans/PLAN-mind-out-of-git.md.
+mind from one place.
 """
 from __future__ import annotations
 
@@ -30,11 +30,11 @@ from .core import MIND_PATHS
 BRANCH = "refs/heads/mind"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 BACKFILL_MARK = "shaft-backfill"          # inside the store: "<last branch commit imported> <its twin here>"
-PRE_PUSH = ("#!/bin/sh\n# SHAFT: an instance's mind store is never pushed anywhere (docs/plans/PLAN-mind-out-of-git.md).\n"
+PRE_PUSH = ("#!/bin/sh\n# SHAFT: an instance's mind store is never pushed anywhere.\n"
             "echo \"refused: this is an instance's private mind store; it is never pushed\" >&2\nexit 1\n")
 PROJECT_PRE_PUSH = """#!/bin/sh
 # SHAFT: instance/* branches are never pushed — their history still holds the minds of the past
-# (docs/plans/PLAN-mind-out-of-git.md D4). Installed by `shaft mind guard`. Deleting one on a remote sends nothing
+#. Installed by `shaft mind guard`. Deleting one on a remote sends nothing
 # (its local sha is all zeros) and is the cleanup D4 asks for, so it is let through.
 while read -r local_ref local_sha remote_ref remote_sha; do
   case "$local_sha" in *[!0]*) ;; *) continue ;; esac
@@ -372,7 +372,7 @@ def cutover(name: str, n: int = 20) -> int:
             core.git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                         "commit", "-q", "-m", f"{name}: the mind moves to the supervisor's mind store\n\n"
                         f"self/, memory/, notes/ and inbox/ stay on disk and are versioned in "
-                        f".supervisor/minds/{name}.git, never in this repository (docs/plans/PLAN-mind-out-of-git.md).")
+                        f".supervisor/minds/{name}.git, never in this repository.")
             commit(name, f"{name}: cutover {datetime.now():%Y-%m-%d %H:%M}\n\nThe mind as it was on disk when it "
                          "left the project's git.", root)
             core.log(f"{name}: mind cut over to {store(name)} ({len(results)}/{len(results)} cycles identical)")

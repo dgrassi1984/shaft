@@ -1,4 +1,4 @@
-"""Surprise measurement (docs/plans/PLAN-surprise M0): the rule flags, recurrence and the per-model baseline.
+"""Surprise measurement: the rule flags, recurrence and the per-model baseline.
 
 The result strings are sanitized from real episodes. The template's in-the-moment rule (M1) must
 flag these same strings the same way: surprise_fixtures.py is the contract between the two copies.

@@ -100,7 +100,7 @@ class OpenConversationTest(unittest.TestCase):
             "a": {"talk_id": "api-recent", "model": "shaft", "last": now - 60, "written": False},
             "b": {"talk_id": "api-long-quiet", "model": "shaft", "last": now - 10 * 3600, "written": False},
             "c": {"talk_id": "api-done", "model": "shaft", "last": now, "written": True},
-            "d": {"talk_id": "api-wren", "model": "wren", "last": now, "written": False}}))
+            "d": {"talk_id": "api-wisp", "model": "wisp", "last": now, "written": False}}))
         with mock.patch("supervisor.version.service", return_value={"pid": 1}):
             self.assertEqual(runner.open_conversations("shaft"), {"api-recent": "api", "api-long-quiet": "api"})
         with mock.patch("supervisor.version.service", return_value=None):   # API not running: nobody to close them
@@ -166,7 +166,7 @@ class SpeakerTest(unittest.TestCase):
         journal = (root / "memory" / "journal.md").read_text()
         self.assertIn("Conversation with Claude Code (for the operator)", journal)
         self.assertNotIn("Conversation with the operator", journal)
-        self.assertEqual(journal.count("## "), 1)   # MiMo opened its text with its own dated heading (wren, 10-13)
+        self.assertEqual(journal.count("## "), 1)   # MiMo opened its text with its own dated heading (wisp, 10-13)
         sent = json.dumps(fake.requests[-1]["messages"])
         self.assertIn("do not attribute what Claude Code said or did to the operator", sent)
         self.assertIn("what you learned about Claude Code", sent)

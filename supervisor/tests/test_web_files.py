@@ -13,14 +13,14 @@ class FilesTest(WebTest):
         super().setUp()
         self.root = self.sup / "files-fixture"
         self.root.mkdir()
-        for patch in (mock.patch.object(web, "_names", return_value=["wren"]),
+        for patch in (mock.patch.object(web, "_names", return_value=["wisp"]),
                       mock.patch.object(core, "instance_root", return_value=self.root)):
             patch.start()
             self.addCleanup(patch.stop)
         self.cookie = self.paired()
 
     def get(self, tab="files", path="", extra=""):
-        return self.req(f"/i/wren/{tab}?path={quote(path, safe='')}{extra}", cookie=self.cookie)
+        return self.req(f"/i/wisp/{tab}?path={quote(path, safe='')}{extra}", cookie=self.cookie)
 
     def test_issue_57_download_bytes_and_utf8_filename(self):
         """Reverting #57 loses raw nested downloads, UTF-8 names and successful empty files."""
@@ -86,7 +86,7 @@ class FilesTest(WebTest):
         self.assertIn(">3 B<", text)                  # shorthand, not "3 bytes"
         self.assertIn(">—<", text)                    # a folder has no size of its own to show, not its inode's 4096
         self.assertRegex(text, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
-        self.assertIn('/i/wren/files?path=notes%2F&page=2', text)
+        self.assertIn('/i/wisp/files?path=notes%2F&page=2', text)
         self.assertIn('>Up</a>', text)
         second = self.get(path="notes/", extra="&page=2").body.decode()
         self.assertEqual(second.count('>Download</a>'), 2)
@@ -105,7 +105,7 @@ class FilesTest(WebTest):
         """Reverting #57 loses authorized access; both new routes must still reject unpaired visitors."""
         (self.root / "ok.txt").write_text("ok")
         for route in ("files", "file?path=ok.txt"):
-            url = f"/i/wren/{route}"
+            url = f"/i/wisp/{route}"
             self.assertEqual(self.req(url, cookie=self.cookie).status, 200)
             self.assertEqual(self.req(url).status, 403)
             self.assertEqual(self.req(url, cookie=self.cookie, login=None).status, 403)
@@ -113,14 +113,14 @@ class FilesTest(WebTest):
     def test_issue_57_document_download_link(self):
         """Reverting #57 removes Download from current and archived open documents."""
         for archived in (False, True):
-            text = str(web_views.docs_panel("wren", [], "folder/a b.md", "saved", "abc", set(), archived=archived))
-            self.assertIn('href="/i/wren/file?path=notes%2Fdocs%2Ffolder%2Fa%20b.md"', text)
+            text = str(web_views.docs_panel("wisp", [], "folder/a b.md", "saved", "abc", set(), archived=archived))
+            self.assertIn('href="/i/wisp/file?path=notes%2Fdocs%2Ffolder%2Fa%20b.md"', text)
             self.assertIn('title="Download" aria-label="Download"><svg', text)
 
 
     # -- added after browser verification --
     def test_issue_57_a_file_over_the_cap_is_refused_in_words_not_read(self):
-        """Downloads are read whole into the web service; wren holds 100 MB+ binaries (Playwright's node). Without the
+        """Downloads are read whole into the web service; wisp holds 100 MB+ binaries (Playwright's node). Without the
         cap one click could exhaust the service's memory."""
         (self.root / "big.bin").write_bytes(b"x" * 2048)
         with mock.patch.object(web, "FILE_MAX", 1024):

@@ -1,4 +1,4 @@
-"""The web UI's read-only pages (docs/plans/PLAN-webui.md M1): the TUI's tabs 2–6, 8, 9, 0 and the messages browser, plus an
+"""The web UI's read-only pages: the TUI's tabs 2–6, 8, 9, 0 and the messages browser, plus an
 instance's journal and activity. Each takes the data the TUI's tab takes — the same `panel` readers, called by web.py
 — and shows the same fields, so the two UIs cannot disagree. Escaping, control characters and the page frame are
 web_pages'; nothing here writes anything.
@@ -1122,7 +1122,7 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
                   '<input type="hidden" name="pid" value="{pid}">'
                   '<button type="submit" class="small">Send to {who}</button></form>',
                   n=q(name), pid=p["pid"], who=name, a=post_attrs("Documents")),
-                # for its next cycle: to its inbox, not answered now (PLAN-background-messages.md)
+                # for its next cycle: to its inbox, not answered now
                 h('<form class="act" data-post="/docs/{n}/comment/send" data-after="comment-saved"{a}>'
                   '<input type="hidden" name="pid" value="{pid}"><input type="hidden" name="when" value="cycle">'
                   '<button type="submit" class="small" title="Not answered now: {who} reads it in its next cycle">'
@@ -1501,7 +1501,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def _user_item(name: str, it: dict) -> Html:
     tag = h(' <span class="dim">· during its reply</span>') if it["interjected"] else Html("")
-    if it.get("via") == "voice":                 # transcribed speech (PLAN-voice §5.1): it may hold recognition errors
+    if it.get("via") == "voice":                 # transcribed speech: it may hold recognition errors
         tag = join([tag, h(' <span class="dim" title="spoken, transcribed on the device">· spoken</span>')])
     if it["edits"]:
         tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
@@ -1671,7 +1671,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         # Queue after reply only while a reply runs (web.js syncQueue keeps it in step with the feed's live turn).
         '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle"{qh}>'
         'Queue after reply<span class="dim">sent when the current reply ends</span></button>'
-        # Next cycle: not answered now — to its inbox, read in its next cycle (PLAN-background-messages.md)
+        # Next cycle: not answered now — to its inbox, read in its next cycle
         '<button type="submit" data-background="1" title="Not answered now: to {n}&#x27;s inbox, {later}">'
         'Next cycle<span class="dim">not answered now — {later}</span></button></div></details></div></div>'
         '<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat'

@@ -32,12 +32,12 @@ class SleepDueTest(unittest.TestCase):
 
 class WakeTest(unittest.TestCase):
     def test_each_instance_on_its_own_interval(self):
-        st = {"wakes": {"shaft": "2026-10-13T10:00:00", "wren": "2026-10-13T10:00:00"}}
-        every = {"shaft": H2, "wren": timedelta(minutes=30)}
-        start, skip = decide_wakes(D("2026-10-13T10:45:00"), st, ["shaft", "wren"], every.get, lambda n: "")
-        self.assertEqual((list(start), skip), (["wren"], {}))
-        start, _ = decide_wakes(D("2026-10-13T12:00:00"), st, ["shaft", "wren"], every.get, lambda n: "")
-        self.assertEqual(list(start), ["shaft", "wren"])
+        st = {"wakes": {"shaft": "2026-10-13T10:00:00", "wisp": "2026-10-13T10:00:00"}}
+        every = {"shaft": H2, "wisp": timedelta(minutes=30)}
+        start, skip = decide_wakes(D("2026-10-13T10:45:00"), st, ["shaft", "wisp"], every.get, lambda n: "")
+        self.assertEqual((list(start), skip), (["wisp"], {}))
+        start, _ = decide_wakes(D("2026-10-13T12:00:00"), st, ["shaft", "wisp"], every.get, lambda n: "")
+        self.assertEqual(list(start), ["shaft", "wisp"])
 
     def test_a_wake_while_already_awake_is_skipped_not_queued(self):
         st = {"wakes": {"shaft": "2026-10-13T10:00:00"}}
@@ -89,14 +89,14 @@ class WakeTest(unittest.TestCase):
     def test_the_instance_is_told_its_own_interval(self):
         with mock.patch.object(autonomy, "wake_interval", return_value=timedelta(minutes=45)), \
              mock.patch.object(Path, "exists", return_value=True):
-            text = autonomy.describe_schedule("wren")
+            text = autonomy.describe_schedule("wisp")
         self.assertIn("every 45 minutes", text)
         self.assertIn("is skipped", text)
 
 
 
 class GateWarmTest(unittest.TestCase):
-    """PLAN-gate-cache M2: the scheduler starts `shaft gate warm` when main moves to a new commit, checks again hourly
+    """The scheduler starts `shaft gate warm` when main moves to a new commit, checks again hourly
     (the child exits at once while the record is fresh), and never retries a commit whose warm-up failed."""
 
     def setUp(self):

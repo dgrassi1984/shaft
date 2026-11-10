@@ -59,13 +59,13 @@ restart the web service after changing them.
 ## Every supervisor knob
 
 `SHAFT_ACTION_INSTANCES` enables the conservative [operator action classes](safety.md#operator-action-classes)
-for a comma-separated list of instance names. Its default is `thelos`; an empty value selects nobody.
+for a comma-separated list of instance names. Empty, the default, selects nobody.
 It does not add grants. Other instances retain their current behavior. The selection is read at process start;
 class demotion and restoration are read from supervisor-owned state on each dispatch.
 Calendar proposals retain `SHAFT_CALENDAR_WRITES_PER_DAY` and `SHAFT_CALENDAR_PROPOSAL_HOURS`.
 
 `SHAFT_GATE_TIMEOUT_S` defaults to 300 seconds. The supervisor's tests run in `SHAFT_GATE_WORKERS` processes, and
-`shaft gate budget` keeps each part within half of that limit (docs/plans/PLAN-gate-5min.md).
+`shaft gate budget` keeps each part within half of that limit.
 
 This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
 Defaults below are source defaults, not values read from this checkout's private state.
@@ -73,7 +73,7 @@ Defaults below are source defaults, not values read from this checkout's private
 
 | Name | Default | Meaning | Declaration |
 |---|---|---|---|
-| `SHAFT_ACTION_INSTANCES` | `thelos` | Instances using conservative operator action classes; comma-separated, empty disables | [actions.py](../supervisor/actions.py) |
+| `SHAFT_ACTION_INSTANCES` | empty | Instances using conservative operator action classes; comma-separated, empty disables | [actions.py](../supervisor/actions.py) |
 | `SHAFT_APNS_KEY_ID` | empty | APNs signing key id; empty disables native push | [apns.py](../supervisor/apns.py) |
 | `SHAFT_APNS_TEAM_ID` | empty | Apple developer team id for native push | [apns.py](../supervisor/apns.py) |
 | `SHAFT_APNS_TOPIC` | empty | Native app bundle id used as the APNs topic | [apns.py](../supervisor/apns.py) |
@@ -328,7 +328,7 @@ Other replies count even without usage. `WAKE_INTERVAL_MINUTES=0` disables perio
 values use the instance's own interval unless the operator sets a wake floor, and a wake at that interval runs only with
 something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wake-sources-and-background-work)). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
-(0 = never; [docs/plans/PLAN-surprise.md](../docs/plans/PLAN-surprise.md)).
+(0 = never).
 A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and
 inbox; surprises about the instance's own tools, plugins, jobs, ledgers, gate or code are never drawn, and with none
 outward the prompt says so and the goal is free (review I7 in [architecture](architecture.md)).
@@ -339,7 +339,7 @@ Off leaves the live instructions unchanged.
 
 ### Experimental mechanisms
 
-These settings switch the mechanisms of [docs/plans/PLAN-consciousness.md](../docs/plans/PLAN-consciousness.md), each on by default:
+These settings switch the self-knowledge mechanisms, each on by default:
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
 `WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),

@@ -1,4 +1,4 @@
-"""Surprise measurement (docs/plans/PLAN-surprise.md): which tool results contradicted what an instance must have
+"""Surprise measurement: which tool results contradicted what an instance must have
 expected, whether the same kind comes back, and the baseline the surprise loop is judged against.
 
 Read from the instances' episodes and usage logs only: the supervisor never imports agent code, and an
@@ -149,7 +149,7 @@ def cycles(name: str, root: Path | None = None) -> dict[str, dict]:
     A turn is logged when it ends and the episode when the cycle ends, so a turn belongs to the first live
     episode ending at or after it; turns of a cycle still running (or one that crashed before writing its
     episode) belong to none and are left out. The model is the one most of its turns used — instances have
-    switched models (shaft: Haiku, then Bonsai; wren: Bonsai, Haiku, MiMo), so every cost and success number
+    switched models (shaft: Haiku, then Bonsai; wisp: Bonsai, Haiku, MiMo), so every cost and success number
     is per model."""
     live = {ep["ts"]: ep for ep in episodes(name, root) if ep.get("kind") == "live"}
     ends = sorted(live)
@@ -696,7 +696,7 @@ def m5_report(name, since: datetime, until: datetime | None = None,
     cals = metrics.calibration(js)   # its versions by name: it also carries the excluded count, an int
     for version in ("v1", "v2", "v3", "v3_first"):
         cal = cals[version]
-        if version in ("v1", "v2") or cal["n"]:   # v3 only once the declare step has run (PLAN-calibration-feedback)
+        if version in ("v1", "v2") or cal["n"]:   # v3 only once the declare step has run
             lines.append(f'Calibration {version}: n={cal["n"]}, Brier {_number(cal["brier"])}; '
                          f'confidence {_pct(cal["mean_confidence"])}, outcome {_pct(cal["mean_outcome"])}. Reported, not gated.')
     if cals["excluded"]:

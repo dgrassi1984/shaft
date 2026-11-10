@@ -1,4 +1,4 @@
-"""`shaft web`: the web UI for managing the instances (docs/plans/PLAN-webui.md) — the control panel of `shaft top` in a
+"""`shaft web`: the web UI for managing the instances — the control panel of `shaft top` in a
 browser, for the tailnet only. Stdlib only, run by the system Python like every launchd service (core.PYTHON).
 
   shaft web on       install the service (com.shaft.web) and expose it with `tailscale serve` (never Funnel)
@@ -350,7 +350,7 @@ def _secured(r: Response) -> Response:
 def respond(req: Request) -> Response:
     r = _secured(_route(req))
     if req.method == "GET" and r.status == 200 and req.path.startswith("/fragment/"):
-        # A refresh that changed nothing costs a header, not the whole feed again (docs/plans/PLAN-pwa P3: ~100 a minute)
+        # A refresh that changed nothing costs a header, not the whole feed again (~100 a minute)
         tag = web_pages.etag(r.body)
         r.headers["ETag"] = tag
         if req.headers.get("if-none-match") == tag:
@@ -386,7 +386,7 @@ def _route(req: Request) -> Response:
         return _launch(req.path.removeprefix("/launch/"), req.query.get("v") == web_pages.STATIC_VERSION)
     if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
         return _static("icon-180.png")
-    # The app's shell (docs/plans/PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.
+    # The app's shell: fetched by the browser before it is paired, with nothing private in it.
     if req.path == "/manifest.webmanifest":
         return Response(200, web_pages.manifest().encode(), {"Content-Type": "application/manifest+json",
                                                              "Cache-Control": "no-cache"})
@@ -614,11 +614,11 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         try:
             fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
-            # Next cycle (background=1): to the inbox, read in its next cycle (PLAN-background-messages.md)
+            # Next cycle (background=1): to the inbox, read in its next cycle
             send = (web_chat.background if fields.get("background") == "1" else
                     web_chat.queue if fields.get("queue") == "1" else web_chat.send)
             extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
-            if send is not web_chat.background:          # spoken (PLAN-voice C1): a turn of the chat, not the inbox
+            if send is not web_chat.background:          # spoken: a turn of the chat, not the inbox
                 extra["voice"] = fields.get("voice") == "1"
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
@@ -720,7 +720,7 @@ def _get(req: Request, csrf: str) -> Response | None:
     from . import dashboard, panel, web_views as v
     path, qs = req.path, req.query
     names = _names()
-    if path == "/":                                  # chat first (docs/plans/PLAN-webui-chat §1): the instance last talked to
+    if path == "/":                                  # chat first: the instance last talked to
         last = _last_chat(req)
         to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
         return Response(302, b"", {"Location": to})
@@ -1020,7 +1020,7 @@ def _delete_doc(name: str, login: str, form: dict) -> Response:
 
 
 def comment_action(name: str, login: str, action: str | None, form: dict) -> tuple[str, str]:
-    """A document comment (docs/plans/PLAN-comments.md): a new thread or a reply (`action` None), or edit, delete, send
+    """A document comment: a new thread or a reply (`action` None), or edit, delete, send
     or state. (what to say, the thread's id); doc_comments.Refused or web_chat.Refused, in words."""
     from . import doc_comments, web_chat
     pid, text = form.get("pid", ""), form.get("text", "")
@@ -1035,7 +1035,7 @@ def comment_action(name: str, login: str, action: str | None, form: dict) -> tup
             tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
                                            form.get("sha", ""), text)
         said = f"kept, not sent: {name} sees it in notes/comments/ and answers it when you ask"
-        if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle (PLAN-background-messages.md)
+        if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle
             try:
                 said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
                         else web_chat.send_comment(name, login, pid)[1])
@@ -1080,7 +1080,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
                 archived: bool = False, att: str = "", folder: str = "", sort: str = ""):
     """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
     writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
-    comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag.
+    comment threads, which are in the fragment so a comment alone changes its ETag.
     att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview).
     folder (?dir=, a subfolder of notes/docs/): the list shows that folder; asking for one is asking for the list."""
     from . import doc_comments, docs, web_views as v
@@ -1393,7 +1393,7 @@ def _attachment_root(path: Path) -> tuple[Path, Path]:
 def attachment_path(a: dict) -> Path | None:
     """Where a message's attachment is, if it is a file inside an instance's folder or the operator's inbox
     attachments, reached without following any link below that folder; None otherwise. Only paths a message names
-    are ever served (docs/plans/PLAN-webui.md: a file an instance wrote never runs as a page)."""
+    are ever served (a file an instance wrote never runs as a page)."""
     from .core import INSTANCES
     rel = Path(str(a.get("path", "")))
     if ".." in rel.parts:

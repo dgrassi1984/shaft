@@ -1,5 +1,5 @@
 """The service guard from a terminal. Live, 2026-10-27: `shaft autonomy on` typed while the scheduler ran restarted it
-and killed shaft's sleep and wren's live cycle — the guard lived only in the two panels, and even there `autonomy on`
+and killed shaft's sleep and wisp's live cycle — the guard lived only in the two panels, and even there `autonomy on`
 was never held back although on a running scheduler it is a restart."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unittest import mock
 from supervisor import __main__ as cli
 from supervisor import actions, api, autonomy, panel
 
-RUNS = ["shaft (sleep since 11:31)", "wren (live since 12:08)"]
+RUNS = ["shaft (sleep since 11:31)", "wisp (live since 12:08)"]
 
 
 class CliGuardTest(unittest.TestCase):
@@ -35,7 +35,7 @@ class CliGuardTest(unittest.TestCase):
         code, err = self.run_cli("autonomy", "on")
         self.assertEqual(code, 1)
         self.assertEqual(self.calls, [])                       # the bug: it restarted and killed both runs
-        self.assertIn("would kill them: shaft (sleep since 11:31), wren (live since 12:08)", err)
+        self.assertIn("would kill them: shaft (sleep since 11:31), wisp (live since 12:08)", err)
         self.assertIn("--force", err)
         self.assertEqual(self.logged, [])
 

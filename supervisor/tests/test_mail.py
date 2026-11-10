@@ -1,4 +1,4 @@
-"""The operator's Gmail, one label at a time (docs/plans/PLAN-mail.md): an instance he granted a label to reads only the threads
+"""The operator's Gmail, one label at a time: an instance he granted a label to reads only the threads
 under it — whatever its search text says, whichever thread id it tries — never a credential, never in an exam, and a
 revoke holds from its next call. Against a fake Gmail behind google.urlopen that is deliberately leaky: with any search
 text it returns every thread, labelIds or not, so the supervisor's own per-thread check is what is tested."""
@@ -150,8 +150,8 @@ def git(cwd, *args):
 
 
 class MailCase(unittest.TestCase):
-    """A project with instance wren (a registered worktree with the template's .gitignore), the account work logged
-    in, and wren granted work/AssistantAccess."""
+    """A project with instance wisp (a registered worktree with the template's .gitignore), the account work logged
+    in, and wisp granted work/AssistantAccess."""
 
     grant = True
 
@@ -164,20 +164,20 @@ class MailCase(unittest.TestCase):
             self.addCleanup(p.stop)
         git(self.project, "init", "-q")
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
-        self.root = self.project / "instances" / "wren"
-        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/wren", str(self.root))
+        self.root = self.project / "instances" / "wisp"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/wisp", str(self.root))
         (self.root / "shaft").mkdir()
         shutil.copy(TEMPLATE / ".gitignore", self.root / ".gitignore")
         (self.root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         for d in ("self", "memory", "notes"):
             (self.root / d).mkdir()
-        (self.root / "self" / "self.md").write_text("I am wren\n")
+        (self.root / "self" / "self.md").write_text("I am wisp\n")
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "wren: born")
+        git(self.root, "commit", "-q", "-m", "wisp: born")
         google._save_account("work", {"address": "operator@work.example", "client": "work", "refresh_token": "rt",
                                         "scope": google.GMAIL})
         if self.grant:
-            core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"}])
+            core.set_mail_grants("wisp", [{"account": "work", "label": "AssistantAccess"}])
         self.secrets = {"GMAIL_WORK_CLIENT_ID": "cid", "GMAIL_WORK_CLIENT_SECRET": "csecret"}
 
     def fake_gmail(self) -> FakeGmail:
@@ -185,7 +185,7 @@ class MailCase(unittest.TestCase):
         return self.gmail
 
     def broker(self, **kw) -> broker.Broker:
-        return broker.Broker("wren", self.project, self.secrets, self.sup / "broker.log", **kw)
+        return broker.Broker("wisp", self.project, self.secrets, self.sup / "broker.log", **kw)
 
     def ok(self, b, tool, args) -> str:
         r = b.call(tool, args)
@@ -251,7 +251,7 @@ class EnforcementTest(MailCase):
     def test_revoke_mid_run(self):
         b = self.broker()
         self.ok(b, "mail_read", {"id": "work/aaa111"})
-        core.set_mail_grants("wren", [])
+        core.set_mail_grants("wisp", [])
         before = len(self.gmail.requests)
         self.assertEqual(self.refused(b, "mail_read", {"id": "work/aaa111"}), "no mail granted to you")
         self.assertEqual(len(self.gmail.requests), before)
@@ -277,7 +277,7 @@ class EnforcementTest(MailCase):
         self.assertEqual(len(self.gmail.requests), before)   # nothing asked of Gmail for an alias not granted
 
     def test_search_accepts_the_grant_as_shown(self):
-        # Regression (M5, 2026-10-15): wren passed account="work/AssistantAccess", the grant as its tool description shows
+        # Regression (M5, 2026-10-15): wisp passed account="work/AssistantAccess", the grant as its tool description shows
         # it, and was told "'work/AssistantAccess' is not granted to you; yours: work/AssistantAccess".
         b = self.broker()
         self.assertIn("work/aaa111", self.ok(b, "mail_search", {"account": "work/AssistantAccess"}))
@@ -285,7 +285,7 @@ class EnforcementTest(MailCase):
         self.assertIn("not granted to you", self.refused(b, "mail_search", {"account": "work/Other"}))   # not widened
 
     def test_grant_on_another_label_does_not_open_this_one(self):
-        core.set_mail_grants("wren", [{"account": "work", "label": "Other"}])
+        core.set_mail_grants("wisp", [{"account": "work", "label": "Other"}])
         self.assertIn("not visible to you", self.refused(self.broker(), "mail_read", {"id": "work/aaa111"}))
 
     def test_mail_calls_capped_per_run(self):
@@ -358,15 +358,15 @@ class OfferedTest(MailCase):
         self.assertEqual(b.mail_env(), "")
 
     def test_granted_tools_name_the_grant(self):
-        core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"}])
+        core.set_mail_grants("wisp", [{"account": "work", "label": "AssistantAccess"}])
         specs = {s["function"]["name"]: s for s in self.broker().tool_specs()}
         self.assertTrue(set(broker.MAIL_TOOLS) <= set(specs))
         self.assertIn("work/AssistantAccess", specs["mail_search"]["function"]["description"])
 
     def test_battery_broker_has_no_mail(self):
         from supervisor import battery
-        core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"}])
-        exam = self.broker(root=self.project / "control", usage_name="wren-battery", network=False)   # as battery._one
+        core.set_mail_grants("wisp", [{"account": "work", "label": "AssistantAccess"}])
+        exam = self.broker(root=self.project / "control", usage_name="wisp-battery", network=False)   # as battery._one
         exam.disabled |= battery.EXAM_OFF
         self.assertTrue(set(broker.MAIL_TOOLS) <= battery.EXAM_OFF)
         self.assertFalse(set(broker.MAIL_TOOLS) & {s["function"]["name"] for s in exam.tool_specs()})
@@ -378,14 +378,14 @@ class OfferedTest(MailCase):
 
     def test_agent_command_names_the_grant(self):
         from supervisor import runner
-        core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"}, {"account": "work", "label": "Other"}])
+        core.set_mail_grants("wisp", [{"account": "work", "label": "AssistantAccess"}, {"account": "work", "label": "Other"}])
         b = self.broker()
         b.start()
         self.addCleanup(b.stop)
         _, env = runner.agent_command(self.root, b, ["live"], self.project / "p.sb", [8780], {})
         self.assertEqual(env["SHAFT_MAIL"], "work/AssistantAccess,work/Other")
         self.assertFalse([k for k in env if k.startswith("GMAIL")] + [v for v in env.values() if "rt" == v or "csecret" in v])
-        core.set_mail_grants("wren", [])
+        core.set_mail_grants("wisp", [])
         _, env = runner.agent_command(self.root, b, ["live"], self.project / "p.sb", [8780], {})
         self.assertNotIn("SHAFT_MAIL", env)
 
@@ -393,8 +393,8 @@ class OfferedTest(MailCase):
 class ReplayTest(MailCase):
     def replay(self, cache, lock, as_of):
         state = Path(tempfile.mkdtemp(dir=self.project, prefix="copy-"))
-        return broker.ReplayBroker("wren", self.project, self.secrets, self.sup / "b.log", state_root=state,
-                                   start_commit="0", as_of=as_of, cache=cache, cache_lock=lock, billed="wren@trial:t",
+        return broker.ReplayBroker("wisp", self.project, self.secrets, self.sup / "b.log", state_root=state,
+                                   start_commit="0", as_of=as_of, cache=cache, cache_lock=lock, billed="wisp@trial:t",
                                    tools_log=self.sup / "t.log")
 
     def test_replay_shared_by_pair_and_bounded_by_as_of(self):
@@ -422,7 +422,7 @@ class ReplayTest(MailCase):
         cache, lock = {}, threading.Lock()
         first, second = self.replay(cache, lock, T0.replace(hour=12)), self.replay(cache, lock, T0.replace(hour=12))
         self.ok(first, "mail_read", {"id": "work/aaa111"})
-        core.set_mail_grants("wren", [{"account": "work", "label": "Other"}])
+        core.set_mail_grants("wisp", [{"account": "work", "label": "Other"}])
         self.assertIn("not visible to you", self.refused(second, "mail_read", {"id": "work/aaa111"}))
 
     def pair(self):
@@ -518,17 +518,17 @@ class AttachmentTest(MailCase):
         self.assertNotIn("mail", git(self.root, "status", "--porcelain", "--untracked-files=all"))
         (self.root / "notes" / "from-mail.md").write_text("a note\n")
         from supervisor import mind
-        mind.init("wren", self.project)
-        self.assertTrue(core.commit_state("wren", "live", [], root=self.root, project=self.project))
+        mind.init("wisp", self.project)
+        self.assertTrue(core.commit_state("wisp", "live", [], root=self.root, project=self.project))
         self.assertEqual(git(self.root, "ls-files", "--", "notes", "mail"), "")      # neither on the branch
-        stored = mind.git("wren", "ls-tree", "-r", "--name-only", "mind", project=self.project).stdout.split()
+        stored = mind.git("wisp", "ls-tree", "-r", "--name-only", "mind", project=self.project).stdout.split()
         self.assertIn("notes/from-mail.md", stored)                                  # the note: in its mind store
         self.assertFalse([p for p in stored if p.startswith("mail/")])               # the download: nowhere
 
     def test_refused_where_mail_is_not_ignored_yet(self):
         (self.root / ".gitignore").write_text("logs/\n.tmp/\n")   # an instance the template update has not reached
         err = self.refused(self.broker(), "mail_attachment", {"id": "work/aaa111", "message": 1, "attachment": 1})
-        self.assertIn("shaft update wren", err)
+        self.assertIn("shaft update wisp", err)
         self.assertFalse((self.root / "mail").exists())
 
     def test_attachment_caps(self):
@@ -596,7 +596,7 @@ class ConfigTest(MailCase):
         google._save_account("home", {"address": "operator@example.com", "client": "personal", "refresh_token": "rt2",
                                        "scope": google.GMAIL})
         self.secrets.update({"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "psecret"})
-        core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"},
+        core.set_mail_grants("wisp", [{"account": "work", "label": "AssistantAccess"},
                                       {"account": "home", "label": "AssistantAccess"}])
         out = self.ok(self.broker(), "mail_search", {})
         self.assertIn("work/AssistantAccess", out)
@@ -675,37 +675,37 @@ class CliTest(MailCase):
         from supervisor import __main__ as cli
         out = io.StringIO()
         with mock.patch.object(cli, "instance_root", lambda n: self.root), \
-                mock.patch.object(cli, "instance_names", lambda: ["wren"]), \
+                mock.patch.object(cli, "instance_names", lambda: ["wisp"]), \
                 mock.patch.object(core, "secrets_env", lambda: self.secrets), \
                 mock.patch.object(cli, "log", lambda m: None), redirect_stdout(out), redirect_stderr(out):
             code = cli.main(["mail", *argv])
         return code, out.getvalue()
 
     def test_grant_show_revoke_round_trip(self):
-        code, out = self.cli("wren", "grant", "work", "AssistantAccess")
+        code, out = self.cli("wisp", "grant", "work", "AssistantAccess")
         self.assertEqual(code, 0, out)
-        self.assertIn("wren may read: work/AssistantAccess", out)
-        self.assertEqual(core.mail_grants("wren"), [{"account": "work", "label": "AssistantAccess"}])
+        self.assertIn("wisp may read: work/AssistantAccess", out)
+        self.assertEqual(core.mail_grants("wisp"), [{"account": "work", "label": "AssistantAccess"}])
         self.assertIn("work (operator@work.example", self.cli()[1])
-        self.assertEqual(self.cli("wren", "revoke", "work", "AssistantAccess")[0], 0)
-        self.assertEqual(core.mail_grants("wren"), [])
-        self.cli("wren", "grant", "work", "AssistantAccess")
-        self.assertEqual(self.cli("wren", "off")[0], 0)
-        self.assertEqual(core.mail_grants("wren"), [])
+        self.assertEqual(self.cli("wisp", "revoke", "work", "AssistantAccess")[0], 0)
+        self.assertEqual(core.mail_grants("wisp"), [])
+        self.cli("wisp", "grant", "work", "AssistantAccess")
+        self.assertEqual(self.cli("wisp", "off")[0], 0)
+        self.assertEqual(core.mail_grants("wisp"), [])
 
     def test_unknown_alias_or_label_refused(self):
-        code, out = self.cli("wren", "grant", "home", "AssistantAccess")
+        code, out = self.cli("wisp", "grant", "home", "AssistantAccess")
         self.assertEqual(code, 2)
         self.assertIn("no Google account 'home'", out)
-        code, out = self.cli("wren", "grant", "work", "NoSuchLabel")
+        code, out = self.cli("wisp", "grant", "work", "NoSuchLabel")
         self.assertEqual(code, 2)
         self.assertIn("mail account 'work' has no label 'NoSuchLabel'", out)
-        self.assertEqual(core.mail_grants("wren"), [])
-        self.assertEqual(self.cli("wren", "frobnicate", "work", "x")[0], 2)
+        self.assertEqual(core.mail_grants("wisp"), [])
+        self.assertEqual(self.cli("wisp", "frobnicate", "work", "x")[0], 2)
 
     def test_the_grant_lives_only_in_the_supervisors_tools_file(self):
-        self.cli("wren", "grant", "work", "AssistantAccess")
-        self.assertEqual(json.loads((self.sup / "tools" / "wren.json").read_text())["mail"],
+        self.cli("wisp", "grant", "work", "AssistantAccess")
+        self.assertEqual(json.loads((self.sup / "tools" / "wisp.json").read_text())["mail"],
                          [{"account": "work", "label": "AssistantAccess"}])
         for p in self.root.rglob("*"):
             if p.is_file() and ".git" not in p.parts:

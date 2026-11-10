@@ -572,8 +572,8 @@ class GrantsTest(unittest.TestCase):
         self.project = Path(tmp.name).resolve()
         git(self.project, 'init', '-q')
         git(self.project, 'commit', '-q', '--allow-empty', '-m', 'main')
-        self.root = self.project / 'instances' / 'wren'
-        git(self.project, 'worktree', 'add', '-q', '--orphan', '-b', 'instance/wren', str(self.root))
+        self.root = self.project / 'instances' / 'wisp'
+        git(self.project, 'worktree', 'add', '-q', '--orphan', '-b', 'instance/wisp', str(self.root))
         (self.root / 'shaft').mkdir()
         self.requests = []
         for patch in (mock.patch.object(core, 'SUP_DIR', self.project / '.supervisor'),
@@ -603,7 +603,7 @@ class GrantsTest(unittest.TestCase):
         return code, out.getvalue()
 
     def grant(self, *args):
-        code, out = self.cli('wren', 'grant', 'work', *args)
+        code, out = self.cli('wisp', 'grant', 'work', *args)
         self.assertEqual(code, 0, out)
         return out
 
@@ -617,45 +617,45 @@ class GrantsTest(unittest.TestCase):
         before = {'off': ['web'], 'shared': '/tmp/shared', 'mail': [{'account': 'work', 'label': 'Access'}],
                   'calendar': [{'account': 'work', 'calendar': 'primary', 'name': 'Work', 'write': True}],
                   'wake_floor': 30, 'cloud_cap': 2}
-        self.core._update_tool_settings('wren', **before)
+        self.core._update_tool_settings('wisp', **before)
         own = [{'account': 'work', 'reach': 'own'}]
-        self.assertEqual(self.core.set_gdrive_grants('wren', own), own)
-        self.assertEqual(self.core.gdrive_grants('wren'), own)
-        self.assertEqual(self.core.set_gdrive_grants('wren', own + [{'account': 'work', 'reach': 'all'}]),
+        self.assertEqual(self.core.set_gdrive_grants('wisp', own), own)
+        self.assertEqual(self.core.gdrive_grants('wisp'), own)
+        self.assertEqual(self.core.set_gdrive_grants('wisp', own + [{'account': 'work', 'reach': 'all'}]),
                          [{'account': 'work', 'reach': 'all'}])
-        self.core.set_gdrive_grants('wren', [])
-        self.assertEqual(self.core._tool_settings('wren'), before)
+        self.core.set_gdrive_grants('wisp', [])
+        self.assertEqual(self.core._tool_settings('wisp'), before)
 
     def test_malformed_grants_dropped(self):
-        self.core._update_tool_settings('wren', gdrive=[None, {}, {'account': 1, 'reach': 'own'},
+        self.core._update_tool_settings('wisp', gdrive=[None, {}, {'account': 1, 'reach': 'own'},
             {'account': 'work', 'reach': 'other'}, {'account': '../escape', 'reach': 'all'},
             {'account': 'work', 'reach': 'own', 'extra': True}])
-        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [{'account': 'work', 'reach': 'own'}])
 
     def test_grant_refuses_unknown_alias(self):
-        code, out = self.cli('wren', 'grant', 'missing')
+        code, out = self.cli('wisp', 'grant', 'missing')
         self.assertEqual(code, 2)
         self.assertIn('shaft google login missing', out)
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_grant_refuses_login_without_scope(self):
         google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': google.GMAIL})
-        code, out = self.cli('wren', 'grant', 'work')
+        code, out = self.cli('wisp', 'grant', 'work')
         self.assertEqual(code, 2)
         self.assertIn('shaft google login work', out)
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_grant_checks_about_before_saving(self):
         with mock.patch.object(google, 'urlopen', side_effect=error(403, 'access denied')):
-            code, out = self.cli('wren', 'grant', 'work')
+            code, out = self.cli('wisp', 'grant', 'work')
         self.assertEqual(code, 2)
         self.assertIn('shaft google login work', out)
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_grant_defaults_to_reach_own(self):
         self.grant('--all')
         self.grant()
-        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [{'account': 'work', 'reach': 'own'}])
         self.assertEqual(self.requests, [google.DRIVE_ABOUT, google.DRIVE_ABOUT])
         self.assertIn('work (own)', self.cli()[1])
 
@@ -669,15 +669,15 @@ class GrantsTest(unittest.TestCase):
     def test_narrowing_reports_copy_removal_failure(self):
         self.grant('--all')
         with mock.patch.object(self.core, 'remove_gdrive_copies', side_effect=OSError('cannot remove')):
-            code, out = self.cli('wren', 'grant', 'work')
+            code, out = self.cli('wisp', 'grant', 'work')
         self.assertEqual(code, 1)
         self.assertIn('copies left', out)
-        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'own'}])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [{'account': 'work', 'reach': 'own'}])
 
     def test_all_prints_the_risk_line(self):
         out = self.grant('--all')
         self.assertIn('everything the account can reach, including files strangers share with it, reaches the instance', out)
-        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'work', 'reach': 'all'}])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [{'account': 'work', 'reach': 'all'}])
         self.assertIn('work (all)', out)
         self.assertNotIn('strangers', self.grant())
 
@@ -685,18 +685,18 @@ class GrantsTest(unittest.TestCase):
         self.grant()
         self.copies('work')
         self.copies('home')
-        self.assertEqual(self.cli('wren', 'off')[0], 0)
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.cli('wisp', 'off')[0], 0)
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
         self.assertFalse((self.root / 'gdrive').exists())
-        self.assertEqual(self.cli('wren', 'off')[0], 0)
+        self.assertEqual(self.cli('wisp', 'off')[0], 0)
 
     def test_revoke_removes_only_that_alias(self):
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'all'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'all'}])
         work, home = self.copies('work'), self.copies('home')
-        self.assertEqual(self.cli('wren', 'revoke', 'work')[0], 0)
+        self.assertEqual(self.cli('wisp', 'revoke', 'work')[0], 0)
         self.assertFalse(work.exists())
         self.assertEqual((home / 'copy.txt').read_text(), 'copy')
-        self.assertEqual(self.core.gdrive_grants('wren'), [{'account': 'home', 'reach': 'all'}])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [{'account': 'home', 'reach': 'all'}])
 
     def test_symlinked_gdrive_refused_target_untouched(self):
         target = self.project / 'target'
@@ -704,25 +704,25 @@ class GrantsTest(unittest.TestCase):
         (target / 'keep').write_text('safe')
         (self.root / 'gdrive').symlink_to(target, target_is_directory=True)
         self.grant()
-        code, out = self.cli('wren', 'off')
+        code, out = self.cli('wisp', 'off')
         self.assertNotEqual(code, 0)
         self.assertIn(str(self.root / 'gdrive'), out)
         self.assertEqual((target / 'keep').read_text(), 'safe')
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_removal_failure_keeps_revoke_saved(self):
         self.grant()
         path = self.copies('work')
         with mock.patch('supervisor.core.shutil.rmtree', side_effect=PermissionError('denied')):
-            code, out = self.cli('wren', 'revoke', 'work')
+            code, out = self.cli('wisp', 'revoke', 'work')
         self.assertNotEqual(code, 0)
         self.assertIn(str(path), out)
         self.assertTrue(path.exists())
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_remove_rejects_path_alias(self):
         with self.assertRaises(ValueError):
-            self.core.remove_gdrive_copies('wren', '../escape')
+            self.core.remove_gdrive_copies('wisp', '../escape')
 
     def test_web_passes_all_only_when_ticked(self):
         from supervisor import web_config, web_actions
@@ -730,12 +730,12 @@ class GrantsTest(unittest.TestCase):
         self.assertEqual(web_actions.CHECK['gdrive'], 'Access')
         with mock.patch.object(web_config, '_ran', return_value=(200, 'ok')) as ran:
             for field, expected in (({}, []), ({'all': '1'}, ['--all']), ({'all': '0'}, [])):
-                web_config.run('gdrive', 'wren', {'op': 'grant', 'alias': 'work', **field})
-                ran.assert_called_with(['gdrive', 'wren', 'grant', 'work', *expected])
-            web_config.run('gdrive', 'wren', {'op': 'revoke', 'alias': 'work'})
-            ran.assert_called_with(['gdrive', 'wren', 'revoke', 'work'])
-            web_config.run('gdrive', 'wren', {'op': 'off'})
-            ran.assert_called_with(['gdrive', 'wren', 'off'])
+                web_config.run('gdrive', 'wisp', {'op': 'grant', 'alias': 'work', **field})
+                ran.assert_called_with(['gdrive', 'wisp', 'grant', 'work', *expected])
+            web_config.run('gdrive', 'wisp', {'op': 'revoke', 'alias': 'work'})
+            ran.assert_called_with(['gdrive', 'wisp', 'revoke', 'work'])
+            web_config.run('gdrive', 'wisp', {'op': 'off'})
+            ran.assert_called_with(['gdrive', 'wisp', 'off'])
 
     def test_web_form_defaults_to_own_and_shows_reach(self):
         from html.parser import HTMLParser
@@ -750,7 +750,7 @@ class GrantsTest(unittest.TestCase):
                 if tag == 'input':
                     self.inputs.append(dict(attrs))
 
-        page = str(web_config.access_page('wren', dict(ACCESS, gdrive=[{'account': 'work', 'reach': 'all'}]), 'gdrive'))
+        page = str(web_config.access_page('wisp', dict(ACCESS, gdrive=[{'account': 'work', 'reach': 'all'}]), 'gdrive'))
         inputs = Inputs()
         inputs.feed(page)
         checkbox = [a for a in inputs.inputs if a.get('name') == 'all']
@@ -770,16 +770,16 @@ class GrantsTest(unittest.TestCase):
         (self.root / 'gdrive').mkdir()
         (self.root / 'gdrive' / 'work').symlink_to(target, target_is_directory=True)
         self.grant()
-        code, out = self.cli('wren', 'revoke', 'work')
+        code, out = self.cli('wisp', 'revoke', 'work')
         self.assertNotEqual(code, 0)
         self.assertIn(str(self.root / 'gdrive' / 'work'), out)
         self.assertEqual((target / 'keep').read_text(), 'safe')
-        self.assertEqual(self.core.gdrive_grants('wren'), [])
+        self.assertEqual(self.core.gdrive_grants('wisp'), [])
 
     def test_gdrive_lock_excludes_other_processes_and_releases(self):
         import subprocess
         import sys
-        path = self.core.SUP_DIR / 'locks' / 'gdrive-wren.lock'
+        path = self.core.SUP_DIR / 'locks' / 'gdrive-wisp.lock'
         probe = '''import fcntl, sys
 with open(sys.argv[1], 'a') as stream:
     try:
@@ -787,7 +787,7 @@ with open(sys.argv[1], 'a') as stream:
     except BlockingIOError:
         sys.exit(3)
 '''
-        with self.core.gdrive_lock('wren'):
+        with self.core.gdrive_lock('wisp'):
             self.assertEqual(subprocess.run([sys.executable, '-c', probe, str(path)], check=False).returncode, 3)
         self.assertEqual(subprocess.run([sys.executable, '-c', probe, str(path)], check=False).returncode, 0)
 
@@ -795,13 +795,13 @@ with open(sys.argv[1], 'a') as stream:
         shared = self.project / 'shared'
         shared.mkdir()
         kept = [{'account': 'work', 'reach': 'all'}]
-        self.core.set_gdrive_grants('wren', kept)
-        for change in (lambda: self.core.set_mail_grants('wren', [{'account': 'work', 'label': 'L'}]),
-                       lambda: self.core.set_calendar_grants('wren', [{'account': 'work', 'calendar': 'primary'}]),
-                       lambda: self.core.set_tool('wren', 'decide', False),
-                       lambda: self.core.set_shared_folder('wren', shared)):
+        self.core.set_gdrive_grants('wisp', kept)
+        for change in (lambda: self.core.set_mail_grants('wisp', [{'account': 'work', 'label': 'L'}]),
+                       lambda: self.core.set_calendar_grants('wisp', [{'account': 'work', 'calendar': 'primary'}]),
+                       lambda: self.core.set_tool('wisp', 'decide', False),
+                       lambda: self.core.set_shared_folder('wisp', shared)):
             change()
-            self.assertEqual(self.core.gdrive_grants('wren'), kept)
+            self.assertEqual(self.core.gdrive_grants('wisp'), kept)
 
     def test_google_login_success_names_drive_grant(self):
         from contextlib import redirect_stdout, redirect_stderr
@@ -860,7 +860,7 @@ class BrokerTest(MailCase):
         super().setUp()
         from supervisor import core
         self.core = core
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}])
         google._save_account('work', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
         with (self.root / '.gitignore').open('a') as out:
             out.write('\ngdrive/\n')
@@ -876,9 +876,9 @@ class BrokerTest(MailCase):
         import threading
         from pathlib import Path
         from supervisor import broker
-        return broker.ReplayBroker('wren', self.project, self.secrets, self.sup / 'b.log',
+        return broker.ReplayBroker('wisp', self.project, self.secrets, self.sup / 'b.log',
             state_root=Path(tempfile.mkdtemp(dir=self.project)), start_commit='0', as_of=CUT,
-            cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wren@trial:t',
+            cache={} if cache is None else cache, cache_lock=lock or threading.Lock(), billed='wisp@trial:t',
             tools_log=self.sup / 't.log', max_calls=200)
 
     def test_zero_strings_count_against_drive_cap(self):
@@ -916,7 +916,7 @@ class BrokerTest(MailCase):
     def test_narrow_during_fetch_leaves_no_copy(self):
         import threading
         from supervisor import gdrive
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'all'}])
         started, resume = threading.Event(), threading.Event()
         results = []
         def fetch(*args):
@@ -929,9 +929,9 @@ class BrokerTest(MailCase):
             thread.start()
             try:
                 self.assertTrue(started.wait(5))
-                with self.core.gdrive_lock('wren'):
-                    self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}])
-                    self.core.remove_gdrive_copies('wren', 'work')
+                with self.core.gdrive_lock('wisp'):
+                    self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}])
+                    self.core.remove_gdrive_copies('wisp', 'work')
             finally:
                 resume.set()
                 thread.join(5)
@@ -970,7 +970,7 @@ class BrokerTest(MailCase):
             self.assertFalse((scratch / 'gdrive').exists())
             return True, 'passed'
         with mock.patch.object(trial, '_files', return_value={}), mock.patch.object(trial.gate, 'run_tests', side_effect=check):
-            self.assertEqual(trial.gate_check(self.project, 'wren', {'id': 'test'}), (True, 'passed'))
+            self.assertEqual(trial.gate_check(self.project, 'wisp', {'id': 'test'}), (True, 'passed'))
 
     def test_download_bytes_checked_and_counted_under_lock(self):
         from contextlib import contextmanager
@@ -997,7 +997,7 @@ class BrokerTest(MailCase):
 
     def test_search_cursor_keeps_shortcut_id_without_via_field(self):
         google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
         self.fake.files[SHORT]['shortcutDetails']['targetId'] = DOMAIN
         self.fake.files[SHORT]['modifiedTime'] = '2026-11-06T00:00:00Z'
         self.fake.files[DOMAIN]['modifiedTime'] = '2026-11-06T00:00:00Z'
@@ -1031,13 +1031,13 @@ class BrokerTest(MailCase):
                 self.assertIn("operator's Drive", s['function']['description'])
                 self.assertIn('authors', s['function']['description'])
                 self.assertIn('own Drive', s['function']['description'])
-        self.core.set_gdrive_grants('wren', [])
+        self.core.set_gdrive_grants('wisp', [])
         self.assertFalse(set(broker.DRIVE_TOOLS) & names())
 
     def test_revoke_holds_from_the_next_call(self):
         b = self.broker()
         self.ok(b, 'drive_read', {'id': self.handle})
-        self.core.set_gdrive_grants('wren', [])
+        self.core.set_gdrive_grants('wisp', [])
         for tool in ('drive_search', 'drive_read', 'drive_download'):
             self.assertIn('no Drive granted', self.refused(b, tool, {} if tool == 'drive_search' else {'id': self.handle}))
 
@@ -1101,7 +1101,7 @@ class BrokerTest(MailCase):
 
     def test_download_refused_while_gdrive_not_ignored(self):
         (self.root / '.gitignore').write_text('logs/\n')
-        self.assertIn('shaft update wren', self.refused(self.broker(), 'drive_download', {'id': self.handle}))
+        self.assertIn('shaft update wisp', self.refused(self.broker(), 'drive_download', {'id': self.handle}))
         self.assertFalse((self.root / 'gdrive').exists())
 
     def test_run_bytes_capped(self):
@@ -1130,9 +1130,9 @@ class BrokerTest(MailCase):
             thread.start()
             try:
                 self.assertTrue(started.wait(5), 'fetch never started')
-                with self.core.gdrive_lock('wren'):
-                    self.core.set_gdrive_grants('wren', [])
-                    self.core.remove_gdrive_copies('wren')
+                with self.core.gdrive_lock('wisp'):
+                    self.core.set_gdrive_grants('wisp', [])
+                    self.core.remove_gdrive_copies('wisp')
                 self.assertFalse((self.root / 'gdrive').exists())
             finally:
                 resume.set()
@@ -1150,7 +1150,7 @@ class BrokerTest(MailCase):
             a = self.ok(first, 'drive_read', {'id': self.handle})
             self.assertEqual(a, self.ok(second, 'drive_read', {'id': self.handle}))
             self.assertEqual(read.call_count, 1)
-            self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+            self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'all'}])
             self.ok(second, 'drive_read', {'id': self.handle})
             self.assertEqual(read.call_count, 2)
         self.assertTrue(all('2026-11-06' in k for k in cache))
@@ -1215,11 +1215,11 @@ class BrokerTest(MailCase):
         self.ok(self.broker(), 'drive_download', {'id': self.handle})
         self.assertFalse(any(p.startswith('gdrive/') for p in trial._files_now(self.root)))
         with mock.patch.object(battery, 'SUP_DIR', self.sup):
-            copy = battery.make_exam_copy('wren', self.root)
+            copy = battery.make_exam_copy('wisp', self.root)
         self.assertFalse((copy / 'gdrive').exists())
         with mock.patch.object(self.core, 'instance_root', return_value=self.root):
             for path in ('gdrive/work/' + OWN, 'GDRIVE/work/' + OWN):
-                self.assertEqual(web._instance_files('wren', 'file', {'path': path}, ['wren'], '').status, 403)
+                self.assertEqual(web._instance_files('wisp', 'file', {'path': path}, ['wisp'], '').status, 403)
 
     def test_search_reports_empty_failed_and_incomplete(self):
         self.fake.incomplete = True
@@ -1228,7 +1228,7 @@ class BrokerTest(MailCase):
         self.assertIn('searched work', out)
         self.assertIn('incomplete', out)
         self.assertNotIn(EXTERNAL, out)
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'missing', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}, {'account': 'missing', 'reach': 'own'}])
         self.assertIn('not searched: missing:', self.ok(b, 'drive_search', {}))
         self.fake.files.clear()
         self.assertIn('no files', self.ok(b, 'drive_search', {}))
@@ -1266,7 +1266,7 @@ class BrokerTest(MailCase):
         for args in ({'text': 'new'}, {'folder': self.handle}, {'modified_after': '2026-01-01'},
                      {'account': 'work'}, {'max': 2}):
             self.assertIn('page', self.refused(b, 'drive_search', {'max': 1, 'page': page, **args}))
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'all'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'all'}])
         self.assertIn('page', self.refused(b, 'drive_search', {'max': 1, 'page': page}))
 
     def test_folder_handle_picks_account(self):
@@ -1298,7 +1298,7 @@ class BrokerTest(MailCase):
 
     def test_search_merge_preserves_account_relevance_order(self):
         google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
         self.fake.files = {OWN: self.fake.files[OWN], DOMAIN: self.fake.files[DOMAIN]}
         self.fake.files[DOMAIN]['modifiedTime'] = '2026-11-06T00:00:00Z'
         self.fake.page_size = 1
@@ -1313,7 +1313,7 @@ class BrokerTest(MailCase):
     def test_search_merges_accounts_without_losing_rows(self):
         import re
         google._save_account('home', {'address': 'operator@work.example', 'refresh_token': 'rt', 'scope': READONLY})
-        self.core.set_gdrive_grants('wren', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
+        self.core.set_gdrive_grants('wisp', [{'account': 'work', 'reach': 'own'}, {'account': 'home', 'reach': 'own'}])
         b = self.broker()
         page, handles = '', []
         for _ in range(10):

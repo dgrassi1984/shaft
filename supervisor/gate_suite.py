@@ -1,4 +1,4 @@
-"""The gate's supervisor tests in two parts (docs/plans/PLAN-gate-cache.md), run inside the committed tree as
+"""The gate's supervisor tests in two parts, run inside the committed tree as
 `python -m supervisor.gate_suite instance|shared`:
 
 - instance: the modules that read the instance under test ($SHAFT_UNDER_TEST), run at every gate;
@@ -27,7 +27,7 @@ supervisor's tests are trusted, committed code no instance can edit; the guards 
 test written to slip past them.
 
 A part runs in `--workers N` spawned processes (gate.py passes SHAFT_GATE_WORKERS; default 1), one module per task,
-the biggest files first (docs/plans/PLAN-gate-5min.md). Each worker loads its module with discover's own walk, every
+the biggest files first. Each worker loads its module with discover's own walk, every
 other module a stand-in, so a module that fails to import or has a hook fails as it did in one process; each worker
 installs the fence before importing any test, and has its own SHAFT_SUPERVISOR_DIR. A worker that dies fails the part.
 

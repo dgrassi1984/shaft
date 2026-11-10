@@ -2,7 +2,7 @@
 
 ## Operator action classes
 
-`SHAFT_ACTION_INSTANCES` selects the instances using this model. The code default is `thelos`.
+`SHAFT_ACTION_INSTANCES` selects the instances using this model. It is empty by default.
 Other instances retain their existing broker behavior. Grants still apply on every call.
 The classification table lives in `supervisor/actions.py`.
 
@@ -53,7 +53,7 @@ egress proxy. Its environment is an allow-list (`sandbox.ENV_ALLOW`: `PATH`, `HO
 
 ## Internet
 
-As described in [docs/plans/PLAN-python-env.md](../docs/plans/PLAN-python-env.md), the sandbox cannot filter by address, so the
+The sandbox cannot filter by address, so the
 instance's way out is a proxy the supervisor runs for each run (`supervisor/egress.py`; `HTTPS_PROXY` /
 `HTTP_PROXY` are set, and uv, pip, curl, git and Python's HTTP libraries follow them). It connects only to
 public addresses, resolved and checked by the proxy itself, so arbitrary localhost services, your LAN and the tailnet stay out of
@@ -81,7 +81,6 @@ which interpreter it runs on.
 
 The shared Chromium (`.browsers/`) is read-only and available to `run` and jobs.
 The instance writes its profile under `.browser/`, hidden from coder and trial copies.
-See [docs/plans/PLAN-browser.md](../docs/plans/PLAN-browser.md).
 
 ### Shared folder
 
@@ -93,13 +92,13 @@ refused, and battery exams never get it.
 ### Mail grants
 
 `shaft mail <name> grant <alias> <label>` enables `mail_search`, `mail_read`, and
-`mail_attachment` for a label ([docs/plans/PLAN-mail.md](../docs/plans/PLAN-mail.md)). The credential and the grant stay with
+`mail_attachment` for a label. The credential and the grant stay with
 the supervisor, which enforces the label on every call (see [integrations](integrations.md)).
 
 ### Drive grants
 
 `shaft gdrive <name> grant <alias> [--all]` enables `drive_search`, `drive_read`, and
-`drive_download` ([docs/plans/PLAN-operator-drive.md](../docs/plans/PLAN-operator-drive.md)). The supervisor holds the whole-Drive read credential and checks the grant and reach
+`drive_download`. The supervisor holds the whole-Drive read credential and checks the grant and reach
 on each file. `own` includes owned files, member Shared Drives, and same-domain files only when
 Drive's `about` reports `canCreateDrives=true` for the account. A Workspace that blocks Shared Drive creation
 shows no same-domain files under `own` unless they qualify as owned files or files in a member Shared Drive;
@@ -110,7 +109,7 @@ shows no same-domain files under `own` unless they qualify as owned files or fil
 ### Google Chat grants
 
 `shaft gchat <name> grant <alias>` enables `gchat_search`, `gchat_read`, and `gchat_download`
-([plan](../docs/plans/PLAN-operator-chat.md)). Access covers every conversation on the account, read-only,
+(plan). Access covers every conversation on the account, read-only,
 with no hide list. The supervisor holds the credential and checks the grant on every call. Pages and watch
 messages mark content as written by its senders, not as the operator's instructions. This marking cannot prevent
 prompt injection. Revoke deletes the account's downloaded copies under `gchat/` and reports deletion failures;
@@ -122,13 +121,13 @@ memories remain. Content reaches the instance's model and may reach judges. See
 ### Calendar grants
 
 `shaft calendar <name> grant <alias> <calendar>` enables `calendar_events` and
-`calendar_event` ([docs/plans/PLAN-calendar.md](../docs/plans/PLAN-calendar.md)). Every call
+`calendar_event`. Every call
 names a granted calendar; the credential and the grant stay with the supervisor.
 
 ### Calendar writes
 
 `shaft calendar <name> grant-write <alias> <calendar>` grants writes to one calendar
-([calendar write plan](../docs/plans/PLAN-calendar-write.md)); write implies read, and `revoke-write` keeps read access.
+(calendar write plan); write implies read, and `revoke-write` keeps read access.
 `calendar_create` and `calendar_move` run at once with `sendUpdates=none` when no attendees are supplied and,
 for a move, the event has no attendees other than the operator and no other organiser is identified.
 An incomplete attendee list also requires approval. Changes that would tell someone else, supplied attendees, invitations,
@@ -413,7 +412,7 @@ instance: it is committed on its own ("config.env changed from outside the insta
 
 ## Trials
 
-With the `trial` tool ([docs/plans/PLAN-trials.md](../docs/plans/PLAN-trials.md)), an instance can test a change to its own
+With the `trial` tool, an instance can test a change to its own
 code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past
 autonomous cycles from saved state (its branch at that moment, the inbox it read), and runs each twice, once with
 current code and once with proposed code, in scratch copies under the same sandbox, through a replay broker that
@@ -471,7 +470,7 @@ the supervisor (the broker's `GET /envelope`, not a tool and not counted), shown
 and minutes, after every step. It carries no keys and no host paths. Live and replay envelopes use `calls_used`, `calls_max`, `run_usd`, `cloud`, `consult`,
 `coder`, `trials`, `probation`, `next_sleep`, `next_wake`, and `pushes`, with no replay flag.
 Unavailable fields can be null. Consultations are unavailable in replays. Spend, trial starts and probation counts stop before the replayed cycle's start; the schedule is computed
-from that start. [Closed probation entries cannot be reconstructed](../docs/plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+from that start. Closed probation entries cannot be reconstructed.
 
 ## Your conversation comes first
 

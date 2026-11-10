@@ -1,4 +1,4 @@
-"""PLAN-calendar-write M0–M1, through Broker.call and the same fake Google door as the read tests.
+"""Through Broker.call and the same fake Google door as the read tests.
 No account or instance outside CalendarCase's temporary project is used."""
 import json
 import urllib.parse
@@ -73,13 +73,13 @@ class WriteCase(read.CalendarCase):
                      'end': (now + timedelta(hours=1)).isoformat(), 'timezone': 'Europe/Rome'}
 
     def grant_write(self):
-        core.set_calendar_grants('wren', [{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator', 'write': True}])
+        core.set_calendar_grants('wisp', [{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator', 'write': True}])
 
     def move_args(self, eid='own1', **extra):
         return {k: v for k, v in {**self.args, 'id': self.handle(read.PRIMARY, eid), **extra}.items() if k != 'calendar'}
 
     def rows(self):
-        return [json.loads(l) for l in (self.sup / 'calendar/wren.jsonl').read_text().splitlines()]
+        return [json.loads(l) for l in (self.sup / 'calendar/wisp.jsonl').read_text().splitlines()]
 
     def deny(self, tool='calendar_create', args=None, contains=''):
         before = len(self.cal.writes)
@@ -116,7 +116,7 @@ class WriteTest(WriteCase):
 
     def test_read_grant_and_revoke_mid_run(self):
         b = self.broker()
-        core.set_calendar_grants('wren', [{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator'}])
+        core.set_calendar_grants('wisp', [{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator'}])
         for tool, args in [('calendar_create', self.args), ('calendar_move', self.move_args()),
                            ('calendar_respond', {'id': self.handle(read.PRIMARY, 'external1'), 'response': 'yes'})]:
             self.assertIn('no calendar granted for writing', self.refused(b, tool, args))
@@ -125,7 +125,7 @@ class WriteTest(WriteCase):
         self.grant_write()
         self.assertTrue(set(broker.CALENDAR_WRITE_TOOLS) <= {s['function']['name'] for s in b.tool_specs()})
         self.assertIn('[writable]', b.calendar_env())
-        core.set_calendar_grants('wren', [])
+        core.set_calendar_grants('wisp', [])
         self.deny(contains='no calendar granted')
         self.assertEqual(len(self.rows()), 4)
 
@@ -297,20 +297,20 @@ class WriteCliTest(read.CalendarCase):
         saved = google.account('work')
         saved['scope'] += ' ' + google.CALENDAR_EVENTS
         google._save_account('work', saved)
-        code, out = self.cli('calendar', 'wren', 'grant-write', 'work', 'primary')
+        code, out = self.cli('calendar', 'wisp', 'grant-write', 'work', 'primary')
         self.assertEqual(code, 0, out)
         self.assertIn('[writable]', out)
-        self.assertTrue(core.calendar_grants('wren')[0]['write'])
-        on_disk = json.loads((self.sup / 'tools/wren.json').read_text())
+        self.assertTrue(core.calendar_grants('wisp')[0]['write'])
+        on_disk = json.loads((self.sup / 'tools/wisp.json').read_text())
         self.assertTrue(on_disk['calendar'][0]['write'])
-        core.set_tool('wren', 'decide', False)
-        self.assertTrue(core.calendar_grants('wren')[0]['write'])
+        core.set_tool('wisp', 'decide', False)
+        self.assertTrue(core.calendar_grants('wisp')[0]['write'])
         self.assertIn('[writable]', self.cli('calendar')[1])
-        self.cli('calendar', 'wren', 'grant', 'work', 'primary')
-        self.assertTrue(core.calendar_grants('wren')[0]['write'])
-        self.assertEqual(len(core.calendar_grants('wren')), 1)
-        self.assertEqual(self.cli('calendar', 'wren', 'revoke-write', 'work', 'primary')[0], 0)
-        self.assertNotIn('write', core.calendar_grants('wren')[0])
-        self.cli('calendar', 'wren', 'grant-write', 'work', 'primary')
-        self.assertEqual(self.cli('calendar', 'wren', 'off')[0], 0)
-        self.assertEqual(core.calendar_grants('wren'), [])
+        self.cli('calendar', 'wisp', 'grant', 'work', 'primary')
+        self.assertTrue(core.calendar_grants('wisp')[0]['write'])
+        self.assertEqual(len(core.calendar_grants('wisp')), 1)
+        self.assertEqual(self.cli('calendar', 'wisp', 'revoke-write', 'work', 'primary')[0], 0)
+        self.assertNotIn('write', core.calendar_grants('wisp')[0])
+        self.cli('calendar', 'wisp', 'grant-write', 'work', 'primary')
+        self.assertEqual(self.cli('calendar', 'wisp', 'off')[0], 0)
+        self.assertEqual(core.calendar_grants('wisp'), [])

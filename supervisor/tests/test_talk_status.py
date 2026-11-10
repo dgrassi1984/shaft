@@ -29,8 +29,8 @@ class StatusLineTest(unittest.TestCase):
     def test_cloud_cost_and_unknown_window(self):
         st = Stats()
         st.add({"prompt_tokens": 11000, "completion_tokens": 400, "tokens_per_s": 60.0, "cost": 0.0051})
-        line = st.line("wren", "openrouter/xiaomi/mimo-v2.6-pro", True)
-        self.assertIn("wren · mimo-v2.6-pro · ctx 11.4k ·", line)
+        line = st.line("wisp", "openrouter/xiaomi/mimo-v2.6-pro", True)
+        self.assertIn("wisp · mimo-v2.6-pro · ctx 11.4k ·", line)
         self.assertIn("$0.0051", line)
 
 

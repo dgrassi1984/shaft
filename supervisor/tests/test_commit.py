@@ -170,7 +170,7 @@ class IgnoredFileTest(unittest.TestCase):
 
 class ConfigMergeTest(unittest.TestCase):
     def test_instance_settings_survive_a_conflicting_template_change(self):
-        # Regression: wren (on Haiku) conflicted with every template change near its model lines.
+        # Regression: wisp (on Haiku) conflicted with every template change near its model lines.
         from unittest import mock
         from supervisor import __main__ as cli, core
         project = Path(tempfile.mkdtemp(prefix="shaft-cfg-")).resolve()
@@ -428,7 +428,7 @@ class UpdateNoteTest(UpdateCase):
 
 class QueuedUpdateTest(UpdateCase):
     """Regression (2026-10-25): `shaft update` on a busy instance was refused ("update it when it is idle"), and
-    each retry lost the race to the next cycle, which starts as soon as the last one ends — wren, shaft and thelos
+    each retry lost the race to the next cycle, which starts as soon as the last one ends — wisp, shaft and tundra
     all refused the M1 update in turn. A busy instance's update is now queued, and the scheduler runs it once idle."""
 
     def busy(self):
@@ -496,7 +496,7 @@ class QueuedUpdateTest(UpdateCase):
 
 class UpdateKeepsUncommittedWorkTest(UpdateCase):
     """Regression (2026-10-13): a merged template that failed the gate was rolled back with `reset --hard`,
-    which also threw away every uncommitted edit in the instance's worktree — wren and kant both had an
+    which also threw away every uncommitted edit in the instance's worktree — wisp and kiln both had an
     uncommitted config.env while updates ran (` M config.env`, WAKE_INTERVAL_MINUTES 120 -> 10)."""
 
     def setUp(self):

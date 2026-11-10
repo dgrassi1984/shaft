@@ -1,4 +1,4 @@
-"""The contract between the two copies of the surprise rules (docs/plans/PLAN-surprise.md §1.2, §2).
+"""The contract between the two copies of the surprise rules.
 
 The template's copy (template/shaft/surprises.py: the in-the-moment note and the open queue) and the supervisor's
 (supervisor/surprise.py: measurement) are written apart, because the supervisor never imports agent code and the
@@ -37,7 +37,7 @@ FLAG_FIXTURES = [
     # any number a tool prints: int() refuses more than 4,300 digits, and the rule must never raise (Codex's review)
     ("exit " + "9" * 5000 + " · 0.1 s", None),
     ("wrote 3581 chars to notes/ai-misalignment-trend.md", None),
-    ("delivered to wren", None),
+    ("delivered to wisp", None),
 ]
 
 
@@ -54,7 +54,7 @@ def _s(expected, observed, so_what=""):
     return {"expected": expected, "observed": observed, "so_what": so_what}
 
 
-# The open-surprise fold (PLAN-surprise §2). Episodes in file order; ids are s<MMDD>-<HHMM>-<n> from the episode's ts,
+# The open-surprise fold. Episodes in file order; ids are s<MMDD>-<HHMM>-<n> from the episode's ts,
 # n counting every id already issued with that prefix. Per live episode: age expiry first (open for more than 7 days
 # at this episode's time), then its resolves, then its surprises, then the cap (more than 8 open, visible ones: the
 # oldest expires). Depth = 1 + the depth of the surprise the goal came from (origin_ref surprise:<id>); depth 2 or

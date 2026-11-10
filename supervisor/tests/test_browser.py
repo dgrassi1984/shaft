@@ -1,4 +1,4 @@
-"""Instances browse with a shared Chromium and a private profile each (docs/plans/PLAN-browser.md, the operator 2026-10-18: "provide it
+"""Instances browse with a shared Chromium and a private profile each (the operator 2026-10-18: "provide it
 a profile on a shared chromium, and leave all the rest to it").
 
 What the supervisor guarantees, and these tests pin:
@@ -23,7 +23,7 @@ from unittest import mock
 from supervisor import broker, browser, core, sandbox
 from supervisor.core import HOME, PROJECT, PYTHON
 
-NAME = "wren"
+NAME = "wisp"
 HAS_SANDBOX = Path(sandbox.SANDBOX_EXEC).exists()
 
 

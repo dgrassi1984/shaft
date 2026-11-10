@@ -352,7 +352,7 @@ class PlaceholdersInLinksTest(unittest.TestCase):
 
 
 class PointsTest(unittest.TestCase):
-    """Operator 2026-10-30: thelos's brief listed "I cinque punti: a · b · c · d · e" in one bullet, a wall of text in
+    """Operator 2026-10-30: tundra's brief listed "I cinque punti: a · b · c · d · e" in one bullet, a wall of text in
     the document where a list was meant. A line of points is its lead over a bullet list, in chat and documents."""
 
     def test_a_line_of_points_in_a_list_item_is_a_nested_list(self):
@@ -372,7 +372,7 @@ class PointsTest(unittest.TestCase):
                      "a · b · c",                                   # no lead
                      "Code: `x · y · z`",                           # the · are code
                      "See: [a · b · c](https://a.example)",         # the · are a link's
-                     # an aside's, as thelos wrote in chat 2026-10-30: a split left "(testo pronto" and "tempi)"
+                     # an aside's, as tundra wrote in chat 2026-10-30: a split left "(testo pronto" and "tempi)"
                      "In coda: i cinque punti nel documento (testo pronto · organi (nostri) · tempi).",
                      "## Agenda: a · b · c",                        # a heading stays one line
                      "| k: a · b · c |\n|---|"):                    # so does a table cell

@@ -180,7 +180,7 @@ class _Proc:
 class QueuedMessages(unittest.TestCase):
     def client(self, events):
         c = object.__new__(talk_ui.Client)
-        c.name, c.show_thinking, c.info, c.interrupts = "wren", False, {}, []
+        c.name, c.show_thinking, c.info, c.interrupts = "wisp", False, {}, []
         c.console = Console(file=io.StringIO(), width=100)
         c.events, c.proc, c.quit = talk_ui.queue.Queue(), None, False
         c.prompting, c.idle_closed, c.last_activity = False, False, 0.0

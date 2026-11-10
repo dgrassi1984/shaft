@@ -82,7 +82,7 @@ class PushHoldTest(unittest.TestCase):
         self.assertEqual(self.forward(), 1)
 
     def test_i14_reply_within_two_hours_still_keeps_to_the_daily_budget(self):
-        """Review I14/G3 (thelos sent 21 pushes against a budget of 6): a reply window waived the budget too."""
+        """Review I14/G3 (tundra sent 21 pushes against a budget of 6): a reply window waived the budget too."""
         self.at = datetime(2026, 10, 28, 12)
         with mock.patch.object(pushes, 'PUSH_BUDGET', 2):
             messages.record(self.sup, self.sup / 'operator.md', 'operator', 'm', 'question', self.at, 'Status?')

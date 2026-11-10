@@ -1,4 +1,4 @@
-"""The operator's Google Calendar, read for an instance they granted calendars to (docs/plans/PLAN-calendar.md).
+"""The operator's Google Calendar, read for an instance they granted calendars to.
 
 calendar.readonly opens every calendar the account can see, other people's shared calendars included, and no token
 can be limited to one. So the instance never holds one: the account is google.py's, and this module is built so that
@@ -6,7 +6,7 @@ every call names one granted calendar in its path (calendars/<id>/events, calend
 here spans calendars for an instance (no free/busy, no calendar list): `calendars` and `resolve` serve the operator's
 CLI at grant time only. An event handle is <alias>/<hash of the calendar ID>/<event ID>; the broker resolves the
 hash against the instance's grants as they are now, so an event of any other calendar cannot even be addressed.
-Direct writes use separate grants and calendar.events; see docs/plans/PLAN-calendar-write.md M0–M1.
+Direct writes use separate grants and calendar.events.
 
 Text in an event organised by someone else (its description and location) is shown under a line saying who wrote
 it: invitations are a prompt-injection channel, as mail is.
@@ -395,7 +395,7 @@ def render_event(hdl: str, cal_label: str, ev: dict, master: dict | None, operat
     return "\n".join(out)
 
 
-# -- direct writes (docs/plans/PLAN-calendar-write.md M1): never invite, notify, or patch a series -----------------
+# -- direct writes: never invite, notify, or patch a series -----------------
 APPROVAL_REQUIRED = "this change needs the operator's approval; submit a proposal (M2)"
 
 

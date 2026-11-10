@@ -1,7 +1,7 @@
 {
-  "instance": "wren",
+  "instance": "wisp",
   "partial": false,
-  "version": "9e53dfc788c8d9b0",
+  "version": "1315e9e636546867",
   "live": "",
   "reply": null,
   "chat": {
@@ -14,9 +14,9 @@
   "earlier": 0,
   "items": [
     {
-      "key": "s20261103-140230-118204-from-wren.md",
+      "key": "s20261103-140230-118204-from-wisp.md",
       "type": "sent",
-      "file": "20261103-140230-118204-from-wren.md",
+      "file": "20261103-140230-118204-from-wisp.md",
       "ts": "2026-11-03T14:02:30+01:00",
       "kind": "question",
       "read": false,

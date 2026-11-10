@@ -1,4 +1,4 @@
-"""2026-10-27: thelos reached its ceiling with closing work unrun in 13 of 47 cycles.
+"""2026-10-27: tundra reached its ceiling with closing work unrun in 13 of 47 cycles.
 Exercise the shared loop's actual model messages and tool log, including a late confirm-turn grant.
 """
 from copy import deepcopy

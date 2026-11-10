@@ -1,4 +1,4 @@
-"""PLAN-voice M1, lane L2: a spoken turn through the API — the flag reaches the instance, the stream gains its own
+"""Lane L2: a spoken turn through the API — the flag reaches the instance, the stream gains its own
 events on voice requests only, and a judge reading a spoken turn is told it is transcribed speech."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from supervisor import api, judge, metrics, tom
 from supervisor.tests import test_api as base   # the module, not its classes: their tests must not run twice
 
 # A reply that narrates, checks the weather with a tool, and answers.
-WEATHER = [{"type": "ready", "name": "wren"}, {"type": "status", "phase": "waiting for the model", "detail": ""},
+WEATHER = [{"type": "ready", "name": "wisp"}, {"type": "status", "phase": "waiting for the model", "detail": ""},
            {"type": "content", "text": "Let me check "}, {"type": "content", "text": "the weather."},
            {"type": "tool_start", "name": "get_weather", "args": '{"city": "Rome"}'},
            {"type": "tool_end", "name": "get_weather", "ok": True, "brief": "sunny"},
@@ -53,7 +53,7 @@ class VoiceApiTest(unittest.TestCase):
     req = base.ApiTest.req
 
     def chat(self, events=WEATHER, **extra):
-        body = {"model": "wren", "stream": True, "messages": [{"role": "user", "content": "weather in Rome?"}], **extra}
+        body = {"model": "wisp", "stream": True, "messages": [{"role": "user", "content": "weather in Rome?"}], **extra}
         with mock.patch.object(base, "EVENTS", events):
             with self.req("/chat/completions", body) as response:
                 raw = response.read().decode()
@@ -125,24 +125,24 @@ class VoiceApiTest(unittest.TestCase):
     def test_a_spoken_interjection_is_marked_for_the_agent_and_the_reply_scoring(self):
         """Bug guarded: a spoken interjection recorded as typed (C1.3), so its talk episode and the reply-prediction
         judge treated recognition errors as the operator's words."""
-        talk_id = api.Handler.conversations.talk_id("wren", [{"role": "user", "content": "weather?"}])
-        entry = api.Handler.live.begin("wren", talk_id)
+        talk_id = api.Handler.conversations.talk_id("wisp", [{"role": "user", "content": "weather?"}])
+        entry = api.Handler.live.begin("wisp", talk_id)
         api.Handler.live.interject(talk_id, "held, spoken", True)          # before the agent starts: held
         api.Handler.live.started(entry)
         api.Handler.live.interject(talk_id, "typed", False)
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {base.KEY}",
                    "Tailscale-User-Login": base.ME}
-        body = {"model": "wren", "voice": True, "messages": [{"role": "user", "content": "weather?"},
+        body = {"model": "wisp", "voice": True, "messages": [{"role": "user", "content": "weather?"},
                                                               {"role": "user", "content": "and tomorrow"}]}
         with urllib.request.urlopen(urllib.request.Request(self.base + "/chat/interject",
                                                            data=json.dumps(body).encode(), headers=headers),
                                     timeout=10) as response:
             self.assertEqual(json.load(response)["talk_id"], talk_id)
-        lines = [json.loads(l) for l in (self.roots / "wren" / ".tmp" / f"interject-{talk_id}.jsonl")
+        lines = [json.loads(l) for l in (self.roots / "wisp" / ".tmp" / f"interject-{talk_id}.jsonl")
                  .read_text().splitlines()]
         self.assertEqual(lines, [{"text": "held, spoken", "voice": True}, {"text": "typed"},
                                  {"text": "and tomorrow", "voice": True}])
-        self.assertEqual([r.get("voice") for r in tom._rows("wren", "-operator-said")], [True])
+        self.assertEqual([r.get("voice") for r in tom._rows("wisp", "-operator-said")], [True])
         api.Handler.live.end(entry)
 
 
@@ -157,7 +157,7 @@ class SpokenTurnJudgeTest(unittest.TestCase):
         with mock.patch.object(metrics, "_episodes", return_value=turns), \
                 mock.patch.object(metrics, "list_beneath", return_value=[]), \
                 mock.patch.object(metrics, "_instance_text", return_value=""):
-            text = metrics._provenance_evidence("wren", {"ts": at.isoformat()})
+            text = metrics._provenance_evidence("wisp", {"ts": at.isoformat()})
         lines = [l for l in text.splitlines() if l.startswith("- ")]
         self.assertEqual(len(lines), 2)
         self.assertIn(f"operator ({judge.SPOKEN}): fix the music", lines[0])
@@ -167,12 +167,12 @@ class SpokenTurnJudgeTest(unittest.TestCase):
     def test_the_reply_prediction_judge_is_told_a_spoken_reply_is_transcribed(self):
         asked = []
         with mock.patch.object(judge, "ask", side_effect=lambda system, prompt, *a, **k: asked.append(prompt) or {}):
-            tom._grade("wren", "yes, go", {"text": "yes go", "voice": True})
-            tom._grade("wren", "yes, go", {"text": "yes go"})
+            tom._grade("wisp", "yes, go", {"text": "yes go", "voice": True})
+            tom._grade("wisp", "yes, go", {"text": "yes go"})
         self.assertEqual(json.loads(asked[0]).get("reply_is"), judge.SPOKEN)
         self.assertNotIn("reply_is", json.loads(asked[1]))
         row = {"at": "2026-11-09T12:00:00", "channel": "web", "text": "yes go", "voice": True}
-        reply = tom._reply_for("wren", {"sent_at": "2026-11-09T11:00:00", "within_hours": 2, "to": "operator"}, [],
+        reply = tom._reply_for("wisp", {"sent_at": "2026-11-09T11:00:00", "within_hours": 2, "to": "operator"}, [],
                                [row])
         self.assertIs(reply["voice"], True)
 

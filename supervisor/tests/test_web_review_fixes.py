@@ -17,12 +17,12 @@ SAME = {"sec-fetch-site": "same-origin"}
 
 
 class ChatRoutesTest(WebTest):
-    """A paired browser asking for wren's chat, with the chats and the message log in this test's own folder."""
+    """A paired browser asking for wisp's chat, with the chats and the message log in this test's own folder."""
 
     def setUp(self):
         super().setUp()
         for p in (mock.patch("supervisor.core.SUP_DIR", self.sup), mock.patch.object(web_chat, "SUP_DIR", self.sup),
-                  mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(web, "_names", return_value=["wren"]),
+                  mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(web, "_names", return_value=["wisp"]),
                   mock.patch.object(webpush, "log"), mock.patch.object(web_chat, "log")):
             p.start()
             self.addCleanup(p.stop)
@@ -31,7 +31,7 @@ class ChatRoutesTest(WebTest):
         self.cookie = self.paired()
 
     def replying(self, activity: list[str]) -> dict:
-        chat = {"id": "web-0123456789abcdef", "instance": "wren", "login": "", "created": "2026-10-24T10:00:00",
+        chat = {"id": "web-0123456789abcdef", "instance": "wisp", "login": "", "created": "2026-10-24T10:00:00",
                 "state": "replying", "turns": [{"role": "user", "content": "hi", "shown": "hi", "ts": "2026-10-24T10:00:00",
                                                 "mid": "m-1"}],
                 "reply": {"started": "2026-10-24T10:00:01", "activity": activity, "answer": "", "interjections": 0}}
@@ -47,25 +47,25 @@ class LiveActivityTest(ChatRoutesTest):
         """W12: the reply's activity was saved every second inside the feed, so its ETag changed on every 1.5 s poll —
         the whole conversation rendered and sent again each time (~8 MB for a 2-minute reply in a 50-turn chat)."""
         self.replying(["read notes/a.md"])
-        first = self.get("/fragment/chat/wren")
+        first = self.get("/fragment/chat/wisp")
         self.assertEqual(first.status, 200)
         self.assertNotIn(b"read notes/a.md", first.body)                         # not in the feed
-        self.assertIn(b'data-poll="/fragment/chat/wren/live"', first.body)       # its own poll, inside the live turn
-        live = self.get("/fragment/chat/wren/live")
+        self.assertIn(b'data-poll="/fragment/chat/wisp/live"', first.body)       # its own poll, inside the live turn
+        live = self.get("/fragment/chat/wisp/live")
         self.assertIn(b"read notes/a.md", live.body)
         chat = web_chat.load("web-0123456789abcdef")
         chat["reply"]["activity"].append("wrote notes/docs/plan.md")
         web_chat.save(chat)
-        again = self.get("/fragment/chat/wren", headers={"if-none-match": first.headers["ETag"]})
+        again = self.get("/fragment/chat/wisp", headers={"if-none-match": first.headers["ETag"]})
         self.assertEqual(again.status, 304)                                      # was 200 with the whole feed
-        self.assertIn(b"wrote notes/docs/plan.md", self.get("/fragment/chat/wren/live").body)
+        self.assertIn(b"wrote notes/docs/plan.md", self.get("/fragment/chat/wisp/live").body)
         chat["state"], chat["reply"] = "idle", None                              # the reply ended
         web_chat.save(chat)
-        self.assertEqual(self.get("/fragment/chat/wren/live").body, b"")
+        self.assertEqual(self.get("/fragment/chat/wisp/live").body, b"")
 
     def test_w12_an_earlier_chat_keeps_its_activity_inline(self):
         chat = self.replying(["x"])
-        feed = str(web_views.chat_feed("wren", chat, [], archived=True))
+        feed = str(web_views.chat_feed("wisp", chat, [], archived=True))
         self.assertNotIn("/live", feed)
         self.assertIn("<p>x</p>", feed)
 
@@ -82,12 +82,12 @@ class LiveActivityTest(ChatRoutesTest):
         (root / "notes/docs/a.md").write_text("one")
         with mock.patch.object(docs, "instance_root", return_value=root), \
                 mock.patch.object(docs, "read_beneath", wraps=docs.read_beneath) as read:
-            first = docs.listing("wren")
-            docs.listing("wren")
+            first = docs.listing("wisp")
+            docs.listing("wisp")
             self.assertEqual(read.call_count, 1)                                 # was one read per listing
             time.sleep(0.01)
             (root / "notes/docs/a.md").write_text("two!")
-            second = docs.listing("wren")
+            second = docs.listing("wisp")
         self.assertEqual(read.call_count, 2)
         self.assertNotEqual(first[0]["sha"], second[0]["sha"])
         self.assertEqual(second[0]["sha"], docs.sha(b"two!"))
@@ -102,12 +102,12 @@ class DigestCacheTest(ChatRoutesTest):
         for name in ("a.md", "b.md", "sub/c.md"):
             (root / "notes/docs" / name).write_text(name)
         with mock.patch.object(docs, "instance_root", return_value=root):
-            docs.listing("wren")
+            docs.listing("wisp")
             mine = lambda: sorted(k for k in docs._digests if k.startswith(str(root)))
             self.assertEqual(len(mine()), 3)
             (root / "notes/docs/b.md").unlink()
             (root / "notes/docs/sub/c.md").unlink()
-            docs.listing("wren")
+            docs.listing("wisp")
             self.assertEqual(mine(), [str(root / "notes/docs/a.md")])
 
 
@@ -118,9 +118,9 @@ class SendingCopyTest(ChatRoutesTest):
         chat = self.replying([])
         chat["queued"] = [{"role": "user", "content": "later", "shown": "later", "ts": "2026-10-24T10:00:02",
                            "mid": "q-1", "attachments": []}]
-        later = {"ts": "2026-10-24T10:00:03", "file": "f.md", "from": "operator", "to": "wren", "text": "cycle",
+        later = {"ts": "2026-10-24T10:00:03", "file": "f.md", "from": "operator", "to": "wisp", "text": "cycle",
                  "shown": "cycle", "mid": "b-1", "read": False}
-        feed = str(web_views.chat_feed("wren", chat, [later]))
+        feed = str(web_views.chat_feed("wisp", chat, [later]))
         for mid in ("m-1", "q-1", "b-1"):
             self.assertIn(f'data-mid="{mid}"', feed)
 
@@ -132,8 +132,8 @@ class QueuedCancelTest(ChatRoutesTest):
         chat = self.replying([])
         chat["queued"] = [{"role": "user", "content": "x", "shown": "x", "ts": "2026-10-24T10:00:02", "mid": "q-1",
                            "attachments": []}]
-        feed = str(web_views.chat_feed("wren", chat, []))
-        self.assertRegex(feed, r'<form class="act" data-post="/chat/wren/unqueue" data-check="[^"]+">')
+        feed = str(web_views.chat_feed("wisp", chat, []))
+        self.assertRegex(feed, r'<form class="act" data-post="/chat/wisp/unqueue" data-check="[^"]+">')
         self.assertIn('<button type="submit" class="act small">Cancel</button>', feed)
 
 
@@ -144,17 +144,17 @@ class RailTest(ChatRoutesTest):
         chat.update(state="idle", reply=None)
         chat["turns"].append({"role": "assistant", "content": "done", "ts": "2026-10-24T10:01:00"})
         web_chat.save(chat)
-        sent = {"ts": "2026-10-24T11:00:00", "from": "wren", "to": "operator", "file": "m.md", "text": "A question?\nmore",
+        sent = {"ts": "2026-10-24T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "text": "A question?\nmore",
                 "read": False}
         older = {**sent, "ts": "2026-10-24T09:00:00", "file": "o.md", "text": "before the chat"}
-        s = web_chat.summary("wren", [older, sent])
+        s = web_chat.summary("wisp", [older, sent])
         self.assertEqual((s["last"], s["line"]), ("2026-10-24T11:00:00", "A question?"))
-        self.assertEqual(web_chat.summary("wren", [older])["last"], "2026-10-24T10:01:00")   # before it: not counted
+        self.assertEqual(web_chat.summary("wisp", [older])["last"], "2026-10-24T10:01:00")   # before it: not counted
         chat["cleared"] = "2026-10-24T10:30:00"
         web_chat.save(chat)
-        self.assertEqual(web_chat.summary("wren", [older, sent]),
+        self.assertEqual(web_chat.summary("wisp", [older, sent]),
                          {"line": "A question?", "last": "2026-10-24T11:00:00", "last_count": 1})
-        rail = self.get("/fragment/rail?c=i:wren")
+        rail = self.get("/fragment/rail?c=i:wisp")
         self.assertEqual(rail.status, 200)
 
 
@@ -162,31 +162,31 @@ class WatchingTest(ChatRoutesTest):
     def test_m10_covered_feed_does_not_watch_but_still_renders(self):
         """M10: a feed poll behind a covering sheet renewed push suppression."""
         self.replying([])
-        self.get("/fragment/chat/wren", headers={"x-shaft-at": "1000"})
-        self.assertTrue(web_chat.watchers("wren"))
-        covered = self.get("/fragment/chat/wren", headers={"x-shaft-at": "2000", "x-shaft-watching": "0"})
+        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1000"})
+        self.assertTrue(web_chat.watchers("wisp"))
+        covered = self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2000", "x-shaft-watching": "0"})
         self.assertEqual(covered.status, 200)
         self.assertIn(b"hi", covered.body)
-        self.assertEqual(web_chat.watchers("wren"), set())
-        self.get("/fragment/chat/wren", headers={"x-shaft-at": "1500"})  # an older poll arriving late
-        self.assertEqual(web_chat.watchers("wren"), set())
-        self.get("/fragment/chat/wren", headers={"x-shaft-at": "2500"})  # sheet closed
-        self.assertTrue(web_chat.watchers("wren"))
+        self.assertEqual(web_chat.watchers("wisp"), set())
+        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1500"})  # an older poll arriving late
+        self.assertEqual(web_chat.watchers("wisp"), set())
+        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2500"})  # sheet closed
+        self.assertTrue(web_chat.watchers("wisp"))
 
     def test_w9_each_device_watches_for_itself_and_says_when_it_goes(self):
-        """W9: one desktop tab on wren's chat silenced every push to the phone; a phone that locked stayed watching
+        """W9: one desktop tab on wisp's chat silenced every push to the phone; a phone that locked stayed watching
         for 6 s more. The feed's poll marks only the device asking, and ?away=1 ends it."""
         self.replying([])
         laptop, phone = self.cookie, self.paired()
-        self.assertEqual(self.get("/fragment/chat/wren", cookie=laptop).status, 200)
-        self.assertEqual(web_chat.watchers("wren"), {web.device_from_cookie(laptop)[0]})
-        self.get("/fragment/chat/wren", cookie=phone)
-        self.assertEqual(len(web_chat.watchers("wren")), 2)
-        away = self.get("/fragment/chat/wren?away=1", cookie=phone)
+        self.assertEqual(self.get("/fragment/chat/wisp", cookie=laptop).status, 200)
+        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
+        self.get("/fragment/chat/wisp", cookie=phone)
+        self.assertEqual(len(web_chat.watchers("wisp")), 2)
+        away = self.get("/fragment/chat/wisp?away=1", cookie=phone)
         self.assertEqual((away.status, away.body), (204, b""))
-        self.assertEqual(web_chat.watchers("wren"), {web.device_from_cookie(laptop)[0]})
-        self.get("/fragment/chat/wren?id=web-0123456789abcdef", cookie=phone)    # an earlier chat's page: not watching
-        self.assertEqual(web_chat.watchers("wren"), {web.device_from_cookie(laptop)[0]})
+        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=phone)    # an earlier chat's page: not watching
+        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
 
 
 class AwayOrderTest(ChatRoutesTest):
@@ -196,13 +196,13 @@ class AwayOrderTest(ChatRoutesTest):
         the away say when the page sent them (X-Shaft-At, &at=); a poll sent before the latest away is not watching."""
         self.replying([])
         dev = web.device_from_cookie(self.cookie)[0]
-        self.assertEqual(self.get("/fragment/chat/wren", headers={"x-shaft-at": "1000"}).status, 200)
-        self.assertEqual(web_chat.watchers("wren"), {dev})
-        self.assertEqual(self.get("/fragment/chat/wren?away=1&at=2000").status, 204)
-        self.assertEqual(self.get("/fragment/chat/wren", headers={"x-shaft-at": "1500"}).status, 200)   # late
-        self.assertEqual(web_chat.watchers("wren"), set())
-        self.get("/fragment/chat/wren", headers={"x-shaft-at": "2500"})                               # back
-        self.assertEqual(web_chat.watchers("wren"), {dev})
+        self.assertEqual(self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1000"}).status, 200)
+        self.assertEqual(web_chat.watchers("wisp"), {dev})
+        self.assertEqual(self.get("/fragment/chat/wisp?away=1&at=2000").status, 204)
+        self.assertEqual(self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1500"}).status, 200)   # late
+        self.assertEqual(web_chat.watchers("wisp"), set())
+        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2500"})                               # back
+        self.assertEqual(web_chat.watchers("wisp"), {dev})
 
 
 class PushRoutesTest(ChatRoutesTest):
@@ -247,7 +247,7 @@ class TooLargeTest(WebTest):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         with socket.create_connection(server.server_address, timeout=5) as s:
-            s.sendall(f"POST /docs/wren/save HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 5000000\r\n\r\n".encode())
+            s.sendall(f"POST /docs/wisp/save HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 5000000\r\n\r\n".encode())
             raw = b""
             while chunk := s.recv(65536):
                 raw += chunk
@@ -262,13 +262,13 @@ class TooLargeTest(WebTest):
 class LeaveWarningTest(WebTest):
     def test_w14_drive_config_and_settings_edits_ask_before_leaving(self):
         """W14: these forms had no draft and no leave warning: an iOS back-swipe lost a long drive.md edit."""
-        drive = str(web_config.drive_page("wren", "be useful", "sha1", web_views.markdown("be useful")))
-        self.assertIn('data-guard data-keep="drive.wren"', drive)
+        drive = str(web_config.drive_page("wisp", "be useful", "sha1", web_views.markdown("be useful")))
+        self.assertIn('data-guard data-keep="drive.wisp"', drive)
         self.assertIn("data-keep-note", drive)
         field = {"key": "LLM_MODEL", "value": "m", "set": True, "default": None, "help": "", "secret": False,
                  "choices": None, "numeric": False}
-        self.assertIn('data-post="/action/config-set" data-guard', str(web_config.config_row("wren", field)))
-        self.assertIn('data-reset="1" data-guard', str(web_config.config_page("wren", [field], [])))
+        self.assertIn('data-post="/action/config-set" data-guard', str(web_config.config_row("wisp", field)))
+        self.assertIn('data-reset="1" data-guard', str(web_config.config_page("wisp", [field], [])))
         setting = {"name": "SHAFT_X", "web": True, "in_file": None, "services": [], "value": "1", "default": "1",
                    "source": "default", "not_live": [], "kind": "text", "help": "", "choices": None}
         with mock.patch.object(web_settings, "_control", return_value=web_views.Html('<input name="value">')):

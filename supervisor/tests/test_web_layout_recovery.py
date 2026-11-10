@@ -44,7 +44,7 @@ class RecoveryTest(WebTest):
         cookie = self.paired()
         self.assertNotIn("X-Shaft-Pair", self.req("/unpair", "POST", cookie=cookie).headers)
         web.unpair(web.device_from_cookie(cookie)[0])
-        for path, method in (("/fragment/rail", "GET"), ("/chat/wren", "POST")):
+        for path, method in (("/fragment/rail", "GET"), ("/chat/wisp", "POST")):
             r = self.req(path, method, cookie=cookie)
             self.assertEqual(r.status, 403)
             self.assertEqual(r.headers.get("X-Shaft-Pair"), "required")
@@ -84,7 +84,7 @@ vm.runInNewContext(process.argv[1], {
     status = code;
     for (const mode of ["navigate", "cors"]) {
       let response;
-      handlers.fetch({ request: { method: "GET", mode, url: "https://shaft.test/i/wren/chat" },
+      handlers.fetch({ request: { method: "GET", mode, url: "https://shaft.test/i/wisp/chat" },
         respondWith(p) { response = p; } });
       const got = await response;
       if (mode !== "navigate") assert.equal(got, undefined);
@@ -108,9 +108,9 @@ const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:a
 const source = fs.readFileSync(process.argv[1], "utf8");
 (async () => {
  for (const status of [401, 403]) for (const kind of ["post", "diff", "poll"]) {
-  const handlers = {}, storage = new Map([["shaft.draft.wren", "unsent message"]]);
+  const handlers = {}, storage = new Map([["shaft.draft.wisp", "unsent message"]]);
   const box = { value: "unsent message" };
-  const form = { dataset: { post: "/chat/wren", draft: "wren", reset: "1", ...(kind === "diff" ? { diff: "/preview/x" } : {}) },
+  const form = { dataset: { post: "/chat/wisp", draft: "wisp", reset: "1", ...(kind === "diff" ? { diff: "/preview/x" } : {}) },
     querySelector(q) { return q.startsWith("textarea") ? box : null; }, querySelectorAll: () => [], closest: () => null,
     reset() { throw Error("cleared draft"); } };
   const document = { readyState: "loading", visibilityState: "visible", body: { scrollHeight: 0, appendChild() {} },
@@ -141,7 +141,7 @@ const source = fs.readFileSync(process.argv[1], "utf8");
     await handlers.submit[0]({ target: { closest: () => form }, preventDefault() {} });
   }
   assert.equal(destination, "/", `${kind} ${status}`);
-  assert.equal(storage.get("shaft.draft.wren"), "unsent message");
+  assert.equal(storage.get("shaft.draft.wisp"), "unsent message");
   assert.equal(box.value, "unsent message");
   assert.equal(reads, 0);
  }

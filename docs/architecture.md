@@ -43,7 +43,7 @@ rules and limits. The [README glossary](../README.md#concepts) defines the share
 An agent's mind consists of `self/`, `memory/`, `notes/`, and `inbox/`. These live in the
 instance folder but are excluded from the project repository: the supervisor versions it after every run in `.supervisor/minds/<name>.git`, a private git
 repository with no remote and a pre-push hook that always fails (`shaft mind status`). What an instance read
-and wrote for itself cannot be pushed or merged with the code ([docs/plans/PLAN-mind-out-of-git.md](../docs/plans/PLAN-mind-out-of-git.md)).
+and wrote for itself cannot be pushed or merged with the code.
 The `instance/<name>` branches are local-only too: their older history still holds minds, so the project's
 pre-push hook, installed by `shaft setup` (or `shaft mind guard`), refuses to push them. A clone of the
 repository therefore never carries instances; [moving SHAFT to a new Mac](migration.md) copies the folder instead.
@@ -57,7 +57,7 @@ skills/       how-tos it writes for itself
 config.env    its LLM settings and budgets (yours to edit; it changes it only through set_config)
 drive.md      what it is for; the drive paragraph of its system prompt (yours alone: its sandbox cannot
               write it; without one, the template's "improve yourself")
-shaft-docs/   the supervisor's copy of README.md and docs/*.md (not docs/plans/), refreshed at every start;
+shaft-docs/   the supervisor's copy of README.md and docs/*.md (not subfolders), refreshed at every start;
               it reads it to tell you how to configure SHAFT (skills/helping-the-operator-configure.md),
               never writes it, and it is never committed
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
@@ -270,7 +270,7 @@ and conversations the supervisor collects, checked against what the instance dec
 before and after a self-change. Cycles judged before the ratings existed are rated with
 `shaft judge backfill` (verdicts unchanged). Judged success and unsupported claims count only judges in today's
 rotation, and are given **per judge**: each judge's 7 days to the latest verdict against its 7 before, "too few" under
-10 verdicts. Judges differ several-fold on claims, so no figure pools two of them ([judge mix plan](../docs/plans/PLAN-judge-mix.md)).
+10 verdicts. Judges differ several-fold on claims, so no figure pools two of them (judge mix plan).
 Stats section order is priority order: commitments, value and recent failure modes precede achieved difficulty,
 where the per-judge success line sits. The LIVE prompt keeps only the head of stats.md; its SECTIONS budget is
 5500 characters, but CONTEXT_CHARS can shrink it further.
@@ -394,7 +394,7 @@ When `judge_pending` copies the intent into a judgment row, the supervisor compu
 The instance never combines the probabilities. The judgment keeps the clauses and labels the result
 `confidence_of="criterion_met=yes;clauses"` (v4). Calibration and metacog AUROC report v4 apart from v1-v3;
 `base_rates` stores its counts separately under `clauses`, outside the bands shown by the confirm flow.
-The live prompt names the resolved mode. The arms await a later trial; no instance is switched here.
+The live prompt names the resolved mode. The arms are not yet compared in a trial.
 
 `finish_cycle` can record `doubts: [{step, what}]`, using 1-based indices in the original tool log.
 They never change its `criterion_met` claim. Fresh judge verdicts require `first_error_step`, the earliest step
@@ -424,7 +424,7 @@ a reply within two hours of the operator's message bypasses quiet hours but keep
 See `supervisor/pushes.py`, `hold_until`. Replays reconstruct
 the instance's spend and trial starts strictly before the cycle start on that date, probation cycles
 judged before it, and the next scheduled sleep and wake. They carry no replay flag. Closed probation
-entries cannot be reconstructed; see [trial fidelity gaps](../docs/plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+entries cannot be reconstructed; see trial fidelity gaps.
 
 `self/stats.md`, `shaft stats` and review report pushes today and each of the last seven calendar days,
 the share of judged push cycles with `should_have_waited=yes` (excluding `na` and ungraded old rows),
@@ -436,7 +436,7 @@ No outcomes feed a combined score.
 
 ### Surprises and corrections
 
-**Surprises** ([docs/plans/PLAN-surprise](../docs/plans/PLAN-surprise.md)). A live cycle states 1–3 falsifiable `predictions` in
+**Surprises**. A live cycle states 1–3 falsifiable `predictions` in
 `declare_intent` and reports `surprises` ({expected, observed, so_what}) and `resolves` ({id, how}) in `finish_cycle`.
 The agent tags each tool-log entry whose result has a known failure shape (`flag`) and, in live cycles, shows the model
 an `[unexpected …]` note when its predictions did not anticipate it. The open surprises are folded from the episodes
@@ -543,7 +543,7 @@ and the checks it makes are kept in that replay's broker, so its later messages 
 
 ### Self-knowledge and commitments
 
-**Self-knowledge measured against the record** ([docs/plans/PLAN-consciousness](../docs/plans/PLAN-consciousness.md)). Functional
+**Self-knowledge measured against the record**. Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
 mechanism behind a knob its kill test flips (`shaft experiment`). `DOUBTS=off` removes `finish_cycle`'s optional
 `doubts` parameter; it defaults to on. `LOOK_AHEAD=on` adds a live step 1 question about what the operator will
@@ -693,7 +693,7 @@ Sources: [instance creation](../supervisor/__main__.py),
 [metrics](../supervisor/metrics.py), [battery](../supervisor/battery.py).
 The `template/` worktree is gitignored and materialized by `setup`; it is a branch,
 not a directory shipped on `main` ([setup](../supervisor/__main__.py)).
-See [enforced rules](safety.md) and [design milestones](../docs/plans/PLAN.md).
+See [enforced rules](safety.md) and design milestones.
 
 ### Device voices
 

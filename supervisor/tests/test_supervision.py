@@ -237,7 +237,7 @@ class StatsTest(unittest.TestCase):
               for i, (c, cl, m) in enumerate([(90, "yes", "no"), (90, "yes", "yes"), (20, "no", "no")])]
         with mock.patch.object(metrics, "judgments", return_value=js):
             text = metrics.stats_text("x")
-        self.assertIn("too few (3) vs none", text)        # 3 verdicts: no rate from so few (PLAN-judge-mix 2026-10-29)
+        self.assertIn("too few (3) vs none", text)        # 3 verdicts: no rate from so few
         self.assertIn("My own claim matched the judge: 2/3", text)
         brier = ((0.9 - 0) ** 2 + (0.9 - 1) ** 2 + (0.2 - 0) ** 2) / 3
         self.assertIn(f"{brier:.2f}", text)
@@ -310,7 +310,7 @@ class RunToolTest(unittest.TestCase):
     def test_heredocs_work(self):
         # Regression (2026-10-13): zsh writes here-document temp files to $TMPPREFIX (default /tmp/zsh), which the
         # run sandbox may not write; every heredoc failed ("can't create temp file for here document") and
-        # shaft and wren concluded the shell itself was crippled.
+        # shaft and wisp concluded the shell itself was crippled.
         r = self.run_cmd("cat <<'EOT'\nhello from a heredoc\nEOT\npython3 - <<'EOF'\nprint(6 * 7)\nEOF")
         self.assertTrue(r.startswith("exit 0"), r)
         self.assertIn("hello from a heredoc", r)
@@ -324,7 +324,7 @@ class RunToolTest(unittest.TestCase):
     def test_no_network_and_no_reading_outside(self):
         r = self.run_cmd(f"python3 -c \"import urllib.request; urllib.request.urlopen('http://example.com', timeout=5)\"")
         self.assertNotIn("exit 0", r.splitlines()[0])
-        plan = Path(__file__).resolve().parents[2] / "docs/plans/PLAN.md"   # in the home folder, outside the instance
+        plan = Path(__file__).resolve().parents[2] / "README.md"   # in the home folder, outside the instance
         r = self.run_cmd(f"head -c 200 {plan}")
         self.assertNotIn("SHAFT", r)
         self.assertIn("Operation not permitted", r)

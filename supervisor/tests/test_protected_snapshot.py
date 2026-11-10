@@ -53,7 +53,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
         main = self.root / "shaft" / "__main__.py"
         main.write_text("import os\nfrom pathlib import Path\n"
                         "p = Path(os.environ['SHAFT_ROOT']) / 'memory/journal.md'\n"
-                        "assert p.read_text() == '# kant — journal\\n'\n"
+                        "assert p.read_text() == '# kiln — journal\\n'\n"
                         "p.write_text(p.read_text() + 'approved ran\\n')\n"
                         "Path('notes').mkdir(exist_ok=True)\nPath('notes/result').write_text('approved')\n"
                         "print(__file__)\n")
@@ -71,12 +71,12 @@ class ProtectedSnapshotTest(RunTransactionCase):
                 return approved
 
             with mock.patch.object(runner, "_reconcile", side_effect=checked_then_swapped):
-                self.assertEqual(runner._run("kant", self.root, "live", [], False, output=output), 0)
+                self.assertEqual(runner._run("kiln", self.root, "live", [], False, output=output), 0)
         code_file = Path(output[0].strip())
         self.assertNotEqual(code_file, main)
         self.assertFalse(code_file.parent.parent.exists(), "launch copy outlived the run")
         self.assertEqual((self.root / "notes/result").read_text(), "approved")
-        self.assertEqual((self.root / "memory/journal.md").read_text(), "# kant — journal\napproved ran\n")
+        self.assertEqual((self.root / "memory/journal.md").read_text(), "# kiln — journal\napproved ran\n")
 
     def test_swapped_working_code_is_neither_tested_nor_committed(self):
         """#86: a write after snapshot cannot change actual test imports or the committed plugin bytes."""
@@ -101,7 +101,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
                                                {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, sys.executable)
 
         with self.settings(), mock.patch.object(gate, "run_tests", side_effect=tests):
-            self.assertTrue(runner._settle("kant", self.root, "live", before, []))
+            self.assertTrue(runner._settle("kiln", self.root, "live", before, []))
         self.assertEqual(git(self.root, "show", "HEAD:plugins/text_stats/main.py"), good)
         self.assertEqual(plugin.read_text(), good)
         self.assertFalse(seen[0].exists(), "gate copy outlived settlement")
@@ -110,21 +110,21 @@ class ProtectedSnapshotTest(RunTransactionCase):
         """#86: code is mode 444 under mode 555 folders, outside the instance's writable set."""
         b = self.fake_broker()
         with self.launch_settings(b):
-            _, cmd, env = runner._launch("kant", self.root, "live", [], None, gate.snapshot(self.root))
+            _, cmd, env = runner._launch("kiln", self.root, "live", [], None, gate.snapshot(self.root))
             tree = Path(env["SHAFT_CODE_ROOT"])
             try:
                 self.assertNotIn(self.root, tree.parents)
                 self.assertEqual(tree.stat().st_mode & 0o777, 0o555)
                 self.assertEqual((tree / "shaft/__init__.py").stat().st_mode & 0o777, 0o444)
-                profile = (runner.SUP_DIR / "kant.sb").read_text()
+                profile = (runner.SUP_DIR / "kiln.sb").read_text()
                 self.assertIn(f'(deny file-write* (subpath "{tree}"))', profile)
                 self.assertIn(f'(allow file-write* (subpath "{self.root}")', profile)
                 self.assertIn("-I", cmd)
             finally:
                 protected.remove(tree)
-            parent = runner.SUP_DIR / "protected/kant"
+            parent = runner.SUP_DIR / "protected/kiln"
             try:
-                with protected.copy(gate.snapshot(self.root), parent, "kant") as tree:
+                with protected.copy(gate.snapshot(self.root), parent, "kiln") as tree:
                     raise RuntimeError("interrupted gate")
             except RuntimeError:
                 pass
@@ -135,13 +135,13 @@ class ProtectedSnapshotTest(RunTransactionCase):
         with self.launch_settings(self.fake_broker()), \
                 mock.patch.object(runner, "_start", side_effect=OSError("cannot start")):
             with self.assertRaisesRegex(OSError, "cannot start"):
-                runner._run("kant", self.root, "live", [], False)
-            self.assertEqual(list((runner.SUP_DIR / "protected/kant").iterdir()), [])
+                runner._run("kiln", self.root, "live", [], False)
+            self.assertEqual(list((runner.SUP_DIR / "protected/kiln").iterdir()), [])
 
     def test_stale_copies_are_swept_and_live_copies_survive(self):
         """#86: startup sweeps a dead supervisor's copy, preserving active conversations."""
         parent = self.project / "protected"
-        tree = protected.make(gate.snapshot(self.root), parent, "kant")
+        tree = protected.make(gate.snapshot(self.root), parent, "kiln")
         with mock.patch.object(protected.os, "kill", return_value=None):
             protected.sweep(parent)
         self.assertTrue(tree.exists())
@@ -153,9 +153,9 @@ class ProtectedSnapshotTest(RunTransactionCase):
         """#86: materialization never bypasses snapshot refusal or SHAFT_COPY_MAX_GB."""
         with mock.patch.object(core, "COPY_MAX_GB", 0):
             with self.assertRaises(core.TreeTooBig):
-                protected.make({"shaft/a.py": b"x"}, self.project / "protected", "kant")
+                protected.make({"shaft/a.py": b"x"}, self.project / "protected", "kiln")
         with self.assertRaises(ValueError):
-            protected.make({"shaft": gate.Link("elsewhere")}, self.project / "protected", "kant")
+            protected.make({"shaft": gate.Link("elsewhere")}, self.project / "protected", "kiln")
 
     def test_trial_command_and_battery_copy_keep_their_existing_paths(self):
         """#86: trial agent_command has no live-launch redirect; exams retain their own writable copies."""
@@ -165,7 +165,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             self.assertEqual(cmd[-6:], [runner.PYTHON, "-E", "-s", "-m", "shaft", "live"])
             self.assertNotIn("SHAFT_CODE_ROOT", env)
             with mock.patch.object(battery, "SUP_DIR", self.project / "sup"):
-                tree = battery.make_exam_copy("kant", self.root)
+                tree = battery.make_exam_copy("kiln", self.root)
                 (tree / "shaft/__init__.py").write_text("exam's own edit\n")
                 self.assertEqual((self.root / "shaft/__init__.py").read_text(), "")
 
@@ -189,7 +189,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             return result.returncode == 0, result.stdout + result.stderr
 
         with self.settings(), mock.patch.object(gate, "run_tests", side_effect=check):
-            self.assertTrue(runner._settle("kant", self.root, "live", before, []))
+            self.assertTrue(runner._settle("kiln", self.root, "live", before, []))
         self.assertEqual(checked, ["ok   new\n"])
         self.assertEqual(git(self.root, "show", "HEAD:plugins/new/main.py"), source)
 
@@ -197,7 +197,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
         """#86: removing the read-only tree never follows a link a test left in .tmp."""
         outside = self.project / "outside"
         outside.mkdir(mode=0o755)
-        with self.settings(), protected.copy(gate.snapshot(self.root), runner.SUP_DIR / "protected/kant", "kant") as tree:
+        with self.settings(), protected.copy(gate.snapshot(self.root), runner.SUP_DIR / "protected/kiln", "kiln") as tree:
             (tree / ".tmp/link").symlink_to(outside, target_is_directory=True)
         self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
         self.assertFalse(tree.exists())
@@ -209,14 +209,14 @@ class ProtectedSnapshotTest(RunTransactionCase):
         git(self.root, "add", "shaft")
         git(self.root, "commit", "-qm", "plugin runner")
         before = runner._snapshot(self.root)
-        with self.settings(), protected.copy(before["code"], runner.SUP_DIR / "protected/kant", "kant") as tree:
+        with self.settings(), protected.copy(before["code"], runner.SUP_DIR / "protected/kiln", "kiln") as tree:
             folder = self.root / "plugins/new"
             folder.mkdir()
             manifest = {"name": "new", "description": "test", "parameters": {"type": "object"}}
             (folder / "plugin.json").write_text(json.dumps(manifest))
             (folder / "main.py").write_text("def run(**args):\n    return 'new working plugin'\n")
             self.assertFalse((tree / "plugins/new/main.py").exists())
-            b = broker.Broker("kant", self.project, {}, runner.SUP_DIR / "broker.log")
+            b = broker.Broker("kiln", self.project, {}, runner.SUP_DIR / "broker.log")
             b.egress = mock.Mock(port=0)
             with mock.patch.object(b, "sandbox_env", return_value={}), \
                     mock.patch.object(b, "mail_env", return_value=""), \
@@ -235,13 +235,13 @@ class ProtectedSnapshotTest(RunTransactionCase):
                 return result.returncode == 0, result.stdout + result.stderr
 
             with mock.patch.object(gate, "run_tests", side_effect=check):
-                self.assertTrue(runner._settle("kant", self.root, "live", before, []))
+                self.assertTrue(runner._settle("kiln", self.root, "live", before, []))
             self.assertEqual(git(self.root, "show", "HEAD:plugins/new/main.py"),
                              "def run(**args):\n    return 'new working plugin'\n")
 
     def test_sandbox_cannot_rewrite_chmod_or_replace_launched_code(self):
         """#86: sandbox integration proves the read-only boundary even for the supervisor's Unix uid."""
-        with self.settings(), protected.copy(gate.snapshot(self.root), runner.SUP_DIR / "protected/kant", "kant") as tree:
+        with self.settings(), protected.copy(gate.snapshot(self.root), runner.SUP_DIR / "protected/kiln", "kiln") as tree:
             prof = self.project / "protected.sb"
             prof.write_text(sandbox.profile(self.root, core.HOME, []) + sandbox.protected_code(tree, core.HOME))
             script = ("import os, pathlib, sys\np = pathlib.Path(sys.argv[1])\n"
@@ -276,7 +276,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             "class T(unittest.TestCase):\n"
             "    def test_data(self):\n"
             "        self.assertEqual((ROOT / 'notes/ledger/key').read_text(), 'treasury')\n"
-            "        self.assertEqual(pathlib.Path('memory/journal.md').read_text(), '# kant — journal\\n')\n"
+            "        self.assertEqual(pathlib.Path('memory/journal.md').read_text(), '# kiln — journal\\n')\n"
             "        (ROOT / 'notes/written').write_text('by the gate')\n"
             "        with tempfile.NamedTemporaryFile() as f:\n"   # the copy's .tmp, its scratch space
             "            f.write(b'scratch')\n"
@@ -286,9 +286,9 @@ class ProtectedSnapshotTest(RunTransactionCase):
             "            with self.assertRaises(PermissionError):\n"
             "                p.write_text('bad')\n")
         with self.settings(), mock.patch.object(gate, "_supervisor_tests", return_value=("", "", None, None)):
-            kept = runner._settle("kant", self.root, "live", before, [])
+            kept = runner._settle("kiln", self.root, "live", before, [])
             said = [c.args[0] for c in runner.log.call_args_list]
-            self.assertEqual(list((runner.SUP_DIR / "protected/kant").iterdir()), [])
+            self.assertEqual(list((runner.SUP_DIR / "protected/kiln").iterdir()), [])
         self.assertTrue(kept)
         self.assertTrue(any("code change passed tests" in s for s in said), said)
         self.assertEqual((self.root / "notes/written").read_text(), "by the gate")
@@ -306,7 +306,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
         b, output = self.fake_broker(), []
         with self.launch_settings(b), mock.patch.object(runner, "_settle", return_value=True), \
                 mock.patch.object(sandbox, "wrap", side_effect=lambda profile, cmd: cmd):
-            self.assertEqual(runner._run("kant", self.root, "live", [], False, output=output), 0)
+            self.assertEqual(runner._run("kiln", self.root, "live", [], False, output=output), 0)
         self.assertEqual(output[0].strip(), "treasury")
 
     def test_only_data_is_linked_never_code_config_or_scratch(self):
@@ -317,14 +317,14 @@ class ProtectedSnapshotTest(RunTransactionCase):
         (self.root / "config.env").write_text("LIVE=1\n")
         code = gate.snapshot(self.root)
         self.assertNotIn("tests", {p.split("/")[0] for p in code})
-        tree = protected.make(code, self.project / "protected", "kant", b"JUDGED=1\n", instance=self.root)
+        tree = protected.make(code, self.project / "protected", "kiln", b"JUDGED=1\n", instance=self.root)
         try:
             self.assertFalse((tree / "tests").exists() or (tree / "tests").is_symlink())
             for name in ("shaft", "plugins", ".tmp", "config.env"):
                 self.assertFalse((tree / name).is_symlink(), name)
             self.assertEqual((tree / "config.env").read_text(), "JUDGED=1\n")
             self.assertEqual((tree / "memory").resolve(), self.root / "memory")
-            self.assertEqual((tree / "memory/journal.md").read_text(), "# kant — journal\n")
+            self.assertEqual((tree / "memory/journal.md").read_text(), "# kiln — journal\n")
         finally:
             protected.remove(tree)
         self.assertTrue((self.root / "memory/journal.md").exists(), "removing the copy followed a link")
@@ -337,7 +337,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             (self.root / name).write_text("raise SystemExit(0)\n")
         (self.root / "pkg").mkdir()
         (self.root / "pkg/__init__.py").write_text("")
-        tree = protected.make(gate.snapshot(self.root), self.project / "protected", "kant", instance=self.root)
+        tree = protected.make(gate.snapshot(self.root), self.project / "protected", "kiln", instance=self.root)
         try:
             for name in ("unittest.py", "json.pyc", "fast.cpython-312-darwin.so", "x.pth", "Upper.PY", "pkg"):
                 self.assertFalse(os.path.lexists(tree / name), name)

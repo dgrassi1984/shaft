@@ -14,7 +14,7 @@ JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
 
 def feed(archived=False, ts="2026-10-20T11:59:00"):
-    return str(web_views.chat_feed("wren", {
+    return str(web_views.chat_feed("wisp", {
         "id": "old" if archived else "current", "state": "ended" if archived else "idle",
         "turns": [{"role": "assistant", "content": "A recorded answer", "ts": ts}],
     }, [], archived=archived))
@@ -24,16 +24,16 @@ HARNESS = r'''
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 const input = JSON.parse(process.argv[2]), handlers = {}, winHandlers = {};
 const old = "2026-10-20T10:00:00", latest = "2026-10-20T11:59:00";
-let stored = JSON.stringify({wren: old}), badge = 0, writes = 0;
+let stored = JSON.stringify({wisp: old}), badge = 0, writes = 0;
 const classes = (...initial) => {
   const s = new Set(initial);
   return { contains: k => s.has(k), add: k => s.add(k), remove: k => s.delete(k),
     toggle(k, on) { if (on) s.add(k); else s.delete(k); } };
 };
-const link = {dataset: {inst: "wren", last: latest}, classList: classes("inst", "on")};
+const link = {dataset: {inst: "wisp", last: latest}, classList: classes("inst", "on")};
 const button = {classList: classes()};
 let replies = [];
-const panel = {dataset: {poll: "/fragment/chat/wren", every: "1500"}, isConnected: true,
+const panel = {dataset: {poll: "/fragment/chat/wisp", every: "1500"}, isConnected: true,
   classList: classes("feed"), children: [], getClientRects: () => [1],
   querySelector: () => null, querySelectorAll: () => [], closest: () => null,
   get innerHTML() { return this.html; }, set innerHTML(html) {
@@ -77,29 +77,29 @@ const check = unread => {
 };
 (async () => {
   emit("DOMContentLoaded");
-  if (input.mode === "current") assert.equal(JSON.parse(stored).wren, latest, "initial loaded reply is seen");
+  if (input.mode === "current") assert.equal(JSON.parse(stored).wisp, latest, "initial loaded reply is seen");
   emit("shaft:swapped", {target: rail});
   if (input.mode === "current") {
-    assert.equal(JSON.parse(stored).wren, latest, "initial loaded reply is seen");
+    assert.equal(JSON.parse(stored).wisp, latest, "initial loaded reply is seen");
     check(false);
   } else {
     check(true);
-    assert.equal(JSON.parse(stored).wren, old, "unseen reply must not be consumed");
+    assert.equal(JSON.parse(stored).wisp, old, "unseen reply must not be consumed");
   }
   if (input.mode === "failure") {
     await panel._tick();
     assert.ok(panel.classList.contains("stale"), "failed fetch leaves the old feed");
     emit("shaft:swapped", {target: rail});
     check(true);
-    assert.equal(JSON.parse(stored).wren, old);
+    assert.equal(JSON.parse(stored).wisp, old);
     context.fetch = async () => ({status: 200, ok: true, headers: {get: () => ""}, text: async () => input.newHtml});
     await panel._tick();
     assert.equal(panel.innerHTML, input.newHtml, "the fetched reply was swapped");
     check(false);
-    assert.equal(JSON.parse(stored).wren, latest, "successful feed swap clears unread");
+    assert.equal(JSON.parse(stored).wisp, latest, "successful feed swap clears unread");
   }
   if (input.mode === "tabs") {
-    stored = JSON.stringify({wren: latest});
+    stored = JSON.stringify({wisp: latest});
     for (const f of winHandlers.storage || []) f({key: "shaft.seen"});
     check(false);
     emit("shaft:swapped", {target: rail});

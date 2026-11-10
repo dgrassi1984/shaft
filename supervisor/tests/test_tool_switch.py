@@ -1,4 +1,4 @@
-"""Supervisor tools switched on/off per instance by the operator (the operator: wren without delegate_coding)."""
+"""Supervisor tools switched on/off per instance by the operator (the operator: wisp without delegate_coding)."""
 from __future__ import annotations
 
 import json
@@ -33,8 +33,8 @@ class ToolSwitchTest(unittest.TestCase):
         return b, [t["function"]["name"] for t in json.load(urllib.request.urlopen(req, timeout=5))["tools"]]
 
     def test_switched_off_is_neither_offered_nor_callable(self):
-        core.set_tool("wren", "delegate_coding", on=False)
-        b, offered = self.broker("wren")
+        core.set_tool("wisp", "delegate_coding", on=False)
+        b, offered = self.broker("wisp")
         self.assertNotIn("delegate_coding", offered)
         self.assertIn("web_search", offered)
         out = b.call("delegate_coding", {"task": "add a plugin"})
@@ -44,10 +44,10 @@ class ToolSwitchTest(unittest.TestCase):
         self.assertIn("delegate_coding", others)
 
     def test_switched_back_on(self):
-        core.set_tool("wren", "delegate_coding", on=False)
-        core.set_tool("wren", "delegate_coding", on=True)
-        self.assertEqual(core.disabled_tools("wren"), set())
-        self.assertIn("delegate_coding", self.broker("wren")[1])
+        core.set_tool("wisp", "delegate_coding", on=False)
+        core.set_tool("wisp", "delegate_coding", on=True)
+        self.assertEqual(core.disabled_tools("wisp"), set())
+        self.assertIn("delegate_coding", self.broker("wisp")[1])
 
     def test_the_prompt_urges_delegation_only_when_the_tool_is_there(self):
         code = ("from shaft import prompts, config; from shaft.state import State; from pathlib import Path; import os\n"

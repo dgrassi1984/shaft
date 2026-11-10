@@ -1,5 +1,5 @@
-"""Scheduled jobs (docs/plans/PLAN-jobs.md): an instance runs one of its own plugins every N minutes, without anyone installing
-anything. wren, 2026-10-16: "I can write the watcher … but the installation lives outside my sandbox".
+"""Scheduled jobs: an instance runs one of its own plugins every N minutes, without anyone installing
+anything. wisp, 2026-10-16: "I can write the watcher … but the installation lives outside my sandbox".
 
 A job is declared in the plugin's own manifest — `"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}`
 in plugins/<name>/plugin.json — so the instance creates, changes or removes it by editing its plugin in a cycle (the
@@ -18,7 +18,7 @@ unreadable declarations count. Quiet output waits for another wake, including th
 .supervisor/jobs/<instance>.jsonl; after FAIL_REPORT failures in a row the instance gets one message with the last
 error, and the job backs off (its interval doubles, up to a day) until it succeeds or its manifest changes.
 
-What a job makes reaches the instance whole (docs/plans/PLAN-thelos-review-2.md S1, S6; 2026-10-31: Thelos's
+What a job makes reaches the instance whole (2026-10-31: Tundra's
 morning brief could not write notes/ and its 20 KB fallback was cut at 4,000 characters, the rest nowhere it was told):
   - hand-off: `{"message": …, "files": ["brief.md", …]}` — at most MAX_FILES files of MAX_FILE_BYTES from its state
     folder — are copied beside the inbox message (inbox/<stamp>-from-job-<plugin>.files/), which lists them with their
@@ -171,7 +171,7 @@ def set_jobs_off(name: str, off: bool) -> None:
 def uncommitted(root: Path) -> set[str] | None:
     """Plugin folders whose files differ from the instance's last commit — being written by a cycle or a
     conversation, or just reverted by the gate. None if git cannot tell (then no job runs: fail closed).
-    A job runs only committed, gate-tested code (2026-10-16: wren's watcher ran mid-conversation, half-written —
+    A job runs only committed, gate-tested code (2026-10-16: wisp's watcher ran mid-conversation, half-written —
     "NameError: name 'broker' is not defined" — and a plugin.json written before its main.py was reported as broken)."""
     from .core import git_wt
     try:
@@ -686,7 +686,7 @@ def _log_row(name: str, row: dict) -> None:
 # -- waking ----------------------------------------------------------------------------------------------------------------
 def request_wake(name: str, plugin: str, not_before: datetime | None = None) -> None:
     """Kept once: several requests before the instance is idle make one wake, not a queue. `plugin`: the job that asked,
-    or an event (autonomy.event_wake: "message from wren", "commitment c… due") — an event's name has a space.
+    or an event (autonomy.event_wake: "message from wisp", "commitment c… due") — an event's name has a space.
     `not_before`: the wake may not start earlier (another instance's message inside the recipient's wake floor: paced,
     not dropped); a request without one makes the wake due now. `last`: when the latest request came — a cycle that
     began after it has seen what it asked for (tick)."""
@@ -715,7 +715,7 @@ def pending_wakes() -> dict[str, dict]:
 
 
 def _wakers(by: list[str]) -> str:
-    """'its job(s) watcher; message from wren': who asked for a wake, jobs and events (request_wake) apart."""
+    """'its job(s) watcher; message from wisp': who asked for a wake, jobs and events (request_wake) apart."""
     plugins, events = [b for b in by if " " not in b], [b for b in by if " " in b]
     return "; ".join(([f"its job(s) {', '.join(plugins)}"] if plugins else []) + events)
 

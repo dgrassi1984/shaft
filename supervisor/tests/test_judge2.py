@@ -1,4 +1,4 @@
-"""wren, 2026-10-13: "I only see fragments of its reasoning (the middle of record(judgments) truncates), it's another
+"""wisp, 2026-10-13: "I only see fragments of its reasoning (the middle of record(judgments) truncates), it's another
 model grading me with its own blind spots … full reasoning visible, and maybe a second judge occasionally".
 the operator: GLM 5.3 Flash as the second judge, and the record fixed."""
 from __future__ import annotations
@@ -91,7 +91,7 @@ class SecondJudgeTest(unittest.TestCase):
             self.sent.append(json.loads(req.data))
             return replies.pop(0)
         with mock.patch("supervisor.cloudllm._send", send):
-            return judge.ask_second("sys", "case", metrics.JUDGE_SCHEMA, "second wren")
+            return judge.ask_second("sys", "case", metrics.JUDGE_SCHEMA, "second wisp")
 
     def usage(self):
         return [json.loads(l) for l in (self.sup / "judge_usage.jsonl").read_text().splitlines()]
@@ -104,7 +104,7 @@ class SecondJudgeTest(unittest.TestCase):
         self.assertEqual(body["provider"]["only"], ["novita", "deepinfra"])  # the operator's data policy, as for instances
         self.assertNotIn("response_format", body)                         # Novita has no structured outputs here
         (u,) = self.usage()
-        self.assertEqual((u["purpose"], u["usd"], u["provider"]), ("second wren", 0.002, "Novita"))
+        self.assertEqual((u["purpose"], u["usd"], u["provider"]), ("second wisp", 0.002, "Novita"))
 
     def test_a_cut_off_answer_is_never_parsed_and_asked_once_with_more_room(self):
         out = self.ask(_reply(json.dumps(VERDICT)[:40], finish="length"), _reply(json.dumps(VERDICT)))
@@ -161,18 +161,18 @@ class SecondJudgeTest(unittest.TestCase):
 
     def test_sampling_is_reproducible_and_follows_the_knob(self):
         with mock.patch.object(judge, "JUDGE2_EVERY", 4):
-            picks = [metrics.second_sampled("wren", f"2026-10-13T{h:02d}:00:00") for h in range(24)]
-            self.assertEqual(picks, [metrics.second_sampled("wren", f"2026-10-13T{h:02d}:00:00") for h in range(24)])
+            picks = [metrics.second_sampled("wisp", f"2026-10-13T{h:02d}:00:00") for h in range(24)]
+            self.assertEqual(picks, [metrics.second_sampled("wisp", f"2026-10-13T{h:02d}:00:00") for h in range(24)])
             self.assertTrue(0 < sum(picks) < 24)
         with mock.patch.object(judge, "JUDGE2_EVERY", 1):
-            self.assertTrue(metrics.second_sampled("wren", "x"))
+            self.assertTrue(metrics.second_sampled("wisp", "x"))
         with mock.patch.object(judge, "JUDGE2_EVERY", 0):
-            self.assertFalse(metrics.second_sampled("wren", "x"))
+            self.assertFalse(metrics.second_sampled("wisp", "x"))
 
     def test_a_failing_second_judge_never_blocks_the_main_verdict(self):
         with mock.patch.object(judge, "ask_second", side_effect=judge.JudgeError("HTTP 503")), \
                 mock.patch.object(metrics, "log"):
-            self.assertEqual(metrics.second_opinion("wren", "case"),
+            self.assertEqual(metrics.second_opinion("wisp", "case"),
                              {"judge": judge.JUDGE2_MODEL, "error": "HTTP 503"})
 
     def test_stats_report_agreement_and_disagreements(self):
@@ -193,8 +193,8 @@ class JudgePendingTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.sup, True)
         self.ep = {"ts": "2026-10-13T04:42:00", "intent": {"goal": "g", "success_criterion": "c", "confidence": 70},
                    "finish": {"criterion_met": "yes"}, "tools": []}
-        instances = self.sup / "instances"                  # wren exists: a deleted one's cases are dropped instead
-        (instances / "wren" / "shaft").mkdir(parents=True)
+        instances = self.sup / "instances"                  # wisp exists: a deleted one's cases are dropped instead
+        (instances / "wisp" / "shaft").mkdir(parents=True)
         for p in (mock.patch.object(metrics, "SUP_DIR", self.sup), mock.patch.object(metrics, "log"),
                   mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "INSTANCES", instances),
                   mock.patch.object(judge, "JUDGE_EVERY", 1)):
@@ -211,7 +211,7 @@ class JudgePendingTest(unittest.TestCase):
                 mock.patch.object(judge, "ask", side_effect=lambda s, case, *a, **k: cases.append(case) or dict(VERDICT)), \
                 mock.patch.object(judge, "ask_second") as second, \
                 mock.patch.object(metrics, "second_sampled", return_value=True):
-            self.assertEqual(metrics.judge_pending("wren"), 1)
+            self.assertEqual(metrics.judge_pending("wisp"), 1)
             second.assert_not_called()                                    # not while the run holds the instance
         (stashed,) = (self.sup / "judgments" / "second-cases").glob("*.json")
         with mock.patch.object(judge, "ask_second",
@@ -219,14 +219,14 @@ class JudgePendingTest(unittest.TestCase):
             self.assertEqual(metrics.second_pending(), 1)
             self.assertEqual(metrics.second_pending(), 0)                 # graded once
         self.assertFalse(stashed.exists())
-        (j,) = metrics.judgments("wren")
+        (j,) = metrics.judgments("wisp")
         self.assertEqual(j["criterion_met"], "partial")                   # the main judge alone scores
         self.assertEqual(j["second"]["criterion_met"], "yes")
         self.assertEqual(j["second"]["judge"], judge.JUDGE2_MODEL)
         self.assertEqual(cases[0], cases[1])                              # blind, on exactly the same case
 
     def test_a_case_another_process_took_is_skipped(self):
-        metrics.stash_second("wren", "2026-10-13T04:42:00", "case")
+        metrics.stash_second("wisp", "2026-10-13T04:42:00", "case")
         (path,) = (self.sup / "judgments" / "second-cases").glob("*.json")
         path.rename(path.with_suffix(".working-1"))
         with mock.patch.object(judge, "ask_second") as second:
@@ -246,8 +246,8 @@ class ReleasedBeforeTheSecondJudgeTest(unittest.TestCase):
                 mock.patch.object(runner, "_run", side_effect=lambda *a, **k: order.append("run") or 0), \
                 mock.patch.object(runner, "instance_root"), \
                 mock.patch.object(runner, "_second_judge_later", side_effect=lambda: order.append("second")):
-            runner.run_agent("wren", "live", ["live"], False)
-            runner.run_agent("wren", "talk", ["talk"], True)
+            runner.run_agent("wisp", "live", ["live"], False)
+            runner.run_agent("wisp", "talk", ["talk"], True)
         self.assertEqual(order, ["acquire", "run", "release", "second", "acquire", "run", "release"])
 
     def test_it_is_started_detached_only_when_a_case_waits(self):
@@ -258,7 +258,7 @@ class ReleasedBeforeTheSecondJudgeTest(unittest.TestCase):
             runner._second_judge_later()
             popen.assert_not_called()
             (sup / "judgments" / "second-cases").mkdir(parents=True)
-            (sup / "judgments" / "second-cases" / "wren@x.json").write_text("{}")
+            (sup / "judgments" / "second-cases" / "wisp@x.json").write_text("{}")
             runner._second_judge_later()
         args, kw = popen.call_args
         self.assertEqual(args[0][-3:], ["supervisor", "judge", "second"])
@@ -280,7 +280,7 @@ class JudgeLessOftenTest(unittest.TestCase):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-jlo-"))
         self.addCleanup(shutil.rmtree, self.sup, True)
         instances = self.sup / "instances"
-        (instances / "wren" / "shaft").mkdir(parents=True)
+        (instances / "wisp" / "shaft").mkdir(parents=True)
         self.eps = [{"ts": f"2026-10-20T10:{i:02d}:00", "finish": {"criterion_met": "yes"}, "tools": [],
                      **({} if i % 3 == 2 else {"intent": {"goal": f"g{i}", "success_criterion": "c", "confidence": 70}})}
                     for i in range(6)]                           # runs 2 and 5 declared no intent
@@ -305,24 +305,24 @@ class JudgeLessOftenTest(unittest.TestCase):
         return dict(VERDICT, criterion_met="yes")
 
     def judged(self) -> list[str]:
-        return [j["episode_ts"] for j in metrics.judgments("wren")]
+        return [j["episode_ts"] for j in metrics.judgments("wisp")]
 
     def test_one_run_in_n_is_judged_and_the_rest_are_recorded_as_not_judged(self):
         draws = iter([0, 1] * 3)                                   # judged, left out, judged, left out, ...
         with mock.patch.object(judge, "JUDGE_EVERY", 2), \
                 mock.patch.object(metrics.secrets, "randbelow", side_effect=lambda n: next(draws)) as draw:
-            self.assertEqual(metrics.judge_pending("wren"), 3)
+            self.assertEqual(metrics.judge_pending("wisp"), 3)
             self.assertEqual(draw.call_count, 6)                   # no-intent runs drawn too: the sample stays unbiased
             self.assertEqual(self.judged(), [e["ts"] for e in self.eps[0::2]])
-            self.assertEqual(metrics.unsampled("wren"), {e["ts"] for e in self.eps[1::2]})
+            self.assertEqual(metrics.unsampled("wisp"), {e["ts"] for e in self.eps[1::2]})
             self.assertEqual(len(self.asked), 2)                   # run 2 had no intent: the free rule, no judge call
             self.assertNotIn(self.eps[5]["ts"], self.judged())     # left out: no rule verdict "never declared an intent"
-            self.assertEqual(metrics.judge_pending("wren"), 0)     # decided once: nothing drawn or asked again
+            self.assertEqual(metrics.judge_pending("wisp"), 0)     # decided once: nothing drawn or asked again
             self.assertEqual(draw.call_count, 6)
         self.eps.append({"ts": "2026-10-20T11:00:00", "intent": {"goal": "g", "success_criterion": "c"},
                          "finish": {"criterion_met": "yes"}, "tools": []})
         with mock.patch.object(judge, "JUDGE_EVERY", 1):           # back to every run: from now on, not the backlog
-            self.assertEqual(metrics.judge_pending("wren"), 1)
+            self.assertEqual(metrics.judge_pending("wisp"), 1)
         self.assertEqual(self.judged()[-1], "2026-10-20T11:00:00")
         self.assertEqual(len(self.judged()), 4)
 
@@ -330,10 +330,10 @@ class JudgeLessOftenTest(unittest.TestCase):
         draws = iter([0, 1] * 3)
         with mock.patch.object(judge, "JUDGE_EVERY", 2), \
                 mock.patch.object(metrics.secrets, "randbelow", side_effect=lambda n: next(draws)):
-            metrics.judge_pending("wren")
-            rows = [dict(j, judge=GLM) for j in metrics.judgments("wren") if j.get("judge") != "rule"]
+            metrics.judge_pending("wisp")
+            rows = [dict(j, judge=GLM) for j in metrics.judgments("wisp") if j.get("judge") != "rule"]
             with mock.patch.object(metrics, "judgments", return_value=rows):
-                text = metrics.stats_text("wren")
+                text = metrics.stats_text("wisp")
         self.assertIn(f"{metrics.judge_label({'judge': GLM})} too few (2) vs none", text)   # 2 judged; the 3 left out are not "no"
         self.assertIn("The main judge grades one live run in 2", text)
         self.assertIn("3 of my runs were left out: they have no verdict, and are not counted as failures", text)
@@ -349,19 +349,19 @@ class JudgeLessOftenTest(unittest.TestCase):
         import random
         rng = random.Random(0)
         picks = {judge.pick(exclude=[MIMO], rng=rng, avoid=(DEEPSEEK,)) for _ in range(200)}
-        self.assertEqual(picks, {GLM})                             # wren on MiMo, DeepSeek to grade it second
+        self.assertEqual(picks, {GLM})                             # wisp on MiMo, DeepSeek to grade it second
         # Review row 20: out of the main rotation on every run, not only those it grades second (a saved pool that
         # still lists it, as here).
         self.assertEqual({judge.pick(exclude=[MIMO], rng=rng) for _ in range(200)}, {GLM})
         with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(metrics, "second_sampled", return_value=True):
-            metrics.judge_pending("wren")
+            metrics.judge_pending("wisp")
         self.assertEqual(set(self.asked), {GLM})
         self.assertEqual(len(list((self.sup / "judgments" / "second-cases").glob("*.json"))), 4)
 
     def test_no_second_opinion_when_only_the_second_judges_model_is_left(self):
         with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(metrics, "second_sampled", return_value=True), \
                 mock.patch.object(judge, "JUDGE_MODELS", [MIMO, DEEPSEEK]):
-            metrics.judge_pending("wren")
+            metrics.judge_pending("wisp")
         self.assertEqual(set(self.asked), {DEEPSEEK})               # still judged: by the one judge left
         self.assertFalse((self.sup / "judgments" / "second-cases").exists())   # but never graded twice by it
 
@@ -371,7 +371,7 @@ class JudgeLessOftenTest(unittest.TestCase):
         own = lambda name, ep: [MIMO, GLM] if ep["ts"] == "2026-10-20T10:00:00" else [MIMO]
         with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(judge, "JUDGE_MODELS", [MIMO, GLM]), \
                 mock.patch.object(metrics, "own_models", side_effect=own):
-            metrics.judge_pending("wren")
+            metrics.judge_pending("wisp")
         self.assertNotIn("2026-10-20T10:00:00", self.judged())     # left for a later pass, never guessed
         self.assertIn("2026-10-20T10:01:00", self.judged())
         self.assertEqual(set(self.asked), {GLM})

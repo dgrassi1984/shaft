@@ -1,9 +1,9 @@
 """config.env has two writers — the operator, at any time, and the instance through the broker's set_config —
 and the gate reverts only the instance's lines.
 
-Regression (2026-10-13): the operator switched kant to claude-opus-5-5 at about 15:00, during a live cycle. The gate
-counted every change to config.env as the instance's; kant's new plugin failed its tests, so at 15:20 the gate
-"reverted: ['config.env', 'plugins/text_stats/...']", told kant that *its* change was reverted, and the next
+Regression (2026-10-13): the operator switched kiln to claude-opus-5-5 at about 15:00, during a live cycle. The gate
+counted every change to config.env as the instance's; kiln's new plugin failed its tests, so at 15:20 the gate
+"reverted: ['config.env', 'plugins/text_stats/...']", told kiln that *its* change was reverted, and the next
 reflection ran on Bonsai."""
 from __future__ import annotations
 
@@ -81,18 +81,18 @@ class ConfigWritersTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.project, True)
         git(self.project, "init", "-q")
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
-        self.root = self.project / "instances" / "kant"
-        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/kant", str(self.root))
+        self.root = self.project / "instances" / "kiln"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/kiln", str(self.root))
         for d in ("shaft", "self", "memory", "plugins", ".tmp"):
             (self.root / d).mkdir()
         (self.root / "shaft" / "__init__.py").write_text("")
-        (self.root / "memory" / "journal.md").write_text("# kant — journal\n")
+        (self.root / "memory" / "journal.md").write_text("# kiln — journal\n")
         (self.root / "config.env").write_text(CONFIG)
         (self.root / ".gitignore").write_text(".tmp/\n" + IGNORE_MIND)
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "kant: created")
-        mind.init("kant", self.project)
-        mind.commit("kant", "kant: created", self.root, self.project)
+        git(self.root, "commit", "-q", "-m", "kiln: created")
+        mind.init("kiln", self.project)
+        mind.commit("kiln", "kiln: created", self.root, self.project)
 
     def cycle(self, test_file: str, during, gate_tests=instance_tests_only):
         """One live cycle through the supervisor's own entry point; `during(broker)` runs while the instance
@@ -100,7 +100,7 @@ class ConfigWritersTest(unittest.TestCase):
         from supervisor import core, runner
         from supervisor.broker import Broker
         sup = self.project / ".supervisor"
-        broker = Broker("kant", self.project, {}, sup / "broker.log")
+        broker = Broker("kiln", self.project, {}, sup / "broker.log")
         cmd = [sys.executable, "-c", CYCLE, test_file]
         env = {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
         result = {}
@@ -113,7 +113,7 @@ class ConfigWritersTest(unittest.TestCase):
              mock.patch.object(gate, "run_tests", side_effect=gate_tests), \
              mock.patch.object(runner, "log"), mock.patch("supervisor.metrics.after_cycle"), \
              mock.patch("supervisor.metrics.start_probation") as probation:
-            t = threading.Thread(target=lambda: result.update(code=runner.run_agent("kant", "live", ["live"], False)))
+            t = threading.Thread(target=lambda: result.update(code=runner.run_agent("kiln", "live", ["live"], False)))
             t.start()
             for _ in range(200):
                 if (self.root / ".tmp" / "working").exists():
@@ -147,7 +147,7 @@ class ConfigWritersTest(unittest.TestCase):
     def test_a_revert_names_every_failing_test(self):
         # Regression (2026-10-19): the note kept the last 1,500 characters, and the gate itself the last 3,000 of the
         # supervisor stage; 8 failing supervisor tests with long messages left no test name in either, and five of
-        # thelos's good changes were reverted with nobody able to say which tests failed.
+        # tundra's good changes were reverted with nobody able to say which tests failed.
         names = [f"FAIL: test_{i} (supervisor.tests.test_web_chat.T.test_{i})" for i in range(8)]
         stderr = "".join(f"{'=' * 70}\n{n}\n{'-' * 70}\nAssertionError: {'x' * 800}\n\n" for n in names) \
             + "Ran 1109 tests\n\nFAILED (failures=8)\n"
@@ -169,9 +169,9 @@ class ConfigWritersTest(unittest.TestCase):
         self.assertEqual([l[2:] for l in listed.strip().splitlines()], names)
 
     def test_a_revert_names_every_failing_instance_test_20261029(self):
-        # Regression (thelos, 2026-10-29): the instance-tests stage kept only its last 3,000 characters and named
+        # Regression (tundra, 2026-10-29): the instance-tests stage kept only its last 3,000 characters and named
         # nothing ahead of them; 11 failures were reported as 2 ("failing: ..." and the note alike), and the "full log"
-        # held the same cut, so thelos retried one change four times blind to the other nine.
+        # held the same cut, so tundra retried one change four times blind to the other nine.
         names = [f"FAIL: test_{i} (tests.test_plugin_runner_args.T.test_{i})" for i in range(11)]
         stderr = "".join(f"{'=' * 70}\n{n}\n{'-' * 70}\nAssertionError: {'x' * 800}\n\n" for n in names) \
             + "Ran 1365 tests\n\nFAILED (failures=11)\n"
@@ -194,7 +194,7 @@ class ConfigWritersTest(unittest.TestCase):
             self.assertIn(f"{n}\n{'-' * 70}\nAssertionError: {'x' * 800}", kept)
 
     def test_a_reverted_change_is_kept_in_the_instance_s_notes_and_named_20261027(self):
-        # Regression (thelos, 2026-10-27): a mid-run revert deleted a failing test file it was building from; code
+        # Regression (tundra, 2026-10-27): a mid-run revert deleted a failing test file it was building from; code
         # reverted before any commit has no history, and the gate kept a copy only on the interrupted-run path.
         self.cycle(FAILING, lambda broker: None)
         self.assertFalse((self.root / "tests" / "test_text_stats.py").exists())          # reverted, as before
@@ -248,7 +248,7 @@ class ConfigWritersTest(unittest.TestCase):
         (tree / "supervisor" / "tests" / "test_ok.py").write_text(PASSING)
         (self.root / "shaft" / "plugin_runner.py").write_text("")                # its plugins' check passes
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "kant: plugin runner")
+        git(self.root, "commit", "-q", "-m", "kiln: plugin runner")
         hangs = ("import sys, time, unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n"
                  "        sys.stderr.write('test_x started\\n'); sys.stderr.flush(); time.sleep(120)\n")
         with mock.patch.object(gate, "committed_tree", return_value=(tree, "tree")):
@@ -278,9 +278,9 @@ class ConfigWritersTest(unittest.TestCase):
         run = git(self.root, "log", "-1", "--format=%H", "--grep=made by the instance").strip()
         self.assertFalse([p for p in git(self.root, "show", "--name-only", "--format=", run).split()
                           if p.split("/")[0] in ("self", "memory", "notes", "inbox")])
-        self.assertEqual(mind.git("kant", "log", "-1", "--format=%B", project=self.project).stdout.strip(),
+        self.assertEqual(mind.git("kiln", "log", "-1", "--format=%B", project=self.project).stdout.strip(),
                          git(self.root, "log", "-1", "--format=%B", run).strip())
-        self.assertIn("made text_stats", mind.show("kant", "mind", "memory/journal.md", self.project) or "")
+        self.assertIn("made text_stats", mind.show("kiln", "mind", "memory/journal.md", self.project) or "")
         self.assertNotIn("config.env", self.probation.call_args.args[2])
         self.assertEqual(len([c for c in self.commits() if "changed from outside the instance" in c]), 1)
 
@@ -308,7 +308,7 @@ class ConfigWritersTest(unittest.TestCase):
         log = git(self.root, "log", "--format=%H %s", "-n", "4").splitlines()
         by_subject = {line.split(" ", 1)[1]: line.split(" ", 1)[0] for line in log}
         outside = next(h for s, h in by_subject.items() if "changed from outside" in s)
-        mine = next(h for s, h in by_subject.items() if s.startswith("kant: live"))
+        mine = next(h for s, h in by_subject.items() if s.startswith("kiln: live"))
         outside_diff = git(self.root, "show", "--format=", outside, "--", "config.env")
         mine_diff = git(self.root, "show", "--format=", mine, "--", "config.env")
         self.assertIn("+" + OPERATOR, outside_diff)
@@ -324,21 +324,21 @@ class SetConfigTest(unittest.TestCase):
         from supervisor.broker import Broker
         self.project = Path(tempfile.mkdtemp(prefix="shaft-setcfg-")).resolve()
         self.addCleanup(shutil.rmtree, self.project, True)
-        self.root = self.project / "instances" / "wren"
+        self.root = self.project / "instances" / "wisp"
         self.root.mkdir(parents=True)
-        (self.root / "config.env").write_text('# my model\nLLM_MODEL="claude-haiku-5-5"  # wren\nX=1\nX=2\n')
-        self.broker = Broker("wren", self.project, {}, self.project / "broker.log")
+        (self.root / "config.env").write_text('# my model\nLLM_MODEL="claude-haiku-5-5"  # wisp\nX=1\nX=2\n')
+        self.broker = Broker("wisp", self.project, {}, self.project / "broker.log")
 
     def test_sets_the_line_that_counts_and_records_it(self):
         self.assertTrue(self.broker.call("set_config", {"key": "X", "value": "3"})["ok"])
         self.assertTrue(self.broker.call("set_config", {"key": "NEW_KEY", "value": "a b"})["ok"])
         self.assertEqual((self.root / "config.env").read_text(),
-                         '# my model\nLLM_MODEL="claude-haiku-5-5"  # wren\nX=1\nX="3"\nNEW_KEY="a b"\n')
+                         '# my model\nLLM_MODEL="claude-haiku-5-5"  # wisp\nX=1\nX="3"\nNEW_KEY="a b"\n')
         self.assertEqual(self.broker.config_writes, [{"key": "X", "old": "X=2", "new": 'X="3"'},
                                                      {"key": "NEW_KEY", "old": None, "new": 'NEW_KEY="a b"'}])
         from supervisor.core import instance_config
         with mock.patch("supervisor.core.instance_root", return_value=self.root):
-            self.assertEqual(instance_config("wren"), {"LLM_MODEL": "claude-haiku-5-5", "X": "3", "NEW_KEY": "a b"})
+            self.assertEqual(instance_config("wisp"), {"LLM_MODEL": "claude-haiku-5-5", "X": "3", "NEW_KEY": "a b"})
 
     def test_refuses_what_would_not_read_back_as_one_value(self):
         before = (self.root / "config.env").read_text()

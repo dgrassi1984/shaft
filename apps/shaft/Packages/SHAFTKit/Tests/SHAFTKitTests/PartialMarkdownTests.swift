@@ -73,7 +73,7 @@ struct PartialMarkdownTests {
     @Test func nextCycleHintKeepsTheClauseThatSaysWhen() {
         #expect(NextCycleHint.short("a cycle is running and read its inbox when it began: this starts the next one once it ends")
                 == "this starts the next one once it ends")
-        #expect(NextCycleHint.short("for wren's next cycle, which this starts now") == "for wren's next cycle, which this starts now")
+        #expect(NextCycleHint.short("for wisp's next cycle, which this starts now") == "for wisp's next cycle, which this starts now")
     }
 
     @Test func aRefusalReadsAsASentence() {

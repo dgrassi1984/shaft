@@ -1,7 +1,7 @@
-"""The operator's edits of config.env and drive.md (docs/plans/PLAN-webui.md M3: `shaft config`, `shaft drive`, the web UI's
+"""The operator's edits of config.env and drive.md (`shaft config`, `shaft drive`, the web UI's
 Config and Drive pages): only the named lines change, a stale edit is refused, the instance's set_config and the
 operator never lose each other's line, and the edit is committed as the operator's — at once when the instance is
-free, by its run otherwise, never undone by the gate as the instance's (kant, 2026-10-13)."""
+free, by its run otherwise, never undone by the gate as the instance's (kiln, 2026-10-13)."""
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +33,7 @@ class OpConfigTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="shaft-opcfg-")).resolve()
         self.addCleanup(shutil.rmtree, self.dir, True)
-        self.root = self.dir / "instances" / "wren"
+        self.root = self.dir / "instances" / "wisp"
         (self.root / "shaft").mkdir(parents=True)
         (self.root / "shaft" / "config.py").write_text(AGENT_CONFIG)
         (self.root / "config.env").write_text(CONFIG)
@@ -65,10 +65,10 @@ class EffortChoicesTest(OpConfigTest):
             '    "OTHER": ("on", "off"),\n'
             '}\n')
         self.assertEqual(opconfig.effort_choices(self.root), ("medium", "xhigh", "low"))
-        field = next(f for f in opconfig.fields("wren") if f["key"] == "LLM_REASONING_EFFORT")
+        field = next(f for f in opconfig.fields("wisp") if f["key"] == "LLM_REASONING_EFFORT")
         self.assertEqual(field["choices"], ["medium", "xhigh", "low"])
         with self.assertRaisesRegex(opconfig.Refused, "must be one of medium, xhigh, low"):
-            opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "invalid"})
+            opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "invalid"})
         self.assertEqual(self.text(), CONFIG)
 
     def test_unreadable_invalid_or_nonliteral_choices_keep_none_fallback(self):
@@ -95,7 +95,7 @@ class EffortChoicesTest(OpConfigTest):
 
 class SetTest(OpConfigTest):
     def test_only_the_named_line_changes_byte_for_byte(self):
-        r = opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "xhigh"})
+        r = opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "xhigh"})
         self.assertEqual(r["changed"], ["LLM_REASONING_EFFORT"])
         self.assertEqual(self.text(), CONFIG.replace('LLM_REASONING_EFFORT="medium"',
                                                      f'LLM_REASONING_EFFORT="xhigh"   # the operator, {TODAY}'))
@@ -105,19 +105,19 @@ class SetTest(OpConfigTest):
         writes = []
         real = core.safe_write
         with mock.patch.object(opconfig, "safe_write", side_effect=lambda *a: writes.append(a) or real(*a)):
-            opconfig.set_values("wren", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+            opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
         self.assertEqual(len(writes), 1)
         values = core.config_values(self.text())
         self.assertEqual((values["LLM_MODEL"], values["LLM_BASE_URL"]),
                          ("ternary-bonsai-2-27b-mlx", "http://127.0.0.1:8780/v1"))
-        opconfig.set_values("wren", {"LLM_MODEL": "gpu/bonsai2"})
+        opconfig.set_values("wisp", {"LLM_MODEL": "gpu/bonsai2"})
         self.assertEqual(core.config_values(self.text())["LLM_BASE_URL"], "broker")
 
     def test_a_stale_edit_is_refused_and_names_the_value_now(self):
         with self.assertRaisesRegex(opconfig.Refused, "it is now 'medium' \\(you saw 'low'\\)"):
-            opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "xhigh"}, {"LLM_REASONING_EFFORT": "low"})
+            opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "xhigh"}, {"LLM_REASONING_EFFORT": "low"})
         with self.assertRaisesRegex(opconfig.Refused, "it is now 'yes'"):
-            opconfig.set_values("wren", {"CUSTOM_KNOB": "no"}, {"CUSTOM_KNOB": None})
+            opconfig.set_values("wisp", {"CUSTOM_KNOB": "no"}, {"CUSTOM_KNOB": None})
         self.assertEqual(self.text(), CONFIG)
         self.assertEqual(self.committed, [])
 
@@ -130,22 +130,22 @@ class SetTest(OpConfigTest):
                                 ("WATCH_GCHAT", "wakeup", "off, inbox or wake"),
                                 ("WATCH_MAIL", "on", "off, inbox or wake")):
             with self.assertRaisesRegex(opconfig.Refused, why, msg=key):
-                opconfig.set_values("wren", {key: value})
+                opconfig.set_values("wisp", {key: value})
         self.assertEqual(self.text(), CONFIG)
 
     def test_unset_removes_the_line_and_nothing_else(self):
-        opconfig.set_values("wren", {"CUSTOM_KNOB": None})
+        opconfig.set_values("wisp", {"CUSTOM_KNOB": None})
         self.assertEqual(self.text(), CONFIG.replace("CUSTOM_KNOB=yes\n", ""))
 
     def test_setting_what_is_already_there_writes_nothing(self):
-        r = opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "medium", "NOT_THERE": None})
+        r = opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "medium", "NOT_THERE": None})
         self.assertEqual(r["changed"], [])
         self.assertEqual(self.text(), CONFIG)
         self.assertEqual(self.committed, [])
 
     def test_a_wake_below_the_floor_says_what_will_happen(self):
         # setUp supplies the operator's 5-minute floor.
-        r = opconfig.set_values("wren", {"WAKE_INTERVAL_MINUTES": "3"})
+        r = opconfig.set_values("wisp", {"WAKE_INTERVAL_MINUTES": "3"})
         self.assertIn("wake floor is 5 min (shaft limits): it wakes every 5 min, not 3", r["notes"][0])
 
 
@@ -158,13 +158,13 @@ class CommitFailsTest(OpConfigTest):
         from supervisor import runner
         with mock.patch.object(runner, "run_lock", return_value=contextlib.nullcontext()), \
                 mock.patch.object(runner, "_commit_outside_config", side_effect=SystemExit("not a registered worktree")):
-            committed = REAL_COMMIT("wren", self.root, "config")
+            committed = REAL_COMMIT("wisp", self.root, "config")
         self.assertIn("written, not committed (not a registered worktree)", committed)
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch.object(opconfig, "set_values",
                                                                 return_value={"changed": ["X"], "committed": committed,
                                                                               "notes": []}):
-            code = opconfig.config_command("wren", "set", ["X=1"], [], [])
+            code = opconfig.config_command("wisp", "set", ["X=1"], [], [])
         self.assertEqual(code, 0)
         self.assertIn("written, not committed", out.getvalue())
 
@@ -179,7 +179,7 @@ class SecretNamesTest(unittest.TestCase):
 
 class FieldsTest(OpConfigTest):
     def test_every_key_with_its_help_choices_and_the_secret_masked(self):
-        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        fs = {f["key"]: f for f in opconfig.fields("wisp")}
         self.assertEqual(list(fs)[:3], ["LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"])
         self.assertEqual(fs["LLM_API_KEY"]["value"], "(set, hidden)")
         self.assertNotIn("sk-secret-value", repr(fs))
@@ -192,7 +192,7 @@ class FieldsTest(OpConfigTest):
         self.assertTrue(fs["CUSTOM_KNOB"]["set"])                        # a key the template does not know
 
     def test_watch_keys_are_dropdowns_with_help_even_when_unset_20261110(self):
-        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        fs = {f["key"]: f for f in opconfig.fields("wisp")}
         keys = ["WATCH_MAIL", "WATCH_CALENDAR", "WATCH_GCHAT"]
         self.assertEqual(list(fs)[-3:], keys)
         for key in keys:
@@ -209,7 +209,7 @@ class FieldsTest(OpConfigTest):
         from supervisor.web_config import _field_form
         (self.root / "config.env").write_text(
             CONFIG + '\nWATCH_GCHAT="wake"\n\n# Keep this help.\nWATCH_MAIL="wakeup"\n')
-        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        fs = {f["key"]: f for f in opconfig.fields("wisp")}
         for key, value in (("WATCH_GCHAT", "wake"), ("WATCH_MAIL", "wakeup")):
             with self.subTest(key=key):
                 self.assertEqual(fs[key]["value"], value)
@@ -217,29 +217,29 @@ class FieldsTest(OpConfigTest):
                 self.assertEqual(fs[key]["choices"], ["off", "inbox", "wake"])
                 self.assertFalse(fs[key]["numeric"])
         self.assertEqual(fs["WATCH_MAIL"]["help"], "Keep this help.")
-        form = str(_field_form("wren", fs["WATCH_MAIL"]))
+        form = str(_field_form("wisp", fs["WATCH_MAIL"]))
         self.assertIn('<select name="value"', form)
         self.assertIn('<option value="wakeup" selected>wakeup</option>', form)
         for value in ("off", "inbox", "wake"):
             self.assertIn(f'<option value="{value}">{value}</option>', form)
 
     def test_a_comment_block_after_keys_starts_afresh(self):
-        fs = {f["key"]: f for f in opconfig.fields("wren")}
+        fs = {f["key"]: f for f in opconfig.fields("wisp")}
         self.assertNotIn("A local server", fs["LLM_REASONING_EFFORT"]["help"])
 
 
 class DriveTest(OpConfigTest):
     def test_set_and_remove_with_compare_and_set(self):
-        self.assertEqual(opconfig.drive("wren"), (None, "none"))
-        opconfig.set_drive("wren", "Help the operator with his mail.", "none")
-        text, sha = opconfig.drive("wren")
+        self.assertEqual(opconfig.drive("wisp"), (None, "none"))
+        opconfig.set_drive("wisp", "Help the operator with his mail.", "none")
+        text, sha = opconfig.drive("wisp")
         self.assertEqual(text, "Help the operator with his mail.\n")
         self.assertEqual(sha, hashlib.sha256(b"Help the operator with his mail.\n").hexdigest())
         with self.assertRaisesRegex(opconfig.Refused, "changed since you looked"):
-            opconfig.set_drive("wren", "Something else.", "none")
+            opconfig.set_drive("wisp", "Something else.", "none")
         with self.assertRaisesRegex(opconfig.Refused, "empty"):
-            opconfig.set_drive("wren", "  \n", sha)
-        opconfig.set_drive("wren", None, sha)
+            opconfig.set_drive("wisp", "  \n", sha)
+        opconfig.set_drive("wisp", None, sha)
         self.assertFalse((self.root / "drive.md").exists())
         self.assertEqual(self.committed, ["drive", "drive"])
 
@@ -252,7 +252,7 @@ class RaceTest(unittest.TestCase):
         from supervisor.broker import Broker
         self.dir = Path(tempfile.mkdtemp(prefix="shaft-race-")).resolve()
         self.addCleanup(shutil.rmtree, self.dir, True)
-        self.root = self.dir / "instances" / "wren"
+        self.root = self.dir / "instances" / "wisp"
         (self.root / "shaft").mkdir(parents=True)
         (self.root / "config.env").write_text('LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES=120\n')
         for p in (mock.patch.object(core, "SUP_DIR", self.dir / "sup"),
@@ -262,11 +262,11 @@ class RaceTest(unittest.TestCase):
                   mock.patch.object(opconfig, "_commit", return_value=True), mock.patch.object(opconfig, "log")):
             p.start()
             self.addCleanup(p.stop)
-        self.broker = Broker("wren", self.dir, {}, self.dir / "broker.log")
+        self.broker = Broker("wisp", self.dir, {}, self.dir / "broker.log")
 
     def test_an_operator_edit_during_set_config_is_kept(self):
         real = core.config_with
-        operator = threading.Thread(target=lambda: opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "low"}))
+        operator = threading.Thread(target=lambda: opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "low"}))
         started = []
 
         def slow_config_with(text, key, line):            # set_config, between its read and its write
@@ -300,7 +300,7 @@ class ThroughARealCycleTest(unittest.TestCase):
                 mock.patch.object(core, "PROJECT", self.project), mock.patch("supervisor.runner.PROJECT", self.project), \
                 mock.patch("supervisor.cloudllm.CLOUD_MODELS", ["claude-opus-5-5"]), \
                 mock.patch("supervisor.runner.log"), mock.patch.object(opconfig, "log"):
-            return opconfig.set_values("kant", changes)
+            return opconfig.set_values("kiln", changes)
 
     def test_an_edit_while_it_runs_is_its_runs_to_commit_as_the_operators_and_survives_a_failed_gate(self):
         result = {}
@@ -321,7 +321,7 @@ class ThroughARealCycleTest(unittest.TestCase):
         self.assertTrue(r["committed"])
         self.assertEqual(cw.git(self.root, "status", "--porcelain", "--untracked-files=no"), "")   # cmd_update's test
         head = cw.git(self.root, "log", "-1", "--format=%an|%B")
-        self.assertTrue(head.startswith("SHAFT supervisor|kant: config.env changed from outside the instance"))
+        self.assertTrue(head.startswith("SHAFT supervisor|kiln: config.env changed from outside the instance"))
         self.assertIn("LLM_MODEL: bonsai -> claude-opus-5-5", head)
         self.assertIn("LLM_BASE_URL", cw.git(self.root, "show", "HEAD:config.env"))
 
@@ -342,8 +342,8 @@ class LinkedWorktreeTest(unittest.TestCase):
         cw.git(main, "commit", "-q", "--allow-empty", "-m", "main")
         branch = main / ".claude" / "worktrees" / "b"
         cw.git(main, "worktree", "add", "-q", "-b", "b", str(branch))
-        inst = main / "instances" / "kant"
-        cw.git(main, "worktree", "add", "-q", "--orphan", "-b", "instance/kant", str(inst))
+        inst = main / "instances" / "kiln"
+        cw.git(main, "worktree", "add", "-q", "--orphan", "-b", "instance/kiln", str(inst))
         self.assertTrue((branch / ".git").is_file())
         self.assertEqual(core._git_common_dir(branch), (main / ".git").resolve())
         self.assertEqual(core._git_common_dir(main), main / ".git")

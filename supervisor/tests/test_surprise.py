@@ -1,4 +1,4 @@
-"""The surprise loop in the template (docs/plans/PLAN-surprise.md M1 and M3), black-box through FakeLLM.
+"""The surprise loop in the template, black-box through FakeLLM.
 
 M1: predictions on declare_intent, surprises/resolves on finish_cycle, the rule's flag and [unexpected …] note on the
 tool log, the open-surprise queue in every prompt, surprises in search_memory. M3: the curiosity draw, close_surprise
@@ -22,7 +22,7 @@ from shaft import agent, config, live, memory, prompts, sleep
 try:
     from shaft import surprises
 except ImportError:
-    raise unittest.SkipTest("template/ predates PLAN-surprise M1: merge claude/surprise-m1-m3-template into template")
+    raise unittest.SkipTest("template/ predates the surprise loop: merge claude/surprise-m1-m3-template into template")
 
 from shaft.llm import Client
 from shaft.state import State
@@ -46,8 +46,10 @@ class Fixture:
             (self.root / folder).mkdir()
         self.state = State(self.root)
         self.cfg = config.load(self.root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake",
-                                                 "MAX_STEPS_SLEEP": "4", "NAME": "wren",
-                                                 "FORECAST": "off"})   # these pin declare's result; D1 has its own
+                                                 "MAX_STEPS_SLEEP": "4", "NAME": "wisp",
+                                                 "FORECAST": "off", "CURIOSITY_EVERY_CYCLES": "0"})
+        # FORECAST and the curiosity draw pin declare's result (D1 and CuriosityDrawTest set their own): the draw is
+        # seeded by NAME, so with it on a test passed or failed by its fixture's name alone
         # Agent time fixed the day after the seeded surprises (clock.now() follows SHAFT_NOW, as in a replay)
         self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root), "SHAFT_NOW": "2026-10-13T08:00:00"},
                                           clear=True))
@@ -308,7 +310,7 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
     waiting, 0 disables; the draw is recorded and a replay of the cycle draws the same."""
 
     def test_share_of_drawn_cycles_is_one_in_five(self):
-        drawn = sum(surprises.draw(5, True, [], f"wren|seed-{i}")["drawn"] for i in range(1000))
+        drawn = sum(surprises.draw(5, True, [], f"wisp|seed-{i}")["drawn"] for i in range(1000))
         self.assertAlmostEqual(drawn / 1000, 0.20, delta=0.03)
 
     def test_no_draw_when_empty_operator_waiting_or_disabled(self):
@@ -318,7 +320,7 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
             for i in range(50):
                 self.assertEqual(surprises.draw(every, queue, inbox, f"s{i}"), {"drawn": False, "skipped_for": why})
         # a message from another instance or a job does not hold the draw back
-        self.assertIsNone(surprises.draw(5, True, ["20261025-080000-1-from-wren.md"], "s")["skipped_for"])
+        self.assertIsNone(surprises.draw(5, True, ["20261025-080000-1-from-wisp.md"], "s")["skipped_for"])
 
     def test_drawn_cycle_is_told_and_recorded(self):
         self.seed(1)
@@ -357,7 +359,7 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
             for elapsed in (0, 5):
                 with mock.patch("time.monotonic", return_value=live.clock.STARTED + elapsed):
                     self.live([{"content": "ok"}])
-        self.assertEqual(seeds, ["wren|2026-10-13T08:12"] * 2)
+        self.assertEqual(seeds, ["wisp|2026-10-13T08:12"] * 2)
 
     def test_nothing_in_a_live_cycle_says_replay(self):
         self.seed(1)

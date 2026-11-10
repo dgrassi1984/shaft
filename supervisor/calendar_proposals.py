@@ -1,4 +1,4 @@
-"""Operator approvals, PLAN-calendar-write M2/D2–D5 and #142. One shared append-only journal at
+"""Operator approvals (#142). One shared append-only journal at
 .supervisor/calendar/proposals.jsonl stores snapshots; the last snapshot per id is authoritative. flock covers
 state checks and submission across web/scheduler/broker processes. Approval sends the frozen request, never a
 freshly read event. A durable failed claim before submission prevents retries after an ambiguous process death.

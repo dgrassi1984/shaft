@@ -1,11 +1,11 @@
-"""The operator's Google accounts, shared by every Google service an instance may be granted (docs/plans/PLAN-calendar.md).
+"""The operator's Google accounts, shared by every Google service an instance may be granted.
 
-One login (`shaft google login`) covers Gmail, Drive and Chat reads and Calendar reads/writes (docs/plans/PLAN-calendar-write.md).
+One login (`shaft google login`) covers Gmail, Drive and Chat reads and Calendar reads/writes.
 The supervisor keeps each account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
 
-An instance's own Google account (docs/plans/PLAN-own-mail.md: Thelos's Gmail; docs/plans/PLAN-own-drive.md: its Drive, Sheets, Docs and
+An instance's own Google account (its Gmail, and its Drive, Sheets, Docs and
 Slides) is not the operator's: each login is a `google` key in the instance's key store (`instance_key_login`, one
 bundle from KEY_SCOPES), refreshed by the broker (`refresh`) and added to its http_request calls like any key. It
 may never be one of the operator's accounts (`operator_addresses`).
@@ -55,7 +55,7 @@ SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", CALENDAR_
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
-# drive (docs/plans/PLAN-own-drive.md): every file in its Drive and every file shared with it, Sheets, Docs and Slides; it can
+# drive: every file in its Drive and every file shared with it, Sheets, Docs and Slides; it can
 # share, trash and permanently delete its own files. www.googleapis.com serves Drive v3 and its uploads (and other
 # Google APIs, which refuse a token without their scope).
 KEY_SCOPES = {"gmail.modify": ((GMAIL_MODIFY,), ("gmail.googleapis.com",)),
@@ -67,7 +67,7 @@ CALENDAR_PRIMARY = "https://www.googleapis.com/calendar/v3/calendars/primary"
 ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 CLIENT_RE = ALIAS_RE                                 # an OAuth client's name (GMAIL_<NAME>_CLIENT_ID)
 # Google's quotas are per user per minute, shared by every instance granted the account: Gmail's hit in M0 of
-# docs/plans/PLAN-mail (2026-10-15). An answer over quota is waited out, Retry-After first, for this long at most.
+# An answer over quota is waited out, Retry-After first, for this long at most.
 QUOTA_WAIT_S = 60
 urlopen = urllib.request.urlopen
 sleep = time.sleep
@@ -89,7 +89,7 @@ def accounts_dir() -> Path:
 
 
 def old_accounts_dir() -> Path:
-    """Where docs/plans/PLAN-mail kept the account files, before docs/plans/PLAN-calendar M1 (`shaft google migrate` moves them)."""
+    """Where mail-only logins kept the account files before one login served every Google service (`shaft google migrate` moves them)."""
     return core.SUP_DIR / "mail"
 
 
@@ -187,8 +187,8 @@ def migrate() -> list[str]:
 
 
 def client_keys(client: str) -> tuple[str, str]:
-    """The .env names of an OAuth client's ID and secret: GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET (named in
-    docs/plans/PLAN-mail, kept for every Google service: the .env is the operator's). Internal client names ending
+    """The .env names of an OAuth client's ID and secret: GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET (named for
+    mail first, kept for every Google service: the .env is the operator's). Internal client names ending
     in :web select the separately configured Web application credentials, including when refreshing a saved login."""
     web = client.endswith(":web")
     client = client.removesuffix(":web")
@@ -250,7 +250,7 @@ def refresh(client: str, refresh_token: str, secrets_env: dict[str, str], who: s
 
 def operator_addresses() -> set[str]:
     """The addresses of the operator's own Google accounts (casefolded): never an instance's own key, which has no
-    label check, so the operator's mailbox would be read whole (docs/plans/PLAN-own-mail.md, D2)."""
+    label check, so the operator's mailbox would be read whole."""
     return {str(a.get("address") or "").casefold() for a in accounts().values()} - {""}
 
 
@@ -276,7 +276,7 @@ class Account:
         saved = account(self.alias)
         if not saved and self.alias in unmigrated():
             raise AccountError(f"Google account {self.alias!r} is not read: its file is still in {old_accounts_dir()} "
-                               "(docs/plans/PLAN-mail's folder); the operator runs `shaft google migrate`")
+                               "(the old mail folder); the operator runs `shaft google migrate`")
         if not saved:
             raise AccountError(f"Google account {self.alias!r} is not logged in: the operator runs "
                                f"`shaft google login {self.alias} <address>`")
@@ -322,7 +322,7 @@ class Account:
         return self._request("PATCH", url, body, headers={"If-Match": etag} if etag else {}, **params)
 
     def _request(self, method: str, url: str, body: dict | None, *, headers: dict | None = None, **params) -> dict:
-        """One door and the same refresh/quota handling for reads and writes (PLAN-calendar-write M0).
+        """One door and the same refresh/quota handling for reads and writes.
         Transport failures are not retried: an insert may already have reached Google."""
         return self._response(method, url, body, json.load, 30, headers=headers, **params)
 
@@ -404,7 +404,7 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
 
 def instance_key_login(address: str, client: str, scope: str, secrets_env: dict[str, str], open_url=None,
                        timeout_s: int = 300) -> dict:
-    """The consent flow for an instance's own Google account (docs/plans/PLAN-own-mail.md, docs/plans/PLAN-own-drive.md): one bundle from
+    """The consent flow for an instance's own Google account: one bundle from
     KEY_SCOPES, every scope in it granted or nothing saved (the consent page lets the operator untick one); never an
     operator account (checked before the browser opens and again on the address Google signed in). Returns the
     key's fields for core.store_google_key; nothing is stored here."""

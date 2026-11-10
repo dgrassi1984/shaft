@@ -1,4 +1,4 @@
-"""The web UI's actions (docs/plans/PLAN-webui.md M2): each runs the exact CLI subcommand `shaft top` runs for it (the panel's
+"""The web UI's actions: each runs the exact CLI subcommand `shaft top` runs for it (the panel's
 whole authority), logged as the web's, and is refused — before anything runs — where the TUI or its CLI refuses it."""
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ActionsTest(WebTest):
         self.ran, self.result = [], (True, "ok")
         self.running = [n for n in actions_services() if n != "web"]      # the guards apply to a running service
         for p in (mock.patch.object(actions, "run_now", self._now), mock.patch.object(actions, "run_detached", self._bg),
-                  mock.patch.object(web, "_names", return_value=["shaft", "wren"]),
+                  mock.patch.object(web, "_names", return_value=["shaft", "wisp"]),
                   mock.patch.object(actions, "busy_instances", return_value=[]),
                   mock.patch.object(panel, "scheduled_runs", return_value=[])):
             p.start()
@@ -62,32 +62,32 @@ class ActionsTest(WebTest):
 
 class EveryActionRunsItsCommand(ActionsTest):
     def test_cycle(self):
-        self.assertEqual(self.act("cycle", name="wren")[0], 200)
-        self.assertRan(["cycle", "wren"])
+        self.assertEqual(self.act("cycle", name="wisp")[0], 200)
+        self.assertRan(["cycle", "wisp"])
 
     def test_pause_and_resume(self):
-        self.act("pause", name="wren")
-        self.act("resume", name="wren", state="paused by you")
-        self.assertEqual([r[1] for r in self.ran], [["pause", "wren"], ["resume", "wren"]])
+        self.act("pause", name="wisp")
+        self.act("resume", name="wisp", state="paused by you")
+        self.assertEqual([r[1] for r in self.ran], [["pause", "wisp"], ["resume", "wisp"]])
 
     def test_kill_runs_the_cli_verb_and_a_slow_settle_is_no_refusal(self):
-        self.result = (False, "wren paused; stopped shaft live; after 20s it is still settling: live since 12:00")
-        status, body = self.act("kill", name="wren", state="live since 12:00")
+        self.result = (False, "wisp paused; stopped shaft live; after 20s it is still settling: live since 12:00")
+        status, body = self.act("kill", name="wisp", state="live since 12:00")
         self.assertEqual(status, 200)
         self.assertIn("still settling", body)
-        self.assertRan(["kill", "wren", "--wait", str(web_actions.KILL_WAIT_S)], web_actions.KILL_WAIT_S + 8)
+        self.assertRan(["kill", "wisp", "--wait", str(web_actions.KILL_WAIT_S)], web_actions.KILL_WAIT_S + 8)
 
     def test_delete_needs_the_name_typed_and_an_instance_that_runs_nothing(self):
         from supervisor import kill
         with mock.patch.object(kill, "running", return_value=[]):
-            self.assertEqual(self.act("delete", name="wren")[0], 409)                 # no typed name
-            self.assertEqual(self.act("delete", name="wren", confirm="wre")[0], 409)  # a typo
+            self.assertEqual(self.act("delete", name="wisp")[0], 409)                 # no typed name
+            self.assertEqual(self.act("delete", name="wisp", confirm="wre")[0], 409)  # a typo
             self.assertNothingRan()
-            self.assertEqual(self.act("delete", name="wren", confirm="wren")[0], 200)
-        self.assertRan(["detached", "delete", "wren", "--yes"], None)
+            self.assertEqual(self.act("delete", name="wisp", confirm="wisp")[0], 200)
+        self.assertRan(["detached", "delete", "wisp", "--yes"], None)
         self.ran.clear()
         with mock.patch.object(kill, "running", return_value=["live since 12:00"]):
-            status, body = self.act("delete", name="wren", confirm="wren")
+            status, body = self.act("delete", name="wisp", confirm="wisp")
         self.assertEqual(status, 409)
         self.assertIn("kill it first", body)
         self.assertNothingRan()
@@ -95,7 +95,7 @@ class EveryActionRunsItsCommand(ActionsTest):
     def test_delete_is_offered_on_the_instance_page_only_and_typed(self):
         page = str(web_actions.instance_buttons(snap()["instances"][0], delete=True))
         self.assertIn('data-post="/action/delete"', page)
-        self.assertIn('data-confirm-type="wren"', page)
+        self.assertIn('data-confirm-type="wisp"', page)
         self.assertIn('data-after="home"', page)
         self.assertIn('data-post="/action/kill"', page)
         card = str(web_actions.instance_buttons(snap()["instances"][0]))
@@ -106,32 +106,32 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.assertIn("kill it first", busy)
 
     def test_sleep_is_detached(self):
-        self.act("sleep", name="wren")
-        self.assertRan(["detached", "sleep", "wren"], None)
+        self.act("sleep", name="wisp")
+        self.assertRan(["detached", "sleep", "wisp"], None)
 
     def test_update_is_detached(self):
         with mock.patch.object(actions, "update_question", return_value=("merge 2?", "")):
-            self.act("update", name="wren")
-        self.assertRan(["detached", "update", "wren"], None)
+            self.act("update", name="wisp")
+        self.assertRan(["detached", "update", "wisp"], None)
 
     def test_send_and_reply_carry_the_text_as_typed(self):
-        self.act("send", name="wren", text="hello%20there%2C%20%3Cfriend%3E")
-        self.act("reply", name="wren", text="yes")
-        self.assertEqual([r[1] for r in self.ran], [["send", "wren", "hello there, <friend>"], ["reply", "wren", "yes"]])
+        self.act("send", name="wisp", text="hello%20there%2C%20%3Cfriend%3E")
+        self.act("reply", name="wisp", text="yes")
+        self.assertEqual([r[1] for r in self.ran], [["send", "wisp", "hello there, <friend>"], ["reply", "wisp", "yes"]])
 
     def test_tool_switch(self):
         with mock.patch("supervisor.broker.SPECS", {"delegate_coding": {}}):
-            self.act("tool", name="wren", tool="delegate_coding", to="off")
-        self.assertRan(["tools", "wren", "off", "delegate_coding"])
+            self.act("tool", name="wisp", tool="delegate_coding", to="off")
+        self.assertRan(["tools", "wisp", "off", "delegate_coding"])
 
     def test_aa_trial(self):
-        self.act("aa-trial", name="wren")
-        self.assertRan(["trial", "run", "wren", "--aa", "--hypothesis", "A/A calibration (from the web UI)"])
+        self.act("aa-trial", name="wisp")
+        self.assertRan(["trial", "run", "wisp", "--aa", "--hypothesis", "A/A calibration (from the web UI)"])
 
     def test_battery_is_detached(self):
         with mock.patch.object(actions, "battery_refusal", return_value=""):
-            self.act("battery", name="wren")
-        self.assertRan(["detached", "battery", "run", "wren"], None)
+            self.act("battery", name="wisp")
+        self.assertRan(["detached", "battery", "run", "wisp"], None)
 
     def test_recap_is_detached(self):
         self.act("recap")
@@ -206,25 +206,25 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
         self.assertNothingRan()
 
     def test_a_cycle_or_a_sleep_only_when_idle(self):
-        self.refused("cycle", "a cycle starts only when it is idle", name="wren", state="in a cycle")
-        self.refused("sleep", "a sleep starts only when it is idle", name="wren", state="talking")
+        self.refused("cycle", "a cycle starts only when it is idle", name="wisp", state="in a cycle")
+        self.refused("sleep", "a sleep starts only when it is idle", name="wisp", state="talking")
 
     def test_update_with_nothing_to_merge(self):
-        with mock.patch.object(actions, "update_question", return_value=("", "wren is already on the current template")):
-            self.refused("update", "already on the current template", name="wren")
+        with mock.patch.object(actions, "update_question", return_value=("", "wisp is already on the current template")):
+            self.refused("update", "already on the current template", name="wisp")
 
     def test_an_empty_or_oversized_message(self):
-        self.refused("send", "empty message", name="wren", text="%20%20")
-        self.refused("send", "at most", name="wren", text="x" * (web_actions.TEXT_MAX + 1))
+        self.refused("send", "empty message", name="wisp", text="%20%20")
+        self.refused("send", "at most", name="wisp", text="x" * (web_actions.TEXT_MAX + 1))
 
     def test_a_tool_that_does_not_exist(self):
         with mock.patch("supervisor.broker.SPECS", {"delegate_coding": {}}):
-            self.refused("tool", "no tool switch", name="wren", tool="rm_rf", to="off")
-            self.refused("tool", "no tool switch", name="wren", tool="delegate_coding", to="maybe")
+            self.refused("tool", "no tool switch", name="wisp", tool="rm_rf", to="off")
+            self.refused("tool", "no tool switch", name="wisp", tool="delegate_coding", to="maybe")
 
     def test_the_battery_when_off_or_not_installed(self):
-        with mock.patch.object(actions, "battery_refusal", return_value="the battery is off for wren"):
-            self.refused("battery", "the battery is off", name="wren")
+        with mock.patch.object(actions, "battery_refusal", return_value="the battery is off for wisp"):
+            self.refused("battery", "the battery is off", name="wisp")
 
     def test_alerts_no_longer_open(self):
         self.refused("dismiss", "not open any more", ids="%5B%22gone%22%5D")
@@ -232,8 +232,8 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
         self.refused("dismiss", "not open any more", ids="not-json")
 
     def test_a_scheduler_restart_while_its_runs_go_on(self):
-        with mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 12:00)"]):
-            self.refused("service", "would kill them: wren (live since 12:00)", service="scheduler", op="on")
+        with mock.patch.object(panel, "scheduled_runs", return_value=["wisp (live since 12:00)"]):
+            self.refused("service", "would kill them: wisp (live since 12:00)", service="scheduler", op="on")
             self.refused("autonomy", "would kill them", op="off")
 
     def test_a_model_restart_while_runs_use_it(self):
@@ -246,29 +246,29 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
     def test_unknown_instances_services_and_verbs(self):
         self.refused("pause", "no instance", name="nobody")
         self.refused("service", "no service action", service="postgres", op="on")
-        self.refused("frobnicate", "no action", name="wren")
+        self.refused("frobnicate", "no action", name="wisp")
 
     def test_the_cli_refusing_is_a_refusal(self):
-        self.result = (False, "wren is busy (live since 12:00)")
-        status, body = self.act("pause", name="wren")
+        self.result = (False, "wisp is busy (live since 12:00)")
+        status, body = self.act("pause", name="wisp")
         self.assertEqual(status, 409)
-        self.assertIn("refused: wren is busy", body)
+        self.assertIn("refused: wisp is busy", body)
 
     def test_no_action_without_the_page_token(self):
-        r = self.req("/action/pause", "POST", cookie=self.cookie, body=b"name=wren",
+        r = self.req("/action/pause", "POST", cookie=self.cookie, body=b"name=wisp",
                      headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(r.status, 403)
         self.assertNothingRan()
 
 
 class AGuardTheOperatorForces(ActionsTest):
-    """Live, 2026-10-20: two live cycles (thelos, wren) kept Restart api and Restart scheduler greyed out on Settings
+    """Live, 2026-10-20: two live cycles (tundra, wisp) kept Restart api and Restart scheduler greyed out on Settings
     and Services, with no way to restart from the page. A guarded action is refused unless forced; forced, it runs and
     the log names what it overrode."""
 
     def setUp(self):
         super().setUp()
-        runs = ["thelos (live since 14:06)", "wren (live since 14:08)"]
+        runs = ["tundra (live since 14:06)", "wisp (live since 14:08)"]
         for p in (mock.patch.object(panel, "scheduled_runs", return_value=runs),
                   mock.patch.object(actions, "busy_instances", return_value=runs)):
             p.start()
@@ -296,7 +296,7 @@ class AGuardTheOperatorForces(ActionsTest):
                          [["autonomy", "on", "--force"], ["api", "on", "--force"], ["autonomy", "off", "--force"]])
         self.assertEqual(len(self.logged), 3)
         self.assertIn("web: operator forced shaft autonomy on past the guard: the scheduler's runs", self.logged[0])
-        self.assertIn("thelos (live since 14:06), wren (live since 14:08)", self.logged[0])
+        self.assertIn("tundra (live since 14:06), wisp (live since 14:08)", self.logged[0])
         self.assertNotIn("Try again", self.logged[0])
 
     def test_a_stopped_service_starts_unforced_while_runs_are_in_progress(self):
@@ -307,7 +307,7 @@ class AGuardTheOperatorForces(ActionsTest):
         self.assertEqual(self.act("service", service="scheduler", op="on")[0], 200)
         self.assertEqual([r[1] for r in self.ran], [["model", "on"], ["autonomy", "on"]])
         self.assertEqual(self.logged, [])
-        runs = ["thelos (live since 14:06)"]
+        runs = ["tundra (live since 14:06)"]
         out = str(web_actions.service_buttons("model", False, runs, runs))
         self.assertIn(">Start</button>", out)
         self.assertNotIn("orce", out)
@@ -319,16 +319,16 @@ class AGuardTheOperatorForces(ActionsTest):
         self.assertNothingRan()
 
     def test_held_back_buttons_offer_force_and_say_what_it_kills(self):
-        runs = ["thelos (live since 14:06)"]
+        runs = ["tundra (live since 14:06)"]
         out = str(web_actions.service_buttons("scheduler", True, runs, runs))
         self.assertNotIn("disabled", out)                                     # was a greyed-out button
         self.assertIn(">Force restart</button>", out)
         self.assertIn(">Force stop</button>", out)
         self.assertIn('name="force" value="1"', out)
         self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group, so "
-                      "this would kill them: thelos (live since 14:06). They end unfinished.", out)
+                      "this would kill them: tundra (live since 14:06). They end unfinished.", out)
         api = str(web_actions.service_buttons("api", True, [], runs))
-        self.assertIn("Force restart api now? Not safe: runs in progress use it: thelos (live since 14:06). Their "
+        self.assertIn("Force restart api now? Not safe: runs in progress use it: tundra (live since 14:06). Their "
                       "calls to it fail while it is down.", api)
         self.assertIn('class="act small force"', api)
         self.assertIn("Force autonomy off", str(web_actions.autonomy_button(True, runs)))
@@ -339,12 +339,12 @@ class AGuardTheOperatorForces(ActionsTest):
 
 
 class ARestartOnceTheRunsEnd(ActionsTest):
-    """2026-11-03: Restart scheduler offered only Force (cut the runs) while thelos and wren covered each other's
+    """2026-11-03: Restart scheduler offered only Force (cut the runs) while tundra and wisp covered each other's
     cycles; a drain-restart (autonomy.restart) is offered beside it, and it needs no force."""
 
     def setUp(self):
         super().setUp()
-        runs = ["thelos (live since 14:06)"]
+        runs = ["tundra (live since 14:06)"]
         p = mock.patch.object(panel, "scheduled_runs", return_value=runs)
         p.start()
         self.addCleanup(p.stop)
@@ -362,10 +362,10 @@ class ARestartOnceTheRunsEnd(ActionsTest):
         self.assertNotIn("when idle", api)
 
     def test_a_pending_drain_shows_what_it_waits_for_and_can_be_withdrawn(self):
-        line = "scheduler restarting (asked 14:10): nothing new starts; waiting for wake thelos; by 16:20 at the latest"
+        line = "scheduler restarting (asked 14:10): nothing new starts; waiting for wake tundra; by 16:20 at the latest"
         with mock.patch("supervisor.autonomy.drain_line", return_value=line):
             out = str(web_actions.service_buttons("scheduler", True, self.runs, []))
-        self.assertIn("waiting for wake thelos; by 16:20", out)
+        self.assertIn("waiting for wake tundra; by 16:20", out)
         self.assertIn(">Cancel restart</button>", out)
         self.assertIn('name="op" value="cancel-restart"', out)
         self.assertNotIn("when idle", out)
@@ -387,9 +387,9 @@ class PagesShowEachActionAsItRuns(ActionsTest):
     def test_the_overview_asks_before_a_cycle_and_explains_when_it_cannot(self):
         idle = self.page("/fragment/overview")
         self.assertIn('data-post="/action/cycle"', idle)
-        self.assertIn('data-confirm="Start a cycle for wren now?"', idle)
+        self.assertIn('data-confirm="Start a cycle for wisp now?"', idle)
         busy = self.page("/fragment/overview", snap(state="in a cycle"))
-        self.assertIn('disabled title="wren is in a cycle — a cycle starts only when it is idle"', busy)
+        self.assertIn('disabled title="wisp is in a cycle — a cycle starts only when it is idle"', busy)
         self.assertNotIn('data-post="/action/cycle"', busy)
 
     def test_paused_shows_resume(self):
@@ -405,7 +405,7 @@ class PagesShowEachActionAsItRuns(ActionsTest):
     def test_the_services_page_asks_before_a_restart_that_would_kill_runs(self):
         with mock.patch.object(panel, "services_detail", return_value=[
                 {"name": "scheduler", "running": True, "detail": ""}, {"name": "web", "running": True, "detail": ""}]), \
-                mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 12:00)"]), \
+                mock.patch.object(panel, "scheduled_runs", return_value=["wisp (live since 12:00)"]), \
                 mock.patch.object(panel, "log_tail", return_value=[]):
             body = self.page("/services")
         self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group", body)
@@ -465,21 +465,21 @@ class RecapLockTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def test_a_recap_being_written_elsewhere_is_not_started_again(self):
-        path = recap._lock_path("wren")
+        path = recap._lock_path("wisp")
         path.parent.mkdir(parents=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR)        # another process's lock (flock: per open file)
         fcntl.flock(fd, fcntl.LOCK_EX)
         self.addCleanup(os.close, fd)
-        self.assertTrue(recap.running("wren"))
+        self.assertTrue(recap.running("wisp"))
         with mock.patch.object(recap, "write") as write:
-            self.assertEqual(recap.start([{"name": "wren"}], wait=True), "a recap is already being written")
+            self.assertEqual(recap.start([{"name": "wisp"}], wait=True), "a recap is already being written")
         write.assert_not_called()
 
     def test_the_lock_is_released_when_the_recap_is_written(self):
         with mock.patch.object(recap, "write") as write:
-            recap.start([{"name": "wren"}], wait=True)
+            recap.start([{"name": "wisp"}], wait=True)
         write.assert_called_once()
-        self.assertFalse(recap.running("wren"))
+        self.assertFalse(recap.running("wisp"))
 
 
 if __name__ == "__main__":
@@ -487,7 +487,7 @@ if __name__ == "__main__":
 
 
 class NewVerbsTest(unittest.TestCase):
-    """The CLI verbs the panels' in-process actions became (docs/plans/PLAN-webui.md M2): shaft cycle, recap, alerts."""
+    """The CLI verbs the panels' in-process actions became: shaft cycle, recap, alerts."""
 
     def cli(self, *argv) -> tuple[int, str]:
         import contextlib
@@ -500,13 +500,13 @@ class NewVerbsTest(unittest.TestCase):
 
     def test_cycle_starts_through_start_wake_and_says_why_not(self):
         from supervisor import autonomy
-        with mock.patch.object(autonomy, "start_wake", return_value="started a cycle for wren") as sw:
-            self.assertEqual(self.cli("cycle", "wren"), (0, "started a cycle for wren\n"))
-        sw.assert_called_once_with("wren")
-        with mock.patch.object(autonomy, "start_wake", side_effect=RuntimeError("wren is already awake (live)")):
-            code, out = self.cli("cycle", "wren")
+        with mock.patch.object(autonomy, "start_wake", return_value="started a cycle for wisp") as sw:
+            self.assertEqual(self.cli("cycle", "wisp"), (0, "started a cycle for wisp\n"))
+        sw.assert_called_once_with("wisp")
+        with mock.patch.object(autonomy, "start_wake", side_effect=RuntimeError("wisp is already awake (live)")):
+            code, out = self.cli("cycle", "wisp")
         self.assertEqual(code, 1)
-        self.assertIn("not started: wren is already awake", out)
+        self.assertIn("not started: wisp is already awake", out)
 
     def test_alerts_lists_and_dismisses(self):
         with mock.patch.object(panel, "extras", side_effect=lambda s: {**s, "alerts": [{"id": "a1", "text": "one"}]}), \
@@ -518,24 +518,24 @@ class NewVerbsTest(unittest.TestCase):
         self.assertEqual(self.cli("alerts", "dismiss")[0], 1)
 
     def test_recap_writes_and_prints_each_or_says_it_failed(self):
-        with mock.patch("supervisor.core.instance_names", return_value=["wren"]), \
-                mock.patch("supervisor.dashboard.instance_state", return_value={"name": "wren"}), \
-                mock.patch.object(recap, "start", return_value="recapping wren…") as start, \
-                mock.patch.object(recap, "load", return_value={"wren": {"ts": "2026-10-19T12:00:00", "text": "tidying",
+        with mock.patch("supervisor.core.instance_names", return_value=["wisp"]), \
+                mock.patch("supervisor.dashboard.instance_state", return_value={"name": "wisp"}), \
+                mock.patch.object(recap, "start", return_value="recapping wisp…") as start, \
+                mock.patch.object(recap, "load", return_value={"wisp": {"ts": "2026-10-19T12:00:00", "text": "tidying",
                                                                         "error": "HTTP 529",
                                                                         "error_ts": "2026-10-19T12:01:00"}}):
             code, out = self.cli("recap")
-        start.assert_called_once_with([{"name": "wren"}], wait=True)
+        start.assert_called_once_with([{"name": "wisp"}], wait=True)
         self.assertEqual(code, 1)
-        self.assertIn("wren: recap failed: HTTP 529", out)
+        self.assertIn("wisp: recap failed: HTTP 529", out)
 
 
 class OneBrokenInstanceTest(unittest.TestCase):
     def test_an_update_check_that_raises_disables_only_that_button(self):
         """Live, 2026-10-19: version.instance raised SystemExit for one instance and the whole overview failed."""
         web_actions._updates.clear()
-        with mock.patch.object(actions, "update_question", side_effect=SystemExit("kant is not a registered worktree")):
-            out = web_actions.instance_buttons({"name": "kant", "state": "idle"})
-        self.assertIn('disabled title="cannot tell whether kant is behind the template: kant is not a registered', out)
+        with mock.patch.object(actions, "update_question", side_effect=SystemExit("kiln is not a registered worktree")):
+            out = web_actions.instance_buttons({"name": "kiln", "state": "idle"})
+        self.assertIn('disabled title="cannot tell whether kiln is behind the template: kiln is not a registered', out)
         self.assertIn('data-post="/action/cycle"', out)                 # the other actions are still there
         web_actions._updates.clear()

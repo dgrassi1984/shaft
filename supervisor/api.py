@@ -1,6 +1,6 @@
 """OpenAI-compatible API for the instances — chat with them from any client on your tailnet.
 
-  GET  /v1/models              each instance is a "model" (shaft, wren, …)
+  GET  /v1/models              each instance is a "model" (shaft, wisp, …)
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools; X-Shaft-Request-Id
                                (non-streamed): asked again, the same answer, not run again (Answered)
   POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
@@ -20,8 +20,7 @@ show and others ignore.
 
 A message sent to /v1/chat/interject while that conversation's reply runs is appended to the agent's
 .tmp/interject-<talk id>.jsonl; the agent takes it at its next step and says so (`heard`). The reply's JSON counts
-them in `interjections_heard` (in the order sent): the client answers any others with its next request
-(docs/plans/PLAN-interject.md).
+them in `interjections_heard` (in the order sent): the client answers any others with its next request.
 
 `"voice": true` in a chat or interject body: the operator spoke it. The agent's request (or the interjection's line)
 carries it, and a voice request's stream also carries `shaft_event` chunks: the step's text as it is written (`draft`),
@@ -82,7 +81,7 @@ CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation:
 CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)
 # The rule of _chat below, told to the instance with every request (a system message: the instance's talk.py puts the
 # app's rules in its system prompt, whatever its own prompts say). Untold, instances wrote the answer beside a tool call
-# and ended with "Stored." or "." — all the operator got (shaft and wren, 2026-10-18..22).
+# and ended with "Stored." or "." — all the operator got (shaft and wisp, 2026-10-18..22).
 LAST_STEP_NOTE = ("[SHAFT, about how your reply is delivered — not the app] Only your last message, the one that calls "
                   "no tool, reaches the operator. Text you write in a message that also calls a tool is never shown "
                   "to them: it is kept as your working notes. So put your whole answer in that last message, even "
@@ -287,7 +286,7 @@ class Live:
                 self._write(entry, line)
 
     def interject(self, talk_id: str, text: str, voice: bool = False) -> bool:
-        """`voice`: the operator spoke it (C1 of PLAN-voice M1); the agent records it on the interjection's episode."""
+        """`voice`: the operator spoke it; the agent records it on the interjection's episode."""
         line = {"text": text, **({"voice": True} if voice else {})}
         with self.lock:
             talk = self.replies.get(talk_id)
@@ -312,7 +311,7 @@ class Live:
 
 
 class VoiceSessions:
-    """The voice conversations' warm processes (runner.Warm, PLAN-voice §7), by talk id: a spoken, streamed request in
+    """The voice conversations' warm processes (runner.Warm), by talk id: a spoken, streamed request in
     a conversation that has one is answered by its process, which stays up between turns; one that has none starts it.
     Every M0 cost of a fresh run per reply is paid once per conversation instead: process start, the memory index read,
     the Codex session opened. A session holds the instance only while a turn runs (runner.Warm), and it ends:
@@ -549,7 +548,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._end(model, messages, cid)
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
-        voice = body.get("voice") is True        # the last user message was spoken (PLAN-voice C1); anything else: typed
+        voice = body.get("voice") is True        # the last user message was spoken; anything else: typed
         if route == "/v1/chat/interject":
             return self._interject(model, messages, cid, channel, voice)
         rid = self.headers.get("X-Shaft-Request-Id") or None
@@ -728,14 +727,14 @@ class Handler(BaseHTTPRequestHandler):
         cid = f"chatcmpl-{uuid.uuid4().hex[:20]}"
         # Only the reply's last step is its answer. Text the model writes before calling a tool ("let me check my
         # notes…") is narration: it goes to reasoning_content with the tool activity, never into the reply — it
-        # reached the operator's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
+        # reached the operator's Telegram as if the instance had said it (wisp, 2026-10-14: 25 of 44 Telegram replies had
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
         tools_ran = False
         spoken = stream and voice
 
         def event(**shaft_event) -> None:
-            """A voice reply's own event (PLAN-voice C3), in a chunk of its own with an empty delta: OpenAI clients
+            """A voice reply's own event, in a chunk of its own with an empty delta: OpenAI clients
             see nothing new, and a typed request never gets one. A step's text goes out at once as `draft` pieces
             (the app speaks them) and is still held in `step` as above; `step_end` then says whether it was the
             answer (its whole text also comes as `content`) or narration before a tool call (only reasoning)."""

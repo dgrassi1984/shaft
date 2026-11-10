@@ -14,7 +14,7 @@ Rules:
   "data_collection": "deny", "zdr": true, "require_parameters": true}): an
   instance's prompt carries its whole memory, including what it knows about the operator. If the provider does
   not qualify, the call fails and says so — no silent fallback.
-- Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 8: kant on Opus 5.5, 4 wakes a day) and logged in
+- Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 8: kiln on Opus 5.5, 4 wakes a day) and logged in
   .supervisor/cloud_usage.jsonl.
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
   each reply's original content blocks are remembered and substituted when the instance
@@ -97,7 +97,7 @@ DECISION_PROVIDER, _ = knob(
 PRICES = {"claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-sonnet-5-5": (2.0, 10.0, 0.20),
           "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-fable-5-1": (10.0, 50.0, 0.25)}
 # Haiku 5.5 has a second rate card: a prompt over 100K tokens (cache reads and writes included) is billed at 5× for
-# the whole call. Priced at the short card, a thelos cycle's longest calls were undercounted 5× by the cap.
+# the whole call. Priced at the short card, a tundra cycle's longest calls were undercounted 5× by the cap.
 LONG_PROMPT = 100_000
 PRICES_LONG = {"claude-haiku-5-5": (0.50, 2.50, 0.05)}
 # Prompt caching (1-hour entries). Each request marks its end; the next turn of the same loop
@@ -355,7 +355,7 @@ def openrouter_reasoning(model: str, kwargs: dict) -> dict:
     """An instance's thinking settings, sent as template kwargs (its own server's form), in OpenRouter's form: no
     thinking (think=False) is `reasoning.enabled` false, or `reasoning.effort` minimal for models with mandatory
     reasoning. LLM_REASONING_EFFORT is `reasoning.effort`; dropped with the
-    kwargs, thelos's and wren's "medium" never reached mimo. Novita accepts effort for mimo but does not enforce it (nor
+    kwargs, tundra's and wisp's "medium" never reached mimo. Novita accepts effort for mimo but does not enforce it (nor
     reasoning.max_tokens: 16,000 reasoning tokens of 16,000 at every level, probed 2026-10-30); only enabled=false
     stops its thinking, which is what the client's retry after a cut-off still thinking asks for (llm.py).
     thinking_budget (SHAFT's own server) and preserve_thinking have no equivalent."""
