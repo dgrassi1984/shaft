@@ -333,12 +333,25 @@ class SetConfigTest(unittest.TestCase):
         self.assertTrue(self.broker.call("set_config", {"key": "X", "value": "3"})["ok"])
         self.assertTrue(self.broker.call("set_config", {"key": "NEW_KEY", "value": "a b"})["ok"])
         self.assertEqual((self.root / "config.env").read_text(),
-                         '# my model\nLLM_MODEL="claude-haiku-5-5"  # wisp\nX=1\nX="3"\nNEW_KEY="a b"\n')
+                         '# my model\nLLM_MODEL="claude-haiku-5-5"  # wisp\nX=1\nX="3"\n\nNEW_KEY="a b"\n')
         self.assertEqual(self.broker.config_writes, [{"key": "X", "old": "X=2", "new": 'X="3"'},
                                                      {"key": "NEW_KEY", "old": None, "new": 'NEW_KEY="a b"'}])
         from supervisor.core import instance_config
         with mock.patch("supervisor.core.instance_root", return_value=self.root):
             self.assertEqual(instance_config("wisp"), {"LLM_MODEL": "claude-haiku-5-5", "X": "3", "NEW_KEY": "a b"})
+
+    def test_appended_keys_and_their_separators_are_undone_exactly_20261110(self):
+        before = (self.root / "config.env").read_bytes()
+        for key in ("A", "B"):
+            self.assertTrue(self.broker.call("set_config", {"key": key, "value": "1"})["ok"])
+        self.assertEqual(gate.revert_config(self.root, self.broker.config_writes), ["A", "B"])
+        self.assertEqual((self.root / "config.env").read_bytes(), before)
+
+    def test_removal_cleans_a_separator_only_above_the_last_line_20261110(self):
+        from supervisor.core import config_with
+        self.assertEqual(config_with('X=1\n\nA=2\nB=3\n', "A", None), 'X=1\n\nB=3\n')
+        self.assertEqual(config_with('X=1\n\nA=2\n\n', "A", None), 'X=1\n\n\n')
+        self.assertEqual(config_with('X=1\n\n\nA=2\n', "A", None), 'X=1\n\n')
 
     def test_refuses_what_would_not_read_back_as_one_value(self):
         before = (self.root / "config.env").read_text()
