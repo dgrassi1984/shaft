@@ -140,7 +140,11 @@ class ServerThreadsTest(unittest.TestCase):
         self.assertTrue(listing[1].startswith("web-21 "))
         self.assertEqual(b._read_thread("web-a"), "operator (2026-02-01): hello")
         self.chat("web-long", state="ended", turns=[dict(role="assistant", ts="2026-02-01", content="x" * 13000)])
-        self.assertEqual(b._read_thread("web-long"), "x" * 12000)
+        # its own long answer is cut, so it cannot push what the operator said out of the view (review of routing)
+        self.assertEqual(b._read_thread("web-long"), "example (2026-02-01): " + "x" * 3000 + " … [10000 more characters cut]")
+        many = [dict(role="assistant", ts=f"2026-02-0{i}", content=str(i) * 3000) for i in range(1, 7)]
+        self.chat("web-many", state="ended", turns=many)
+        self.assertEqual(len(b._read_thread("web-many")), 12000)          # the tail of the thread, as before
         for cid in ("web-foreign", "web-unknown", "../escape"):
             with self.assertRaises(web_chat.Refused):
                 b._read_thread(cid)

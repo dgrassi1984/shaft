@@ -299,6 +299,8 @@ def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[di
     def here(m: dict) -> bool:
         if m.get("thread"):                    # routed to one thread (a cycle's answer, a note written there)
             return m["thread"] == cid
+        if m.get("re"):                        # for an ended thread: From, whatever conversation sent it
+            return False
         if "talk" in m:
             return m.get("talk") in talks and m.get("talk") is not None and m.get("via") != messages.BACKGROUND
         return start <= m["ts"] <= end         # legacy rows: by time span
@@ -325,7 +327,7 @@ def from_feed(name: str) -> dict:
     from . import messages
     own = {t for c in chats(name) for t in c.get("talks") or []}
     rows = sorted((m for m in messages.history() if "talk" in m and not m.get("thread") and (
-        (m["from"] == name and m["to"] == "operator" and m["talk"] not in own) or
+        (m["from"] == name and m["to"] == "operator" and (m["talk"] not in own or m.get("re"))) or
         (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))),
         key=lambda m: m["ts"])
     model = build(name, None, rows)
@@ -731,7 +733,16 @@ def _api_messages(chat: dict) -> list[dict]:
                       f"you: {last['user']} / me: {last['assistant']}")
     prefix = [{"role": "system", "content": "Other open threads:\n" + "\n".join(digest)
                + "\nread_thread reads any of them."}] if digest else []
-    return prefix + [{"role": role, "content": text} for _, role, text in dialogue(chat)]
+    items = _dialogue(chat)
+    own = [k for k, it in enumerate(items) if not it[3]]          # the thread's own turns, not routed in
+    if own and items[own[-1]][1] == "user":
+        # The reply answers the operator's last message: what a cycle routed here at or after it (the same second, or
+        # in the instant before the cycle paused) goes before it, never after — a request ends with the operator
+        # (api.py refuses one that does not; found reviewing the routing)
+        last = own[-1]
+        items = items[:last] + items[last + 1:] + [items[last]]
+    items = [{"role": role, "content": text} for _, role, text, _ in items]
+    return prefix + items
 
 
 def routed(name: str, cid: str | None, history: list[dict] | None = None) -> list[dict]:
@@ -750,17 +761,22 @@ def dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, s
     from a cycle (assistant) and the operator's notes for the next cycle (user), each saying so. What a reply's API call
     and read_thread both read, so the thread never has two voices (2026-11-10: a cycle's answer sent at 21:15
     that the replies after it never knew about)."""
+    return [(ts, role, text) for ts, role, text, _ in _dialogue(chat, history)]
+
+
+def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str, bool]]:
+    """dialogue(), each item also saying whether it was routed in (True) or is a turn of the thread (False)."""
     name = chat["instance"]
-    items = [(t.get("ts", ""), 0, t["role"], t["content"]) for t in chat.get("turns") or []
+    items = [(t.get("ts", ""), 0, t["role"], t["content"], False) for t in chat.get("turns") or []
              if not t.get("retried") and (t.get("content") or t["role"] == "user")]
     for m in routed(name, chat["id"], history):
         if m["from"] == name:
             items.append((m["ts"], 1, "assistant", f"[sent from my cycle at {m['ts'][11:16]}, into this thread]\n"
-                                                   f"{m['text']}"))
+                                                   f"{m['text']}", True))
         else:
             items.append((m["ts"], 1, "user", f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n"
-                                              f"{m['text']}"))
-    return [(ts, role, text) for ts, _, role, text in sorted(items, key=lambda x: (x[0], x[1]))]
+                                              f"{m['text']}", True))
+    return [(ts, role, text, rt) for ts, _, role, text, rt in sorted(items, key=lambda x: (x[0], x[1]))]
 
 
 def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str]:

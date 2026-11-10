@@ -40,6 +40,8 @@ def _cid_of_message(row: dict) -> str:
     there), else its conversation's (web_chat.thread_of_talk) — else "from": its push opens that, and a device looking
     at exactly that feed is not pushed."""
     from . import web_chat
+    if row.get("re"):                          # an ended thread's answer: From, whatever conversation sent it
+        return "from"
     return row.get("thread") or web_chat.thread_of_talk(row["from"], row.get("talk")) or "from"
 
 

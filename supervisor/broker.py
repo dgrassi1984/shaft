@@ -51,6 +51,8 @@ RUN_SAVED_CHARS = 1_000_000   # a saved `run` output keeps at most this many cha
 RUN_SAVED_FILES = 32          # saved `run` outputs kept in .tmp/outputs/; the oldest go first,
 RUN_SAVED_HOURS = 24          # and any older than this
 MAX_MESSAGE_CHARS = 8000
+READ_THREAD_CHARS = 12000          # read_thread's view of one thread: its tail, from the operator's latest message at least
+READ_THREAD_ITEM_CHARS = 3000      # each of the instance's own items in it, cut beyond this
 # Messages to the operator per instance per day; 0 = no limit.
 OPERATOR_DAILY_LIMIT, _ = knob(
     "SHAFT_OPERATOR_PER_DAY", "0", whole, "messages per day one instance may send the operator (0: no limit)",
@@ -1558,6 +1560,8 @@ class Broker:
             stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}"
             thread, re_, where = self._conversation_target(conversation)   # refused before anything is checked or sent
             check, checked = self._check_orders(text, f"{stem}.md", stamp)   # refused here when it goes against one
+            if conversation:   # the orders check can take seconds: what the operator did in the thread meanwhile counts
+                thread, re_, where = self._conversation_target(conversation)
             atts = self._store(self.project / ".supervisor" / "operator-inbox", f"attachments/{stem}", files)
             body = text.strip() + messages.attachment_lines(atts, "path")
             held = self._deliver("operator", f"{stem}.md",
@@ -1679,10 +1683,20 @@ class Broker:
         if id:
             chat = web_chat.thread_of(self.name, self._thread_id(id) or id, writing=False)
             history = messages.history()
+            items = web_chat.dialogue(chat, history)
+            # Its own long answers are cut, and the view never starts after the operator's latest message: reading
+            # a thread is what lets send_message answer in it (thread_reads), so what the operator said last is
+            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail)
+            lines = [f"operator ({ts}): {text}" if role == "user" else
+                     f"{self.name} ({ts}): " + (text if len(text) <= READ_THREAD_ITEM_CHARS else
+                                                text[:READ_THREAD_ITEM_CHARS]
+                                                + f" … [{len(text) - READ_THREAD_ITEM_CHARS} more characters cut]")
+                     for ts, role, text in items]
+            out = "\n\n".join(lines)
+            said = [k for k, (_, role, _) in enumerate(items) if role == "user"]
+            keep = len("\n\n".join(lines[said[-1]:])) if said else 0
             self.thread_reads[chat["id"]] = web_chat.thread_mark(chat, history)
-            return "\n\n".join(
-                f"{'operator' if role == 'user' else self.name} ({ts}): {text}"
-                for ts, role, text in web_chat.dialogue(chat, history))[-12000:]
+            return out[-max(READ_THREAD_CHARS, keep):]
         ended = sorted((c for c in web_chat.chats(self.name) if c.get("state") == "ended"),
                        key=web_chat._activity, reverse=True)[:20]
         return "\n".join(f"{c['id']} «{web_chat.title(c)}» {c['state']} (last moved {web_chat._activity(c)[0]})"
@@ -1701,10 +1715,14 @@ class Broker:
         last thing the operator wrote there (read_thread), so an answer from a cycle is written knowing what was said
         since it was queued (2026-11-10: an answer queued at 21:12 was sent at 21:15 blind to the operator's
         21:13 turn). An ended thread: From, linked to it (re). A conversation with no web thread: From. A replay
-        cannot read threads (read_thread), so it is not asked to."""
+        cannot read threads (read_thread) and must not depend on what they became since: nothing is looked up."""
         from . import messages, web_chat
         if not conversation:
             return None, None, ""
+        if self.as_of is not None:   # a replay: today's threads are not its past; it is simulated, never routed
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation):
+                raise ValueError(f"unknown conversation {conversation!r}: read_thread() lists your threads")
+            return None, None, " to the conversation it names (a replay: not looked up)"
         cid = self._thread_id(conversation)
         if not cid:
             if conversation.startswith("web-") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation):
@@ -1716,17 +1734,15 @@ class Broker:
         named = f"«{web_chat.title(chat)}»"
         if chat.get("state") == "ended":
             return None, cid, f" in the From feed, linked to the thread {named}: it has ended"
-        if self.as_of is None:
-            history = messages.history()
-            now, seen = web_chat.thread_mark(chat, history), self.thread_reads.get(cid)
-            if seen != now:
-                new = now[0] - (seen or (0, ""))[0]
-                raise ValueError(
-                    f"read the thread {named} first: read_thread(id='{cid}')"
-                    + (" — you have not read it in this run" if seen is None else
-                       f" — the operator wrote there {new} more time(s) since you read it, last at {now[1][11:16]}")
-                    + "; then write as the next turn of that conversation as it stands now (or send nothing if it "
-                      "was settled there)")
+        now, seen = web_chat.thread_mark(chat, messages.history()), self.thread_reads.get(cid)
+        if seen != now:
+            new = now[0] - (seen or (0, ""))[0]
+            raise ValueError(
+                f"read the thread {named} first: read_thread(id='{cid}')"
+                + (" — you have not read it in this run" if seen is None else
+                   f" — the operator wrote there {new} more time(s) since you read it, last at {now[1][11:16]}")
+                + "; then write as the next turn of that conversation as it stands now (or send nothing if it "
+                  "was settled there)")
         return cid, None, f" as part of the thread {named}"
 
     def _channel_line(self) -> str:

@@ -94,10 +94,13 @@ class ThreadRepliesTest(unittest.TestCase):
         self.assertIn("⏾ from its cycle", str(web_views._message_item("wisp", item, False)))
 
         # One voice: the thread's next reply reads the cycle's answer in its dialogue, after the turn it followed
+        # (the operator's 21:15:35 message has no answer yet: the request still ends with it, the cycle's answer just
+        # before it; the thread's own order keeps the answer last)
         api = web_chat._api_messages(chat)
-        self.assertEqual([m["role"] for m in api], ["user", "assistant", "user", "assistant", "user", "assistant"])
-        self.assertTrue(api[-1]["content"].startswith("[sent from my cycle at "))
-        self.assertIn("with Friday in mind", api[-1]["content"])
+        self.assertEqual([m["role"] for m in api], ["user", "assistant", "user", "assistant", "assistant", "user"])
+        self.assertTrue(api[-2]["content"].startswith("[sent from my cycle at "))
+        self.assertIn("with Friday in mind", api[-2]["content"])
+        self.assertIn("with Friday in mind", web_chat.dialogue(chat)[-1][2])
         self.assertIn("with Friday in mind", b.call("read_thread", {"id": CID})["result"])
 
     def test_the_thread_marks_lights_its_unread_and_not_froms(self):
@@ -137,11 +140,77 @@ class ThreadRepliesTest(unittest.TestCase):
         self.assertIn("conversation is for a message to the operator", r["error"])
         self.assertEqual(len(messages.history()), 1)
 
-    def test_a_replay_is_not_asked_to_read_a_live_thread(self):
-        self.thread()
+    def test_a_replay_neither_reads_nor_looks_up_live_threads(self):
+        """Review finding: a replay resolved today's thread (its new title, its ended state, a deleted file refused).
+        It is simulated: nothing about the thread is looked up, whatever became of it."""
         b = self.cycle()
         b.as_of = datetime(2026, 11, 10, 21, 15)           # read_thread is not offered in a replay
-        self.assertEqual(b._conversation_target(TALK), (CID, None, " as part of the thread «Report review»"))
+        said = " to the conversation it names (a replay: not looked up)"
+        self.assertEqual(b._conversation_target(CID), (None, None, said))     # no such thread file now
+        self.thread(state="ended", title="Renamed since")
+        self.assertEqual(b._conversation_target(TALK), (None, None, said))
+        with self.assertRaises(ValueError):
+            b._conversation_target("../x")
+
+    # -- review findings ----------------------------------------------------------------------------------------------
+    def test_a_reply_request_ends_with_the_operators_message_even_after_a_late_cycle_answer(self):
+        """Review finding: a cycle answer stamped in the same second as the operator's pending message (or just after,
+        before the cycle paused) sorted after it, and the API refuses a request that does not end with the operator."""
+        self.thread()
+        self.operator_writes("So what now?", "2026-11-10T21:15:35")
+        for ts in ("2026-11-10T21:15:35", "2026-11-10T21:15:36"):
+            messages._cache.update(key=None, rows=[])
+            (self.f.sup / "messages.jsonl").write_text(
+                '{"ts": "%s", "from": "wisp", "to": "operator", "kind": "note", "file": "f.md", "text": "late", '
+                '"talk": null, "thread": "%s"}\n' % (ts, CID))
+            api = web_chat._api_messages(web_chat.load(CID))
+            self.assertEqual((api[-1]["role"], api[-1]["content"]), ("user", "So what now?"), ts)
+            self.assertEqual(api[-2]["role"], "assistant")
+            self.assertIn("late", api[-2]["content"])
+            self.assertEqual(web_chat.dialogue(web_chat.load(CID))[-1][2].split("\n")[-1], "late")   # true order kept
+
+    def test_what_the_operator_does_during_the_orders_check_counts(self):
+        """Review finding: the read was checked before the orders check (a judge: seconds), then delivered blind."""
+        self.thread()
+        b = self.cycle()
+        b.call("read_thread", {"id": CID})
+
+        def judge(text, file, stamp):
+            self.operator_writes("Wait, cancel that.", "2026-11-10T21:16:00")
+            return None, ""
+        with mock.patch.object(b, "_check_orders", side_effect=judge):
+            r = self.send(b, CID)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("wrote there 1 more time(s)", r["error"])
+        self.assertEqual(messages.history(), [])
+
+    def test_read_thread_always_returns_the_operators_latest_message_it_credits(self):
+        """Review finding: a long answer after the operator's last message pushed it out of read_thread's 12,000
+        characters, yet the read counted, so a cycle could answer without having seen it."""
+        chat = self.thread()
+        chat["turns"] += [turn("user", "2026-11-10T21:15:00", "Do not proceed. " + "x" * 9000),
+                          turn("assistant", "2026-11-10T21:15:30", "y" * 13000),
+                          turn("assistant", "2026-11-10T21:15:40", "z" * 13000)]
+        web_chat.save(chat)
+        b = self.cycle()
+        out = b.call("read_thread", {"id": CID})["result"]
+        self.assertIn("operator (2026-11-10T21:15:00): Do not proceed.", out)
+        self.assertIn("[10000 more characters cut]", out)
+        self.assertTrue(self.send(b, CID)["ok"])
+
+    def test_an_ended_threads_answer_sent_from_another_conversation_is_in_from(self):
+        """Review finding: sent during thread A's reply for ended thread B, the row (talk=A's, re=B) showed in A and
+        its push opened A."""
+        self.thread(state="ended")
+        a = self.thread(cid="web-a0000001", talks=("api-aaaa",), title="A")
+        b = self.cycle()
+        b.talk_id = "api-aaaa"
+        self.assertTrue(self.send(b, CID)["ok"])
+        [row] = messages.history()
+        self.assertEqual((row["talk"], row["re"]), ("api-aaaa", CID))
+        self.assertEqual(web_chat.sent_during("wisp", a), [])
+        self.assertEqual([i["re"]["cid"] for i in web_chat.from_feed("wisp")["items"]], [CID])
+        self.assertEqual(web_alerts._cid_of_message(row), "from")
 
     # -- the operator's note for the next cycle, written in a thread -----------------------------------------------
     def test_a_note_for_the_next_cycle_shows_in_its_thread_names_it_and_needs_a_new_read(self):

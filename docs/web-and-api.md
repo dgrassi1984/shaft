@@ -79,7 +79,8 @@ the talk id and returns `X-Shaft-Talk` on completions. A non-streamed answer als
 replay can return the same header. Cached answers from before this field was added have no talk header.
 `supervisor.web_chat._api_messages` prepends a short system digest of the other open threads, newest first.
 The broker's `read_thread` tool lists open threads followed by the 20 newest ended threads. With an id, it returns
-that instance's thread as text, limited to the last 12,000 characters. Trial replays cannot use it.
+that instance's thread as text: the last 12,000 characters, never starting after the operator's latest message, with
+each of the instance's own items cut at 3,000. Trial replays cannot use it.
 
 `supervisor.messages.record` writes `talk` on every new message row. Messages sent during an API reply belong to
 that thread's recorded talks. `supervisor.web_chat.from_feed` contains cycle messages with `talk: null` and the
@@ -94,8 +95,9 @@ answered with `send_message(to="operator", conversation=<talk or thread id>)`. W
 read it. The broker refuses such a send until this run has read the thread (`read_thread`) after the last thing the
 operator wrote there (`web_chat.thread_mark`): the answer is written knowing what was said since it was queued, and may
 be rephrased or dropped. An ended thread's answer goes to From with `re: <id>`, shown as a **re: «title»** link; a
-conversation with no web thread (a terminal talk, Telegram) goes to From. Trial replays skip the read (they cannot
-read threads). A next-cycle note written in an open thread (the composer sends `cid`, or `thread` on the plain chat
+conversation with no web thread (a terminal talk, Telegram) goes to From. Trial replays neither read nor look up
+threads: the send is simulated. The check runs again after the orders check, just before delivery. A reply's request
+always ends with the operator's message: an answer routed in at or after it goes before it. A next-cycle note written in an open thread (the composer sends `cid`, or `thread` on the plain chat
 page) records `thread` too and shows there; one from From or for an ended thread stays in From.
 
 ### `/v1` wire contract
