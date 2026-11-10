@@ -154,7 +154,7 @@ WEB_READS = ("fetch_page", "http_request", "run")   # the tools whose successful
 STATE_CHANGING = frozenset({
     "write_file", "append_file", "rewrite_facts", "write_digest", "remember", "update_self_model",
     "update_personality", "commit_to", "settle_commitment", "close_surprise", "send_message", "run",
-    "secret_set", "secret_delete", "delegate_coding", "set_config", "trial", "mail_attachment", "drive_download",
+    "secret_set", "secret_delete", "delegate_coding", "set_config", "trial", "mail_attachment", "mail_draft", "mail_draft_update", "drive_download",
     "calendar_create", "calendar_move", "calendar_respond", "withdraw_held",
 })
 
