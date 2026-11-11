@@ -1134,6 +1134,8 @@ details.pendingnotes > summary { display: inline-flex; padding: 0; border: 0; ba
 .conversation-switcher [aria-current=page] { font-weight: 600; background: var(--hover); }
 .conversation-switcher .switch-state { display: inline-block; white-space: nowrap; }
 .conversation-switcher form.act { display: block; margin: 0; }
+.conversation-switcher form.act button { font: inherit; }   /* Close thread reads as the items above it */
+.pending-label { margin-left: .3em; }   /* the inline-flex summary drops the leading space: "2for next cycle" */
 .switch-unread { color: var(--accent); font-weight: 600; }
 .reply-failure { border-left: 3px solid var(--bad); padding: .6rem .8rem; margin-top: .3rem;
   background: color-mix(in srgb, var(--bad) 4%, var(--bg)); border-radius: 0 8px 8px 0; }
