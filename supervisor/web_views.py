@@ -1614,7 +1614,9 @@ def _answer_item(name: str, cid: str, it: dict, archived: bool, seen: str | None
     body = markdown(it["content"]) if it["content"] else Html("")
     if not it["content"] and not it["failure"]:
         body = Html('<p class="dim">(no answer)</p>')
-    cards = join([doc_cards(it["docs"], name if archived else ""), _comment_chips(it["answered"], "answered"),
+    # From has no documents panel: its cards open the document on the chat page, as an earlier chat's do
+    cards = join([doc_cards(it["docs"], name if archived or seen == "from" else ""),
+                  _comment_chips(it["answered"], "answered"),
                   _comment_chips(it["opened"], "opened")])
     seen = _seen_attrs(name, seen or cid, "seen-reply", it["ts"]) if not archived else Html("")
     return h('<div class="turn it" data-k="{key}" data-raw="{raw}"{seen}{last}><div class="who">{n} '
@@ -1640,8 +1642,8 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
                        'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     feed = []
     if model["earlier"] and from_feed:
-        feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="/messages">{n} earlier: what it '
-                      'sent is in Messages</a></p>', n=model["earlier"]))
+        feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="?all=1">Show the {n} earlier '
+                      'messages</a></p>', n=model["earlier"]))
     elif model["earlier"]:
         more = f"?id={q(chat['id'])}&all=1" if archived else "?all=1"
         feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="{u}">Show the {n} earlier '
@@ -1744,12 +1746,12 @@ def _from_html(model: dict) -> Html:
 
 
 def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[str], csrf: str,
-              later: str = "") -> Html:
+              later: str = "", whole: bool = False) -> Html:
     """/i/<n>/from: the From <instance> feed, refreshed like a chat's, and a thread's composer: what is written here is
     answered now, in the From conversation (web_chat.from_chat), or left for its next cycle (2026-11-11: it was only
     ever left for the next cycle)."""
     from . import messages
-    feed_url = f"/fragment/from/{q(name)}"
+    feed_url = f"/fragment/from/{q(name)}" + ("?all=1" if whole else "")    # all of it asked for: its refreshes too
     feed = feed_html(model, from_feed=True)
     composer = _composer(name, cid="from", draft=f"{name}/from", replying=model.get("reply") is not None,
                          mids=model["mids"], later=later)

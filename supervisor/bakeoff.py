@@ -809,7 +809,7 @@ def _asked(name: str, t0: str, redact, hours: int = 24) -> list[dict]:
     start = datetime.fromisoformat(t0)
     lo = (start - timedelta(hours=hours)).isoformat(timespec="seconds")
     best, best_ts = None, ""
-    for c in web_chat.chats(name):
+    for c in web_chat._all_chats(name):                     # threads and the From conversation
         mine = [t for t in c.get("turns") or [] if lo <= str(t.get("ts", "")) <= t0]
         last_user = max((str(t["ts"]) for t in mine if t.get("role") == "user"), default="")
         if last_user > best_ts:

@@ -296,8 +296,9 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   there names the From conversation, so its cycle answers in From after reading it. The From conversation is no
   thread: it never ends, no thread list or Earlier chats shows it, End, Clear and Rename refuse it, and pages, apps,
   pushes and seen marks name it `from`. Its replies read what From shows (the cycles' messages, the notes) as part of
-  the conversation, each message cut at 3,000 characters and the request at its newest 60,000 (it never ends), with a
-  line saying it is From. A reply waiting for its turn says so on
+  the conversation, each message cut at 3,000 characters and the request at its newest 60,000 (it never ends) — the
+  operator's message being answered is always whole, so a long queued batch can go past that — with a line saying it
+  is From. "Show the N earlier messages" (`?all=1`) shows all of From, its turns too. A reply waiting for its turn says so on
   its own line, `waiting: answering in «<title>»`, until it starts.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after

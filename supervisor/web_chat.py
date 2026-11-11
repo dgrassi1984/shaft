@@ -394,12 +394,14 @@ def from_rows(name: str, history: list[dict] | None = None) -> list[dict]:
         key=lambda m: m["ts"])
 
 
-def from_feed(name: str) -> dict:
+def from_feed(name: str, whole: bool = False) -> dict:
     """The From <instance> page: From's messages (from_rows) and the From conversation's turns, in time order, the
-    last CHAT_WINDOW of them, with revisions over the whole feed."""
+    last CHAT_WINDOW of them unless `whole` ("Show the N earlier messages": its turns are in no other page), with
+    revisions over the whole feed."""
     model = build(name, from_chat(name), from_rows(name), whole=True)
-    model["earlier"] = max(0, len(model["items"]) - CHAT_WINDOW)
-    model["items"] = model["items"][-CHAT_WINDOW:]
+    if not whole:
+        model["earlier"] = max(0, len(model["items"]) - CHAT_WINDOW)
+        model["items"] = model["items"][-CHAT_WINDOW:]
     return model
 
 

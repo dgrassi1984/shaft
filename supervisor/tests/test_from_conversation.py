@@ -204,6 +204,40 @@ class FromConversationTest(unittest.TestCase):
                 app_api._action(req, "wisp", "stop")
         relay.stop.assert_called_once_with()
 
+    def test_a_document_card_in_from_opens_on_the_chat_page(self):
+        """Review finding: From has no documents panel, so a card's "?doc=" link reloaded From and nothing opened."""
+        fc = web_chat.from_chat("wisp", ME, create=True)
+        fc["turns"] = [{"role": "user", "ts": "2099-01-01T00:00:00", "content": "write it up"},
+                       {"role": "assistant", "ts": "2099-01-01T00:00:05", "content": "Done.",
+                        "docs": [{"path": "notes/docs/plan.md", "created": True}]}]
+        web_chat.save(fc)
+        html = str(web_views.feed_html(web_chat.from_feed("wisp"), from_feed=True))
+        self.assertIn('href="/i/wisp/chat?doc=notes%2Fdocs%2Fplan.md"', html)
+        self.assertNotIn('href="?doc=', html)
+
+    def test_from_shows_its_earlier_turns_on_request_not_in_messages_which_has_none(self):
+        """Review finding: past CHAT_WINDOW items From's "earlier" link went to Messages, where its own turns are not."""
+        fc = web_chat.from_chat("wisp", ME, create=True)
+        fc["turns"] = [{"role": "user" if k % 2 == 0 else "assistant", "ts": f"2099-01-01T00:{k // 60:02d}:{k % 60:02d}",
+                        "content": f"turn {k}"} for k in range(web_chat.CHAT_WINDOW + 10)]
+        web_chat.save(fc)
+        windowed = web_chat.from_feed("wisp")
+        self.assertEqual(windowed["earlier"], 10)
+        self.assertIn('href="?all=1"', str(web_views.feed_html(windowed, from_feed=True)))
+        whole = web_chat.from_feed("wisp", whole=True)
+        self.assertEqual(len(whole["items"]), web_chat.CHAT_WINDOW + 10)
+        self.assertIn("/fragment/from/wisp?all=1", str(web_views.from_page("wisp", whole, [], {}, ["wisp"], "t",
+                                                                           whole=True)))
+
+    def test_a_bakeoff_reads_the_operators_request_made_in_from(self):
+        """Review finding: the operator-request context of a bake-off case looked only at threads."""
+        from supervisor import bakeoff
+        fc = web_chat.from_chat("wisp", ME, create=True)
+        fc["turns"] = [{"role": "user", "ts": "2026-11-11T09:00:00", "content": "Clean the import job"}]
+        web_chat.save(fc)
+        asked = bakeoff._asked("wisp", "2026-11-11T10:00:00", lambda t: t)
+        self.assertEqual([a["text"] for a in asked], ["Clean the import job"])
+
     def test_the_app_api_finds_from_by_name_and_answers_with_from(self):
         with self.assertRaises(app_api.Refusal):
             app_api._chat_of("wisp", "from")                  # none until its first message

@@ -385,7 +385,7 @@ def _threads(req: Request, n: str) -> Response:
 
 def _from(req: Request, n: str) -> Response:
     from . import web_chat
-    model = web_chat.from_feed(n)
+    model = web_chat.from_feed(n, whole=req.query.get("all") == "1")       # all of From, as a thread's ?all=1
     at = web._page_ms(req.query.get("at"))
     (web_chat.unwatch if req.query.get("watch") == "0" else web_chat.watching)(
         n, req.device, at, cid="from")
