@@ -502,26 +502,6 @@ struct TappedThreads: Identifiable {
     var id: String { ids.joined(separator: ",") }
 }
 
-/// What a write answered, or how it failed, floating over the bottom of the page.
-struct DocumentStatus: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.footnote)
-            .foregroundStyle(color)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, Design.Space.s12)
-            .padding(.vertical, Design.Space.s8)
-            .glassEffect(.regular, in: .rect(cornerRadius: Design.Radius.chip, style: .continuous))
-            .padding(.horizontal, Design.Space.s16)
-            .padding(.bottom, Design.Space.s8)
-            .frame(maxWidth: .infinity)
-            .accessibilityAddTraits(.updatesFrequently)
-    }
-}
-
 extension View {
     /// The document's column (spec §5): at most `Design.measure` wide and centred, with the screen's gutter, or the
     /// phone's in the narrow inspector, where a wider one would take a sixth of the text.

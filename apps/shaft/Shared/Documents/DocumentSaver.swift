@@ -11,7 +11,7 @@ final class DocumentSaver {
     var file: SavedDocument?
     /// Why the last download did not reach the save step.
     var problem: String?
-    /// The document being fetched: a second Download waits for it.
+    /// The document being fetched: a second Download waits for it, and the list says so.
     private(set) var fetching: String?
 
     func download(_ path: String, from docs: DocumentsStore) {
@@ -19,12 +19,13 @@ final class DocumentSaver {
         fetching = path
         Task {
             defer { fetching = nil }
-            let name = (path as NSString).lastPathComponent
-            guard let fetched = await docs.download(path) else {
-                problem = "Could not download \(name): \(docs.error?.message ?? "no answer from the server.")"
-                return
+            do {
+                let fetched = try await docs.download(path)
+                file = SavedDocument(data: fetched.data, name: SavedDocument.name(fetched.filename, path: path))
+            } catch {
+                guard let failure = APIError.from(error) else { return }      // cancelled: nothing failed
+                problem = "Could not download \((path as NSString).lastPathComponent): \(failure.message)"
             }
-            file = SavedDocument(data: fetched.data, name: SavedDocument.name(fetched.filename, path: path))
         }
     }
 }
@@ -70,6 +71,12 @@ extension View {
                 saver.problem = "Could not save it: \(error.localizedDescription)"
             }
             saver.file = nil
+        }
+        .safeAreaBar(edge: .bottom) {
+            if let fetching = saver.fetching {
+                DocumentStatus(text: String(localized: "Downloading \((fetching as NSString).lastPathComponent)…"),
+                               color: Color.textSecondary)
+            }
         }
         .alert(saver.problem ?? "", isPresented: Binding(get: { saver.problem != nil },
                                                          set: { if !$0 { saver.problem = nil } })) {

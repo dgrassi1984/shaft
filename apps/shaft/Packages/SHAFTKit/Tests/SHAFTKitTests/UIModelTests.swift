@@ -180,6 +180,28 @@ struct DocumentsStoreTests {
         #expect(await store.comment(anchor: nil, text: "", send: .now) == false)
         #expect(store.error?.message == "a comment needs text")
     }
+
+    /// Bug: Download on a too-big document cleared `error`, which that page is drawn from, and left a spinner.
+    @Test func aDownloadLeavesTheTooBigPageAsItWas() async throws {
+        let bytes = Data("# Big\n\nè\n".utf8)
+        let server = StubServer { request in
+            switch request.path {
+            case "/app/v1/docs/tundra/doc":
+                return .json(409, #"{"error": {"code": "too_big", "message": "Over 256 KB: download it."}}"#)
+            case "/app/v1/docs/tundra/raw":
+                return .data(bytes)
+            default:
+                return .json(200, #"{"dir": "notes/docs", "max_bytes": 262144, "docs": []}"#)
+            }
+        }
+        let store = DocumentsStore(client: server.client, instance: "tundra")
+        await store.load("q4/big.md")
+        #expect(store.error?.code == "too_big")
+        let file = try await store.download("q4/big.md")
+        #expect(file.data == bytes)
+        #expect(server.requests.last?.query("path") == "q4/big.md")
+        #expect(store.error?.code == "too_big")                          // still the page's reason, not a spinner
+    }
 }
 
 @MainActor
