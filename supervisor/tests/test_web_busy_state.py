@@ -29,7 +29,7 @@ class BusyStateHeaderTest(unittest.TestCase):
             ("working", "busy", None),
             ("sleeping", "sleep", "Your message pauses its sleep; the sleep resumes after the reply."),
             ("paused by you", "pause", "No cycles run until you resume example. It still answers your messages."),
-            ("in a conversation (waiting for you)", "waiting", "A conversation with you is open, waiting for your "
+            ("in a conversation (waiting for you)", "clock", "A conversation with you is open, waiting for your "
                                                              "next message. A message is answered now."),
             ("reflecting", "busy", None),
             ("talking", "busy", None),
@@ -44,11 +44,12 @@ class BusyStateHeaderTest(unittest.TestCase):
                                                  {"id": "c1", "state": "idle", "title": "Topic"}, []))
                 self.assertNotIn('<p class="warn">', body)
                 # M2b puts the conversation title on line one and links Main on line two.
-                self.assertIn('title="Switch conversation">Topic</button></h1>', body)
+                self.assertIn('title="Switch conversation"><span>Topic</span>' + str(svg("back", 12)) + '</button></h1>', body)
                 self.assertIn('<a class="instance-main" href="/i/example/chat">example</a>', body)
+                mark = '<span class="statepulse" aria-hidden="true"></span>' if state in ("in a cycle", "working") else svg(name, 14)
                 self.assertIn(
                     f'<details class="menu busystate" data-key="busy-state">'
-                    f'<summary data-focus="busy" aria-label="example is {state}">{svg(name, 14)}<span>{state}</span>'
+                    f'<summary data-focus="busy" aria-label="example is {state}">{mark}<span>{state}</span>'
                     f'</summary><div class="menubody">', body)
                 self.assertIn(words or fallback, body)
                 self.assertNotRegex(body, "[⏳💤⏸💬🕘📄☰]")

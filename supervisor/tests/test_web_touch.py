@@ -199,9 +199,9 @@ class AccessibilityTest(unittest.TestCase):
                      'aria-label="Message wisp"'):
             self.assertIn(name, page)
         rail = str(web_pages.rail(["wisp"], chats={"wisp": {"from_state": "replying", "threads": []}}))
-        # M2b restores the instance lifecycle dot independently of Main replying.
+        # Main replying has a named state and a decorative amber glyph.
         self.assertIn('<span class="sr">wisp, idle, replying</span>', rail)
-        self.assertIn('class="dot st-idle" title="idle" aria-hidden="true"', rail)
+        self.assertIn('class="tdot t-replying" title="replying" aria-hidden="true"', rail)
         self.assertIn('x.setAttribute("aria-label", `remove ${f.name}`);', JS)
 
     def test_the_keyboard_reaches_attach_and_reply(self):

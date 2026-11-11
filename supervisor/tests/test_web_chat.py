@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import messages, web, web_chat
+from supervisor import messages, web, web_chat, web_pages
 from supervisor.tests.test_web import WebTest, snap
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
@@ -497,8 +497,8 @@ class ChatCentricTest(ChatRoutesCase):
         with mock.patch.object(web, "overview", return_value=s):
             body = self.req("/fragment/rail", cookie=self.cookie).body.decode()
         self.assertIn('<span class="last" aria-hidden="true">replying…</span>', body)
-        # M2b uses the subline for Main replying and keeps the leading instance dot.
-        self.assertIn('<span class="dot st-idle" title="idle" aria-hidden="true">', body)
+        # Main replying takes precedence over the idle lifecycle slot.
+        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true">', body)
         self.assertIn('data-last=""', body)                                    # it has not answered yet
         self.assertIn('<span class="badge bad" title="alerts">2</span>', body)
 
@@ -507,7 +507,7 @@ class ChatCentricTest(ChatRoutesCase):
         import re
         headings = re.findall(r"<h1\b[^>]*>(.*?)</h1>", body)
         # M2b opens a conversation picker here; the sidebar retains its own button.
-        self.assertEqual(headings, ['<button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation">wisp</button>'])
+        self.assertEqual(headings, ['<button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation"><span>wisp</span>' + str(web_pages.icon("back", 12)) + '</button>'])
         self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
         self.assertNotIn('class="tabs"', body)
         for page in ("/i/wisp", "/i/wisp/config", "/i/wisp/drive", "/i/wisp/access", "/i/wisp/judge",

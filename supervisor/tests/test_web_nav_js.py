@@ -278,7 +278,7 @@ const assert=require('node:assert/strict'), handlers={}; let submits=0, renamed=
 const document={activeElement:null,addEventListener:(type,fn)=>handlers[type]=fn,
  querySelector:()=>menu.hidden?null:menu};
 function item() {return {focus(){document.activeElement=this;}};}
-const items=[item(),item(),item()]; const renameInput={focus(){renamed++;}};
+const items=[item(),item(),item(),{...item(),closest:()=>null}]; const renameInput={focus(){renamed++;}};
 const more={open:false}, rename={open:false,querySelector:()=>renameInput};
 const opener={...item(),expanded:'false',setAttribute(k,v){this.expanded=v;},getAttribute(){return this.expanded;},closest:()=>head};
 const menu={hidden:true,closest:()=>head,querySelector:()=>items[1],querySelectorAll:()=>items,
@@ -290,7 +290,10 @@ const key=k=>handlers.keydown({key:k,preventDefault(){}});
 ''' + code + r'''
 click('[data-switch-conversation]'); assert.equal(menu.hidden,false); assert.equal(opener.expanded,'true');
 assert.equal(document.activeElement,items[1]); key('ArrowDown'); assert.equal(document.activeElement,items[2]);
-key('ArrowDown'); assert.equal(document.activeElement,items[0]); key('End'); assert.equal(document.activeElement,items[2]);
+key('ArrowDown'); assert.equal(document.activeElement,items[3]);
+// A Close thread form button stays in the picker tab order; its normal submit owns the confirmation.
+handlers.click({target:items[3]}); assert.equal(menu.hidden,false);
+key('ArrowDown'); assert.equal(document.activeElement,items[0]); key('End'); assert.equal(document.activeElement,items[3]);
 key('Home'); assert.equal(document.activeElement,items[0]); key('Escape');
 assert.equal(menu.hidden,true); assert.equal(document.activeElement,opener);
 click('[data-switch-conversation]'); click('[data-switch-new]'); assert.equal(submits,1); assert.equal(menu.hidden,true);

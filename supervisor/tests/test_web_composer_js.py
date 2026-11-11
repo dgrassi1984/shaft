@@ -400,7 +400,7 @@ await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payl
             chat = {'id': 'web-a', 'state': state, 'turns': [], 'started': '2026-10-22T09:00:00',
                     'created': '2026-10-22T09:00:00'} if state else None
             buttons.feed(str(chat_page('wisp', chat, [], [], {}, ['wisp'], 't')))
-            self.assertEqual(buttons.labels, [['', 'Send now', False], ['1', 'Queue after reply', queue_hidden]], state)
+            self.assertEqual(buttons.labels, [['1', 'Queue after reply', queue_hidden], ['', 'Send now', False]], state)
 
     def test_queue_after_reply_shows_only_while_a_reply_runs(self):
         """Reverting this leaves Queue after reply on screen when nothing is replying, or hidden once a reply starts."""

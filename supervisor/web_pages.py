@@ -83,6 +83,7 @@ ICON_PATHS = {
     "compose": '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>'
                '<path d="M17.5 2.5a2.1 2.1 0 0 1 3 3L12 14l-4 1 1-4Z"/>',
     "history": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+    "warning": '<path d="m12 3 10 18H2Z"/><path d="M12 9v5M12 17h.01"/>',
     "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
     "grip": '<path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-width="3"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -160,9 +161,9 @@ THREAD_STATES = {"idle": "idle", "replying": "replying", "waiting": "waiting for
 
 
 def _rail_state(state: str, waiting: str | None = None, failed: bool = False) -> tuple[Html, str]:
-    label = waiting or ("replying" if state == "replying" else "reply failed" if failed else "")
+    label = waiting or ("waiting for its turn" if state == "waiting" else "replying" if state == "replying" else "reply failed" if failed else "")
     kind = "waiting" if waiting or state == "waiting" else "replying" if state == "replying" else "failed" if failed else "idle"
-    mark = icon("clock", 12) if kind == "waiting" else Html("!") if kind == "failed" else Html("")
+    mark = icon("clock", 12) if kind == "waiting" else icon("warning", 13) if kind == "failed" else Html("")
     return h('<span class="tdot t-{kind}" title="{label}" aria-hidden="true">{mark}</span>', kind=kind, mark=mark, label=label), label
 
 
@@ -212,10 +213,15 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
         selected = current == f"i:{n}"
         main = bool(unread.get("from"))
         count = sum(v for k, v in unread.items() if k != "from")
-        _, state = _rail_state(c.get("from_state", "idle"), c.get("from_waiting"), c.get("from_failed", False))
+        reply_dot, state = _rail_state(c.get("from_state", "idle"), c.get("from_waiting"), c.get("from_failed", False))
         instance_state = live.get(n, {}).get("state", "idle")
-        dot = h('<span class="dot st-{cls}" title="{state}" aria-hidden="true"></span>',
-                cls=state_class(instance_state), state=instance_state)
+        cls = state_class(instance_state)
+        mark = icon("sleep", 13) if cls == "sleep" else icon("pause", 13) if cls == "paused" else Html("")
+        if instance_state == "in a conversation (waiting for you)":
+            cls, mark = "waiting", icon("clock", 12)
+        dot = (reply_dot if state else
+               h('<span class="dot st-{cls}" title="{state}" aria-hidden="true">{mark}</span>',
+                 cls=cls, state=instance_state, mark=mark))
         state = ", ".join(x for x in [instance_state, state] if x)
         lasts = {**{t["id"]: t.get("last") or "" for t in threads}, "from": c.get("from_last") or ""}
         disclosure = h('<button type="button" class="railchevron" data-disclose="{n}" data-focus="expand-{n}" '
@@ -232,7 +238,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
                        '<span class="last" aria-hidden="true">{line}</span></a>{disclosure}'
                        '<form class="act newthread railcompose" data-post="/chat/{n}/new" data-after="open-thread"{a}>'
                        '<button type="submit" class="iconbtn" data-focus="compose-{n}" aria-label="New thread with {n}" '
-                       'title="New thread with {n}">{compose}</button></form>{controls}</div>{notes}{threads}</section>',
+                       'title="New thread with {n}">{compose}</button></form>{controls}{notes}</div>{threads}</section>',
                        notes=notes, n=n, selected=" selected-instance" if selected else "", on=" on" if selected and thread in ("from", "current") else "",
                        cur=Html(' aria-current="page"') if selected and thread in ("from", "current") else "",
                        last=c.get("from_last") or "", unread=int(any(unread.values())), main=int(main), count=count,

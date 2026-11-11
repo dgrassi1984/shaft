@@ -182,12 +182,13 @@ class FromConversationTest(unittest.TestCase):
         fc = web_chat.from_chat("wisp", ME, create=True)
         from supervisor import web_pages
         idle = str(web_pages.rail(["wisp"], "i:wisp", chats=web._rail_chats(["wisp"]), thread="from"))
-        self.assertIn("t-idle", idle)
+        self.assertIn('<span class="dot st-idle" title="idle" aria-hidden="true"></span>', idle)
         fc["state"] = "replying"
         web_chat.save(fc)
         rail = web._rail_chats(["wisp"])["wisp"]
         self.assertEqual(rail["from_state"], "replying")
-        self.assertIn("t-replying", str(web_pages.rail(["wisp"], "i:wisp", chats={"wisp": rail}, thread="from")))
+        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true"></span>',
+                      str(web_pages.rail(["wisp"], "i:wisp", chats={"wisp": rail}, thread="from")))
         self.assertTrue(web_chat.summary("wisp", [])["replying"])
 
     def test_stop_from_the_app_names_from_and_stops_the_from_reply(self):
