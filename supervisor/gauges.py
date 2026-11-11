@@ -147,6 +147,28 @@ def _battery(name: str, now: datetime) -> Reading:
                    + ", ".join(parts), max(gaps))
 
 
+def _unrecorded(name: str, now: datetime) -> Reading:
+    from . import unrecorded
+    return Reading(*unrecorded.reading(name, now))
+
+
+def _plan(name: str, now: datetime) -> Reading:
+    """How stale the instance's plan is: its open projects, or how long since it last opened or closed one. The plan
+    is the instance's own (memory/projects.jsonl); the supervisor only reads it."""
+    from . import projects
+    items = list(projects._fold(core.safe_read(core.INSTANCES / name, projects.FILE, "")).values())
+    opened = [it for it in items if it["status"] == "open"]
+    if opened:
+        late = sum(1 for it in opened if (at := projects._at(it.get("deadline"))) and at <= projects._at(now.isoformat()))
+        return Reading(f"My plan: {len(opened)} open project(s), {late} past its date", _share(late, len(opened)))
+    stamps = [at for it in items for key in ("closed_at", "at") if (at := projects._at(it.get(key)))]
+    if not stamps:
+        return Reading("My plan: no open project; none ever opened", 1.0)
+    idle = now - max(stamps).replace(tzinfo=None)
+    return Reading(f"My plan: no open project; the last one was opened or closed {_days(now - idle, now)} ago",
+                   min(1.0, idle / timedelta(days=WINDOW_DAYS)))
+
+
 MENU = {   # key: (what it reads, in the menu's words; its reading)
     "promises": ("promises to the operator that are open or overdue", _promises),
     "unasked_used": ("self-chosen work the judge found anticipated a need", _unasked),
@@ -155,6 +177,8 @@ MENU = {   # key: (what it reads, in the menu's words; its reading)
     "value": ("judged value of my recent cycles", _value),
     "recurrence": ("kinds of failed result that came back", _recurrence),
     "battery": ("capability on fixed tasks against an empty-mind control", _battery),
+    "unrecorded_orders": ("orders the operator gave for later that I did not record", _unrecorded),
+    "plan": ("how stale my plan is: open projects, or days since the last", _plan),
 }
 
 

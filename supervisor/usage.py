@@ -155,3 +155,11 @@ def kept_changes_line(name: str, days: int = 14, now: datetime | None = None) ->
             f"{sum(bool(c['tested']) for c in changes)}; probation: passed {count('passed')}, reverted "
             f"{count('reverted')}, still running {count('on probation')}, too little use to judge "
             f"{count('kept, not judged')}")
+
+
+def kept_lines(name: str) -> list[str]:
+    """kept_changes_line as a stats section: [] when nothing was kept in the period."""
+    line = kept_changes_line(name)
+    return ["## My code changes, tested and kept", f"- {line}",
+            "- record(kind='usage') shows which plugins and skill files I built are used; record(kind='habits') what I "
+            "keep doing by hand", ""] if line else []

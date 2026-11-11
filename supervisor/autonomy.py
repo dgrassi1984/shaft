@@ -295,11 +295,13 @@ class WakeFacts:
     results: int = 0        # can_wake job runs that delivered or published since its last cycle
     error: str = ""         # what could not be read: the wake goes ahead, saying so
     overdue: int = 0        # unsettled promises already due when the last cycle began
+    standing: str = ""      # a project past a boundary, or an operator order a day old with no result (wakereasons.py)
 
 
 def wake_gate(now: datetime, since: datetime | None, until: datetime, idle_after: timedelta, facts) -> tuple[bool, str]:
     """(wake?, why) for a due timed wake (review C15/G1/G4). Pure and model-free: an unread message, a commitment
-    due before `until` (the next check), a job result since `since` (its last cycle), or no cycle for `idle_after`.
+    due before `until` (the next check), a job result since `since` (its last cycle), a standing reason (a project
+    past a boundary, an operator order a day old with no result: wakereasons.py), or no cycle for `idle_after`.
     `facts`: a callable returning WakeFacts, read only when the idle rule does not decide."""
     if since is None:
         return True, "no cycle on record"
@@ -314,6 +316,8 @@ def wake_gate(now: datetime, since: datetime | None, until: datetime, idle_after
         return True, f"commitment {f.due}"
     if f.results:
         return True, f"{f.results} job result(s) since its last cycle"
+    if f.standing:
+        return True, f.standing
     due_text = f"none newly due; {f.overdue} overdue" if f.overdue else f"no commitment due before {until:%H:%M}"
     return False, (f"{NOTHING_TO_DO}: inbox empty, {due_text}, no job result since its "
                    f"last cycle at {since:%H:%M}; it wakes anyway after {int(idle_after.total_seconds() // 60)} min "
@@ -369,7 +373,13 @@ def wake_facts(name: str, since: datetime | None, until: datetime) -> WakeFacts:
         return WakeFacts(error=f"{type(e).__name__}: {e}")
     reason = f"{due[0]['id']} due {due[0]['due_at']:%H:%M}" if due else \
         f"{reminders[0]['id']} overdue" if reminders else ""
-    return WakeFacts(unread=unread, results=results, due=reason, overdue=overdue)
+    standing = ""
+    try:   # its own try: a project file the instance broke must not hide its unread mail from the gate
+        from . import wakereasons
+        standing = wakereasons.due(name, now)[1]
+    except (Exception, SystemExit) as e:
+        log(f"{name}: standing wake reasons could not be read: {type(e).__name__}: {e}")
+    return WakeFacts(unread=unread, results=results, due=reason, overdue=overdue, standing=standing)
 
 
 def event_wake(name: str, why: str, from_instance: bool = False) -> None:
@@ -526,6 +536,11 @@ def serve(poll_s: int = 30) -> int:
             for name, why in start.items():
                 record("wake", name)
                 log(f"scheduler: waking {name} — {why}")
+                try:   # a project or order that just woken it has had its turn for a day (wakereasons.PACE)
+                    from . import wakereasons
+                    wakereasons.mark(name, why, now)
+                except (Exception, SystemExit) as e:
+                    log(f"{name}: wake reason not marked: {type(e).__name__}: {e}")
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
             commitment_wakes(now, st, names, children, commitment_errors)   # started by jobs.tick, once it is idle
             from . import jobs   # the instances' own plugins on their timers, and the wakes those jobs asked for

@@ -271,7 +271,7 @@ def _spec(name, description, properties, required=None):
 
 S = {"type": "string"}
 LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger",
-                "predictions": "predictions"}   # record kind -> module
+                "predictions": "predictions", "unrecorded_orders": "unrecorded"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -422,14 +422,16 @@ SPECS = {
         "'usage' (each of your plugins and skill files: when built, how often called or read in your cycles, when "
         "last), 'facts' (each fact in memory/facts.md: whether the log or page it cites shows it, and how many "
         "later cycles restated it; `before` is not used, page with `offset`), 'predictions' (the predictions you made "
-        "with predict: due time, status, and the judge's result and reason for the scored ones). "
+        "with predict: due time, status, and the judge's result and reason for the scored ones), 'unrecorded_orders' (per ended "
+        "conversation: what the operator ordered for later that you did not record as a commitment or standing "
+        "order, in his quoted words). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
                                                     "consults", "calendar", "gate", "expectations", "families", "habits",
-                                                    "usage", "facts", "predictions"]},
+                                                    "usage", "facts", "predictions", "unrecorded_orders"]},
          "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "

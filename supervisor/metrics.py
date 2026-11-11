@@ -1858,6 +1858,9 @@ def _stats_text(name: str) -> str:
     achieved[-1:-1] = ran_out_by_model(name, all_js)
     lines += achieved + _surprise_section(name) + _sections(name, ("tom",))
     lines += _part_lines(name, "predictions", "stats_lines") + _battery_section(name)
+    lines += _part_lines(name, "families", "stats_lines")
+    kept = _part_lines(name, "usage", "kept_lines")
+    lines += kept
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -2421,11 +2424,14 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    from . import claimlint, judge_probe, predictions, tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    from . import claimlint, judge_probe, predictions, tom, unrecorded   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
     # claim_lint: model-free checks of what the cycle claimed against its tool log, on every cycle, before the page
     # is written, so a finding stands at its head for the next cycle (not in a sampled verdict after the next sleep)
     for label, step in (("judge_pending", judge_pending), ("judge_catch", judge_probe.run), ("score_expectations", tom.score),
                         ("claim_lint", claimlint.run), ("score_predictions", predictions.score),
+                        # one judge call per conversation ended and written up since: what the operator ordered for
+                        # later against what was recorded (unrecorded.py); it only reports
+                        ("unrecorded_orders", unrecorded.run),
                         ("write_stats", write_stats), ("check_probation", check_probation)):
         try:
             done[label] = step(name)
