@@ -114,7 +114,7 @@ const source = fs.readFileSync(process.argv[1], "utf8");
     querySelector(q) { return q.startsWith("textarea") ? box : null; }, querySelectorAll: () => [], closest: () => null,
     reset() { throw Error("cleared draft"); } };
   const document = { readyState: "loading", visibilityState: "visible", body: { scrollHeight: 0, appendChild() {} },
-    createElement: () => ({ setAttribute() {}, classList: { add() {} } }),
+    createElement: () => ({ setAttribute() {}, classList: { add() {}, remove() {}, contains: () => false } }),
     addEventListener(k, fn) { (handlers[k] ||= []).push(fn); }, querySelector: () => null,
     querySelectorAll: () => [], getElementById: () => null, dispatchEvent() {} };
   let destination = "", reads = 0;
@@ -132,7 +132,8 @@ const source = fs.readFileSync(process.argv[1], "utf8");
     context.window.__shaftWeb = false;
     vm.runInNewContext(injected, context);
     const el = { dataset: { poll: "/fragment/rail" }, isConnected: true, getClientRects: () => [1],
-      querySelector: () => null, querySelectorAll: () => [], contains: () => false, classList: { add() {}, remove() {} },
+      querySelector: () => null, querySelectorAll: () => [], contains: () => false,
+      classList: { add() {}, remove() {}, contains: c => c === "rail" },
       previousElementSibling: { classList: { contains: () => true } } };
     context.window.getSelection = () => null;
     context.window.testPoll(el);

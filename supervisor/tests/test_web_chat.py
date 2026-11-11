@@ -13,10 +13,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import messages, web, web_chat
+from supervisor import messages, web, web_chat, web_pages
 from supervisor.tests.test_web import WebTest, snap
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
+
+
+def topic(name: str = "wisp") -> dict:
+    """The topic thread these tests talk in: the newest open thread, else a new one. They were written when a
+    message that named no conversation went to the most recently active chat; since 2026-11-11 it goes to Main
+    (which never ends), so a test of a conversation's life (end, clear, the next message after End) names its thread."""
+    open_ = sorted(web_chat.threads(name), key=lambda c: c.get("created", ""), reverse=True)
+    return open_[0] if open_ else web_chat.new_thread(name, ME)
+
+
+def say(text: str, files: list | None = None, **kw) -> tuple[dict, str]:
+    """web_chat.send to the topic thread (topic), or to the conversation `cid` names."""
+    return web_chat.send("wisp", ME, text, files or [], cid=kw.pop("cid", None) or topic()["id"], **kw)
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
 HOLD_MAX_S = 60                    # a held reply nobody releases or leaves still ends
 
@@ -135,7 +148,7 @@ class ChatTest(unittest.TestCase):
 
 class RelayTest(ChatTest):
     def test_a_reply_is_relayed_and_saved_with_no_browser_watching(self):
-        chat, said = web_chat.send("wisp", ME, "hello <b>", [])
+        chat, said = say("hello <b>", [])
         self.assertEqual(said, "sent to wisp")
         c = self.wait_idle(chat["id"])                          # nobody polls: the server keeps it going
         self.assertEqual([t["role"] for t in c["turns"]], ["user", "assistant"])
@@ -149,27 +162,27 @@ class RelayTest(ChatTest):
         self.assertNotIn(KEY, (self.dir / "sup" / "web" / "chats" / f"{chat['id']}.json").read_text())
 
     def test_the_next_message_carries_the_conversation_so_far(self):
-        chat, _ = web_chat.send("wisp", ME, "one", [])
+        chat, _ = say("one", [])
         self.wait_idle(chat["id"])
-        web_chat.send("wisp", ME, "two", [])
+        say("two", [])
         self.wait_idle(chat["id"])
         self.assertEqual(self.api.chats()[1][2]["messages"], [{"role": "user", "content": "one\n\n" + web_chat.DOCS_NOTE},
                                                              {"role": "assistant", "content": "Answer 1."},
                                                              {"role": "user", "content": "two"}])
 
     def test_two_chats_that_open_alike_are_two_conversations(self):
-        a, _ = web_chat.send("wisp", ME, "hi", [])
+        a, _ = say("hi", [])
         self.wait_idle(a["id"])
         web_chat.end(a["id"])
-        b, _ = web_chat.send("wisp", ME, "hi", [])
+        b, _ = say("hi", [])
         self.wait_idle(b["id"])
         self.assertNotEqual(self.api.chats()[0][1]["X-Shaft-Conversation"], self.api.chats()[1][1]["X-Shaft-Conversation"])
 
     def test_a_message_during_the_reply_is_an_interjection_and_one_heard_too_late_gets_its_own_reply(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "start", [])
+        chat, _ = say("start", [])
         time.sleep(0.3)
-        _, said = web_chat.send("wisp", ME, "and also this", [])
+        _, said = say("and also this", [])
         self.assertEqual(said, "wisp reads it at its next step")
         path, headers, body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0]
         self.assertEqual(headers["X-Shaft-Conversation"], chat["id"])
@@ -184,9 +197,9 @@ class RelayTest(ChatTest):
     def test_an_interjection_heard_in_time_needs_no_second_reply(self):
         self.api.hold.set()
         self.api.heard = 1
-        chat, _ = web_chat.send("wisp", ME, "start", [])
+        chat, _ = say("start", [])
         time.sleep(0.3)
-        web_chat.send("wisp", ME, "also", [])
+        say("also", [])
         self.api.hold.clear()
         self.wait_idle(chat["id"], 15)
         self.assertEqual(len(self.api.chats()), 1)
@@ -194,9 +207,9 @@ class RelayTest(ChatTest):
     def test_an_interjection_too_late_for_the_api_is_a_new_message(self):
         self.api.hold.set()
         self.api.interject_status = 409
-        chat, _ = web_chat.send("wisp", ME, "start", [])
+        chat, _ = say("start", [])
         time.sleep(0.3)
-        web_chat.send("wisp", ME, "late", [])                    # while it still replies: the API refuses it (409)
+        say("late", [])                    # while it still replies: the API refuses it (409)
         self.api.hold.clear()
         c = self.wait_idle(chat["id"], 15)
         self.assertEqual(c["turns"][-1]["role"], "assistant")
@@ -204,7 +217,7 @@ class RelayTest(ChatTest):
 
     def test_stop_ends_the_reply_and_the_api_sees_its_client_go(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "long one", [])
+        chat, _ = say("long one", [])
         time.sleep(0.3)
         self.assertEqual(web_chat.stop(chat["id"]), "stopping the reply")
         c = self.wait_idle(chat["id"])
@@ -214,19 +227,19 @@ class RelayTest(ChatTest):
             web_chat.stop(chat["id"])
 
     def test_end_writes_it_up_through_the_api_and_the_next_message_starts_a_new_chat(self):
-        chat, _ = web_chat.send("wisp", ME, "hi", [])
+        chat, _ = say("hi", [])
         self.wait_idle(chat["id"])
         self.assertIn("journal write-up requested", web_chat.end(chat["id"]))
         path, headers, body = [r for r in self.api.requests if r[0] == "/v1/chat/end"][0]
         self.assertEqual((headers["X-Shaft-Conversation"], body), (chat["id"], {"model": "wisp"}))
         self.assertEqual(web_chat.load(chat["id"])["state"], "ended")
-        nxt, _ = web_chat.send("wisp", ME, "again", [])
+        nxt, _ = say("again", [])
         self.assertNotEqual(nxt["id"], chat["id"])
         self.wait_idle(nxt["id"])
 
     def test_end_refused_while_replying_and_already_written_up_is_ended(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "x", [])
+        chat, _ = say("x", [])
         time.sleep(0.2)
         with self.assertRaisesRegex(web_chat.Refused, "still replying"):
             web_chat.end(chat["id"])
@@ -250,7 +263,7 @@ class OlderApiTest(ChatTest):
     """The web UI may be newer than the API service running (restarted later): it must not misread the old one."""
 
     def test_end_on_an_api_without_the_route_says_so_and_does_not_end(self):
-        chat, _ = web_chat.send("wisp", ME, "hi", [])
+        chat, _ = say("hi", [])
         self.wait_idle(chat["id"])
         self.api.end_status, self.api.end_type = 404, "invalid_request_error"
         with self.assertRaisesRegex(web_chat.Refused, "older than the web UI"):
@@ -260,9 +273,9 @@ class OlderApiTest(ChatTest):
     def test_a_stream_that_does_not_say_what_it_heard_gets_no_second_reply(self):
         self.api.hold.set()
         self.api.heard = None
-        chat, _ = web_chat.send("wisp", ME, "start", [])
+        chat, _ = say("start", [])
         time.sleep(0.3)
-        web_chat.send("wisp", ME, "also", [])
+        say("also", [])
         self.api.hold.clear()
         self.wait_idle(chat["id"], 15)
         self.assertEqual(len(self.api.chats()), 1)
@@ -277,7 +290,7 @@ class HoldTest(ChatTest):
     def test_a_held_reply_ends_when_released_however_slow_the_timers(self):
         self.api.pause = lambda s: time.sleep(3 * s)        # a 50 ms sleep at utility QoS under load: 150 ms
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "long one", [])
+        chat, _ = say("long one", [])
         time.sleep(0.3)
         self.assertEqual(web_chat.load(chat["id"])["state"], "replying")    # held: still going
         self.api.hold.clear()
@@ -288,7 +301,7 @@ class HoldTest(ChatTest):
 
     def test_a_reply_left_running_by_a_test_is_stopped_before_its_patches_go(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "never released", [])
+        chat, _ = say("never released", [])
         time.sleep(0.3)
         self.end_relays()
         self.assertFalse(web_chat.replying(chat["id"]))
@@ -297,7 +310,7 @@ class HoldTest(ChatTest):
 
 class FilesTest(ChatTest):
     def test_files_go_in_as_telegrams_do(self):
-        chat, _ = web_chat.send("wisp", ME, "look", [("photo.png", PNG), ("notes.md", b"# x")])
+        chat, _ = say("look", [("photo.png", PNG), ("notes.md", b"# x")])
         c = self.wait_idle(chat["id"])
         turn = c["turns"][0]
         self.assertEqual(turn["shown"], "look")
@@ -311,13 +324,13 @@ class FilesTest(ChatTest):
     def test_a_file_too_big_is_refused_before_anything_is_written_or_sent(self):
         with mock.patch.object(messages, "ATTACH_MAX_BYTES", 10):
             with self.assertRaisesRegex(web_chat.Refused, "larger than"):
-                web_chat.send("wisp", ME, "big", [("photo.png", PNG)])
+                say("big", [("photo.png", PNG)])
         self.assertFalse((self.dir / "instances" / "wisp" / "attachments").exists())
         self.assertEqual(self.api.requests, [])
 
     def test_an_empty_message_is_not_sent(self):
         with self.assertRaisesRegex(web_chat.Refused, "empty"):
-            web_chat.send("wisp", ME, "  ", [])
+            say("  ", [])
 
     def test_multipart_bodies_are_read(self):
         boundary = "XyZ"
@@ -345,6 +358,13 @@ class ChatRoutesCase(WebTest):
             p.start()
             self.addCleanup(p.stop)
         self.cookie = self.paired()
+
+    def main_with(self, turns: list[dict], state: str = "idle") -> dict:
+        """Main, the instance's own conversation (what its page and its rail row show), holding `turns`."""
+        chat = web_chat.from_chat("wisp", ME, create=True)
+        chat.update(turns=turns, state=state)
+        web_chat.save(chat)
+        return chat
 
     def chat_with(self, turns: list[dict], state: str = "idle") -> dict:
         chat = web_chat.new_thread("wisp", ME)
@@ -376,25 +396,27 @@ class ChatRoutesTest(ChatRoutesCase):
         self.addCleanup(post.stop)
         body = b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nnext\r\n' \
                b'--B\r\nContent-Disposition: form-data; name="queue"\r\n\r\n1\r\n' \
-               b'--B\r\nContent-Disposition: form-data; name="mid"\r\n\r\nq1\r\n--B--\r\n'
+               b'--B\r\nContent-Disposition: form-data; name="mid"\r\n\r\nq1\r\n' \
+               + f'--B\r\nContent-Disposition: form-data; name="cid"\r\n\r\n{c["id"]}\r\n--B--\r\n'.encode()
         headers = {"content-type": "multipart/form-data; boundary=B", "sec-fetch-site": "same-origin"}
         self.assertEqual(self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body, headers=headers).status, 403)
         headers["x-csrf-token"] = self.csrf(self.cookie)
         self.assertEqual(self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body, headers=headers).status, 200)
         self.assertEqual(web_chat.load(c["id"])["queued"][0]["shown"], "next")
         headers = {"sec-fetch-site": "same-origin"}
-        self.assertEqual(self.req("/chat/wisp/unqueue", "POST", cookie=self.cookie, body=b"mid=q1", headers=headers).status, 403)
+        unq = f"mid=q1&cid={c['id']}".encode()
+        self.assertEqual(self.req("/chat/wisp/unqueue", "POST", cookie=self.cookie, body=unq, headers=headers).status, 403)
         self.assertEqual(len(web_chat.load(c["id"])["queued"]), 1)
         headers["x-csrf-token"] = self.csrf(self.cookie)
-        self.assertEqual(self.req("/chat/wisp/unqueue", "POST", cookie=self.cookie, body=b"mid=q1", headers=headers).status, 200)
+        self.assertEqual(self.req("/chat/wisp/unqueue", "POST", cookie=self.cookie, body=unq, headers=headers).status, 200)
         self.assertEqual(web_chat.load(c["id"])["queued"], [])
 
     def test_the_page_shows_the_conversation_escaped_and_polls_it(self):
-        self.chat_with([{"role": "user", "content": "<script>x</script>", "shown": "<script>x</script>", "ts": "2026-10-19T12:00:00"},
+        c = self.chat_with([{"role": "user", "content": "<script>x</script>", "shown": "<script>x</script>", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "**bold** <img src=x onerror=y>", "ts": "2026-10-19T12:00:05",
                          "activity": ["🔧 web_search <i>"]}])
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertIn('data-poll="/fragment/chat/wisp"', body)
+        body = self.req(f"/i/wisp/chat?id={c['id']}", cookie=self.cookie).body.decode()   # a thread's own page
+        self.assertIn(f'data-poll="/fragment/chat/wisp?id={c["id"]}"', body)
         self.assertIn('data-multipart="1"', body)
         self.assertIn("<b>bold</b>", body)
         self.assertNotIn("<script>x", body)
@@ -406,9 +428,10 @@ class ChatRoutesTest(ChatRoutesCase):
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
         chat["reply"] = {"started": "2026-10-19T12:00:01", "activity": ["waiting: wisp is in a cycle"], "answer": ""}
         web_chat.save(chat)
-        body = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
+        body = self.req(f"/fragment/chat/wisp?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn(f'data-poll="/fragment/chat/wisp/live?id={chat["id"]}"', body)             # W12: its activity, polled on its own
-        self.assertIn("waiting: wisp is in a cycle", self.req("/fragment/chat/wisp/live", cookie=self.cookie).body.decode())
+        self.assertIn("waiting: wisp is in a cycle",
+                      self.req(f"/fragment/chat/wisp/live?id={chat['id']}", cookie=self.cookie).body.decode())
         self.assertIn('data-post="/action/chat-stop"', body)
 
     def test_chat_files_follow_the_attachment_rules(self):
@@ -455,30 +478,36 @@ class ChatCentricTest(ChatRoutesCase):
         self.assertIn("SameSite=Strict", last)
 
     def test_the_rail_shows_state_last_line_and_when_it_last_answered(self):
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+        self.main_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "> quoted\n<b>first</b> line\nsecond", "ts": "2026-10-19T12:00:05"}])
         with mock.patch.object(web, "overview", return_value=snap(state="in a cycle")):
-            body = self.req("/fragment/rail?c=i:wisp", cookie=self.cookie).body.decode()
+            body = self.req("/fragment/rail?c=i:wisp&t=from", cookie=self.cookie).body.decode()
         self.assertIn('class="inst on"', body)
         self.assertIn('data-last="2026-10-19T12:00:05"', body)
-        self.assertIn('<span class="dot st-cycle" title="in a cycle" role="img" aria-label="in a cycle">', body)
+        # M2b restores the instance lifecycle dot even while Main is idle.
+        self.assertIn('<span class="dot st-cycle" title="in a cycle" aria-hidden="true"></span>', body)
         self.assertIn("&lt;b&gt;first&lt;/b&gt; line", body)                  # escaped, and not the quoted line
         self.assertNotIn("quoted", body)
         self.assertIn('href="/overview"', body)
 
-    def test_the_rail_says_replying_and_counts_alerts(self):
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
+    def test_the_rail_says_main_is_replying_and_counts_alerts(self):
+        self.main_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
         s = snap()
         s["alerts"] = [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}]
         with mock.patch.object(web, "overview", return_value=s):
             body = self.req("/fragment/rail", cookie=self.cookie).body.decode()
-        self.assertIn("replying…", body)
+        self.assertIn('<span class="last" aria-hidden="true">replying…</span>', body)
+        # Main replying takes precedence over the idle lifecycle slot.
+        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true">', body)
         self.assertIn('data-last=""', body)                                    # it has not answered yet
         self.assertIn('<span class="badge bad" title="alerts">2</span>', body)
 
     def test_the_chat_page_keeps_the_instance_pages_behind_its_menu(self):
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertRegex(body, r'<header class="chathead">.*?<h1>wisp</h1>')
+        import re
+        headings = re.findall(r"<h1\b[^>]*>(.*?)</h1>", body)
+        # M2b opens a conversation picker here; the sidebar retains its own button.
+        self.assertEqual(headings, ['<button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation"><span>wisp</span>' + str(web_pages.icon("back", 12)) + '</button>'])
         self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
         self.assertNotIn('class="tabs"', body)
         for page in ("/i/wisp", "/i/wisp/config", "/i/wisp/drive", "/i/wisp/access", "/i/wisp/judge",
@@ -486,24 +515,25 @@ class ChatCentricTest(ChatRoutesCase):
                      "/i/wisp/activity"):
             self.assertIn(f'href="{page}"', body, page)
         self.assertIn('data-post="/action/cycle"', body)                       # its actions too
-        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=current"', body)
+        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=from"', body)  # the instance's own page: Main
 
-    def test_with_no_chat_going_on_the_page_shows_the_last_one_and_a_composer(self):
-        """It showed "No chat open" over an empty box, though the conversation had just ended."""
+    def test_an_ended_thread_is_in_earlier_chats_and_the_instance_page_keeps_a_composer(self):
+        """It showed "No chat open" over an empty box, though the conversation had just ended. Since 2026-11-11 the
+        instance's page is Main, which never ends: a thread that ended is one tap away in Earlier chats."""
         old = self.chat_with([{"role": "user", "content": "earlier question", "ts": "2026-10-19T12:00:00"},
                               {"role": "assistant", "content": "earlier answer", "ts": "2026-10-19T12:00:05"}], "ended")
         old["ended"] = "2026-10-19T12:30:00"
         web_chat.save(old)
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertIn("earlier answer", body)
-        self.assertIn("Your next message starts a new conversation", body)
+        self.assertNotIn("earlier answer", body)
         self.assertIn('data-post="/chat/wisp/send"', body)
         # #8: in the ⋯ menu, with the instance's pages (the header keeps three controls)
         self.assertRegex(body, r'data-key="chat-menu">.*<details class="earliermenu" data-key="earlier-chats"><summary '
                                r'data-focus="earlier"><svg[^>]*>.*?</svg> Earlier chats</summary>')
         self.assertIn(f"/i/wisp/chat?id={old['id']}", body)
-        frag = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
-        self.assertIn("earlier answer", frag)                                       # its refresh shows the same
+        past = self.req(f"/i/wisp/chat?id={old['id']}", cookie=self.cookie).body.decode()
+        self.assertIn("earlier answer", past)
+        self.assertIn("This conversation ended on", past)
 
     def test_the_chat_page_carries_what_its_script_needs(self):
         """Copy an answer as written, the reply's clock, a draft per instance, drop anywhere."""
@@ -512,11 +542,11 @@ class ChatCentricTest(ChatRoutesCase):
                                {"role": "user", "content": "q2", "ts": "2026-10-19T12:01:00"}], "replying")
         chat["reply"] = {"started": "2026-10-19T12:01:01", "activity": [], "answer": ""}
         web_chat.save(chat)
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
+        body = self.req(f"/i/wisp/chat?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn('data-raw="**a** &quot;&lt;x&gt;&quot;"', body)              # the Markdown, escaped once
         self.assertIn('data-copy', body)
         self.assertIn('<span class="elapsed" data-since="2026-10-19T12:01:01">', body)
-        self.assertIn('data-draft="wisp"', body)
+        self.assertIn(f'data-draft="wisp/{chat["id"]}"', body)                    # its own draft
         self.assertIn('data-dropzone hidden', body)
         self.assertIn('data-newbelow hidden', body)
         self.assertIn("data-notify", body)
@@ -550,9 +580,9 @@ class DocsInChatTest(DocsChatCase):
     """The instance is told about documents once per chat; a reply's documents get cards."""
 
     def test_only_the_first_message_carries_the_note_and_he_never_sees_it(self):
-        chat, _ = web_chat.send("wisp", ME, "one", [])
+        chat, _ = say("one", [])
         self.wait_idle(chat["id"])
-        web_chat.send("wisp", ME, "two", [])
+        say("two", [])
         c = self.wait_idle(chat["id"])
         self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])
         self.assertEqual(c["turns"][0]["shown"], "one")
@@ -575,7 +605,7 @@ class DocsInChatTest(DocsChatCase):
             return out
         calls = []
         with mock.patch.object(web_chat, "_docs_now", side_effect=write_during_reply):
-            chat, _ = web_chat.send("wisp", ME, "write the plan", [])
+            chat, _ = say("write the plan", [])
             c = self.wait_idle(chat["id"])
         self.assertEqual(c["turns"][1]["docs"], [{"path": "new.md", "created": True},
                                                  {"path": "plan.md", "created": False}])
@@ -591,13 +621,13 @@ class DocsInChatTest(DocsChatCase):
         def gone(name):
             raise SystemExit(f"no instance named {name!r}")
         with mock.patch("supervisor.docs.instance_root", side_effect=gone):
-            chat, said = web_chat.send("wisp", ME, "hi", [])
+            chat, said = say("hi", [])
             c = self.wait_idle(chat["id"])
         self.assertEqual(said, "sent to wisp")
         self.assertEqual(c["turns"][1]["content"], "Answer 1.")
 
     def test_a_reply_that_wrote_none_has_no_cards(self):
-        chat, _ = web_chat.send("wisp", ME, "hi", [])
+        chat, _ = say("hi", [])
         c = self.wait_idle(chat["id"])
         self.assertNotIn("docs", c["turns"][1])
 
@@ -628,7 +658,8 @@ class DocsPanelTest(ChatRoutesCase):
         until clicked; ← Documents asks for the list explicitly (?list=1) instead."""
         (self.docs / "plan.md").write_text("the plan")
         (self.docs / "notes.md").write_text("not this one")
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+        self.main_with([                                 # the page's conversation: Main
+                       {"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
                          "docs": [{"path": "plan.md", "created": True}]}])
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
@@ -673,7 +704,8 @@ class DocsPanelTest(ChatRoutesCase):
     def test_a_folder_rolls_up_its_documents_marks_and_comments(self):
         (self.docs / "ucg").mkdir()
         (self.docs / "ucg" / "a.md").write_text("a")
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+        self.main_with([                                 # the page's conversation: Main
+                       {"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
                          "docs": [{"path": "ucg/a.md", "created": True}]}])
         from supervisor import doc_comments
@@ -740,13 +772,13 @@ class DocEditsTest(DocsChatCase):
         self.assertTrue(c.startswith("[The operator created notes/docs/p.md:]\n`````markdown\n"))
 
     def test_saves_while_it_is_idle_go_once_with_the_next_message_as_one_diff(self):
-        chat, _ = web_chat.send("wisp", ME, "start", [])
+        chat, _ = say("start", [])
         self.wait_idle(chat["id"])
-        said = web_chat.doc_saved("wisp", ME, "plan.md", "one\ntwo\n", "one\n2\n", "sha1")
+        said = web_chat.doc_saved("wisp", ME, "plan.md", "one\ntwo\n", "one\n2\n", "sha1", cid=topic()["id"])
         self.assertEqual(said, "saved · wisp gets the change with your next message")
-        web_chat.doc_saved("wisp", ME, "plan.md", "one\n2\n", "one\n2\nthree\n", "sha2")      # folded: from "one\ntwo"
+        web_chat.doc_saved("wisp", ME, "plan.md", "one\n2\n", "one\n2\nthree\n", "sha2", cid=topic()["id"])      # folded: from "one\ntwo"
         self.assertEqual(len(self.api.chats()), 1)                                        # nothing sent yet
-        web_chat.send("wisp", ME, "continue it", [])
+        say("continue it", [])
         c = self.wait_idle(chat["id"])
         sent = self.api.chats()[1][2]["messages"][-1]["content"]
         self.assertTrue(sent.startswith("continue it\n\n[The operator edited notes/docs/plan.md:]"))
@@ -755,16 +787,16 @@ class DocEditsTest(DocsChatCase):
         self.assertEqual(c["turns"][2]["edits"], ["plan.md"])
         self.assertEqual(c["turns"][2]["shown"], "continue it")
         self.assertNotIn("pending_edits", c)
-        web_chat.send("wisp", ME, "and now?", [])
+        say("and now?", [])
         self.wait_idle(chat["id"])
         self.assertNotIn("the operator edited", self.api.chats()[2][2]["messages"][-1]["content"])   # never twice
 
     def test_a_write_of_the_instance_between_two_saves_is_not_called_his(self):
         """Found live: he created plan.md empty, the instance wrote its plan in it, he added a section — and the
         instance would have been told "the operator created plan.md" with its own plan in it."""
-        web_chat.doc_saved("wisp", ME, "plan.md", None, "", "s1")
-        web_chat.doc_saved("wisp", ME, "plan.md", "its plan\n", "its plan\nmy section\n", "s2")
-        chat, _ = web_chat.send("wisp", ME, "go on", [])
+        web_chat.doc_saved("wisp", ME, "plan.md", None, "", "s1", cid=topic()["id"])
+        web_chat.doc_saved("wisp", ME, "plan.md", "its plan\n", "its plan\nmy section\n", "s2", cid=topic()["id"])
+        chat, _ = say("go on", [])
         sent = self.wait_idle(chat["id"])["turns"][0]["content"]
         self.assertNotIn("the operator created", sent)
         self.assertIn("[The operator edited notes/docs/plan.md:]", sent)
@@ -772,9 +804,9 @@ class DocEditsTest(DocsChatCase):
 
     def test_a_save_while_it_replies_reaches_it_at_once(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "write the plan", [])
+        chat, _ = say("write the plan", [])
         time.sleep(0.3)
-        said = web_chat.doc_saved("wisp", ME, "plan.md", "a\n", "a\nmine\n", "sha1")
+        said = web_chat.doc_saved("wisp", ME, "plan.md", "a\n", "a\nmine\n", "sha1", cid=topic()["id"])
         self.assertEqual(said, "saved · wisp reads it at its next step")
         body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
         self.assertIn("[The operator edited notes/docs/plan.md:]", body["messages"][-1]["content"])
@@ -787,23 +819,23 @@ class DocEditsTest(DocsChatCase):
 
     def test_an_empty_message_is_sent_only_to_carry_an_edit(self):
         with self.assertRaises(web_chat.Refused):
-            web_chat.send("wisp", ME, "  ", [])
-        web_chat.doc_saved("wisp", ME, "plan.md", None, "# new\n", "sha1")
-        chat, said = web_chat.send("wisp", ME, "", [])
+            say("  ", [])
+        web_chat.doc_saved("wisp", ME, "plan.md", None, "# new\n", "sha1", cid=topic()["id"])
+        chat, said = say("", [])
         self.assertEqual(said, "sent to wisp")
         c = self.wait_idle(chat["id"])
         self.assertIn("[The operator created notes/docs/plan.md:]", c["turns"][0]["content"])
         self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])           # still its first message
 
     def test_delete_replaces_a_pending_edit_and_is_taken_once(self):
-        web_chat.doc_saved("wisp", ME, "plan.md", "one", "two", "s1")
-        said = web_chat.doc_saved("wisp", ME, "plan.md", "two", None, "none")
+        web_chat.doc_saved("wisp", ME, "plan.md", "one", "two", "s1", cid=topic()["id"])
+        said = web_chat.doc_saved("wisp", ME, "plan.md", "two", None, "none", cid=topic()["id"])
         self.assertEqual(said, "deleted · wisp gets the change with your next message")
-        c = web_chat.current("wisp")
+        c = web_chat.load(topic()["id"])
         self.assertNotIn("plan.md", c["saved_docs"])
         self.assertEqual(web_chat._take_edits(c), ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
         self.assertEqual(web_chat._take_edits(c), ("", [], []))
-        chat, _ = web_chat.send("wisp", ME, "continue", [])
+        chat, _ = say("continue", [])
         self.wait_idle(chat["id"])
         sent = self.api.chats()[0][2]["messages"][-1]["content"]
         self.assertIn("continue\n\n[The operator deleted notes/docs/plan.md.]", sent)
@@ -815,9 +847,9 @@ class DocEditsTest(DocsChatCase):
 
     def test_delete_interjects_while_replying(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "write", [])
+        chat, _ = say("write", [])
         time.sleep(0.3)
-        said = web_chat.doc_saved("wisp", ME, "plan.md", "one", None, "none")
+        said = web_chat.doc_saved("wisp", ME, "plan.md", "one", None, "none", cid=topic()["id"])
         self.assertEqual(said, "deleted · wisp reads it at its next step")
         body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
         self.assertEqual(body["messages"][-1]["content"], "[The operator deleted notes/docs/plan.md.]")
@@ -868,7 +900,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("deleted", r.body.decode())
         self.assertFalse(p.exists())
         self.assertEqual(self.ran, [["docs", "wisp", "rm", "plan.md", "--expect-sha", docs.sha(b"one")]])
-        self.assertEqual(web_chat._take_edits(web_chat.current("wisp")),
+        self.assertEqual(web_chat._take_edits(web_chat.target("wisp", "", writing=False)),
                          ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
         self.assertEqual(doc_comments.threads("wisp", "plan.md")[0]["id"], tid)
         panel = self.req(f"/fragment/docs/wisp?doc=plan.md&thread={tid}", cookie=self.cookie)
@@ -888,7 +920,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(self.req("/docs/wisp/delete", "POST").status, 403)
         self.assertEqual(p.read_text(), "one")
         self.assertEqual(self.ran, [])
-        self.assertIsNone(web_chat.current("wisp"))
+        self.assertIsNone(web_chat.target("wisp", "", writing=False))
 
     def test_delete_refuses_a_write_between_the_route_check_and_cli(self):
         from supervisor import actions, docs
@@ -904,7 +936,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(r.status, 409)
         self.assertIn("changed since you looked", r.body.decode())
         self.assertEqual(p.read_text(), "two")
-        self.assertIsNone(web_chat.current("wisp"))
+        self.assertIsNone(web_chat.target("wisp", "", writing=False))
 
     def test_a_save_goes_through_the_cli_and_is_queued_for_the_instance(self):
         from supervisor import docs
@@ -914,7 +946,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(r.headers["X-Doc"], "plan.md")
         self.assertEqual(self.ran[0][:4], ["docs", "wisp", "set", "plan.md"])
         self.assertEqual((self.docs / "plan.md").read_text(), "one\nmine\n")
-        chat = web_chat.current("wisp")
+        chat = web_chat.target("wisp", "", writing=False)
         self.assertEqual(chat["pending_edits"]["plan.md"], {"old": "one\n", "new": "one\nmine\n"})
         feed = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
         self.assertIn("Your changes to plan.md go to wisp with your next message", feed)
@@ -936,7 +968,7 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("changed since you looked", body)
         self.assertIn("+by the instance", body)
         self.assertEqual((self.docs / "plan.md").read_text(), "one\nby the instance\n")
-        self.assertIsNone(web_chat.current("wisp"))
+        self.assertIsNone(web_chat.target("wisp", "", writing=False))
         # Found live: Save after the refusal was refused forever (the page kept the old sha). It gets the sha now:
         self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"one\nby the instance\n"))
         again = self.post(path="plan.md", text="one\nmine\n", sha=r.headers["X-Doc-Sha"])
@@ -988,7 +1020,7 @@ class ClearTest(DocsChatCase):
     """Clear the chat: the page and the rail start empty; nothing is deleted; an open conversation is ended first."""
 
     def test_an_open_chat_is_ended_then_cleared_and_kept(self):
-        chat, _ = web_chat.send("wisp", ME, "hello", [])
+        chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
         said = web_chat.clear("wisp", chat["id"])
         self.assertTrue(said.startswith("cleared · ended"), said)
@@ -1003,21 +1035,24 @@ class ClearTest(DocsChatCase):
         with self.assertRaisesRegex(web_chat.Refused, "nothing to clear"):
             web_chat.clear("wisp", chat["id"])
 
-    def test_an_ended_chat_is_only_hidden(self):
-        chat, _ = web_chat.send("wisp", ME, "hello", [])
+    def test_an_ended_thread_is_not_cleared_it_is_in_earlier_chats(self):
+        """Clear hid the ended chat the plain page showed. Since 2026-11-11 no page shows an ended thread but Earlier
+        chats: there is nothing on screen to clear, and the next message starts a new thread."""
+        chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
         web_chat.end(chat["id"])
         ends = len([r for r in self.api.requests if r[0] == "/v1/chat/end"])
-        self.assertEqual(web_chat.clear("wisp", chat["id"]), "cleared · it is kept in Earlier web chats")
+        with self.assertRaisesRegex(web_chat.Refused, "has ended: it is in Earlier chats"):
+            web_chat.clear("wisp", chat["id"])
         self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), ends)
-        chat2, _ = web_chat.send("wisp", ME, "again", [])          # the next message starts a new chat, shown
+        chat2, _ = say("again", [])          # the next message starts a new thread
         self.assertNotEqual(chat2["id"], chat["id"])
-        self.assertEqual(web_chat.shown("wisp")["id"], chat2["id"])
+        self.assertEqual([c["id"] for c in web_chat.threads("wisp")], [chat2["id"]])
         self.wait_idle(chat2["id"])
 
     def test_a_reply_running_is_not_cleared(self):
         self.api.hold.set()
-        chat, _ = web_chat.send("wisp", ME, "long one", [])
+        chat, _ = say("long one", [])
         time.sleep(0.3)
         with self.assertRaisesRegex(web_chat.Refused, "stop the reply first"):
             web_chat.clear("wisp", chat["id"])
@@ -1026,17 +1061,17 @@ class ClearTest(DocsChatCase):
 
     def test_edits_not_yet_sent_reach_the_instance_after_a_clear_or_an_end(self):
         """They stayed on the old chat and were lost: the next message starts a new one."""
-        chat, _ = web_chat.send("wisp", ME, "hello", [])
+        chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
-        web_chat.doc_saved("wisp", ME, "plan.md", "a\n", "a\nmine\n", "s1")
+        web_chat.doc_saved("wisp", ME, "plan.md", "a\n", "a\nmine\n", "s1", cid=topic()["id"])
         web_chat.clear("wisp", chat["id"])
-        chat2, _ = web_chat.send("wisp", ME, "go on", [])
+        chat2, _ = say("go on", [])
         c = self.wait_idle(chat2["id"])
         self.assertIn("[The operator edited notes/docs/plan.md:]", c["turns"][0]["content"])
         self.assertNotIn("pending_edits", web_chat.load(chat["id"]))
-        web_chat.doc_saved("wisp", ME, "plan.md", "a\nmine\n", "a\nmine\nmore\n", "s2")
+        web_chat.doc_saved("wisp", ME, "plan.md", "a\nmine\n", "a\nmine\nmore\n", "s2", cid=topic()["id"])
         web_chat.end(chat2["id"])
-        chat3, _ = web_chat.send("wisp", ME, "and now", [])
+        chat3, _ = say("and now", [])
         c3 = self.wait_idle(chat3["id"])
         self.assertIn("+more", c3["turns"][0]["content"])
 
@@ -1044,16 +1079,17 @@ class ClearTest(DocsChatCase):
 class ClearRouteTest(ChatRoutesCase):
     def test_the_page_offers_clear_and_the_route_takes_the_page_token_only(self):
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
-                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}], "ended")
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
+                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        body = self.req(f"/i/wisp/chat?id={chat['id']}", cookie=self.cookie).body.decode()   # the thread's page
         self.assertIn('data-post="/chat/wisp/clear"', body)
         no = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(no.status, 403)
-        ok = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, body=f"cid={chat['id']}".encode(),
-                      headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)})
+        with mock.patch.object(web_chat, "_post", return_value=(202, {})):     # an open thread is ended first
+            ok = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, body=f"cid={chat['id']}".encode(),
+                          headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)})
         self.assertEqual(ok.status, 200, ok.body)
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertIn("No chat open with wisp", body)
+        self.assertEqual(web_chat.threads("wisp"), [])
+        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()   # the instance's page: Main
         self.assertIn("1 message(s)", body)                        # in Earlier web chats, kept
 
 
@@ -1072,7 +1108,7 @@ class SaveRecordTest(DocSaveRouteTest):
         with mock.patch.object(actions, "run_now", side_effect=save_then_instance_writes):
             r = self.post(path="plan.md", text="one\nmy line\n", sha=docs.sha(b"one\n"))
         self.assertEqual(r.status, 200)
-        saved = web_chat.current("wisp")["saved_docs"]["plan.md"]
+        saved = web_chat.target("wisp", "", writing=False)["saved_docs"]["plan.md"]
         self.assertEqual(saved["sha"], docs.sha(b"one\nmy line\n"))
         panel = self.req("/fragment/docs/wisp?doc=plan.md", cookie=self.cookie).body.decode()
         self.assertIn("you wrote at", panel)
@@ -1088,7 +1124,8 @@ class SaveRecordTest(DocSaveRouteTest):
 class LifecycleRaceTest(ChatTest):
     """Codex review: chat choice, End and Clear raced with a send from another device."""
 
-    def test_two_devices_writing_first_open_one_chat(self):
+    def test_two_devices_writing_first_open_one_main(self):
+        """Two first messages naming no conversation at once: one Main, both in it (its record is made once)."""
         self.api.hold.set()
         go = threading.Barrier(2)
         out = []
@@ -1100,18 +1137,26 @@ class LifecycleRaceTest(ChatTest):
         [t.start() for t in ts]
         [t.join() for t in ts]
         self.assertEqual(len(set(out)), 1)                       # one chat: the second message joined it
-        self.assertEqual(len(web_chat.chats("wisp")), 1)
+        self.assertEqual(len(web_chat._all_chats("wisp")), 1)
         self.api.hold.clear()
         self.wait_idle(out[0], 15)
 
-    def test_a_message_sent_while_end_is_on_its_way_starts_a_new_chat(self):
-        chat, _ = web_chat.send("wisp", ME, "hello", [])
+    def test_a_message_to_a_thread_while_end_is_on_its_way_is_refused_not_added(self):
+        """Another device writes in the thread while End runs: it waits for End, then is refused (the thread has
+        ended), and nothing is added to the ended thread."""
+        chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
         real_post, sent = web_chat._post, {}
 
+        def other_device():
+            try:
+                sent["chat"] = say("one more", [], cid=chat["id"])[0]
+            except web_chat.Refused as e:
+                sent["refused"] = str(e)
+
         def post(c, route, body, timeout=15):
             if route == "end":                                   # the other device sends now
-                t = threading.Thread(target=lambda: sent.update(chat=web_chat.send("wisp", ME, "one more", [])[0]))
+                t = threading.Thread(target=other_device)
                 t.start()
                 t.join(0.3)                                      # it waits for End: it does not get in first
                 self.assertNotIn("chat", sent)
@@ -1122,9 +1167,7 @@ class LifecycleRaceTest(ChatTest):
         sent["thread"].join(5)
         old = web_chat.load(chat["id"])
         self.assertEqual((old["state"], len(old["turns"])), ("ended", 2))
-        self.assertNotEqual(sent["chat"]["id"], chat["id"])
-        self.wait_idle(sent["chat"]["id"])
-        self.assertEqual(web_chat.load(sent["chat"]["id"])["turns"][0]["shown"], "one more")
+        self.assertIn("ended", sent.get("refused", ""))
 
 
 class ArchivedClearTest(ChatRoutesCase):
@@ -1137,7 +1180,7 @@ class ArchivedClearTest(ChatRoutesCase):
         for body in (page, frag):
             self.assertNotIn("/chat/wisp/clear", body)
             self.assertNotIn("chat-end", body)
-        with self.assertRaisesRegex(web_chat.Refused, "not the chat on this page"):
+        with self.assertRaisesRegex(web_chat.Refused, "has ended"):
             web_chat.clear("wisp", past["id"])
         self.assertEqual(web_chat.load(now["id"])["state"], "idle")   # the current one untouched
 
@@ -1146,7 +1189,6 @@ class ClearInHeaderTest(ChatRoutesCase):
     def test_selected_open_thread_refreshes_its_own_feed_header_and_activity(self):
         chat = self.chat_with([{"role": "user", "content": "selected topic", "ts": "2026-10-19T12:00:00"}])
         other = self.chat_with([])
-        self.assertEqual(web_chat.current("wisp")["id"], other["id"])
         cid = chat["id"]
 
         def form(body, route):
@@ -1168,7 +1210,9 @@ class ClearInHeaderTest(ChatRoutesCase):
                 feed = self.req(f"/fragment/chat/wisp?id={cid}", cookie=self.cookie).body.decode()
                 self.assertIn("selected topic", feed)
                 action = "stop" if state == "replying" else "end"
-                self.assertIn(f'name="cid" value="{cid}"', form(feed, f"/action/chat-{action}"))
+                action_body = feed if state == "replying" else header
+                self.assertIn(f'name="cid" value="{cid}"', form(action_body, f"/action/chat-{action}"))
+                self.assertNotIn("/action/chat-end", feed)
                 web._sent_during.assert_called_with("wisp", chat, False)
                 if state == "replying":
                     self.assertIn(f'data-poll="/fragment/chat/wisp/live?id={cid}"', feed)
@@ -1178,14 +1222,13 @@ class ClearInHeaderTest(ChatRoutesCase):
         page = self.req(f'/i/wisp/chat?id={other["id"]}', cookie=self.cookie).body.decode()
         self.assertIn(f'data-poll="/fragment/chat/wisp?id={other["id"]}"', page)
 
-    def test_the_plain_chat_page_follows_the_current_thread_and_names_none(self):
-        """Review of the threads lane: the plain page's composer named the open thread it was drawn with, so after End
-        (from this page or another device) the next message was refused as sent to an ended thread, where before
-        threads it started a new chat."""
+    def test_the_instance_page_writes_to_main_and_a_threads_page_to_it(self):
+        """The instance's own page is Main (2026-11-11): its composer names Main, never a thread it was drawn beside
+        (a thread can end; Main does not). A thread's page names the thread."""
         chat = self.chat_with([{"role": "user", "content": "topic", "ts": "2026-10-19T12:00:00"}])
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
         composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
-        self.assertNotIn('name="cid"', composer)
+        self.assertIn('name="cid" value="from"', composer)
         selected = self.req(f'/i/wisp/chat?id={chat["id"]}', cookie=self.cookie).body.decode()
         composer = selected.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
         self.assertIn(f'name="cid" value="{chat["id"]}"', composer)
@@ -1194,7 +1237,7 @@ class ClearInHeaderTest(ChatRoutesCase):
         chat = self.chat_with([{"role": "user", "content": "old topic", "ts": "2026-10-19T12:00:00"}], "ended")
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
         composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
-        self.assertNotIn('name="cid"', composer)
+        self.assertIn('name="cid" value="from"', composer)        # Main, not the thread that ended
         self.assertIn('data-poll="/fragment/chat/wisp"', page)
         archived = self.req(f'/i/wisp/chat?id={chat["id"]}', cookie=self.cookie).body.decode()
         self.assertNotIn('<form class="composer"', archived)
@@ -1225,26 +1268,27 @@ class ClearInHeaderTest(ChatRoutesCase):
         self.assertEqual(self.req("/fragment/chat/nobody/header", cookie=self.cookie).status, 404)
 
     def test_issue_18_19_header_follows_chat_clear_and_earlier(self):
-        """Reverting #18/#19 keeps Clear absent or leaves its cid on the previous conversation."""
-        url = "/fragment/chat/wisp/header"
-        self.assertNotIn('/chat/wisp/clear', self.req(url, cookie=self.cookie).body.decode())
-        chat = self.chat_with([{"role": "user", "content": "hello", "ts": "2026-10-19T12:00:00"}], "ended")
+        """Reverting #18/#19 keeps Clear absent or leaves its cid on the previous conversation. Main's header has no
+        Clear (Main is the record of what was sent); a thread's header clears that thread; once cleared it is in
+        Earlier chats and its header clears nothing."""
+        main = "/fragment/chat/wisp/header"
+        self.assertNotIn('/chat/wisp/clear', self.req(main, cookie=self.cookie).body.decode())
+        chat = self.chat_with([{"role": "user", "content": "hello", "ts": "2026-10-19T12:00:00"}])
+        url = f"/fragment/chat/wisp/header?id={chat['id']}"
         body = self.req(url, cookie=self.cookie).body.decode()
         self.assertIn('data-post="/chat/wisp/clear"', body)
         self.assertIn(f'name="cid" value="{chat["id"]}"', body)
         headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)}
-        cleared = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers=headers,
-                           body=f"cid={chat['id']}".encode())
+        with mock.patch.object(web_chat, "_post", return_value=(202, {})):     # an open thread is ended first
+            cleared = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers=headers,
+                               body=f"cid={chat['id']}".encode())
         self.assertEqual(cleared.status, 200, cleared.body)
-        body = self.req(url, cookie=self.cookie).body.decode()
-        self.assertNotIn('/chat/wisp/clear', body)
-        self.assertIn(f'/i/wisp/chat?id={chat["id"]}', body)
+        self.assertNotIn('/chat/wisp/clear', self.req(url, cookie=self.cookie).body.decode())
+        self.assertIn(f'/i/wisp/chat?id={chat["id"]}', self.req(main, cookie=self.cookie).body.decode())
         next_chat = self.chat_with([{"role": "user", "content": "next", "ts": "2026-10-19T13:00:00"}])
-        body = self.req(url, cookie=self.cookie).body.decode()
+        body = self.req(f"/fragment/chat/wisp/header?id={next_chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn(f'name="cid" value="{next_chat["id"]}"', body)
         self.assertNotIn(f'name="cid" value="{chat["id"]}"', body)
-        archived = self.req(url + f"?id={chat['id']}", cookie=self.cookie).body.decode()
-        self.assertNotIn('/chat/wisp/clear', archived)
 
     def test_issue_19_clear_route_requires_the_shown_cid(self):
         """Reverting #19 lets a POST without cid clear the current chat; stale ids must also be refused."""
@@ -1257,17 +1301,18 @@ class ClearInHeaderTest(ChatRoutesCase):
                 self.assertIn(b"not a chat of wisp", r.body)
                 self.assertNotIn("cleared", web_chat.load(chat["id"]))
 
-    def test_clear_is_in_the_header_always_on_screen(self):
+    def test_clear_and_close_thread_are_in_the_header_menu(self):
         """the operator, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
         bottom of a feed that scrolls in its own box."""
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
-                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                               {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        body = self.req(f"/i/wisp/chat?id={chat['id']}", cookie=self.cookie).body.decode()
         head = body[body.index('<header class="chathead">'):body.index("</header>")]
         self.assertIn('data-post="/chat/wisp/clear"', head)
-        feed = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
+        feed = self.req(f"/fragment/chat/wisp?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertNotIn("/clear", feed)
-        self.assertIn("chat-end", feed)                                    # End stays with the conversation
+        self.assertNotIn("chat-end", feed)
+        self.assertRegex(head, r'data-key="chat-menu">.*data-post="/action/chat-end".*>Close thread</button>')
 
     def test_no_chat_no_clear(self):
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
@@ -1279,14 +1324,15 @@ class NetworkTest(ChatRoutesCase):
 
     def test_an_unchanged_refresh_is_a_304_with_no_body(self):
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}])
-        first = self.req("/fragment/chat/wisp", cookie=self.cookie)
+        url = f"/fragment/chat/wisp?id={chat['id']}"
+        first = self.req(url, cookie=self.cookie)
         tag = first.headers["ETag"]
         self.assertTrue(tag.startswith('"') and len(first.body) > 100)
-        again = self.req("/fragment/chat/wisp", cookie=self.cookie, headers={"if-none-match": tag})
+        again = self.req(url, cookie=self.cookie, headers={"if-none-match": tag})
         self.assertEqual((again.status, again.body), (304, b""))
         chat["turns"].append({"role": "user", "content": "q2", "ts": "2026-10-19T12:01:00"})   # changed: the body
         web_chat.save(chat)
-        changed = self.req("/fragment/chat/wisp", cookie=self.cookie, headers={"if-none-match": tag})
+        changed = self.req(url, cookie=self.cookie, headers={"if-none-match": tag})
         self.assertEqual(changed.status, 200)
         page = self.req("/i/wisp/chat", cookie=self.cookie)
         self.assertNotIn("ETag", page.headers)                               # pages and actions: no conditionals
@@ -1307,12 +1353,14 @@ class NetworkTest(ChatRoutesCase):
             self.assertEqual((first.status, first.body), (304, b""), f"{url}: the first refresh sent it all again")
 
     def test_every_feed_item_has_a_key_the_page_updates_by(self):
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
-                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
-        feed = self.req("/fragment/chat/wisp", cookie=self.cookie).body.decode()
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                               {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        feed = self.req(f"/fragment/chat/wisp?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn('class="turn me" data-k="u0"', feed)
         self.assertIn('class="turn it" data-k="a1"', feed)
-        self.assertIn('data-k="acts"', feed)
+        import re
+        keys = re.findall(r'data-k="([^"]+)"', feed)
+        self.assertEqual([k for k in keys if not k.startswith("day-")], ["u0", "a1"])
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
         self.assertIn('data-keyed="1"', page)
         self.assertIn('data-lazy="1"', page)                                 # the documents: slow while hidden
@@ -1328,14 +1376,14 @@ class NetworkTest(ChatRoutesCase):
 class ResendTest(ChatTest):
     def test_a_message_sent_again_with_its_id_is_not_sent_twice(self):
         """A send whose answer was lost (a phone on cellular) was sent again by the next tap: two replies."""
-        chat, said = web_chat.send("wisp", ME, "hello", [], mid="m-1")
+        chat, said = say("hello", [], mid="m-1")
         self.wait_idle(chat["id"])
-        again, said2 = web_chat.send("wisp", ME, "hello", [], mid="m-1")
+        again, said2 = say("hello", [], mid="m-1")
         self.assertEqual(said2, "already sent to wisp")
         self.assertEqual(len(self.api.chats()), 1)
         c = web_chat.load(chat["id"])
         self.assertEqual([t["role"] for t in c["turns"]], ["user", "assistant"])
-        web_chat.send("wisp", ME, "hello", [], mid="m-2")                     # a new id: a new message
+        say("hello", [], mid="m-2")                     # a new id: a new message
         self.wait_idle(chat["id"])
         self.assertEqual(len(self.api.chats()), 2)
 
@@ -1356,16 +1404,16 @@ class PushWhenTest(ChatTest):
     def test_a_reply_that_ends_unwatched_wakes_the_phone_and_a_watched_one_does_not(self):
         web_chat._watched.clear()
         with mock.patch("supervisor.webpush.notify") as notify:
-            chat, _ = web_chat.send("wisp", ME, "hello", [])
+            chat, _ = say("hello", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
         (event,), kw = notify.call_args                          # what this push shows: this reply (issue #23)
         self.assertEqual((event["title"], event["url"]), ("wisp replied", f"/i/wisp/chat?id={chat['id']}"))
         self.assertEqual(kw, {"skip": set()})
         notify.assert_called_once()
-        web_chat.watching("wisp", "laptop")                      # its page is open and refreshing there
+        web_chat.watching("wisp", "laptop", cid=chat["id"])      # its page is open and refreshing there
         with mock.patch("supervisor.webpush.notify") as notify:
-            web_chat.send("wisp", ME, "again", [])
+            say("again", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
         # W9 (review 2026-10-24): only the device looking is skipped — the laptop's tab silenced the phone too

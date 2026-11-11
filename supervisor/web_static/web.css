@@ -33,11 +33,12 @@ nav { border-right: 1px solid var(--line); padding: 1rem .8rem; display: flex; f
       position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 nav .brand { font-weight: 700; letter-spacing: .08em; margin-bottom: .6rem; color: var(--text); padding: 0 .5rem; }
 nav a { padding: .3rem .5rem; border-radius: 6px; color: var(--text); }
-nav a.on, nav a:hover { background: var(--panel); }
-.rail { display: flex; flex-direction: column; gap: .15rem; }
+nav a:hover { background: var(--hover); }
+nav a.on { background: var(--panel); }
+.rail { display: flex; flex-direction: column; gap: .15rem; flex: 1; }
 .rail .group { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
                padding: .6rem .5rem .2rem; cursor: pointer; list-style: none; }
-.rail details.manage { display: flex; flex-direction: column; }
+.rail details.manage { display: block; margin-top: auto; }
 .rail details.manage > a { display: block; }
 .rail summary::-webkit-details-marker { display: none; }
 nav a.inst { display: grid; grid-template-columns: .9rem 1fr; column-gap: .2rem; align-items: baseline; }
@@ -132,7 +133,7 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
                padding: .2rem .55rem; }
   nav a.inst .last { display: none; }
   .rail details.manage { display: block; flex: 1 1 100%; font-size: .85rem; }
-  .rail details.manage > summary { display: none; }
+  .rail details.manage > summary { display: flex; }
   .rail details.manage > a { display: inline-block; padding: .15rem .4rem; }
   nav .unpair { margin: 0 0 0 auto; }
   nav .unpair button { width: auto; }
@@ -359,11 +360,8 @@ details.menu { position: relative; }
 main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem;
                             container: chat-area / inline-size; }
 .chatgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; flex: 1 1 auto; min-height: 0; }
-/* :not(.hidedocs): a :has() takes its argument's specificity, so .chatgrid:has(.doclist a) outranked .chatgrid.hidedocs
-   below, and a closed drawer showing its list kept the chat at half width. Closed wins, whatever the drawer holds. */
-.chatgrid:not(.hidedocs):has([data-back-docs]), .chatgrid:not(.hidedocs):has(.doclist a) {
-  grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
-.chatgrid:not(:has(.doclist a)):not(:has([data-back-docs])):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
+/* Documents open when requested, independently of whether the instance owns documents. */
+.chatgrid:not(.showdocs) > aside.docs { display: none; }
 .chatgrid.showdocs { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 /* closed by the operator (📄 or ✕): all chat again, whatever documents there are */
 .chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }
@@ -413,7 +411,7 @@ a.icon.small:hover { border-color: var(--accent); }
 /* The chat uses the whole width when the documents are closed (#71): each message keeps its own readable width
    (.turn max-width), so a page cap only left a wide window empty — on 2560 px, closing the drawer made it narrower. */
 .chathead { width: 100%; }
-.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { width: 100%; }
+.chatgrid:not(.showdocs) > .chatpage { width: 100%; }
 /* documents */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
@@ -733,8 +731,9 @@ details.earliermenu .earlier .lines a { display: block; padding: .35rem 0; }
 .turn.me { background: var(--bubble); border-radius: 18px 18px 6px 18px; padding: .5rem .85rem; max-width: min(85%, 36rem); }
 .turn.me .who { font-size: .72rem; font-weight: 500; color: var(--dim); margin-bottom: .1rem; }
 .turn.it .who { font-size: .8rem; color: var(--dim); font-weight: 600; margin-bottom: .15rem; }
-.turn.sent, .turn.later { border: 1px dashed var(--line); padding: .5rem .85rem; border-radius: 12px; }
-.turn.later { border-color: var(--cycle); }
+.turn.sent, .turn.later { padding: .5rem .85rem; border-radius: 12px; }
+.turn.sent { border: 1px solid var(--line); background: color-mix(in srgb, var(--cycle) 4%, var(--bg)); }
+.turn.later { border: 1px dashed var(--cycle); }
 .turn.live { border: 0; }
 .turn.me blockquote { border-left-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .chat-day { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
@@ -792,13 +791,15 @@ form.composer .cbox textarea { flex: 1 1 auto; min-width: 0; border: 0; backgrou
     min-height: 40px; padding: .55rem .3rem; line-height: 1.35; resize: none; }
 .composer label.pick.iconbtn { color: var(--dim); border-radius: 50%; }
 .composer label.pick.iconbtn:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
-.composer .sendgroup { display: flex; align-items: center; gap: 0; flex: none; }
-.composer button.send { width: 36px; height: 36px; min-width: 36px; min-height: 36px; margin: 2px; border-radius: 50%;
+.composer .sendgroup { display: flex; align-items: center; gap: 0; flex: none; border: 1px solid var(--line); border-radius: 999px; }
+.composer button.send { width: 36px; height: 36px; min-width: 36px; min-height: 36px; margin: 0; border: 0; border-radius: 0 999px 999px 0;
     background: var(--accent); color: #fff; }
 .composer button.send:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
-form.composer:has(textarea[name=text]:placeholder-shown):not(:has(.chip, .quotechip)) button.send { opacity: .4; }
-.composer .sendmenu > summary.iconbtn { width: 28px; min-width: 28px; border: 0; background: transparent; color: var(--dim);
-    border-radius: 8px; font-size: inherit; padding: 0; }
+.composer button.send:disabled,
+form.composer:has(textarea[name=text]:placeholder-shown):not(:has(.chip, .quotechip)) button.send {
+  background: var(--line); color: var(--dim); opacity: 1; }
+.composer .sendmenu > summary.iconbtn { width: 28px; min-width: 28px; height: 36px; min-height: 36px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--dim);
+    border-radius: 999px 0 0 999px; font-size: inherit; padding: 0; }
 .composer .sendmenu .menubody, .chatpage .composer .sendmenu .menubody { position: absolute; top: auto; left: auto; right: 0;
     bottom: calc(100% + 8px); width: min(19rem, calc(100vw - 1.5rem)); max-height: none; padding: .3rem; display: grid; }
 .composer .sendmenu .menubody button { display: grid; text-align: left; border: 0; background: transparent; border-radius: 8px;
@@ -809,7 +810,7 @@ form.composer:has(textarea[name=text]:placeholder-shown):not(:has(.chip, .quotec
 .composer .keys { font-size: .72rem; text-align: center; margin: 0; }
 @media (pointer: coarse) {
   .composer button.send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
-  .composer .sendmenu > summary.iconbtn { width: 36px; min-width: 36px; }
+  .composer .sendmenu > summary.iconbtn { width: 36px; min-width: 36px; height: 40px; min-height: 40px; }
   form.composer .cbox textarea { min-height: 44px; }
 }
 @media (min-width: 600px) {     /* an iPad typing on a hardware keyboard: the shortcuts are true (iPad C3) */
@@ -987,32 +988,96 @@ main { container: page / inline-size; }
   }
 }
 
-/* Topic threads. In the rail, under the instance being viewed: its open threads (a dot: idle, replying, waiting for
-   its turn), From <instance> and + New thread. A title too long for the rail ends in … */
-.railthreads { display: flex; flex-direction: column; gap: 1px; margin: 0 0 .3rem 1.1rem; padding-left: .35rem;
-               border-left: 1px solid var(--line); }
-nav a.thread { display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .22rem .45rem; font-size: .86rem;
-               color: var(--text); }
-nav a.thread .ttl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-nav a.thread.on { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
-nav a.thread.from .ttl { color: var(--dim); }
-nav a.thread.unread .ttl { font-weight: 600; color: var(--text); }
-nav a.thread.unread::after { content: "●"; color: var(--accent); font-size: .7rem; flex: none; }
-.tdot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; border: 1.5px solid var(--dim); }
-.tdot.t-replying { background: var(--talk); border-color: var(--talk); animation: tpulse 1.4s ease-in-out infinite; }
-.tdot.t-waiting { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 35%, transparent); }
-.tdot.t-from { border-style: dashed; }
+/* Main and hand-ordered topics share one navigation hierarchy. */
+.railheading { display: flex; align-items: center; justify-content: space-between; }
+.railedit { display: none; }
+.railinstance { min-width: 0; position: relative; }
+.railrow { display: flex; flex-wrap: wrap; align-items: center; position: relative; min-width: 0; gap: 0; border-radius: 6px; }
+nav .railrow > a { flex: 1; min-width: 0; margin: 0; }
+nav .railrow > a.inst { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto auto; align-items: center; gap: 4px; padding: 6px 2px; border: 0; }
+nav .railrow .who { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav .selected-instance > .instrow .who { font-weight: 600; }
+nav .railrow .inst.unread .who { font-weight: 700; }
+nav .railrow .inst.unread .who::after { content: none; }
+nav .railrow:hover { background: var(--hover); }
+nav .railrow > a:hover, nav .railrow > a.on { background: transparent; box-shadow: none; }
+nav .railrow a:focus-visible, .railrow button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+nav .railrow .last { grid-column: 2 / -1; line-height: 1.25; }
+.railthreads { display: flex; flex-direction: column; margin: 0 0 4px; padding: 0; border: 0; gap: 1px; }
+.threadrow { padding-left: 20px; }
+nav .railrow a.thread { display: flex; padding: 5px 2px; gap: 4px; font-size: .86rem; }
+nav .railrow a.thread .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav .railrow a.thread.unread .ttl { font-weight: 700; }
+@media (prefers-reduced-motion: no-preference) {
+  .railrow .t-replying, .railrow .st-cycle, .railrow .st-talk, .statepulse { animation: tpulse 1.4s ease-in-out infinite; }
+}
 @keyframes tpulse { 50% { opacity: .35; } }
-.rail form.railnew { display: block; }
-.rail form.railnew button { border: 0; background: none; color: var(--accent); font-size: .84rem; padding: .22rem .45rem;
-                            text-align: left; width: 100%; border-radius: 6px; }
-.rail form.railnew button:hover { background: var(--panel); }
-@media (pointer: coarse) {
-  nav a.thread, .rail form.railnew button { min-height: 44px; }
-}
+.railrow .tdot { width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 0; background: none; flex: none; }
+.railrow .t-idle { visibility: hidden; }
+.railrow .t-replying::before { content: ""; width: 6px; height: 6px; background: var(--warn); border-radius: 50%; }
+.railrow .t-waiting { color: var(--warn); }
+.railrow .t-failed { color: var(--bad); }
+.railrow .dot { width: 12px; height: 13px; display: inline-flex; align-items: center; justify-content: center;
+  background: none; border-radius: 0; }
+.railrow .st-idle { visibility: hidden; }
+.railrow .dot:empty::before { content: ""; width: 6px; height: 6px; border-radius: 50%; }
+.railrow .st-other::before { background: var(--line); }
+.railrow .st-cycle::before, .railrow .st-talk::before { background: var(--warn); }
+.railrow .st-writeup::before { background: var(--writeup); }
+.railrow .st-update::before { background: var(--paused); }
+.railrow .st-sleep { color: var(--sleep); }
+.railrow .st-paused, .railrow .st-waiting { color: var(--warn); }
+.railrow a.unread::after { content: none; }
+.unread-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.railrow a.unread .unread-dot { display: inline-block; }
+.threadcount { display: none; font-size: .72rem; line-height: 1.4; padding: 0 4px; border-radius: 8px; color: var(--dim); background: var(--line); }
+.collapsed .threadcount:not(:empty) { display: inline; }
+.railrow > button, .railrow > .railcompose .iconbtn { min-width: 20px; width: 20px; min-height: 28px; padding: 2px; border: 0; background: transparent; color: var(--dim); }
+.railrow .railcompose { display: flex; flex: none; margin: 0; }
+.railrow .railcompose, .railmore, .railgrip { opacity: 0; }
+.railrow:hover > .railmore, .railrow:hover > .railgrip, .railrow:focus-within > .railmore, .railrow:focus-within > .railgrip,
+.instrow:hover > .railcompose, .instrow:focus-within > .railcompose, .selected-instance > .instrow > .railcompose { opacity: 1; }
+.railrow .railgrip { order: -1; width: 14px; min-width: 14px; touch-action: none; cursor: grab; }
+.railchevron svg { transform: rotate(-90deg); }
+.collapsed .railchevron svg { transform: rotate(180deg); }
+.rail-dragging { opacity: .65; }
+.railmenu { position: fixed; z-index: 100; min-width: 180px; max-width: min(320px, calc(100vw - 16px)); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 6px 18px #0002; }
+.railmenu p { margin: 4px 6px 8px; overflow-wrap: anywhere; }
+.railmenu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px; }
+.railmenu button:hover, .railmenu button:focus-visible { background: var(--hover); }
+.pendingnotes { margin-left: .5rem; }
+.pendingnotes .menubody { min-width: 260px; max-height: 60vh; overflow: auto; }
+.pendingnotes ul { list-style: none; padding: 0; margin: 0; }
+.pendingnotes li { padding: .5rem; border-bottom: 1px solid var(--line); }
+.pendingnotes p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chathead .conversation-title { min-width: 0; flex: 1; }
+.conversation-title button { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; background: none; border: 0; padding: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.conversation-title button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conversation-title button > .i { display: none; flex: none; transform: rotate(-90deg); }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  body.navopen nav a.thread { display: flex; border: 0; white-space: normal; }
+  .chathead { background: var(--bg); border-bottom: 1px solid var(--line); padding-bottom: .35rem; }
+  .chathead .sub .facts { display: none; }
+  .chathead .instance-main, .chathead .sub > .state, .chathead .sub details.busystate { flex-shrink: 0; }
+  .chathead .instance-main { max-width: 35%; }
+  .chathead .pendingnotes { min-width: 0; margin-left: 0; }
+  .chathead .pendingnotes > summary { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chathead .pending-label { display: none; }
+  .conversation-title button > .i { display: inline-block; }
+  .chathead .titleline .conversation-title { max-width: 100%; flex: 1; }
+  .conversation-title button { min-height: 44px; }
+  .railedit { display: block; }
+  .railrow .railgrip { display: none; }
+  .rail-editing .railrow .railgrip { display: block; opacity: 1; width: 44px; min-width: 44px; min-height: 44px; }
+  nav .railrow > a.inst, nav .railrow > a.thread { min-height: 44px; }
+  .railrow .railmore, .railrow .railchevron, .railrow .railcompose .iconbtn { width: 32px; min-width: 32px; min-height: 44px; }
+  .railrow .railmore { opacity: 1; }
+  .railmenu button { min-height: 44px; }
 }
+.railtime { color: var(--dim); font-size: .68rem; flex: none; font-variant-numeric: tabular-nums; }
+.railpending { flex: 0 0 100%; min-width: 0; padding: 0 4px 4px 30px; margin: 0; font-size: .78rem; color: var(--dim); }
+.railpending .pendingnotes { margin: 0; }
+.railpending .menubody { position: static; width: 100%; min-width: 0; max-width: 100%; box-shadow: none; margin-top: 4px; padding: 4px; white-space: normal; }
+.rail-insert::before { content: ""; position: absolute; top: -2px; left: 0; right: 0; height: 2px; background: var(--accent); }
 
 /* The thread's title beside the instance's name; Rename behind it */
 .chathead .titleline { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
@@ -1032,8 +1097,61 @@ nav a.thread.unread::after { content: "●"; color: var(--accent); font-size: .7
 .renameform input[name=title] { display: block; width: 100%; margin: .25rem 0 .5rem; font-size: 1rem; }
 .chathead form.newthread { display: inline-flex; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  .chathead .titleline h1 { flex: 0 0 auto; max-width: 45%; }
+  .chathead .titleline h1 { flex: 1 1 auto; max-width: 100%; }
 }
 
 /* A reply waiting for the instance while another thread's reply holds it */
 .waitline { margin: .1rem 0 .3rem; font-size: .85rem; color: var(--warn); }
+
+
+.composer .keys { display: none; }
+@media (min-width: 721px) { .composer:focus-within .keys { display: inline; } }
+.sentactions { display: flex; align-items: center; gap: 4px; margin-top: .4rem; }
+.sentactions button.icon { border: 0; background: none; }
+
+/* Compact disclosures and the conversation header share the dim fact size. */
+.rail details.manage > summary { display: flex; align-items: center; justify-content: space-between;
+  padding: .5rem; color: var(--dim); font-size: .8rem; cursor: pointer; list-style: none; }
+.rail details.manage > summary .i { transform: rotate(-90deg); }
+.rail details.manage[open] > summary .i { transform: rotate(90deg); }
+.rail details.manage > a { font-size: .8rem; }
+nav .manage summary:focus-visible, nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+nav .railrow:has(> a.on) { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
+nav .railrow .last:empty { display: none; }
+nav a.inst .last { display: block; }
+details.pendingnotes > summary { display: inline-flex; padding: 0; border: 0; background: none;
+  color: var(--dim); font-size: inherit; font-weight: 400; line-height: inherit; min-height: 0; min-width: 0; }
+.chathead .pendingnotes { font-size: inherit; margin-left: 0; }
+.chathead .instance-main { color: inherit; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
+.chathead .subsep { margin: 0 .3em; flex: none; }
+.chathead .titleline { position: relative; }
+.conversation-switcher { position: absolute; z-index: 25; top: 100%; left: 0; padding: .4rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 18px #0002;
+  max-height: 70vh; overflow-y: auto; white-space: normal; }
+.conversation-switcher a, .conversation-switcher button { display: block; width: 100%; text-align: left;
+  padding: .6rem; border: 0; background: none; color: var(--text); overflow-wrap: anywhere; }
+.conversation-switcher a:hover, .conversation-switcher button:hover { background: var(--hover); }
+.conversation-switcher [aria-current=page] { font-weight: 600; background: var(--hover); }
+.conversation-switcher .switch-state { display: inline-block; white-space: nowrap; }
+.conversation-switcher form.act { display: block; margin: 0; }
+.conversation-switcher form.act button { font: inherit; }   /* Close thread reads as the items above it */
+.pending-label { margin-left: .3em; }   /* the inline-flex summary drops the leading space: "2for next cycle" */
+.switch-unread { color: var(--accent); font-weight: 600; }
+.reply-failure { border-left: 3px solid var(--bad); padding: .6rem .8rem; margin-top: .3rem;
+  background: color-mix(in srgb, var(--bad) 4%, var(--bg)); border-radius: 0 8px 8px 0; }
+.reply-failure .failure-why { color: var(--bad); margin: 0; }
+.reply-failure .failure-action { margin: .2rem 0 .4rem; }
+.reply-failure button.retry { display: inline-flex; align-items: center; justify-content: center; position: relative;
+  width: auto; min-width: 0; height: 32px; min-height: 32px; padding: 0 .65rem; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--text); }
+.reply-failure button.retry:hover { background: var(--hover); }
+@media (pointer: coarse) {
+  .reply-failure .actions { padding: 6px 0; }
+  .reply-failure button.retry::after { content: ""; position: absolute; inset: -6px; }
+}
+.sent .reply-chip { display: inline-block; padding: .1rem .4rem; border-radius: 4px;
+  background: var(--panel); border: 1px solid var(--line); }
+.emptychat form.newthread { display: inline-flex; vertical-align: middle; }
+
+.statepulse { display: inline-block; width: 6px; height: 6px; flex: none; border-radius: 50%;
+  background: var(--warn); margin-right: .25rem; vertical-align: middle; }

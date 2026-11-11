@@ -262,7 +262,7 @@ def google_accounts(name: str, accounts: dict) -> Html:
     env = core.secrets_env() if accounts else {}
     for alias, data in accounts.items():
         client = (data.get("client") or alias).removesuffix(":web")
-        missing = [("Drafting needs Log in again. " if scope == google.GMAIL_COMPOSE else "")
+        missing = [google.LATER_SCOPES.get(scope, "")
                    + google.missing_scope_message(alias, data, scope) for scope in google.SCOPES
                    if scope not in google.scopes(data)]
         keys = google.client_keys(client + ":web")

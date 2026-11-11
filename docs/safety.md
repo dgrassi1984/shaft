@@ -97,6 +97,7 @@ refused, and battery exams never get it.
 the supervisor, which enforces the label on every call (see [integrations](integrations.md)).
 `shaft mail <name> grant-draft <alias> <label>` adds `mail_draft` and `mail_draft_update`: the instance picks which
 drafted account a draft is written from, and replies in a thread only on a label with the draft flag. Nothing is sent.
+A draft can carry labels, only ones granted to the instance for drafts on that account.
 
 ### Drive grants
 

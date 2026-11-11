@@ -59,15 +59,11 @@ public final class DocumentsStore {
         open = nil
     }
 
-    /// The document's bytes whatever its size (§10.3), for Share or a document too big to show.
-    public func download(_ path: String) async -> DownloadedFile? {
-        do {
-            error = nil
-            return try await client.rawDoc(instance, path: path)
-        } catch {
-            if let apiError = APIError.from(error) { self.error = apiError }
-            return nil
-        }
+    /// The document's bytes whatever its size (§10.3), for Download: from its row, its page, or one too big to show.
+    /// It leaves `error` alone: a too-big document's page is drawn from that error (clearing it left a spinner where
+    /// the page was), and a failed download is the caller's to say.
+    public func download(_ path: String) async throws -> DownloadedFile {
+        try await client.rawDoc(instance, path: path)
     }
 
     // MARK: Writing (§10.4, §10.5)

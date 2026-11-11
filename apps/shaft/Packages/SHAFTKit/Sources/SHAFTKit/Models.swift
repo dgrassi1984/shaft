@@ -30,6 +30,7 @@ public struct PairResponse: Codable, Sendable, Equatable {
 public struct InstancesResponse: Codable, Sendable, Equatable {
     public var instances: [InstanceRow]
     public var badge: Int
+    public var instancesRev: OrderRevision? = nil
 }
 
 public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {
@@ -47,6 +48,9 @@ public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {
     public var voiceMode: String
     /// Its open threads (§3, topic threads); nil from a server before threads, which has one chat per instance.
     public var threads: Int?
+    public var threadsRev: OrderRevision? = nil
+    public var unreadMain: Bool? = nil
+    public var unreadThreads: Int? = nil
 
     public var id: String { name }
 }
@@ -58,13 +62,14 @@ public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {
 public struct ThreadsResponse: Codable, Sendable, Equatable {
     public var threads: [ThreadRow]
     public var from: FromRow
+    public var threadsRev: OrderRevision? = nil
 
     public init(threads: [ThreadRow], from: FromRow) {
         self.threads = threads
         self.from = from
     }
 
-    /// The most recently active open thread: where a send without `cid` goes (§6), and what an instance's row opens.
+    /// The most recently active thread, used only to adopt historical untargeted data.
     public var newest: ThreadRow? {
         threads.max { ($0.last ?? $0.created) < ($1.last ?? $1.created) }
     }
@@ -84,6 +89,7 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
     /// While its reply waits for the instance: what it waits on (`waiting: answering in «…»`); nil otherwise.
     public var waiting: String?
     public var unread: Bool
+    public var failed: Bool? = nil
 
     public init(id: String, title: String, created: Date, last: Date?, line: String, state: String, waiting: String?,
                 unread: Bool) {
@@ -99,7 +105,7 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
 
     public var replying: Bool { state == "replying" }
 
-    private enum CodingKeys: String, CodingKey { case id, title, created, last, line, state, waiting, unread }
+    private enum CodingKeys: String, CodingKey { case id, title, created, last, line, state, waiting, unread, failed }
 
     /// `last` and `waiting` are null-able; a server that leaves them out means null too.
     public init(from decoder: any Decoder) throws {
@@ -112,6 +118,7 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
         state = try container.decode(String.self, forKey: .state)
         waiting = try container.decodeIfPresent(String.self, forKey: .waiting)
         unread = try container.decode(Bool.self, forKey: .unread)
+        failed = try container.decodeIfPresent(Bool.self, forKey: .failed)
     }
 }
 
@@ -122,6 +129,7 @@ public struct FromRow: Codable, Sendable, Equatable {
     public var unread: Bool
     public var state: String? = nil
     public var waiting: String? = nil
+    public var failed: Bool? = nil
 
     public init(line: String, last: Date?, unread: Bool) {
         self.line = line
@@ -129,7 +137,7 @@ public struct FromRow: Codable, Sendable, Equatable {
         self.unread = unread
     }
 
-    private enum CodingKeys: String, CodingKey { case line, last, unread, state, waiting }
+    private enum CodingKeys: String, CodingKey { case line, last, unread, state, waiting, failed }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -137,6 +145,7 @@ public struct FromRow: Codable, Sendable, Equatable {
         last = try container.decodeIfPresent(Date.self, forKey: .last)
         unread = try container.decode(Bool.self, forKey: .unread)
         state = try container.decodeIfPresent(String.self, forKey: .state)
+        failed = try container.decodeIfPresent(Bool.self, forKey: .failed)
         waiting = try container.decodeIfPresent(String.self, forKey: .waiting)
     }
 }
@@ -1004,4 +1013,51 @@ public struct CycleDetail: Codable, Sendable, Equatable {
         public var action: String?
         public var reviseIf: String?
     }
+}
+
+/// Content revisions are opaque; saved order counters can also arrive as strings.
+public enum OrderRevision: Codable, Sendable, Equatable {
+    case text(String)
+    case number(Int)
+
+    public init(from decoder: any Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let number = try? value.decode(Int.self) { self = .number(number) }
+        else { self = .text(try value.decode(String.self)) }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var value = encoder.singleValueContainer()
+        switch self {
+        case .text(let text): try value.encode(text)
+        case .number(let number): try value.encode(number)
+        }
+    }
+
+    public var counter: Int? {
+        switch self {
+        case .number(let number): number
+        case .text(let text): Int(text)
+        }
+    }
+}
+
+public struct OrderMoveResponse: Codable, Sendable, Equatable {
+    public var rev: OrderRevision?
+    public var ids: [String]?
+}
+
+public struct PendingNotesResponse: Codable, Sendable, Equatable {
+    public var notes: [PendingNote]?
+}
+
+public struct PendingNote: Codable, Sendable, Equatable, Identifiable {
+    public var file: String?
+    public var mid: String?
+    public var text: String?
+    public var ts: Date?
+    public var cid: String?
+    public var title: String?
+    public var cancellable: Bool?
+    public var id: String { file ?? mid ?? "" }
 }

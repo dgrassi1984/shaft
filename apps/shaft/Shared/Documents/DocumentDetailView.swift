@@ -8,7 +8,7 @@ struct DocumentDetailView: View {
     let path: String
     @Environment(DocumentsStore.self) private var docs
     @Environment(ChatScreenModel.self) private var screen
-    @Environment(FilePreview.self) private var preview
+    @Environment(DocumentSaver.self) private var saver
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editing = false
@@ -42,7 +42,7 @@ struct DocumentDetailView: View {
                         } description: {
                             Text(error.message)
                         } actions: {
-                            Button("Download") { download() }
+                            Button("Download…") { saver.download(path, from: docs) }
                         }
                     } else {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, Design.Space.s24)
@@ -157,7 +157,7 @@ struct DocumentDetailView: View {
                     }
                 }
             }
-            Button { download() } label: { Label("Download", systemImage: "arrow.down.doc") }
+            Button { saver.download(path, from: docs) } label: { Label("Download…", systemImage: "arrow.down.doc") }
             if !screen.archived && doc != nil {
                 Divider()
                 Button(role: .destructive) { deleting = true } label: { Label("Delete…", systemImage: "trash") }
@@ -202,16 +202,6 @@ struct DocumentDetailView: View {
                     .tint(Color.textSecondary)
                     .frame(minHeight: 44)
                 }
-            }
-        }
-    }
-
-    private func download() {
-        Task {
-            guard let file = await docs.download(path) else { return }
-            if let url = try? AttachmentLoader.write(file.data, name: file.filename ?? (path as NSString).lastPathComponent,
-                                                     key: "doc-\(screen.instance)-\(path)") {
-                preview.open(local: url)
             }
         }
     }
@@ -510,26 +500,6 @@ struct DocumentSelectSheet: View {
 struct TappedThreads: Identifiable {
     let ids: [String]
     var id: String { ids.joined(separator: ",") }
-}
-
-/// What a write answered, or how it failed, floating over the bottom of the page.
-struct DocumentStatus: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.footnote)
-            .foregroundStyle(color)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, Design.Space.s12)
-            .padding(.vertical, Design.Space.s8)
-            .glassEffect(.regular, in: .rect(cornerRadius: Design.Radius.chip, style: .continuous))
-            .padding(.horizontal, Design.Space.s16)
-            .padding(.bottom, Design.Space.s8)
-            .frame(maxWidth: .infinity)
-            .accessibilityAddTraits(.updatesFrequently)
-    }
 }
 
 extension View {

@@ -32,7 +32,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import apns, web
+from . import apns, order, web
 from .core import NAME_RE, log
 from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
@@ -232,7 +232,8 @@ def _instances(req: Request) -> Response:
     history = messages.history()
     names = web._names()
     summaries = {n: web_chat.summary(n, history) for n in names}
-    unread = web_seen.unread(req.device, summaries)
+    conversations = {n: web_seen.unread_conversations(req.device, n) for n in names}
+    unread = {n: any(marks.values()) for n, marks in conversations.items()}
     rows = []
     for n in names:
         live, s = web._live(n), summaries[n]
@@ -243,9 +244,12 @@ def _instances(req: Request) -> Response:
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
                      "line": s.get("line") or "", "last": stamp(s.get("last")), "replying": replying,
-                     "threads": len(threads), "unread": unread.get(n, False), "next_cycle": web._next_cycle(n),
+                     "threads": len(threads), "threads_rev": _threads_rev(n, threads), "unread": unread.get(n, False),
+                     "unread_main": conversations[n].get("from", False),
+                     "unread_threads": sum(v for cid, v in conversations[n].items() if cid != "from"),
+                     "next_cycle": web._next_cycle(n),
                      "voice_mode": opconfig.voice_mode(core.instance_config(n))})
-    return _etagged(req, {"instances": rows, "badge": sum(unread.values())})
+    return _etagged(req, {"instances": rows, "instances_rev": order.instance_rev(), "badge": sum(unread.values())})
 
 
 def _etagged(req: Request, data: dict) -> Response:
@@ -363,6 +367,25 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
             raise Refusal(404, "not_found", f"{n} has no chat {cid}.")
 
 
+def _threads_rev(n: str, chats: list[dict]) -> str:
+    """Refetch rows when titles, lifecycle, waiting state or manual order changes."""
+    from . import web_chat
+    rows = [(c["id"], web_chat.title(c),
+             "waiting" if c["state"] == "replying" and (c.get("reply") or {}).get("waiting") else c["state"], web_chat.failed(c)) for c in chats]
+    return hashlib.sha256(json.dumps([order.thread_rev(n), rows, web_chat.failed(web_chat.from_chat(n))]).encode()).hexdigest()[:16]
+
+
+def _move(req: Request, n: str | None = None) -> Response:
+    data = _body(req)
+    after = None if data.get("after") is None else _str(data, "after")
+    try:
+        moved = (order.move_thread(n, _str(data, "id"), after) if n is not None
+                 else order.move_instance(_str(data, "name"), after))
+    except order.Refused as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, moved)
+
+
 def _threads(req: Request, n: str) -> Response:
     from . import web_chat, web_seen
     from .web_md import first_line
@@ -377,12 +400,17 @@ def _threads(req: Request, n: str) -> Response:
         return {"line": first_line(item.get("text", item.get("content", "")))[:80], "last": stamp(model["last"]),
                 "unread": unread[cid]}
 
-    return _json(200, {"threads": [
+    return _json(200, {"threads_rev": _threads_rev(n, chats), "threads": [
         {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
          "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
-         **preview(c["id"])} for c in chats],
-        "from": {**preview("from"), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
+         **preview(c["id"]), "failed": web_chat.failed(c)} for c in chats],
+        "from": {**preview("from"), "failed": web_chat.failed(web_chat.from_chat(n)), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
                  "waiting": ((web_chat.from_chat(n) or {}).get("reply") or {}).get("waiting") or None}})
+
+
+def _notes(req: Request, n: str) -> Response:
+    from . import web_chat
+    return _json(200, {"notes": [{**row, "ts": stamp(row["ts"])} for row in web_chat.pending_notes(n)]})
 
 
 def _from(req: Request, n: str) -> Response:
@@ -544,7 +572,7 @@ def _stream(req: Request, n: str) -> Response:
     if not raw.isdigit():
         raise Refusal(400, "bad_request", "after is the seq of the last event the app has, 0 for none.")
     after, reply, at = int(raw), qs.get("reply"), web._page_ms(qs.get("at"))
-    chat = _chat_of(n, qs["cid"]) if qs.get("cid") else web_chat.current(n)
+    chat = _chat_of(n, qs["cid"]) if qs.get("cid") else web_chat.target(n, "", writing=False)   # none: Main
     relay = web_chat.stream_of(chat["id"]) if chat else None
     if relay is not None and reply is not None and reply != relay.id:
         after = 0                                  # a newer reply than the app's: all of it
@@ -614,7 +642,7 @@ def _feedback(req: Request, n: str) -> Response:
 def _doc_chat(req: Request, n: str) -> dict | None:
     from . import web_chat
     cid = req.query.get("cid")
-    return _chat_of(n, cid) if cid else web_chat.shown(n)
+    return _chat_of(n, cid) if cid else web_chat.target(n, "", writing=False)        # none: Main
 
 
 def _docs(req: Request, n: str) -> Response:
@@ -1023,6 +1051,7 @@ def _service_action(req: Request, service: str, act: str) -> Response:
 ROUTES: list[tuple[str, dict]] = [
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
+    (r"/instances/move", {"POST": _move}),
     (rf"/plan/{N}", {"GET": _plan}),
     (rf"/cycles/{N}", {"GET": _cycles}),
     (rf"/cycles/{N}/(?P<ts>\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}})", {"GET": _cycle}),
@@ -1041,6 +1070,8 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
     (rf"/threads/{N}", {"GET": _threads}),
+    (rf"/notes/{N}", {"GET": _notes}),
+    (rf"/threads/{N}/move", {"POST": _move}),
     (rf"/from/{N}", {"GET": _from}),
     (rf"/file/chat/{CID}/(?P<k>\d+)/(?P<j>\d+)", {"GET": _chat_file}),
     (r"/file/message/(?P<file>[^/]+)/(?P<j>\d+)", {"GET": _message_file}),

@@ -7,6 +7,7 @@ import json
 import socket
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -36,6 +37,20 @@ class _Base(unittest.TestCase):
         p = mock.patch.object(cloudllm, "USAGE", self.usage)
         p.start()
         self.addCleanup(p.stop)
+
+    def usage_record(self):
+        # The gate under load read the usage log before the broker wrote it.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                text = self.usage.read_text()
+            except FileNotFoundError:
+                text = ""
+            if text.endswith("\n"):
+                return json.loads(text.splitlines()[-1])
+            if time.monotonic() >= deadline:
+                self.fail(f"No complete usage record in {self.usage} within 5 seconds")
+            time.sleep(0.01)
 
     def fake(self, replies):
         f = FakeLLM(replies)
@@ -77,7 +92,7 @@ class HostedServerTest(_Base):
         self.assertEqual(sent["presence_penalty"], 1.5)          # the agent's own setting is not overridden
         self.assertEqual(sent["thinking_budget_tokens"], 4096)
         self.assertEqual(self.local.requests, [])
-        rec = json.loads(self.usage.read_text().splitlines()[-1])
+        rec = self.usage_record()
         self.assertEqual((rec["model"], rec["usd"], rec["error"]), ("gpu/bonsai2", None, None))
 
     def test_after_a_tool_result_the_smaller_budget_reaches_gpu_and_no_thinking_means_no_budget(self):
@@ -113,7 +128,7 @@ class FallbackTest(_Base):
         for gpu_only in (*SAMPLING, "thinking_budget_tokens"):   # the local server keeps its own settings
             self.assertNotIn(gpu_only, sent)
         self.assertIn("-> local fallback", (self.root / "broker.log").read_text())
-        rec = json.loads(self.usage.read_text().splitlines()[-1])
+        rec = self.usage_record()
         self.assertEqual(rec["model"], "gpu/bonsai2 (local fallback)")
 
     def test_gpu_failing_before_any_reply_falls_back_but_a_bad_request_does_not(self):

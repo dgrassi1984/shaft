@@ -65,11 +65,10 @@ public final class AppModel {
     }
 
     /// How a notification that arrives while the app is open shows: nothing but the badge for the chat already on
-    /// screen (its feed shows the reply), a banner for any other — another thread of the same instance included. One
-    /// that names no thread (a server before threads) is about the instance's chat on screen, whichever it is.
+    /// screen (its feed shows the reply), a banner for another conversation. A push without cid names Main.
     nonisolated public static func presentation(for instance: String?, cid: String? = nil, visibleChat: ChatTarget?)
         -> UNNotificationPresentationOptions {
-        if let instance, let visibleChat, instance == visibleChat.instance, cid == nil || cid == visibleChat.cid {
+        if let instance, let visibleChat, instance == visibleChat.instance, (cid ?? ChatRef.fromID) == (visibleChat.cid ?? ChatRef.fromID) {
             return [.badge]
         }
         return [.banner, .list, .sound, .badge]

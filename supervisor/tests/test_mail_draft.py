@@ -15,7 +15,7 @@ class DraftGmail(read.FakeGmail):
     def __init__(self):
         super().__init__()
         self.urls, self.uploads, self.drafts = [], [], {}
-        self.upload_accounts = []
+        self.upload_accounts, self.modified, self.writes, self.refuse_modify = [], [], [], False
 
     def __call__(self, req, timeout=0):
         self.urls.append(req.full_url)
@@ -25,6 +25,18 @@ class DraftGmail(read.FakeGmail):
             form = dict(urllib.parse.parse_qsl(req.data.decode()))
             return self._answer({'access_token': 'at-' + form['refresh_token'], 'expires_in': 3600})
         path = urllib.parse.urlsplit(req.full_url).path
+        if req.get_method() != 'GET':
+            self.writes.append(path)
+        if req.get_method() == 'POST' and path.endswith('/modify'):
+            # the one label write: a message of a draft, never a thread, a batch or a trash
+            mid = path.removeprefix('/gmail/v1/users/me/messages/').removesuffix('/modify')
+            assert mid in {d['message']['id'] for d in self.drafts.values()}, path
+            body = json.loads(req.data)
+            assert set(body) == {'addLabelIds', 'removeLabelIds'}, body
+            if self.refuse_modify:
+                raise self._error(req.full_url, 400, {'error': {'code': 400, 'message': 'Invalid label'}})
+            self.modified.append((mid, body['addLabelIds'], body['removeLabelIds']))
+            return self._answer({'id': mid})
         if '/drafts' not in path:
             return super().__call__(req, timeout)
         if req.get_method() == 'GET':
@@ -55,18 +67,25 @@ class DraftTest(read.MailCase):
         super().setUp()
         for alias in ('work', 'home'):
             google._save_account(alias, {'address': f'operator@{alias}.example', 'client': 'work',
-                                        'refresh_token': 'rt-' + alias, 'scope': google.GMAIL + ' ' + google.GMAIL_COMPOSE})
+                                        'refresh_token': 'rt-' + alias,
+                                        'scope': ' '.join((google.GMAIL, google.GMAIL_COMPOSE, google.GMAIL_MODIFY))})
         self.grants = [{'account': a, 'label': 'AssistantAccess', 'draft': True} for a in ('work', 'home')]
         core.set_mail_grants('wisp', self.grants)
         self.gmail.threads['aaa111'][-1]['payload']['headers'] += [
             {'name': 'Reply-To', 'value': 'reply@example.com'}, {'name': 'Message-ID', 'value': '<last@example.com>'},
             {'name': 'References', 'value': '<first@example.com>'}]
+        self.update = {'to': ['reader@example.com'], 'subject': 'PRIVATE SUBJECT', 'body': 'PRIVATE BODY'}
         self.args = {'account': 'work', 'to': ['reader@example.com'], 'subject': 'PRIVATE SUBJECT',
                      'body': 'PRIVATE BODY'}
 
     def tearDown(self):
         # Every test, including refusals and replay, checks every URL observed by the transport.
         self.assertTrue(all('/send' not in u for u in self.gmail.urls), self.gmail.urls)
+        # ... and every write is a draft upload or a label change on a draft's message (DraftGmail checks which).
+        for path in self.gmail.writes:
+            self.assertTrue(path.startswith('/upload/gmail/v1/users/me/drafts')
+                            or (path.startswith('/gmail/v1/users/me/messages/') and path.endswith('/modify'))
+                            or path == urllib.parse.urlsplit(google.TOKEN_URL).path, path)
         super().tearDown()
 
     def draft(self, b=None, **args):
@@ -255,7 +274,10 @@ class DraftTest(read.MailCase):
     def test_offer_and_action_class(self):
         b = self.broker()
         specs = {s['function']['name']: s['function'] for s in b.tool_specs()}
-        self.assertIn('Draft from: home (operator@home.example), work (operator@work.example)', specs['mail_draft']['description'])
+        self.assertIn('Draft from: home (operator@home.example; labels: AssistantAccess), '
+                      'work (operator@work.example; labels: AssistantAccess)', specs['mail_draft']['description'])
+        for tool in broker.MAIL_DRAFT_TOOLS:
+            self.assertIn('labels', specs[tool]['parameters']['properties'])
         self.assertIn('work/AssistantAccess [drafts]', b.mail_env())
         for tool in broker.MAIL_DRAFT_TOOLS:
             self.assertEqual(actions.classify(tool, {}), 'reversible')
@@ -331,6 +353,117 @@ class DraftTest(read.MailCase):
                                                {'id': 'work/draft/d1', 'body': 'x', 'to': ['a@example.com']}))
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(len(self.gmail.uploads), 1)
+
+    def test_labels_go_on_the_draft_and_follow_the_whole_draft_rule(self):
+        b = self.broker()
+        out = self.draft(b, **self.args, labels=['AssistantAccess'])
+        self.assertIn('Labels: AssistantAccess', out)
+        self.assertEqual(self.gmail.modified, [('m1', [read.TAG], [])])
+        rows = json.loads((self.sup / 'mail-drafts/wisp.json').read_text())
+        self.assertEqual(rows['d1']['labels'], {'AssistantAccess': read.TAG})
+        # an update that asks the label again puts it on the new message; one that omits it takes it off
+        self.ok(b, 'mail_draft_update', {'id': 'work/draft/d1', **self.update, 'labels': ['AssistantAccess']})
+        self.assertEqual(self.gmail.modified[-1], ('m2', [read.TAG], []))
+        out = self.ok(b, 'mail_draft_update', {'id': 'work/draft/d1', **self.update})
+        self.assertIn('Labels: none', out)
+        self.assertEqual(self.gmail.modified[-1], ('m3', [], [read.TAG]))
+        self.assertNotIn('labels', json.loads((self.sup / 'mail-drafts/wisp.json').read_text())['d1'])
+        self.ok(b, 'mail_draft_update', {'id': 'work/draft/d1', **self.update})
+        self.assertEqual(len(self.gmail.modified), 3)          # nothing to change: no label call at all
+        self.assertIn('Labels: none', self.draft())             # a draft without labels makes none either
+        self.assertEqual(len(self.gmail.modified), 3)
+        self.assertIn('"labels": 1', (self.sup / 'broker.log').read_text())
+        self.assertNotIn('AssistantAccess', (self.sup / 'broker.log').read_text().split('mail_draft', 1)[1])
+
+    def test_only_a_label_granted_for_drafts_on_that_account_and_nothing_written_otherwise(self):
+        core.set_mail_grants('wisp', self.grants + [{'account': 'work', 'label': 'Other', 'draft': False}])
+        b = self.broker()
+        for label in ('Other', 'INBOX', 'TRASH', 'NoSuchLabel'):   # read-only grant, system labels, unknown
+            self.assertIn(f"label {label!r} is not granted to you for drafts on work; allowed: AssistantAccess",
+                          self.refused(b, 'mail_draft', {**self.args, 'labels': ['AssistantAccess', label]}))
+        b = self.broker()
+        # a reply takes no label from its thread: only the ones asked, and those are checked the same way
+        self.assertIn("label 'Other' is not granted", self.refused(b, 'mail_draft', {'reply_to': 'work/aaa111', 'body': 'x', 'labels': ['Other']}))
+        self.assertIn('labels: an array of label names', self.refused(b, 'mail_draft', {**self.args, 'labels': 'Other'}))
+        self.assertIn('labels: an array of label names', self.refused(b, 'mail_draft', {**self.args, 'labels': [7]}))
+        self.gmail.labels[read.TAG] = 'AssistantAccess-renamed'     # the granted label renamed since: refused, not guessed
+        self.assertIn("has no label 'AssistantAccess'", self.refused(b, 'mail_draft', {**self.args, 'labels': ['AssistantAccess']}))
+        self.assertEqual((self.gmail.uploads, self.gmail.modified), ([], []))
+
+    def test_a_reply_gets_no_label_unless_asked(self):
+        # the bug this names: the thread's own labels were taken for the asked ones, labelling every reply draft
+        self.assertIn('Labels: none', self.draft(reply_to='work/aaa111', body='x'))
+        self.assertEqual(self.gmail.modified, [])
+        self.assertIn('Labels: AssistantAccess', self.draft(reply_to='work/aaa111', body='x', labels=['AssistantAccess']))
+        self.assertEqual(self.gmail.modified, [('m2', [read.TAG], [])])
+
+    def test_labels_need_the_modify_scope_and_drafts_without_them_do_not(self):
+        saved = google.account('work')
+        google._save_account('work', {**saved, 'scope': google.GMAIL + ' ' + google.GMAIL_COMPOSE})
+        b = self.broker()
+        error = self.refused(b, 'mail_draft', {**self.args, 'labels': ['AssistantAccess']})
+        self.assertIn('gmail.modify', error)
+        self.assertEqual((self.gmail.uploads, self.gmail.modified), ([], []))   # refused before the draft is written
+        self.assertIn('Labels: none', self.draft(b))
+
+    def test_a_refused_label_call_names_the_draft_that_was_left(self):
+        b = self.broker()
+        self.gmail.refuse_modify = True
+        error = self.refused(b, 'mail_draft', {**self.args, 'labels': ['AssistantAccess']})
+        self.assertIn('the draft is left as work/draft/d1, but its labels were not set', error)
+        rows = json.loads((self.sup / 'mail-drafts/wisp.json').read_text())
+        self.assertEqual(rows['d1']['message_id'], 'm1')        # still the instance's draft: it can set them again
+        self.assertNotIn('labels', rows['d1'])
+        self.gmail.refuse_modify = False
+        self.ok(b, 'mail_draft_update', {'id': 'work/draft/d1', **self.update, 'labels': ['AssistantAccess']})
+        self.assertEqual(self.gmail.modified, [('m2', [read.TAG], [])])
+
+    def test_replay_never_labels(self):
+        state = self.project / 'replay'
+        state.mkdir()
+        b = broker.ReplayBroker('wisp', self.project, self.secrets, self.sup / 'broker.log', state_root=state,
+                                start_commit='0', as_of=read.T0.replace(hour=12), cache={}, cache_lock=threading.Lock(),
+                                billed='wisp@trial:t', tools_log=self.sup / 't.log')
+        out = self.ok(b, 'mail_draft', {'reply_to': 'work/aaa111', 'body': 'simulated', 'labels': ['AssistantAccess']})
+        self.assertIn('Labels: AssistantAccess', out)
+        self.assertEqual(b.trace[-1]['tags'] and {'simulated: not drafted', 'simulated: not labelled'} <= set(b.trace[-1]['tags']), True)
+        self.assertIn('not granted to you for drafts', self.refused(b, 'mail_draft', {'reply_to': 'work/aaa111', 'body': 'x', 'labels': ['Other']}))
+        self.assertEqual((self.gmail.uploads, self.gmail.modified, self.gmail.writes), ([], [], []))
+
+    def test_the_only_message_write_is_the_label_change(self):
+        # gmail.modify could trash, delete or relabel anything: mail.py holds one modify URL and no other write
+        text = (Path(mail.__file__).parent / 'mail.py').read_text()
+        self.assertEqual(text.count('/modify'), 1)
+        for endpoint in ('/trash', '/untrash', 'batchModify', 'batchDelete', 'acct.delete', '"DELETE"', "'DELETE'"):
+            self.assertNotIn(endpoint, text)
+
+    def test_an_operator_account_cannot_send_whatever_the_code_asks(self):
+        # the token (gmail.compose, gmail.modify) could send, trash and delete: the one door to Google refuses each
+        # before a request exists, so a later caller cannot send from the operator's address by mistake
+        acct, api = google.Account('work', self.secrets), mail.API
+        before = len(self.gmail.urls)
+        for method, url in (
+                ('POST', api + '/messages/send'), ('POST', api + '/drafts/send'), ('POST', api + '/drafts/d1/send'),
+                ('POST', api.replace('/gmail/v1', '/upload/gmail/v1') + '/messages/send'),
+                ('POST', api.replace('/gmail/v1', '/upload/gmail/v1') + '/drafts/send'),
+                ('POST', 'https://www.googleapis.com/gmail/v1/users/me/messages/send'),
+                ('POST', 'https://www.googleapis.com/batch/gmail/v1'), ('POST', 'https://gmail.googleapis.com/batch'),
+                ('POST', api + '/messages'), ('POST', api + '/messages/import'), ('POST', api + '/messages/m1/trash'),
+                ('POST', api + '/messages/batchModify'), ('POST', api + '/threads/aaa111/modify'),
+                ('POST', api + '/messages/m1%2Fsend/modify'), ('POST', api + '/messages/m1/modify/send'),
+                ('POST', api + '/settings/sendAs'), ('PUT', api + '/settings/autoForwarding'),
+                ('POST', api + '/settings/filters'), ('POST', api + '/drafts'), ('PATCH', api + '/messages/m1'),
+                ('POST', 'https://GMAIL.googleapis.com/gmail/v1/users/me/messages/send'),
+                ('POST', 'https://gmail.googleapis.com/gmail/v1/users/other@example.com/messages/m1/modify')):
+            with self.subTest(url=url), self.assertRaises(google.ForbiddenWrite):
+                acct._response(method, url, {}, json.load, 5)
+        with self.assertRaises(google.ForbiddenWrite):
+            acct.post(api + '/messages/send', {'raw': ''})
+        with self.assertRaises(google.ForbiddenWrite):
+            acct.upload('POST', api.replace('/gmail/v1', '/upload/gmail/v1') + '/messages/send', b'', 'message/rfc822')
+        self.assertEqual(len(self.gmail.urls), before)             # nothing reached the transport, not even a token call
+        google.check_gmail_write('POST', 'https://www.googleapis.com/calendar/v3/calendars/primary/events')   # other APIs pass
+        self.assertEqual(self.draft(**self.args, labels=['AssistantAccess']).count('Labels: AssistantAccess'), 1)   # the two writes pass
 
     def test_no_send_endpoint_in_supervisor(self):
         # the modules that build Google requests (a judge prompt may name the endpoint; it never calls it)

@@ -89,13 +89,19 @@ The message log records `urgent` and `push_due`; judges see urgency in the tool 
 Mail, Calendar, Drive, and Google Chat share your Google accounts. An instance never holds a
 Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly`, `gmail.compose`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
+for `gmail.readonly`, `gmail.compose`, `gmail.modify`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `chat.spaces.readonly`,
 `chat.messages.readonly`, and `chat.memberships.readonly` together and records the scopes Google actually granted
 (the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
 the login to run again; it never returns an empty result. Mail drafts and calendar writes need per-instance grants
 on top (`grant-draft`, `grant-write`). `gmail.compose` is the only Gmail scope that writes drafts, and it could also
 send: no SHAFT code calls a send endpoint. An account logged in before drafts lacks it; its reads keep working, and
 drafting asks for Log in again after you add `https://www.googleapis.com/auth/gmail.compose` to Data Access.
+Labels on a draft need `https://www.googleapis.com/auth/gmail.modify` the same way: Gmail changes a message's labels
+only through `messages.modify`, which `gmail.compose` cannot call. That scope could also trash or relabel any
+message; SHAFT's code only changes labels on a draft an instance wrote, and a test fails on any other write. The
+session on an operator's account (`google.Account`) refuses every Gmail write but a draft upload and a label change
+on one message, so no send, insert, trash, delete, batch or settings call is ever made with your token. An
+account without it keeps reading and drafting; only a draft that asks for labels is refused, before it is written.
 
 Before re-login, add `https://www.googleapis.com/auth/calendar.events` in Google Cloud → Google Auth Platform →
 Data Access for each OAuth project. Then run `shaft google login <alias> <address>` again for each operator account
@@ -147,7 +153,11 @@ that account with the reply headers, outside the original thread. Without `reply
 are required. Attachments are paths in the instance's folder (its `mail/` and `gdrive/` downloads included; links and
 reserved paths refused), 25 MB in all. The result gives the draft's handle and its Gmail link. `mail_draft_update`
 replaces a draft the instance created, only while Gmail still holds the version it wrote (an edit by the operator, or
-a send, makes the draft theirs). There is no delete. Five draft calls per run, inside the 30 mail calls. The broker
+a send, makes the draft theirs). `labels` puts Gmail labels on the draft: only labels granted to the instance for
+drafts on the draft's account (the tool's description lists them), by name, so a label renamed since is refused. An
+update follows the whole-draft rule for them too: the labels asked again stay, the ones the instance put before and
+does not ask again come off. A sent message keeps its labels, so a labelled draft, once you send it, is mail under
+that label. There is no delete. Five draft calls per run, inside the 30 mail calls. The broker
 log keeps counts, never recipients, subject or body. A trial replay checks a draft and answers as a cycle would, and
 writes nothing. The supervisor's register of drafts is `.supervisor/mail-drafts/<name>.json`.
 

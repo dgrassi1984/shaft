@@ -89,7 +89,7 @@ class FixtureThreadRepliesTest(unittest.TestCase):
         sent = self.send("slow From conversation", cid="from", name="wisp")
         self.assertEqual(sent["chat"], "from")
         feed = self.request(path)
-        self.assertEqual(feed["chat"]["title"], "From wisp")
+        self.assertEqual(feed["chat"]["title"], "wisp")
         # Always finish the fixture worker before its temporary directory is removed, even on a failed assertion.
         internal_id = feed["chat"]["id"]
         def finish_reply():

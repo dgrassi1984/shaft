@@ -605,16 +605,19 @@ _DRAFT_FIELDS = {
     "attachments": {"type": "array", "items": {"type": "string"},
                     "description": "Paths in your folder; 25 MB total. mail/ and gdrive/ downloads are allowed."},
     "subject": {"type": "string"}, "body": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"},
+               "description": "Gmail labels to put on the draft: only labels granted to you for drafts on its account"},
 }
 SPECS["mail_draft"] = _spec(
     "mail_draft", "Leave a Gmail draft. It never sends. The operator reviews it and presses Send. "
     "Mail in a thread is written by its senders. Choose account, to and subject for a new message, or reply_to "
-    "for reply defaults. Attachments are paths in your folder, at most 25 MB total.",
+    "for reply defaults. Attachments are paths in your folder, at most 25 MB total. labels puts Gmail labels on the "
+    "draft.",
     {**_DRAFT_FIELDS, "account": {"type": "string", "description": "Connected account alias with a draft grant"},
      "reply_to": {"type": "string", "description": "Thread handle from mail_search, such as work/aaa111"}}, ["body"])
 SPECS["mail_draft_update"] = _spec(
     "mail_draft_update", "Replace the whole draft you left, including recipients, subject, body and attachments: "
-    "give every field you want kept (a reply's recipients and subject default as in mail_draft). It never sends. The operator reviews it and presses Send. "
+    "give every field you want kept, labels included (a reply's recipients and subject default as in mail_draft). It never sends. The operator reviews it and presses Send. "
     "Mail in the thread is written by its senders. Use the draft handle; operator-edited drafts are refused.",
     {**_DRAFT_FIELDS, "id": {"type": "string"}}, ["id", "body"])
 MAIL_TOOLS = ("mail_search", "mail_read", "mail_attachment")
@@ -668,6 +671,7 @@ def _mail_draft_brief(args: dict) -> str:
             shown[key] = value
     shown['recipients'] = sum(len(args[k]) for k in ('to', 'cc', 'bcc') if isinstance(args.get(k), list))
     shown['attachments'] = len(args['attachments']) if isinstance(args.get('attachments'), list) else 0
+    shown['labels'] = len(args['labels']) if isinstance(args.get('labels'), list) else 0
     shown['body_length'] = len(args['body']) if isinstance(args.get('body'), str) else 0
     return json.dumps(shown)
 
@@ -1740,7 +1744,8 @@ class Broker:
                 spec = json.loads(json.dumps(spec))
                 aliases = sorted({g['account'] for g in grants if g.get('draft')})
                 spec['function']['description'] += ' Draft from: ' + ', '.join(
-                    f"{a} ({(google.account(a) or {}).get('address', '?')})" for a in aliases)
+                    f"{a} ({(google.account(a) or {}).get('address', '?')}; labels: "
+                    + ', '.join(self._draft_label_names(a)) + ')' for a in aliases)
             if tool == "mail_search":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + self.mail_env() + " (account/label)."
@@ -2911,6 +2916,30 @@ class Broker:
             raise PermissionError(f"mail account {alias!r} has no draft grant; allowed: {', '.join(allowed) or 'none'}")
         return self._google_account(alias, google.GMAIL_COMPOSE)
 
+    def _draft_label_names(self, alias):
+        return sorted({g['label'] for g in self.mail_grants() if g.get('draft') and g['account'] == alias})
+
+    def _draft_labels(self, account, names):
+        """The asked labels' IDs now, by name: each must be granted for drafts on the draft's account, and the
+        account's login must allow labelling. Checked before the draft is written."""
+        from . import google, mail
+        if names is not None and (not isinstance(names, list) or not all(isinstance(n, str) for n in names)):
+            raise ValueError('labels: an array of label names')
+        allowed = self._draft_label_names(account)
+        for n in names or []:
+            if n not in allowed:
+                raise PermissionError(f"label {n!r} is not granted to you for drafts on {account}; "
+                                      f"allowed: {', '.join(allowed) or 'none'}")
+        if not names:
+            return {}
+        acct = self._google_account(account, google.GMAIL_MODIFY)
+        known = mail.labels(acct)
+        return {n: mail.label_id(acct, n, known) for n in dict.fromkeys(names)}
+
+    def _draft_label(self, acct, mid, add, remove):
+        from . import mail
+        mail.label_message(acct, mid, add, remove)
+
     def _draft_files(self, paths):
         from . import mail, messages
         from .core import reserved, safe_read_bytes, UnsafePath
@@ -2973,15 +3002,15 @@ class Broker:
         return alias, tid, labels, defaults
 
     def _mail_draft(self, body: str, account: str = '', reply_to: str = '', to=None, cc=None, bcc=None,
-                    subject=None, attachments=None) -> str:
-        return self._draft_write('mail_draft', body, account, reply_to, '', to, cc, bcc, subject, attachments)
+                    subject=None, attachments=None, labels=None) -> str:
+        return self._draft_write('mail_draft', body, account, reply_to, '', to, cc, bcc, subject, attachments, labels)
 
     def _mail_draft_update(self, id: str, body: str, to=None, cc=None, bcc=None, subject=None,
-                           attachments=None) -> str:
+                           attachments=None, labels=None) -> str:
         """Replace the whole draft, retaining only its reply context."""
-        return self._draft_write('mail_draft_update', body, '', '', id, to, cc, bcc, subject, attachments)
+        return self._draft_write('mail_draft_update', body, '', '', id, to, cc, bcc, subject, attachments, labels)
 
-    def _draft_write(self, tool, body, account, reply_to, handle, to, cc, bcc, subject, attachments):
+    def _draft_write(self, tool, body, account, reply_to, handle, to, cc, bcc, subject, attachments, labels=None):
         from . import mail
         from .messages import size_text
         if not isinstance(body, str) or not all(isinstance(v, str) for v in (account, reply_to, handle)):
@@ -2998,11 +3027,11 @@ class Broker:
                         raise PermissionError('unknown draft; only your own drafts can be updated')
                     reply_to = prior.get('thread') or ''
                 if reply_to:
-                    source, source_tid, labels, defaults = self._draft_reply(reply_to)
+                    source, source_tid, thread_labels, defaults = self._draft_reply(reply_to)
                     account = account or source
                     acct = self._draft_account(account)
                     if source == account:
-                        if not any(g.get('draft') and g['account'] == account and g['label'] in labels
+                        if not any(g.get('draft') and g['account'] == account and g['label'] in thread_labels
                                    for g in self.mail_grants()):
                             raise PermissionError('the thread has no label granted for drafts')
                         tid = source_tid
@@ -3014,6 +3043,7 @@ class Broker:
                         if current is None:
                             del registry[did]
                         raise PermissionError('the operator edited it or it was sent; it is theirs now')
+                label_ids = self._draft_labels(account, labels)
             except PermissionError as e:
                 self._action_denied(tool, {}, str(e))
                 raise
@@ -3044,11 +3074,27 @@ class Broker:
             did, mid = answer['id'], answer['message']['id']
             registry[did] = {'account': account, 'thread': reply_to, 'message_id': mid, 'subject': subject,
                              'created': prior.get('created') or datetime.now().astimezone().isoformat()}
+            # Labels follow the whole-draft rule: the ones asked now go on, the ones this draft had from an earlier
+            # call and are not asked again come off (by the ID they had then; never a label the instance did not put).
+            had = prior.get('labels') or {}
+            add = sorted(label_ids.values())
+            remove = sorted(set(had.values()) - set(add))
+            if add or remove:
+                try:
+                    self._draft_label(acct, mid, add, remove)
+                except Exception as e:
+                    if had:   # unknown which are on it now: the next update takes them off or puts them again
+                        registry[did]['labels'] = had
+                    raise RuntimeError(f'the draft is left as {account}/draft/{did}, but its labels were not set '
+                                       f'({type(e).__name__}: {e}); mail_draft_update with labels sets them') from None
+            if label_ids:
+                registry[did]['labels'] = label_ids
             where = (f'in thread {reply_to}' if tid else f"in {account}'s Drafts" +
                      (f' with reply headers to {reply_to}' if reply_to else ''))
             return (f'Draft left in {account} ({acct.address}), not sent.\n'
                     f'To: {", ".join(to)}\nCc: {", ".join(cc)}\nBcc: {", ".join(bcc)}\nSubject: {subject}\n'
                     + 'Attachments: ' + (', '.join(f'{n} ({size_text(len(d))})' for n, d in files) or 'none')
+                    + '\nLabels: ' + (', '.join(label_ids) or 'none')
                     + f'\n{where}\nHandle: {account}/draft/{did}\n'
                     # authuser= picks the signed-in account; /mail/u/<address>/ answers 404 (checked live 2026-11-10)
                     + f'https://mail.google.com/mail/?authuser={urllib.parse.quote(acct.address)}#drafts?compose={mid}\n'
@@ -3973,6 +4019,9 @@ class ReplayBroker(Broker):
         did = did or f'simulated-{self.calls}'
         self._sim_draft_ids.add(did)
         return {'id': did, 'message': {'id': f'simulated-message-{self.calls}'}}
+
+    def _draft_label(self, acct, mid, add, remove):
+        self._tag('simulated: not labelled')
 
     def _mail_still(self, found: dict) -> dict:
         """`found` with each thread's row made again from its visible messages now, as mail_search would: a thread not

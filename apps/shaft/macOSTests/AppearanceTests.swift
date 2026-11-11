@@ -1,4 +1,5 @@
 import AppKit
+import SHAFTKit
 import SwiftUI
 import Testing
 
@@ -81,5 +82,73 @@ struct AppearanceTests {
         #expect(paragraph.paragraphSpacing == 10)
         let own = "Body\n```\ncode\n```"
         #expect(MarkdownAttributed.operatorText(own, scale: 1).text.isEqual(to: MarkdownAttributed.operatorText(own).text))
+    }
+}
+
+struct SidebarRowPresentationTests {
+    private func instance(replying: Bool = false) throws -> SHAFTKit.InstanceRow {
+        let json = """
+        {"name":"example","state":"idle","since":"","model":"example","usdToday":0,
+         "line":"Main preview","replying":\(replying),"unread":false,"nextCycle":"","voiceMode":"off",
+         "unreadThreads":2}
+        """
+        return try JSONDecoder().decode(SHAFTKit.InstanceRow.self, from: Data(json.utf8))
+    }
+
+    @Test func mainStateOverridesOtherThreadsActivity() throws {
+        let row = try instance(replying: true)
+        var main = SHAFTKit.FromRow(line: "Main preview", last: nil, unread: false)
+        main.state = "idle"
+        let state = ConversationRowState(row: row, main: main)
+        #expect(state.state == "idle")
+        #expect(state.label == "idle")
+        #expect(ConversationRowState(row: row, main: nil).state == "replying")
+    }
+
+    @Test func mainFailureAndWaitingAreAnnounced() throws {
+        let row = try instance()
+        var main = SHAFTKit.FromRow(line: "Main preview", last: nil, unread: false)
+        main.state = "idle"
+        main.failed = true
+        #expect(ConversationRowState(row: row, main: main).failed)
+        #expect(SidebarRowLabels.instance(row, main: main, collapsed: false, subline: "Main preview")
+                == "example, reply failed, Main preview")
+        main.waiting = "answering in another thread"
+        #expect(ConversationRowState(row: row, main: main).label == "waiting: answering in another thread")
+    }
+
+    @Test func collapsedMainAnnouncesUnreadThreadCount() throws {
+        let row = try instance()
+        #expect(SidebarRowLabels.instance(row, main: nil, collapsed: true, subline: "Main preview")
+                == "example, idle, Main preview, 2 unread threads")
+        #expect(SidebarRowLabels.instance(row, main: nil, collapsed: false, subline: "Main preview")
+                == "example, idle, Main preview")
+        #expect(SidebarRowLabels.disclosure("example", expanded: false) == "Expand threads for example")
+        #expect(SidebarRowLabels.disclosure("example", expanded: true) == "Collapse threads for example")
+    }
+
+    @Test func threadAnnouncesItsWaitingSentenceAndFailure() {
+        var thread = SHAFTKit.ThreadRow(id: "example", title: "A topic", created: .distantPast, last: nil,
+                                        line: "", state: "idle", waiting: "answering Main", unread: true)
+        #expect(SidebarRowLabels.thread(thread) == "A topic, waiting: answering Main, unread")
+        thread.waiting = nil
+        thread.failed = true
+        #expect(SidebarRowLabels.thread(thread) == "A topic, reply failed, unread")
+    }
+
+    @Test func movesAreAvailableOnlyWithinTheRowsOwnOrder() {
+        let ids = ["first", "middle", "last"]
+        #expect(!SidebarMoveAvailability(id: "first", ids: ids).up)
+        #expect(SidebarMoveAvailability(id: "first", ids: ids).down)
+        #expect(SidebarMoveAvailability(id: "middle", ids: ids).up)
+        #expect(SidebarMoveAvailability(id: "middle", ids: ids).down)
+        #expect(SidebarMoveAvailability(id: "last", ids: ids).up)
+        #expect(!SidebarMoveAvailability(id: "last", ids: ids).down)
+        for rows in [[], ["only"]] {
+            #expect(!SidebarMoveAvailability(id: "only", ids: rows).up)
+            #expect(!SidebarMoveAvailability(id: "only", ids: rows).down)
+        }
+        #expect(!SidebarMoveAvailability(id: "missing", ids: ids).up)
+        #expect(!SidebarMoveAvailability(id: "missing", ids: ids).down)
     }
 }

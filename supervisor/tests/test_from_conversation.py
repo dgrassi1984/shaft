@@ -75,7 +75,7 @@ class FromConversationTest(unittest.TestCase):
 
         api = web_chat._api_messages(fc)
         self.assertEqual(api[0]["role"], "system")
-        self.assertIn("This conversation is From wisp", api[0]["content"])
+        self.assertIn("This is your main conversation with the operator", api[0]["content"])
         self.assertEqual([m["role"] for m in api[1:]], ["assistant", "user"])
         self.assertTrue(api[1]["content"].startswith(f"[sent from my cycle at {row['ts'][11:16]}, shown in From]"))
         self.assertIn("the import job failed twice", api[1]["content"])
@@ -90,7 +90,7 @@ class FromConversationTest(unittest.TestCase):
         self.assertEqual(self.started, [], "no reply now: it is for the next cycle")
         fc = web_chat.from_chat("wisp")
         [note] = self.f.inbox()
-        self.assertIn(f"Conversation: {fc['id']} («From wisp»)", note.read_text())
+        self.assertIn(f"Conversation: {fc['id']} («main conversation»)", note.read_text())
         [row] = messages.history()
         self.assertEqual(row["thread"], fc["id"])
         self.assertEqual([i["type"] for i in web_chat.from_feed("wisp")["items"]], ["later"])
@@ -103,7 +103,7 @@ class FromConversationTest(unittest.TestCase):
         self.assertEqual(answer["thread"], fc["id"])
         self.assertEqual([i["type"] for i in web_chat.from_feed("wisp")["items"]], ["later", "sent"])
         self.assertEqual(web_alerts._cid_of_message(answer), "from")
-        self.assertEqual(web_alerts.event(answer)["url"], "/i/wisp/from")
+        self.assertEqual(web_alerts.event(answer)["url"], "/i/wisp/chat")
 
     # -- From is no thread ------------------------------------------------------------------------------------------
     def test_from_is_in_no_thread_list_and_refuses_end_clear_and_rename(self):
@@ -111,7 +111,7 @@ class FromConversationTest(unittest.TestCase):
         thread = web_chat.new_thread("wisp", ME)
         self.assertEqual([c["id"] for c in web_chat.threads("wisp")], [thread["id"]])
         self.assertEqual([c["id"] for c in web_chat.chats("wisp")], [thread["id"]])
-        self.assertEqual(web_chat.current("wisp")["id"], thread["id"])
+        self.assertEqual(web_chat.target("wisp", "", writing=False)["id"], fc["id"], "no cid is Main, not a thread")
         self.assertEqual({c["id"] for c in web_chat.open_chats("wisp")}, {thread["id"], fc["id"]})
         for act in (lambda: web_chat.end(fc["id"]), lambda: web_chat.clear("wisp", "from"),
                     lambda: web_chat.clear("wisp", fc["id"]), lambda: web_chat.rename("wisp", "from", "x")):
@@ -128,7 +128,7 @@ class FromConversationTest(unittest.TestCase):
         fc["turns"] = [{"role": "user", "ts": "2026-11-11T09:00:00", "content": "hi"},
                        {"role": "assistant", "ts": "2026-11-11T09:00:05", "content": "Hello."}]
         event = web_chat.reply_event(fc)
-        self.assertEqual((event["cid"], event["url"]), ("from", "/i/wisp/from"))
+        self.assertEqual((event["cid"], event["url"]), ("from", "/i/wisp/chat"))
         self.addCleanup(web_chat._watched.clear)
 
     def test_a_from_replys_own_messages_show_in_from_but_are_not_routed_in_again(self):
@@ -157,6 +157,13 @@ class FromConversationTest(unittest.TestCase):
         self.assertNotIn("Report 0:", "".join(m["content"] for m in body))
 
     # -- the page and the apps --------------------------------------------------------------------------------------
+    def test_main_tab_title_uses_only_the_instance_name(self):
+        """The Main tab still read '· from ·' after the rename."""
+        page = str(web_views.from_page("wisp", web_chat.from_feed("wisp"), [], {}, ["wisp"], "tok"))
+        title = page.split("<title>", 1)[1].split("</title>", 1)[0]
+        self.assertEqual(title, "wisp · SHAFT")
+        self.assertNotIn("from", title.lower())
+
     def test_the_from_page_composer_sends_now_with_next_cycle_behind_the_arrow(self):
         html = str(web_views.from_page("wisp", web_chat.from_feed("wisp"), [], {}, ["wisp"], "tok"))
         self.assertIn('<input type="hidden" name="cid" value="from">', html)
@@ -181,15 +188,14 @@ class FromConversationTest(unittest.TestCase):
         """Without it, a reply running in From showed nowhere in the rail: the dot stayed From's plain mark."""
         fc = web_chat.from_chat("wisp", ME, create=True)
         from supervisor import web_pages
-        idle = str(web_pages.thread_rows("wisp", [], "", "", **{k: web._rail_chats(["wisp"])["wisp"][k]
-                                                               for k in ("from_state", "from_waiting")}))
-        self.assertIn("t-from", idle)
+        idle = str(web_pages.rail(["wisp"], "i:wisp", chats=web._rail_chats(["wisp"]), thread="from"))
+        self.assertIn('<span class="dot st-idle" title="idle" aria-hidden="true"></span>', idle)
         fc["state"] = "replying"
         web_chat.save(fc)
         rail = web._rail_chats(["wisp"])["wisp"]
         self.assertEqual(rail["from_state"], "replying")
-        self.assertIn("t-replying", str(web_pages.thread_rows("wisp", [], "", "", rail["from_state"],
-                                                              rail["from_waiting"])))
+        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true"></span>',
+                      str(web_pages.rail(["wisp"], "i:wisp", chats={"wisp": rail}, thread="from")))
         self.assertTrue(web_chat.summary("wisp", [])["replying"])
 
     def test_stop_from_the_app_names_from_and_stops_the_from_reply(self):
@@ -204,16 +210,18 @@ class FromConversationTest(unittest.TestCase):
                 app_api._action(req, "wisp", "stop")
         relay.stop.assert_called_once_with()
 
-    def test_a_document_card_in_from_opens_on_the_chat_page(self):
-        """Review finding: From has no documents panel, so a card's "?doc=" link reloaded From and nothing opened."""
+    def test_a_document_card_in_main_opens_in_its_own_panel(self):
+        """Review finding: From had no documents panel, so a card's "?doc=" link reloaded From and nothing opened. Main
+        (the instance's own page) has the panel: the card opens the document beside it."""
         fc = web_chat.from_chat("wisp", ME, create=True)
         fc["turns"] = [{"role": "user", "ts": "2099-01-01T00:00:00", "content": "write it up"},
                        {"role": "assistant", "ts": "2099-01-01T00:00:05", "content": "Done.",
                         "docs": [{"path": "notes/docs/plan.md", "created": True}]}]
         web_chat.save(fc)
         html = str(web_views.feed_html(web_chat.from_feed("wisp"), from_feed=True))
-        self.assertIn('href="/i/wisp/chat?doc=notes%2Fdocs%2Fplan.md"', html)
-        self.assertNotIn('href="?doc=', html)
+        self.assertIn('href="?doc=notes%2Fdocs%2Fplan.md" data-open-doc="notes/docs/plan.md"', html)
+        page = str(web_views.from_page("wisp", web_chat.from_feed("wisp"), [], {}, ["wisp"], "t"))
+        self.assertIn('<aside class="docs" id="docs"', page)
 
     def test_from_shows_its_earlier_turns_on_request_not_in_messages_which_has_none(self):
         """Review finding: past CHAT_WINDOW items From's "earlier" link went to Messages, where its own turns are not."""
@@ -226,7 +234,7 @@ class FromConversationTest(unittest.TestCase):
         self.assertIn('href="?all=1"', str(web_views.feed_html(windowed, from_feed=True)))
         whole = web_chat.from_feed("wisp", whole=True)
         self.assertEqual(len(whole["items"]), web_chat.CHAT_WINDOW + 10)
-        self.assertIn("/fragment/from/wisp?all=1", str(web_views.from_page("wisp", whole, [], {}, ["wisp"], "t",
+        self.assertIn("/fragment/chat/wisp?all=1", str(web_views.from_page("wisp", whole, [], {}, ["wisp"], "t",
                                                                            whole=True)))
 
     def test_a_bakeoff_reads_the_operators_request_made_in_from(self):

@@ -224,8 +224,8 @@ class FeedbackRouteTest(WebTest):
         self.assertIn("goes with your next message", html)
         self.assertEqual(self.inbox(), [])
         with self.assertRaisesRegex(web_chat.Refused, "empty message"):
-            web_chat.send("wisp", "operator", "", [])
-        chat, _ = web_chat.send("wisp", "operator", "try again", [], mid="next")
+            web_chat.send("wisp", "operator", "", [], cid="web-abc")
+        chat, _ = web_chat.send("wisp", "operator", "try again", [], mid="next", cid="web-abc")
         self.assertEqual(chat["turns"][-1]["feedback"], [fid])
         expected = ("try again\n\n[Operator feedback: 👎 on your reply of 2026-10-29 10:00 "
                     "(web chat web-abc):\n «server answer»\n What was wrong: check it.\n "
@@ -234,11 +234,11 @@ class FeedbackRouteTest(WebTest):
         self.assertNotIn("pending_feedback", chat)
         self.assertEqual(feedback.items()[0]["sent"]["via"], "chat")
         self.assertIn("👎 feedback", str(web_views.chat_feed("wisp", chat, [])))
-        again, _ = web_chat.send("wisp", "operator", "try again", [], mid="next")
+        again, _ = web_chat.send("wisp", "operator", "try again", [], mid="next", cid="web-abc")
         self.assertEqual(again["turns"], chat["turns"])
         chat["state"] = "idle"
         web_chat.save(chat)
-        later, _ = web_chat.send("wisp", "operator", "next question", [])
+        later, _ = web_chat.send("wisp", "operator", "next question", [], cid="web-abc")
         self.assertEqual(later["turns"][-1]["content"], "next question")
         self.assertEqual(self.inbox(), [])
 
@@ -268,7 +268,7 @@ class FeedbackRouteTest(WebTest):
         self.assertEqual(item["sent"]["via"], "inbox")
         self.assertEqual(len(self.inbox()), 1)
         self.assertNotIn("pending_feedback", web_chat.load("web-abc"))
-        chat, _ = web_chat.send("wisp", "operator", "next", [])
+        chat, _ = web_chat.send("wisp", "operator", "next", [], cid="web-abc")
         self.assertEqual(chat["turns"][-1]["content"], "next")
         row = messages.history()[-1]
         self.assertEqual((row["kind"], row["via"], row["mid"]), ("feedback", messages.BACKGROUND, item["id"]))
@@ -312,7 +312,7 @@ class FeedbackRouteTest(WebTest):
         self.open()
         self.sent(self.rated())
         self.rated("up")
-        chat, _ = web_chat.send("wisp", "operator", "next", [])
+        chat, _ = web_chat.send("wisp", "operator", "next", [], cid="web-abc")
         self.assertEqual(chat["turns"][-1]["content"], "next")
         self.assertNotIn("pending_feedback", chat)
         self.assertIsNone(feedback.items()[0]["sent"])
@@ -327,7 +327,7 @@ class FeedbackRouteTest(WebTest):
         self.assertEqual(feedback.items()[0]["id"], fid)
         self.sent(fid)
         self.post(op="clear", id=fid)
-        chat, _ = web_chat.send("wisp", "operator", "next", [])
+        chat, _ = web_chat.send("wisp", "operator", "next", [], cid="web-abc")
         self.assertEqual(chat["turns"][-1]["content"], "next")
         self.assertEqual(self.inbox(), [])
 
@@ -336,10 +336,10 @@ class FeedbackRouteTest(WebTest):
         fid = self.rated()
         self.sent(fid)
         with mock.patch.object(web_chat, "_post", return_value=(202, {})) as post:
-            chat, _ = web_chat.send("wisp", "operator", "meanwhile", [])
+            chat, _ = web_chat.send("wisp", "operator", "meanwhile", [], cid="web-abc")
         self.assertEqual(post.call_args.args[2]["messages"][-1]["content"], "meanwhile")
         self.assertEqual([p["id"] for p in chat["pending_feedback"]], [fid])
-        web_chat.queue("wisp", "operator", "afterwards", [], mid="q1")
+        web_chat.queue("wisp", "operator", "afterwards", [], mid="q1", cid="web-abc")
         chat = web_chat.load("web-abc")
         self.assertTrue(web_chat._flush_queue(chat))
         web_chat.save(chat)
@@ -405,7 +405,7 @@ class FeedbackRouteTest(WebTest):
         self.sent(fid)
         with mock.patch.object(feedback, "mark_sent", side_effect=OSError("interrupted")):
             with self.assertRaises(OSError):
-                web_chat.send("wisp", "operator", "next", [])
+                web_chat.send("wisp", "operator", "next", [], cid="web-abc")
         self.assertIsNone(feedback.items()[0]["sent"])
         r = self.post(op="send", id=fid, reason="changed on retry")
         self.assertEqual(r.status, 409, r.body)

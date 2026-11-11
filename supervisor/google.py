@@ -35,6 +35,9 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR = "https://www.googleapis.com/auth/calendar.readonly"
+# Labels on a draft an instance left (mail.label_message): Gmail changes a message's labels only through
+# messages.modify, which gmail.compose cannot call. modify can also trash and relabel any message: SHAFT's code only
+# ever changes labels on a draft it wrote (tests/test_mail_draft.py fails on any other write URL).
 GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 # Drafts in the operator's mailbox (mail.py). Gmail has no drafts-only scope: compose can also send, and no SHAFT
 # code ever does (tests/test_mail_draft.py fails on any send URL).
@@ -49,12 +52,36 @@ CHAT_SPACES = "https://www.googleapis.com/auth/chat.spaces.readonly"
 CHAT_MESSAGES = "https://www.googleapis.com/auth/chat.messages.readonly"
 CHAT_MEMBERS = "https://www.googleapis.com/auth/chat.memberships.readonly"
 # Operator consent; per-calendar write grants stay separate.
-SCOPES = (GMAIL, GMAIL_COMPOSE, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY, CHAT_SPACES, CHAT_MESSAGES, CHAT_MEMBERS)
+SCOPES = (GMAIL, GMAIL_COMPOSE, GMAIL_MODIFY, CALENDAR, CALENDAR_EVENTS, DRIVE_READONLY, CHAT_SPACES, CHAT_MESSAGES, CHAT_MEMBERS)
 SCOPE_NAMES = {GMAIL: "gmail.readonly", GMAIL_COMPOSE: "gmail.compose", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
                GMAIL_MODIFY: "gmail.modify", DRIVE_READONLY: "drive.readonly", DRIVE: "drive",
                SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations",
                CHAT_SPACES: "chat.spaces.readonly", CHAT_MESSAGES: "chat.messages.readonly",
                CHAT_MEMBERS: "chat.memberships.readonly"}
+# The only writes any operator account's session makes to Gmail, whatever its token allows: a draft upload (new or
+# replaced) and a label change on one message. Account refuses every other one before a request exists, so no send,
+# insert, import, trash, delete, batch or settings call can leave this process by a later mistake or a new caller.
+# An ID is plain (no escape that could hide a path), and never the word Gmail's own send URL puts in its place.
+_GMAIL_WRITES = re.compile(r"(?:POST|PUT) /upload/gmail/v1/users/me/drafts(?:/(?!send$)[A-Za-z0-9_-]+)?"
+                           r"|POST /gmail/v1/users/me/messages/(?!send/)[A-Za-z0-9_-]+/modify")
+
+
+class ForbiddenWrite(PermissionError):
+    """A write to the operator's Gmail that SHAFT never makes (a send above all)."""
+
+
+def check_gmail_write(method: str, url: str) -> None:
+    parts = urllib.parse.urlsplit(url)
+    path = urllib.parse.unquote(parts.path).lower()
+    if method == "GET" or not ((parts.hostname or "").lower().startswith("gmail.") or "/gmail/" in path):
+        return
+    if (parts.hostname or "").lower() != "gmail.googleapis.com" or not _GMAIL_WRITES.fullmatch(f"{method} {parts.path}"):
+        raise ForbiddenWrite(f"refused: {method} {parts.path} is not a Gmail write SHAFT makes on an operator's "
+                             "account (only draft uploads and label changes; never a send)")
+
+
+# What still works without a scope that was added to the consent later, said before its missing-scope message.
+LATER_SCOPES = {GMAIL_COMPOSE: "Drafting needs Log in again. ", GMAIL_MODIFY: "Labelling drafts needs Log in again. "}
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
@@ -351,6 +378,7 @@ class Account:
 
     def _response(self, method, url, body, read, timeout, *, headers=None, **params):
         """JSON and byte reads share refresh and quota handling; transport errors propagate unchanged."""
+        check_gmail_write(method, url)
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")}, doseq=True)
         refreshed, waited, attempt = False, 0.0, 0
         while True:

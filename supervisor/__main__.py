@@ -665,10 +665,10 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
         print(f"logged in: Google account {alias} is {saved['address']} (mail, calendar, Drive and Chat; client {saved['client']}). "
               f"Granted: {got}.")
         missing = [google.SCOPE_NAMES[s] for s in google.SCOPES
-                   if s != google.GMAIL_COMPOSE and s not in google.scopes(saved)]
-        if google.GMAIL_COMPOSE not in google.scopes(saved):
-            print("Drafting needs Log in again. " + google.missing_scope_message(alias, saved, google.GMAIL_COMPOSE),
-                  file=sys.stderr)
+                   if s not in google.LATER_SCOPES and s not in google.scopes(saved)]
+        for s, needs in google.LATER_SCOPES.items():
+            if s not in google.scopes(saved):
+                print(needs + google.missing_scope_message(alias, saved, s), file=sys.stderr)
         if missing:
             print(f"NOT granted: {', '.join(missing)} (unticked on Google's consent page, or not on the app's Data "
                   f"Access list): the tools that need it refuse, naming this login. To add it, run this login again "

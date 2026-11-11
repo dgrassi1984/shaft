@@ -293,7 +293,8 @@ function runLoad(href, closed, narrowSheet) {
     getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
   const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
   const main = { children: [], ...attrs() };
-  const grid = { classList: classes(), parentElement: main, ...attrs() };
+  const grid = { dataset: { conversationDocs: "0" }, querySelector: () => null,
+    classList: classes(), parentElement: main, ...attrs() };
   const chat = { parentElement: grid, ...attrs() };
   const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null };
   const docs = { id: "docs", dataset: { poll: "/fragment/docs/tundra?doc=plan.md" }, parentElement: grid, ...attrs(),
@@ -345,7 +346,8 @@ const attrs = () => { const m = new Map(); return { setAttribute: (k, v) => m.se
   getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
 const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
 const main = { children: [], ...attrs() };
-const grid = { classList: classes(), parentElement: main, ...attrs() };
+const grid = { dataset: { conversationDocs: "0" }, querySelector: () => null,
+    classList: classes(), parentElement: main, ...attrs() };
 const chat = { parentElement: grid, ...attrs() };
 const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null, matches: () => false };
 const panel = { id: "docs", dataset: { poll: "/fragment/docs/tundra?list=1", lazy: "1", etag: '"old"', etagUrl: "/fragment/docs/tundra?list=1" },
@@ -438,7 +440,8 @@ function boot(href) {
     getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
   const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
   const main = { children: [], ...attrs() };
-  const grid = { classList: classes(), parentElement: main, ...attrs() };
+  const grid = { dataset: { conversationDocs: "0" }, querySelector: () => null,
+    classList: classes(), parentElement: main, ...attrs() };
   const chat = { parentElement: grid, ...attrs() };
   const panel = { id: "docs", dataset: { poll: "/fragment/docs/wisp?doc=" }, isConnected: true, parentElement: grid,
     classList: classes(), ...attrs(), contains: n => n === panel,

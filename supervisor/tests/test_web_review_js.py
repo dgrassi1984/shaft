@@ -111,7 +111,7 @@ const selectingIn = () => false, document = { activeElement: null };
 let shown = false, text = "same";
 const view = { getClientRects: () => shown ? [1] : [],
   querySelector: q => ({ "form.docedit textarea": { value: text }, "textarea.raw": { value: "same" } })[q] };
-const el = { dataset: {}, querySelector: q => q === ".editing" ? view : null,
+const el = { classList: { contains: () => false }, dataset: {}, querySelector: q => q === ".editing" ? view : null,
   querySelectorAll: q => q === ".editing" ? [view] : [], contains: () => false };
 """ + function("busyIn") + function("editDirty") + r"""
 assert.equal(busyIn(el), false, "hidden and unchanged: the panel refreshes");

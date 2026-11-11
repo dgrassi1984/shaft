@@ -425,6 +425,13 @@ def update_draft(acct: google.Account, draft_id: str, raw: bytes, thread_id: str
     return _draft_upload(acct, "PUT", draft_id, raw, thread_id)
 
 
+def label_message(acct: google.Account, message_id: str, add: list[str], remove: list[str]) -> dict:
+    """Change the labels (IDs) on one message: the only messages.modify call SHAFT makes on the operator's mailbox.
+    The broker gives it only the message of a draft the instance wrote and labels granted to it for drafts."""
+    return acct.post(f"{API}/messages/{urllib.parse.quote(message_id, safe='')}/modify",
+                     {"addLabelIds": add, "removeLabelIds": remove})
+
+
 def draft_message_id(acct: google.Account, draft_id: str) -> str | None:
     try:
         return _get(acct, "drafts/" + urllib.parse.quote(draft_id, safe=""), format="minimal")["message"]["id"]

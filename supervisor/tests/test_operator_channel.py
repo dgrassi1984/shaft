@@ -137,11 +137,11 @@ class WebAlertsTest(Sandbox):
         self.assertEqual(web_alerts.forward_new(), 0)                         # first run: from now on, no backlog
         q = self.message("wisp", "Which one?\nsecond line", kind="question", alert=("web", "x"))
         self.message("wisp", "for Telegram", alert=("telegram", "x"))
-        n = self.message("kiln", "a note", alert=("web", "x"))
+        n = self.message("tundra", "a note", alert=("web", "x"))
         self.assertEqual(web_alerts.forward_new(), 2)
         self.assertEqual(self.pushed, [                                     # each its own tag: none replaces another
-            {"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/from", "cid": "from", "tag": f"wisp-{q['file']}"},
-            {"title": "kiln says", "body": "a note", "url": "/i/kiln/from", "cid": "from", "tag": f"kiln-{n['file']}"}])
+            {"title": "wisp asks", "body": "Which one?", "url": "/i/wisp/chat", "cid": "from", "tag": f"wisp-{q['file']}"},
+            {"title": "tundra says", "body": "a note", "url": "/i/tundra/chat", "cid": "from", "tag": f"tundra-{n['file']}"}])
         self.assertEqual(web_alerts.forward_new(), 0)                         # each once
         self.assertEqual(len(self.pushed), 2)
 
