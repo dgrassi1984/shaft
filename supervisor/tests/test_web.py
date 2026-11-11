@@ -31,6 +31,7 @@ class WebTest(unittest.TestCase):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-web-"))
         self.addCleanup(shutil.rmtree, self.sup, True)
         self.patches = [mock.patch.object(web, "SUP_DIR", self.sup),
+                        mock.patch("supervisor.core.SUP_DIR", self.sup),
                         mock.patch("supervisor.version.SERVICES", self.sup / "services"),
                         mock.patch("supervisor.version.supervisor_commit", return_value="abc1234"),
                         mock.patch.object(web, "allowed_logins", return_value={ME}),

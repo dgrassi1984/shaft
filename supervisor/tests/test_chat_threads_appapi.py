@@ -16,7 +16,7 @@ class ThreadsAppTest(AppTest):
         self.a = self.chat([turn("assistant", "2026-11-03T14:00:00", "Answer A")],
                            cid="web-a", title="Topic A")
         self.b = self.chat([turn("assistant", "2026-11-03T14:01:00", "Answer B")],
-                           cid="web-b", title="Topic B", state="replying",
+                           cid="web-b", title="Topic B", created="2026-11-03T13:59:00", state="replying",
                            reply={"started": "2026-11-03T14:01:00", "waiting": "waiting for Topic A"})
         self.from_model = web_chat.build("wisp", None, [{
             "from": "wisp", "to": "operator", "file": "note.md", "text": "From a cycle",
@@ -32,6 +32,7 @@ class ThreadsAppTest(AppTest):
     def test_threads_and_rail_include_each_open_thread_and_from(self):
         self.chat([], state="ended", cid="web-ended")
         got = self.get("/app/v1/threads/wisp")
+        self.assertRegex(got.pop("threads_rev"), r"^[0-9a-f]{16}$")
         self.assertEqual(got, {"threads": [
             {"id": "web-b", "title": "Topic B", "created": app_api.stamp(self.b["created"]),
              "last": app_api.stamp("2026-11-03T14:01:00"), "line": "Answer B", "state": "replying",
