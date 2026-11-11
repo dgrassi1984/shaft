@@ -311,16 +311,28 @@ SPECS = {
                                             "nothing if it was settled there. An ended thread's answer goes to the "
                                             "From feed, linked to it"}},
                           ["to", "text"]),
-    "record_order": _spec("record_order", "Record a standing order the operator gave you: a decision that stays "
-                          "decided ('Retire it', 'Drop the X', 'the paper body has no process blocks'). The supervisor "
-                          "holds it, not your memory: you are shown it in every run and conversation, and every "
-                          "message you send the operator is checked against it. Only the operator can drop one.",
-                          {"text": {"type": "string", "description": "the order in his own words, verbatim"},
-                           "source": {"type": "string", "description": "the file of his message it came in (e.g. "
-                                      "inbox/20261101-091500-123456-from-operator.md); leave it empty in a "
-                                      "conversation with him. On refusal, the answer lists recent message files; "
-                                      "record(kind='runs') shows conversation ids in start talk/api lines"}},
-                          ["text"]),
+    "record_order": _spec("record_order", "Record a standing order: a decision that stays decided. The supervisor "
+                          "holds it, not your memory: you are shown it in every run and conversation, and what you send "
+                          "or change through the supervisor (a message to the operator or to another instance, a mail "
+                          "draft, a calendar change) is checked against it and refused when it goes against it. Two "
+                          "kinds. (1) An order the operator gave you ('Retire it', 'Drop the X', 'the paper body has "
+                          "no process blocks'): text in his own words, source = the file of his message or the "
+                          "conversation id (leave source empty in a conversation with him). Only he can drop it. "
+                          "(2) A rule of your own, to bind yourself: own=true, text = the rule, source = the time of "
+                          "the episode of yours that taught it (its exact ts, or YYYY-MM-DD HH:MM). It is shown and "
+                          "checked exactly like his, and refusals against it are counted. You can drop your own rule "
+                          "with drop=<its id> (he can too); you can never drop his. At most 10 rules of your own and "
+                          "40 orders in all are in force.",
+                          {"text": {"type": "string", "description": "the order, verbatim in his words; or your own rule"},
+                           "source": {"type": "string", "description": "his order: the file of his message it came in "
+                                      "(e.g. inbox/20261101-091500-123456-from-operator.md), or empty in a conversation "
+                                      "with him; on refusal the answer lists recent message files, and "
+                                      "record(kind='runs') shows conversation ids in start talk/api lines. Your own "
+                                      "rule: the time of your episode that taught it"},
+                           "own": {"type": "boolean", "description": "true: a rule of your own"},
+                           "drop": {"type": "string", "description": "the id of a rule of your own to drop (o7); pass "
+                                                                     "nothing else"}},
+                          []),
     "gauges": _spec("gauges", "Your gauges: a few readings the supervisor computes from its own record of you "
                     "(promises open, claims the tool log did not support, failures that came back, value, capability "
                     "against a control...). Called with no argument it lists the menu with each reading now and what is "
@@ -1631,13 +1643,16 @@ class Broker:
                        f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
                     + (f"; should_have_waited=yes in your judged push cycles of the last 7 days: {waited}"
                        if waited else "") + checked)
+        check, checked = self._check_orders(text, f"to-{to}", stamp, "message to another instance")
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
         self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
         record_expectation()
-        return f"delivered to {to}{with_files}{expectation}"
+        if check:
+            self._log_check(check)
+        return f"delivered to {to}{with_files}{expectation}{checked}"
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
@@ -1831,27 +1846,29 @@ class Broker:
             return None
         return pushes.waited_share(pushes.recent_judgments(js, as_of))
 
-    def _check_orders(self, text: str, file: str, stamp: datetime) -> tuple[dict | None, str]:
-        """A message to the operator, checked against his standing orders and the corrections still checked
-        (orders.py): (the check's row, to log once it is delivered; what the result says). One that goes against an
-        order is refused with the order quoted. One the judge could not check is delivered, and the result says so."""
+    def _check_orders(self, text: str, ref: str, stamp: datetime, what="message to the operator") -> tuple[dict | None, str]:
+        """Check outgoing content before writing; refusals are logged here, other verdicts after success.
+        Held corrections bind every checked tool, but only operator messages affect their pass count."""
         from . import metrics, orders
         from .core import log
         active, held = self._orders_in_force(), self._corrections_held()
         if not active and not held:
             return None, ""
-        row = {"ts": stamp.isoformat(timespec="seconds"), "message": file, "orders": [o["id"] for o in active],
+        row = {"ts": stamp.isoformat(timespec="seconds"), "message": ref, "orders": [o["id"] for o in active],
                "corrections": [c["id"] for c in held]}
+        row["tool"] = ("send_message" if what.startswith("message") else ref)
+        if row["tool"] == "send_message":
+            row["to"] = "operator" if what == "message to the operator" else "instance"
         try:
-            verdict = orders.check(self.name, text, active, held, exclude=metrics.own_models(self.name))
-        except Exception as e:                 # no verdict: the message goes, unchecked, and the instance is told
+            verdict = orders.check(self.name, f"## {what}\n{text}", active, held, exclude=metrics.own_models(self.name))
+        except Exception as e:                 # no verdict: the action proceeds unchecked, and the instance is told
             row["error"] = f"{type(e).__name__}: {e}"[:300]
-            log(f"{self.name}: message to the operator not checked against its standing orders: {row['error']}")
+            log(f"{self.name}: {what} not checked against its standing orders: {row['error']}")
             return row, f"; NOT checked against your standing orders (the judge gave no verdict: {row['error']})"
         row.update(verdict)
         if verdict["violates"]:
             self._log_check(row)
-            raise PermissionError(orders.refusal(verdict, active, held))
+            raise PermissionError(orders.refusal(verdict, active, held, what))
         return row, "; checked against your standing orders: it keeps to them"
 
     def _orders_in_force(self) -> list[dict]:
@@ -1874,13 +1891,21 @@ class Broker:
         except (OSError, ValueError) as e:     # said, not hidden: it knows it is not seeing them
             return f" Your standing orders could not be read ({type(e).__name__}: {e}); they still apply."
 
-    def _record_order(self, text: str, source: str = "") -> str:
-        """An order the instance heard from the operator, held by the supervisor (orders.py); only he drops it."""
+    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
+        """Record an operator order or an episode-backed self rule, or drop only a self rule."""
         from . import orders
-        order, new = orders.add(self.name, text, "instance", self._order_source(source))
+        if type(own) is not bool:
+            raise ValueError("own must be a boolean")
+        if drop:
+            if text or source or own:
+                raise ValueError("use drop alone with the id of your own rule")
+            orders.drop_own(self.name, drop)
+            return f"dropped own rule {drop}"
+        source = self._order_source(source, own=own)
+        order, new = orders.add(self.name, text, "self" if own else "instance", source)
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
-            ": you are shown it in every run and conversation, your messages to the operator are checked against "
-            "it, and only he can drop it")
+            ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
+            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
 
     def _gauges(self, choose=None) -> str:
         """The gauge menu with its readings, or the instance's choice of gauges recorded (gauges.py). The readings
@@ -1959,11 +1984,24 @@ class Broker:
         from . import gate_held
         return gate_held.withdraw(self.name, id, reason)
 
-    def _order_source(self, source) -> str:
-        """Where the operator gave the order: this conversation (its id), an earlier one (its id, from the supervisor's
-        log), or a message he sent this instance (its file). Anything else is refused."""
+    def _order_source(self, source, own: bool = False) -> str:
+        """Validate the operator's conversation/message source, or an own rule's past episode source.
+        Episode logs are read from this broker's root, including a replay's reconstructed state."""
         from . import pushes
         source = str(source or "").strip()
+        if own:
+            from . import metrics, orders
+            records = metrics._parsed_episodes(self.root)
+            cut = self.as_of or datetime.now()
+            eligible = {r['ts'] for r in records if (at := orders._at(r.get('ts'))) is not None and at <= cut}
+            if source in eligible:
+                return source
+            hits = [ts for ts in eligible if len(source) == 16
+                    and ts[:16].replace('T', ' ') == source.replace('T', ' ')]
+            if len(hits) == 1:
+                return hits[0]
+            raise ValueError("own=true requires source: pass the exact ts of one of your past episodes, "
+                             "or its unique YYYY-MM-DD HH:MM prefix (T accepted)")
         talk = self.talk_id
         if talk and source in ("", "conversation", talk):
             return talk
@@ -2950,11 +2988,15 @@ class Broker:
             files = self._draft_files(attachments)
             raw = mail.build_message(acct.address, to, cc, bcc, subject, body, files,
                                      defaults.get('in_reply_to', ''), defaults.get('references', ''))
+            content = f"To: {', '.join(to)}\nCc: {', '.join(cc)}\nBcc: {', '.join(bcc)}\nSubject: {subject}\n\n{body}"
+            check, checked = self._check_orders(content, tool, self._message_stamp(), "mail draft")
             action = self._action_route(tool, {})
             if action and action['mode'] != 'direct':   # a demoted class: drafts have no proposal path, so refuse
                 raise PermissionError(f"{action['class']} actions wait for the operator after an over-reach; "
                                       f"shaft actions {self.name} restore {action['class']} (action {action['id']})")
             answer = self._draft_submit(acct, did, raw, tid)
+            if check:
+                self._log_check(check)
             did, mid = answer['id'], answer['message']['id']
             registry[did] = {'account': account, 'thread': reply_to, 'message_id': mid, 'subject': subject,
                              'created': prior.get('created') or datetime.now().astimezone().isoformat()}
@@ -2966,7 +3008,7 @@ class Broker:
                     + f'\n{where}\nHandle: {account}/draft/{did}\n'
                     # authuser= picks the signed-in account; /mail/u/<address>/ answers 404 (checked live 2026-11-10)
                     + f'https://mail.google.com/mail/?authuser={urllib.parse.quote(acct.address)}#drafts?compose={mid}\n'
-                    + 'The operator reviews it and presses Send.')
+                    + 'The operator reviews it and presses Send.' + checked)
 
     def _mail_download(self, id: str, message, attachment) -> tuple[str, str, int, str, str, bytes]:   # noqa: A002
         """(alias, thread id, message number, file name, type, bytes) of one attachment of a visible thread."""
@@ -3551,20 +3593,30 @@ class Broker:
                     known.add(email.casefold())
                     added.append({"email": email})
             body["attendees"] = existing + added
+        content = {**original, **body}
+        text = (f"{tool}: {content.get('summary', '')}\nDescription: {content.get('description', '')}\n"
+                f"Location: {content.get('location', '')}\nStart: {content.get('start')}\nEnd: {content.get('end')}\n"
+                f"Attendees: {json.dumps(content.get('attendees', []), ensure_ascii=False)}")
+        check, checked = self._check_orders(text, tool, self._message_stamp(), "calendar change")
         proposal = actions.classify(tool, {'attendees': attendees}, event=original, address=acct.address) == 'staged'
         action = self._action_route(tool, {'attendees': attendees}, event=original, address=acct.address)
         if action:
             proposal = action['mode'] == 'staged'
         if proposal:
-            return self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
+            answer = self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
+            if check:
+                self._log_check(check)
+            return answer + checked
         self._calendar_attempt["submitted"] = True
         url = f"{gcal.API}/{gcal._path(grant['calendar'], 'events', *([eid] if move else []))}"
         # If attendees changed since the read, Google must refuse the stale edit rather than bypass approval.
         answer = (acct.patch(url, body, etag=original["etag"], sendUpdates="none") if move else
                   acct.post(url, body, sendUpdates="none"))
         self._calendar_attempt["answer"] = answer
+        if check:
+            self._log_check(check)
         return gcal.render_event(gcal.handle(grant["account"], grant["calendar"], answer["id"]),
-                                 f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address)
+                                 f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address) + checked
 
     def _calendar_propose(self, tool, target, grant, original, body, address, eid):
         """Freeze the Google request before notifying the operator.
@@ -3631,9 +3683,15 @@ class Broker:
         mine = [a for a in attendees if a.get('email', '').casefold() == acct.address.casefold()]
         if len(mine) != 1 or original.get('attendeesOmitted'):
             raise ValueError("the event must include the operator's own attendee and its full attendee list")
+        text = (f"calendar_respond: {original.get('summary', '')}\nDescription: {original.get('description', '')}\n"
+                f"Attendees: {json.dumps(attendees, ensure_ascii=False)}\nResponse: {response} ({statuses[response]})")
+        check, checked = self._check_orders(text, "calendar_respond", self._message_stamp(), "calendar change")
         mine[0]['responseStatus'] = statuses[response]
         self._action_route('calendar_respond', {'id': id, 'response': response}, event=original, address=acct.address)
-        return self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
+        answer = self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
+        if check:
+            self._log_check(check)
+        return answer + checked
 
     # -- images ----------------------------------------------------------------------------------------
     def _image_file(self, path: str) -> tuple[str, bytes]:
@@ -3735,6 +3793,7 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._started = datetime.now()
+        self.sim_dropped: set[str] = set()
         self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self.sim_withdrawn: set[str] = set()
@@ -4126,7 +4185,8 @@ class ReplayBroker(Broker):
 
     def _orders_in_force(self) -> list[dict]:
         from . import orders
-        return orders.listing(self.name, self.as_of, extra=self.sim_orders)
+        return [o for o in orders.listing(self.name, self.as_of, extra=self.sim_orders)
+                if o['id'] not in self.sim_dropped]
 
     def _corrections_held(self) -> list[dict]:
         from . import orders
@@ -4178,18 +4238,32 @@ class ReplayBroker(Broker):
         self._tag("simulated: not recorded")
         return row
 
-    def _record_order(self, text: str, source: str = "") -> str:
-        from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written
+    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
+        from . import orders  # same validation as live; all state changes remain in this replay
+        if type(own) is not bool:
+            raise ValueError("own must be a boolean")
+        if drop:
+            if text or source or own:
+                raise ValueError("use drop alone with the id of your own rule")
+            order = next((o for o in self._orders_in_force() if o['id'] == drop), None)
+            if order is None:
+                raise ValueError(f"no own rule in force with id {drop!r}")
+            if order['by'] != 'self':
+                raise ValueError("only the operator drops his orders")
+            self.sim_dropped.add(drop)
+            self._tag("simulated: not recorded")
+            return f"dropped own rule {drop}"
         text = orders.clean(text)
-        source = str(self._order_source(source))[:orders.SOURCE_MAX]
-        every = {o["id"]: o for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
-        order, new = orders.added(self.name, every, text, "instance", source, self.as_of)
+        source = str(self._order_source(source, own=own))[:orders.SOURCE_MAX]
+        every = {o["id"]: {**o, "dropped_at": self.as_of.isoformat()} if o['id'] in self.sim_dropped else o
+                 for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
+        order, new = orders.added(self.name, every, text, "self" if own else "instance", source, self.as_of)
         if new:
             self.sim_orders.append(order)
         self._tag("simulated: not recorded")
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
-            ": you are shown it in every run and conversation, your messages to the operator are checked against "
-            "it, and only he can drop it")
+            ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
+            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE

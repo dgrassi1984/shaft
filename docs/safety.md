@@ -241,10 +241,19 @@ call allowance.
 
 ### Standing-order checks and notifications
 
-Every operator-directed `send_message` is checked against standing orders and corrections
-still subject to checking. A violating message is refused with the judge's reason.
-If the check fails to produce a verdict, the message is delivered unchecked and its result
-says so (`supervisor/broker.py`, `Broker._check_orders`).
+`send_message` to the operator or another instance, `mail_draft`, `mail_draft_update`, `calendar_create`,
+`calendar_move` and `calendar_respond` are checked against standing orders and held corrections.
+`http_request` and `run` are not checked. Violations are refused before delivery, draft submission,
+calendar writing or proposal creation, quoting the rule and the judge's reason. The instance may rewrite
+and retry. A judge error lets the call proceed with a NOT checked note. No rules or held corrections
+means no judge call (`supervisor/broker.py`, `Broker._check_orders`).
+
+An instance may record an order heard from the operator or set its own rule with `record_order(own=true)`,
+citing an exact past episode timestamp or a unique minute prefix. Self rules bind it in the same way.
+At most 10 self rules and 40 total orders may be in force. The instance drops only its own rules with
+`record_order(drop=ID)`. Only the operator drops his orders; he can also drop self rules.
+Refusals are counted per rule. Only passing messages to the operator advance a held correction's pass
+count, and only a refused operator message restarts it. Drafts, calendar changes and other messages do neither.
 
 With `SHAFT_PUSH_HOLD=1`, the default, device notifications for non-urgent messages
 wait through quiet hours and after the daily push budget is reached. The inbox still receives the message. Urgent messages and open

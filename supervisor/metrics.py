@@ -1858,7 +1858,7 @@ def _stats_text(name: str) -> str:
     achieved[-1:-1] = ran_out_by_model(name, all_js)
     lines += achieved + _surprise_section(name) + _sections(name, ("tom",))
     lines += _part_lines(name, "predictions", "stats_lines") + _battery_section(name)
-    lines += _part_lines(name, "families", "stats_lines")
+    lines += _part_lines(name, "families", "stats_lines") + _part_lines(name, "orders", "stats_lines")
     kept = _part_lines(name, "usage", "kept_lines")
     lines += kept
     lines.append("## Success against my own criteria (raw)")

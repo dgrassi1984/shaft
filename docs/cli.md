@@ -457,7 +457,12 @@ restore its default.
 
 `shaft tools` controls supervisor-tool availability in supervisor-owned state. Instances cannot restore a
 disabled tool. `shaft orders` lists, adds, or drops standing orders shown verbatim in runs and conversations.
-Instances may record an order they heard; only the operator drops one.
+The listing includes `by self` rules and per-order refusal counts. Instances may record an order heard from
+the operator or set a self rule with `record_order(own=true, source=...)`, citing a past episode timestamp
+or unique minute prefix. At most 10 self rules and 40 total orders may be in force. Instances drop only their
+own rules with `record_order(drop=ID)`; the operator can drop any order. Orders and held corrections are
+checked on messages to the operator or another instance, mail drafts and updates, and calendar creation,
+moves and responses. `http_request` and `run` are not checked.
 
 `shaft actions` shows class states, history, and proposals. `restore` restores a class's initial rule.
 `overreach` marks a recorded action out of bounds and demotes its class once. `approve` submits a frozen

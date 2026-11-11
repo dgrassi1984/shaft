@@ -522,24 +522,31 @@ The default is 6, and 0 disables the alert. A missing, unreadable or malformed l
 
 ### Standing orders
 
-**Standing orders** ([orders.py](../supervisor/orders.py)) record decisions that remain in force.
-The supervisor checks outgoing messages against those decisions and holds them in `.supervisor/orders/<name>.jsonl`, append-only rows
-`{id, text, added_at, by: operator|instance, source, dropped_at}` (the last row of an id is its state). The operator
-adds, lists and drops them with `shaft orders <name> [list|add TEXT|drop ID]` or on the web Config page; an instance
-records one it heard with the broker tool `record_order(text, source)`, source the operator's message file, or the
-conversation (its id, filled in during the conversation), and never drops one. The orders in force are shown verbatim
-in every run and conversation, in the `record_order` tool's description (in `send_message`'s when record_order is
-switched off): supervisor-side, so no template change carries them. Every `send_message` to the operator is checked by
-a judge from the rotation (never the instance's own model) against the orders and the corrections still checked; one
-that goes against them is refused, quoting the order and the judge's reason, and the instance may rewrite it. A check
-with no verdict, none in time, or an answer that does not fit the check's schema, delivers the message and the result
-says it was not checked. **A correction stays checked** until the next `SHAFT_CORRECTION_PASSES` (default 3) messages
-to the operator after it pass the check against its text, whatever the instance's ledger says about closing it; a
-message refused for going against it starts the count again, an unchecked one does not count, and `not_accepted`
-corrections are left out. Each check is a row of `.supervisor/orders/<name>-checks.jsonl`, from which the passes are
-counted. Trial replays check as the live cycle would, against the orders, corrections and checks as of the replayed
-cycle (a later check never clears a correction in an earlier replay), and write nothing: an order the replay records
-and the checks it makes are kept in that replay's broker, so its later messages are checked against them.
+Standing orders ([orders.py](../supervisor/orders.py)) remain in force until dropped. The supervisor holds
+append-only rows `{id, text, added_at, by: operator|instance|self, source, dropped_at}` in
+`.supervisor/orders/<name>.jsonl`. The last row of an id is its state. The operator adds, lists and drops orders
+with `shaft orders <name> [list|add TEXT|drop ID]` or the web Config page. An instance uses `record_order` to
+record an order heard from the operator, citing the message file or conversation id. With `own=true`, it sets
+its own rule and must cite an exact past episode timestamp or a unique minute prefix. At most 10 self rules
+and 40 total orders may be in force. The instance can drop only its own rules with `record_order(drop=ID)`.
+The operator can drop any order. The CLI lists authors and refusal counts. `orders.stats_lines` reports self rules.
+
+Orders are shown verbatim every run and conversation in the `record_order` tool description, or in
+`send_message` when `record_order` is disabled. A judge from the rotation, excluding the instance's own model,
+checks `send_message` to the operator or another instance, `mail_draft`, `mail_draft_update`, `calendar_create`,
+`calendar_move` and `calendar_respond` against all orders and held corrections. Self rules bind the instance
+in the same way as operator orders. `http_request` and `run` are not checked. A violation is refused before
+message delivery, draft submission, calendar writing or proposal creation, quoting the rule and reason.
+The instance may rewrite and retry. A judge error lets the call proceed with an explicit NOT checked note.
+No orders and no held corrections means no judge call.
+
+A correction stays checked until `SHAFT_CORRECTION_PASSES` messages to the operator pass, regardless of the
+instance's closing ledger. Only operator messages advance or restart that count. Other checks do neither.
+Unchecked messages do not count. Corrections marked `not_accepted` are left out. Checks are logged in
+`.supervisor/orders/<name>-checks.jsonl` with the tool name and, for messages, the recipient category.
+Old rows without a tool name count as operator messages. Refusals count per order across all checked tools.
+Trial replays respect their cutoff and keep additions, drops and checks in memory. They write no order state.
+Calendar writes remain unavailable in replays.
 
 ### Self-knowledge and commitments
 

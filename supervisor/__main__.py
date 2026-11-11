@@ -515,9 +515,7 @@ def cmd_gauges(name: str, action: str | None, value: list[str]) -> int:
 
 
 def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli") -> int:
-    """The operator's standing orders for an instance (supervisor/orders.py, review I2): list them, add one (its text,
-    verbatim), drop one by id. The instance is shown the orders in force every run and conversation, and every message
-    it sends you is checked against them; it can record an order it heard from you, never drop one."""
+    """List orders and refusal counts, add an operator order, or drop any order by id."""
     from . import orders
     root = instance_root(name)
     try:
@@ -539,10 +537,12 @@ def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli"
         print(f"refused: {e}", file=sys.stderr)
         return 1
     every = orders.listing(name, dropped=True)
+    counts = orders.violations(name)
     for o in every:
         state = f"dropped {o['dropped_at'][:16].replace('T', ' ')}" if o.get("dropped_at") else "in force"
         print(f"{o['id']:5} {state:22} by {o['by']:8} {o['added_at'][:16].replace('T', ' ')}"
-              + (f" ({o['source']})" if o.get("source") else "") + f": {o['text']}")
+              + (f" ({o['source']})" if o.get("source") else "") + f": {o['text']}"
+              + f" ({counts.get(o['id'], 0)} message(s)/action(s) refused)")
     for c in orders.corrections(name, root):
         print(f"{c['id']} still checked on its messages to you ({c['passes']} of {orders.CORRECTION_PASSES} passed): "
               f"{c['what_operator_said']}")
