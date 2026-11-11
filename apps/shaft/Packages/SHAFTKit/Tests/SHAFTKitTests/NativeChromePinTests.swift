@@ -291,6 +291,16 @@ struct NativeChromePinTests {
         #expect(source.contains("prompt:"))
     }
 
+    /// Bug: an always-present empty message Section above "Model" made the Mac draw the "Model" header as a row
+    /// inside its box, so the popup showed "Model" twice. The message section exists only when there is a message.
+    @Test func theModelHeaderIsNotPushedIntoItsBoxByAnEmptySection() throws {
+        let source = try shared("Shared/Settings/InstanceSettingsView.swift")
+        let ifMessage = try #require(source.range(of: "if let message = store.saveError ?? store.notice {\n                Section {} footer: {"))
+        let model = try #require(source.range(of: #"Section("Model") {"#))
+        #expect(ifMessage.upperBound < model.lowerBound)
+        #expect(source.components(separatedBy: "Section {} footer:").count == 2)
+    }
+
     @Test func servicesTitleAndPidAvoidAmbiguousServerAndLocalizedNumbers() throws {
         let source = try shared("Shared/Settings/ServerSection.swift")
         #expect(source.contains(#"header: { Text("Services") }"#))

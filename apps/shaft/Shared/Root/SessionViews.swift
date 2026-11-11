@@ -752,7 +752,7 @@ struct InstancesList: View {
 
     private func rowFill(selected: Bool) -> some View {
         #if os(macOS)
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: Design.Radius.pill, style: .continuous)
             .fill(selected ? Color.rowSelected : Color.clear)
         #else
         RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)

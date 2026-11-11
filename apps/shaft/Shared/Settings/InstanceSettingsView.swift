@@ -51,8 +51,10 @@ struct InstanceSettingsView: View {
 
     private func settingsForm(_ settings: InstanceSettings) -> some View {
         Form {
-            Section {} footer: {
-                if let message = store.saveError ?? store.notice {
+            // Only when there is a message: an always-present empty Section here made macOS draw the next
+            // section's header ("Model") as a row inside its box instead of above it like the others.
+            if let message = store.saveError ?? store.notice {
+                Section {} footer: {
                     Text(message).foregroundStyle(store.saveError == nil ? Color.textSecondary : Color.warning)
                 }
             }
