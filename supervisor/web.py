@@ -641,6 +641,21 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if req.path == "/instances/move" or re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/move", req.path):
+        from . import order
+        form = req.form()
+        try:
+            if req.path == "/instances/move":
+                moved = order.move_instance(form.get("name", ""), form.get("after") or None)
+            else:
+                name = req.path.split("/")[2]
+                if name not in _names():
+                    return _not_found(req.path)
+                moved = order.move_thread(name, form.get("id", ""), form.get("after") or None)
+        except order.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h('<p data-rev="{rev}" data-ids="{ids}">Order saved.</p>',
+                                      rev=moved["rev"], ids=json.dumps(moved["ids"])))
     if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/unqueue", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -747,8 +762,8 @@ IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/pn
 
 
 def _names() -> list[str]:
-    from .core import instance_names
-    return instance_names()
+    from . import core, order
+    return order.instances(core.instance_names())
 
 
 def _get(req: Request, csrf: str) -> Response | None:

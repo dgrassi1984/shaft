@@ -68,6 +68,17 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: 
 ```
 ### Topic threads
 
+`supervisor.order` stores the operator's thread order in `SUP_DIR/web/thread-order/<name>.json` and instance
+order in `SUP_DIR/web/instance-order.json`, each with `{rev, ids}`. Replies never reorder threads. New threads go
+to the top. Open threads missing from storage go first, newest creation first. New instances go last.
+Ended threads and removed instances are ignored and pruned on the next write.
+
+`POST /chat/<n>/move` accepts form fields `id` and `after`; `POST /instances/move` accepts `name` and `after`.
+Both use the same paired-browser authentication and CSRF checks as `/chat/<n>/unqueue`. Empty `after` moves to
+the top, as does an unknown or ended anchor. A self-anchor does nothing. Moving `from`, an unknown or ended
+thread, or an unknown instance returns 409. Success returns a small HTML paragraph with `data-rev` and
+`data-ids`, containing the authoritative revision and JSON order. Moves apply to the latest order under a lock.
+
 `supervisor.api.ReplyQueue` gives API replies for each instance first-come tickets. A reply in another thread
 waits instead of interjecting. Cycles still pause for replies; terminal conversations use the run lock outside this
 queue. A waiting stream names the API thread ahead of it as `waiting: answering in «<title>»`.
@@ -77,7 +88,7 @@ so documents written while waiting do not become this reply's cards.
 The web client sends the UTF-8 percent-encoded title in `X-Shaft-Thread-Title`. The API stores the decoded title beside
 the talk id and returns `X-Shaft-Talk` on completions. A non-streamed answer also carries `talk_id`, so an idempotent
 replay can return the same header. Cached answers from before this field was added have no talk header.
-`supervisor.web_chat._api_messages` prepends a short system digest of the other open threads, newest first.
+`supervisor.web_chat._api_messages` prepends a short system digest of the other open threads in their saved order.
 The broker's `read_thread` tool lists open threads followed by the 20 newest ended threads. With an id, it returns
 that instance's thread as text: the last 12,000 characters, never starting after the operator's latest message, with
 each of the instance's own items cut at 3,000. Trial replays cannot use it.
@@ -282,13 +293,13 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   unread; the app badge counts instances. Config, Journal, earlier chats, another thread and a failed feed refresh do
   not consume a new reply. Marks are kept in this browser (`shaft.seen`: per instance, per thread id or `from`) and
   shared across its tabs; a mark kept from before threads counts for every thread until each is seen again.
-- **Topic threads.** Under the instance being viewed, the rail lists its open threads, most recently active first:
+- **Topic threads.** Under the instance being viewed, the rail lists its open threads in the operator's saved order:
   the title (the first line of its first message until renamed), a dot (hollow idle, pulsing replying, amber while
   it waits for the instance because another thread's reply holds it) and the unread mark; then **From <instance>**,
   then **+ New thread**, which opens a new thread (`POST /chat/<name>/new`) and goes to it. A thread's page is
   `/i/<name>/chat?id=<id>`: its feed, header and composer stay on that thread (the composer sends its id, and a
   document saved or commented on beside it goes to that thread's next message); its draft is its own. The plain
-  `/i/<name>/chat` follows the most recently active thread. **From <instance>** (`/i/<name>/from`) shows what it sent
+  `/i/<name>/chat` follows the first thread in that order. **From <instance>** (`/i/<name>/from`) shows what it sent
   you outside any thread (a cycle, a terminal or Telegram talk, an answer for a thread that had ended) and what you left
   for its next cycle outside a thread, refreshed like a
   chat (`/fragment/from/<name>`). Its composer is a thread's: a message written there is answered now, in the From
@@ -740,6 +751,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
 | POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
 | POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear chat |
+| POST | `/chat/<n>/move`, `/instances/move` | Save thread or instance order |
 | POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
 | POST | `/docs/<n>/save`, `/docs/<n>/delete`, `/docs/<n>/comment[/edit\|/delete\|/send\|/state]` | Document and comment changes |
 | POST | `/preview/drive/<n>`, `/action/<verb>` | Drive diff preview and management actions through `web_actions.run` |

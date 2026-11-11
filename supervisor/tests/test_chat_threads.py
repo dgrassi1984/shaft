@@ -59,16 +59,15 @@ class ThreadsTest(ChatTest):
             web_chat.send("wisp", ME, "to a closed thread", [], cid=a["id"])
         self.assertEqual(len(web_chat.load(a["id"])["turns"]), 2)        # nothing was added to it
 
-    def test_without_a_thread_the_message_goes_to_the_most_recently_active_one(self):
+    def test_legacy_current_follows_manual_order_even_after_a_reply(self):
         a = web_chat.new_thread("wisp", ME)
-        web_chat.new_thread("wisp", ME)
-        time.sleep(1.1)                                                  # turn stamps are to the second
+        b = web_chat.new_thread("wisp", ME)
         web_chat.send("wisp", ME, "in a", [], cid=a["id"])
         self.wait_idle(a["id"])
-        self.assertEqual(web_chat.current("wisp")["id"], a["id"])
-        chat, _ = web_chat.send("wisp", ME, "no thread named", [])       # an app built before threads
-        self.assertEqual(chat["id"], a["id"])
-        self.wait_idle(a["id"])
+        self.assertEqual(web_chat.current("wisp")["id"], b["id"])
+        chat, _ = web_chat.send("wisp", ME, "no thread named", [])       # legacy routing until current() is retired
+        self.assertEqual(chat["id"], b["id"])
+        self.wait_idle(b["id"])
 
     def test_a_thread_of_another_instance_is_refused(self):
         (self.dir / "instances" / "kiln").mkdir()

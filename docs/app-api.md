@@ -158,7 +158,7 @@ it. Request `{}`. Response 200 `{"said": "This device is unpaired."}`. The beare
 
 ### `GET /app/v1/instances`
 
-The rail: one row per instance, in the web rail's order (`instance_names()`).
+The rail has one row per instance in the operator's saved order (`supervisor.order.instances`). New instances go last.
 
 - **Auth:** §1.2.
 - **Conditional:** the response carries an `ETag`; with a matching `If-None-Match` the answer is `304`. The app polls
@@ -168,6 +168,7 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
   | Field | Type | |
   |---|---|---|
   | `instances` | list | the rows below |
+  | `instances_rev` | int | saved instance order revision |
   | `badge` | int | instances with something this device has not seen (`web_seen.badge`, §12) |
 
   Each row:
@@ -183,6 +184,7 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
   | `line` | str | the rail's last line: `"you: …"` for the operator's own, the instance's first line otherwise; at most 80 characters plus "…" when cut; `""` when none (`web_chat.summary`) |
   | `last` | timestamp or null | when it last answered or sent the operator a message |
   | `threads` | int | number of open threads |
+  | `threads_rev` | str | short hash of ordered thread ids, titles, lifecycle states and the saved order revision |
   | `replying` | bool | a reply is running in any open thread |
   | `unread` | bool | any thread or the From feed has something this device has not seen (§12) |
   | `next_cycle` | str | what Next cycle does now (`autonomy.next_cycle`): the composer's Next cycle hint; `""` when it cannot be read |
@@ -210,7 +212,10 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
 Returns `{"threads": [...], "from": {"line": str, "last": timestamp or null, "unread": bool, "state": str,
 "waiting": str or null}}` — From's `state` and `waiting` are the From conversation's, as a thread's (`idle` before its
 first message).
-Threads are open conversations, most recently active first. Each row has:
+The response also has `threads_rev`, the same string returned in the instance row. It changes on creation,
+rename, close, state changes including waiting, and manual order changes. It stays stable otherwise.
+Threads are open conversations in the operator's saved order. New threads go first. Activity never changes their
+order. Open threads missing from storage go first, newest creation first. Each row has:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -224,6 +229,19 @@ Threads are open conversations, most recently active first. Each row has:
 | `unread` | bool | This device has unseen instance items in this feed |
 
 The From row uses the same preview and unread rules. Unknown instances return `404 not_found`.
+
+### 3.2 Order moves
+
+- `POST /app/v1/threads/<n>/move`: JSON `{"id": str, "after": str or null}`.
+- `POST /app/v1/instances/move`: JSON `{"name": str, "after": str or null}`.
+
+Both require the paired bearer from §1.2. Response 200 is `{"rev": int, "ids": [str, ...]}`, the authoritative
+order of all current rows. `after: null` moves to the top. A missing or ended anchor also moves to the top.
+A self-anchor leaves the revision unchanged. Moves apply to the latest saved order, so sequential moves from two
+devices both apply. Unknown or ended threads, `"from"`, and unknown instances return `409 refused`.
+Ended threads and removed instances are ignored on reads and pruned on the next write.
+Clients discard order responses older than a revision they already hold. After an ambiguous network failure,
+refetch the order. `rev` is the saved order counter; `threads_rev` is a content hash, not a counter.
 
 ## 4. The feed
 

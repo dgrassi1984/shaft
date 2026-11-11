@@ -158,8 +158,9 @@ def _activity(chat: dict) -> tuple[str, str]:
 
 
 def threads(name: str) -> list[dict]:
-    """Open conversations, most recently active first."""
-    return sorted((c for c in chats(name) if c.get("state") != "ended"), key=_activity, reverse=True)
+    """Keep the operator's order while replies arrive."""
+    from . import order
+    return order.threads(name, [c for c in chats(name) if c.get("state") != "ended"])
 
 
 def current(name: str) -> dict | None:
@@ -621,6 +622,7 @@ def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
 
 
 def new_thread(name: str, login: str, title: str = "") -> dict:
+    from . import order
     chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "login": login, "created": _now(), "state": "idle",
             "turns": [], "reply": None}
     if value := _title(title):
@@ -628,6 +630,7 @@ def new_thread(name: str, login: str, title: str = "") -> dict:
     with _inst_lock(name):
         _adopt_edits(name, chat)
         save(chat)
+        order.add_thread(name, chat["id"])
     return chat
 
 
