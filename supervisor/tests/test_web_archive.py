@@ -75,7 +75,8 @@ class ArchiveTest(WebTest):
         self.assertIn('class="composer"', self.get("/i/wisp/chat"))
 
     def test_issue_32_archive_footer(self):
-        """Reverting #32 invites a next message in an archive with no composer."""
+        """Reverting #32 invites a next message in an archive with no composer.
+        Since 2026-11-11 the untargeted fragment is Main; ended threads are always named archives."""
         cid = self.records[0]["id"]
         self.records[0]["pending_edits"] = {"a b.md": {}}
         for path in (f"/i/wisp/chat?id={cid}", f"/fragment/chat/wisp?id={cid}"):
@@ -83,7 +84,11 @@ class ArchiveTest(WebTest):
             self.assertIn("This conversation ended on 2026-09-26 13:00.", body)
             self.assertNotIn("next message", body)
         self.current["state"] = "ended"
-        self.assertIn("Your next message starts a new conversation", self.get("/fragment/chat/wisp"))
+        self.assertIn("This conversation ended on 2026-09-26 13:00.",
+                      self.get(f"/fragment/chat/wisp?id={cid}"))
+        main = self.get("/fragment/chat/wisp")
+        self.assertIn('class="emptychat" data-k="empty"', main)
+        self.assertNotIn("Your next message starts a new conversation", main)
 
     def test_issue_15_archive_documents_and_cards(self):
         """Reverting #15 presents current files as historical and exposes mutation controls after polling."""

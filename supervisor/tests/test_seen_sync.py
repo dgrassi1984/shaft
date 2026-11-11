@@ -26,7 +26,7 @@ class SeenSyncTest(WebTest):
             mock.patch.object(web_chat, "from_feed", side_effect=lambda n, **kw: self.models["from"]),
             mock.patch.object(web_chat, "public_id", side_effect=lambda n, cid: cid),
             mock.patch.object(web_chat, "shown", return_value={"id": "web-a"}),
-            mock.patch.object(web_chat, "threads", return_value=[{"id": "web-a"}, {"id": "web-b"}]),
+            mock.patch.object(web_chat, "threads", return_value=[{"id": "web-a", "state": "idle"}, {"id": "web-b", "state": "idle"}]),
             mock.patch.object(core, "instance_names", return_value=["example"]),
             mock.patch.object(web, "_names", return_value=["example"]),
             mock.patch.object(web, "log"),
