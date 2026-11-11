@@ -216,7 +216,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
         disclosure = h('<button type="button" class="railchevron" data-disclose="{n}" data-focus="expand-{n}" '
                        'aria-label="Threads with {n}" aria-expanded="{expanded}" aria-controls="threads-{n}">'
                        '{chevron}</button>', n=n, expanded="true" if selected else "false", chevron=icon("back", 12)) if threads else Html("")
-        line = "" if c.get("notes") else c.get("line") or ""
+        line = "replying…" if c.get("from_state") == "replying" else "" if c.get("notes") else c.get("line") or ""
         notes = h('<div class="railpending">{notes}</div>', notes=pending_notes_html(n)) if c.get("notes") else Html("")
         items.append(h('<section class="railinstance{selected}" data-order-id="{n}" data-name="{n}" data-title="{n}">'
                        '<div class="railrow instrow"><a href="/i/{n}/chat" class="inst{on}" data-inst="{n}" '

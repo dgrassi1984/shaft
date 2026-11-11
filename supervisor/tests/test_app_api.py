@@ -436,7 +436,7 @@ class PairingTest(AppTest):
 def html_keys(html: str) -> list[str]:
     """The data-k of every item of an HTML feed, in order: not the day separators nor the feed's own furniture."""
     return [k for k in re.findall(r'data-k="([^"]*)"', html)
-            if not k.startswith("day-") and k not in ("more", "empty", "live", "act", "wait", "ans", "acts", "pend")]
+            if not k.startswith("day-") and k not in ("more", "empty", "live", "act", "wait", "ans", "pend")]
 
 
 def json_keys(feed: dict) -> list[str]:
@@ -481,10 +481,30 @@ class FeedTest(AppTest):
                          ["user", "assistant", "sent", "later", "retried", "user", "user", "assistant"])
         self.assertEqual(re.findall(r'data-k="u\d+" data-raw="[^"]*" data-mid="([^"]+)"', html),
                          [i["mid"] for i in feed["items"] if i["type"] == "user" and i["mid"]])
-        self.assertIn('data-k="acts"', html)
+        self.assertNotIn('data-k="acts"', html)
         self.assertTrue(feed["can_end"])
         self.assertIn('data-k="pend"', html)
         self.assertEqual(feed["pending_edits"], ["ledger.md"])
+
+    def test_main_keeps_pending_items_with_or_without_turns(self):
+        fid = "f-" + "a" * 24
+        self.rating(fid, {"kind": "chat", "chat": CID, "k": 1}, "down", "2026-11-03T14:01:12")
+        for turns in ([], [turn("user", "2026-11-03T14:00:00", "hello", shown="hello")]):
+            with self.subTest(turns=len(turns)):
+                self.chat(turns, kind="from", pending_edits={"plan.md": {"old": "a", "new": "b"}},
+                          queued=[{"mid": "q-main", "shown": "queued for Main"}],
+                          pending_feedback=[{"id": fid, "note": "check this"}])
+                feed = self.get("/app/v1/from/wisp")
+                html = self.html()
+                self.assertEqual(html_keys(html), json_keys(feed))
+                self.assertEqual(json_keys(feed), (["u0"] if turns else []) +
+                                 ["queue-q-main", "queue-feedback-" + fid])
+                self.assertIn("queued for Main", html)
+                self.assertIn("Keep feedback without sending", html)
+                self.assertIn('data-k="pend"', html)
+                self.assertIn("Your changes to plan.md go to wisp with your next message", html)
+                self.assertEqual(feed["pending_edits"], ["plan.md"])
+                self.assertFalse(feed["can_end"])
 
     def test_parity_while_replying_with_queued_messages_and_pending_feedback(self):
         self.rating("f-" + "a" * 24, {"kind": "chat", "chat": CID, "k": 1}, "down", "2026-11-03T14:01:12")

@@ -1664,9 +1664,7 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
         return join([*(_message_item(name, it, archived) for it in model["items"]),
                      h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
                        'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
-    if from_feed and not model["items"] and not model["reply"]:
-        return _from_html(model)
-    feed = []
+    feed = ([_from_html(model)] if from_feed and not model["items"] and not model["reply"] else [])
     if model["earlier"] and from_feed:
         feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="?all=1">Show the {n} earlier '
                       'messages</a></p>', n=model["earlier"]))

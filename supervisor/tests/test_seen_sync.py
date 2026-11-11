@@ -109,7 +109,9 @@ class SeenSyncTest(WebTest):
                 rail = str(web_pages.rail(["example"], "i:example", chats={"example": {"threads": [
                     {"id": k, "title": k, "state": "idle"} for k in ("web-a", "web-b")]}}))
                 self.assertIn(f'data-unread-main="{int(expected[0])}" data-unread-threads="{expected[1]}"', rail)
-                self.assertIn(f'data-seen-key="from" data-last="" data-unread="{int(expected[0])}"', rail)
+                self.assertIn(f'data-inst="example" data-last="" data-unread="{int(expected[2])}" '
+                              f'data-unread-main="{int(expected[0])}"', rail)
+                self.assertNotIn('data-seen-key="from"', rail)  # Main is the instance, with no child row.
 
     def post_seen(self, last, token=True):
         cookie = self.cookie

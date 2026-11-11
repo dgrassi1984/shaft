@@ -481,27 +481,30 @@ class ChatCentricTest(ChatRoutesCase):
         self.main_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "> quoted\n<b>first</b> line\nsecond", "ts": "2026-10-19T12:00:05"}])
         with mock.patch.object(web, "overview", return_value=snap(state="in a cycle")):
-            body = self.req("/fragment/rail?c=i:wisp", cookie=self.cookie).body.decode()
+            body = self.req("/fragment/rail?c=i:wisp&t=from", cookie=self.cookie).body.decode()
         self.assertIn('class="inst on"', body)
         self.assertIn('data-last="2026-10-19T12:00:05"', body)
-        self.assertIn('<span class="dot st-cycle" title="in a cycle" role="img" aria-label="in a cycle">', body)
+        self.assertIn('<span class="tdot t-idle" title="" aria-hidden="true"></span>', body)
         self.assertIn("&lt;b&gt;first&lt;/b&gt; line", body)                  # escaped, and not the quoted line
         self.assertNotIn("quoted", body)
         self.assertIn('href="/overview"', body)
 
-    def test_the_rail_says_replying_and_counts_alerts(self):
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
+    def test_the_rail_says_main_is_replying_and_counts_alerts(self):
+        self.main_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
         s = snap()
         s["alerts"] = [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}]
         with mock.patch.object(web, "overview", return_value=s):
             body = self.req("/fragment/rail", cookie=self.cookie).body.decode()
-        self.assertIn("replying…", body)
+        self.assertIn('<span class="last" aria-hidden="true">replying…</span>', body)
+        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true">', body)
         self.assertIn('data-last=""', body)                                    # it has not answered yet
         self.assertIn('<span class="badge bad" title="alerts">2</span>', body)
 
     def test_the_chat_page_keeps_the_instance_pages_behind_its_menu(self):
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertRegex(body, r'<header class="chathead">.*?<h1>wisp</h1>')
+        import re
+        headings = re.findall(r"<h1\b[^>]*>(.*?)</h1>", body)
+        self.assertEqual(headings, ['<button type="button" data-toggle-nav title="Switch conversation">wisp</button>'])
         self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
         self.assertNotIn('class="tabs"', body)
         for page in ("/i/wisp", "/i/wisp/config", "/i/wisp/drive", "/i/wisp/access", "/i/wisp/judge",
@@ -1204,7 +1207,9 @@ class ClearInHeaderTest(ChatRoutesCase):
                 feed = self.req(f"/fragment/chat/wisp?id={cid}", cookie=self.cookie).body.decode()
                 self.assertIn("selected topic", feed)
                 action = "stop" if state == "replying" else "end"
-                self.assertIn(f'name="cid" value="{cid}"', form(feed, f"/action/chat-{action}"))
+                action_body = feed if state == "replying" else header
+                self.assertIn(f'name="cid" value="{cid}"', form(action_body, f"/action/chat-{action}"))
+                self.assertNotIn("/action/chat-end", feed)
                 web._sent_during.assert_called_with("wisp", chat, False)
                 if state == "replying":
                     self.assertIn(f'data-poll="/fragment/chat/wisp/live?id={cid}"', feed)
@@ -1293,7 +1298,7 @@ class ClearInHeaderTest(ChatRoutesCase):
                 self.assertIn(b"not a chat of wisp", r.body)
                 self.assertNotIn("cleared", web_chat.load(chat["id"]))
 
-    def test_clear_is_in_the_header_always_on_screen(self):
+    def test_clear_and_close_thread_are_in_the_header_menu(self):
         """the operator, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
         bottom of a feed that scrolls in its own box."""
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
@@ -1303,7 +1308,8 @@ class ClearInHeaderTest(ChatRoutesCase):
         self.assertIn('data-post="/chat/wisp/clear"', head)
         feed = self.req(f"/fragment/chat/wisp?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertNotIn("/clear", feed)
-        self.assertIn("chat-end", feed)                                    # End stays with the conversation
+        self.assertNotIn("chat-end", feed)
+        self.assertRegex(head, r'data-key="chat-menu">.*data-post="/action/chat-end".*>Close thread</button>')
 
     def test_no_chat_no_clear(self):
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
@@ -1349,7 +1355,9 @@ class NetworkTest(ChatRoutesCase):
         feed = self.req(f"/fragment/chat/wisp?id={chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn('class="turn me" data-k="u0"', feed)
         self.assertIn('class="turn it" data-k="a1"', feed)
-        self.assertIn('data-k="acts"', feed)
+        import re
+        keys = re.findall(r'data-k="([^"]+)"', feed)
+        self.assertEqual([k for k in keys if not k.startswith("day-")], ["u0", "a1"])
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
         self.assertIn('data-keyed="1"', page)
         self.assertIn('data-lazy="1"', page)                                 # the documents: slow while hidden
