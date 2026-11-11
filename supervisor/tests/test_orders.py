@@ -20,6 +20,7 @@ NOW = fixtures.NOW
 class OrdersTest(unittest.TestCase):
     def setUp(self):
         fixtures.PushTest.setUp(self)
+        self.b.idle_declared = False
         self.enterContext(mock.patch.object(orders, "CORRECTION_PASSES", 3))
         self.enterContext(mock.patch.object(metrics, "own_models", return_value=["openrouter/own/model"]))
         self.pick = self.enterContext(mock.patch.object(judge, "pick", return_value="openrouter/judge/x"))
@@ -92,7 +93,7 @@ class OrdersTest(unittest.TestCase):
         self.assertIn("record(kind='runs')", refused["error"])
         self.assertTrue(self.b.call("record_order", {"text": "Retire the paper.", "source": files[0]})["ok"])
 
-    def test_record_order_needs_a_real_source_and_never_drops(self):
+    def test_record_order_from_operator_needs_a_real_source(self):
         refused = self.b.call("record_order", {"text": "Retire.", "source": "made-up.md"})
         self.assertFalse(refused["ok"])
         self.assertIn("name the file of the operator's message", refused["error"])
@@ -235,7 +236,7 @@ class OrdersTest(unittest.TestCase):
         replay = object.__new__(broker.ReplayBroker)
         replay.name, replay.project, replay.as_of, replay.operator_sent = "m", self.project, NOW, 0
         replay.root, replay.counts, replay._tags, replay.talk_id = self.b.root, self.b.counts, threading.local(), None
-        replay.sim_orders, replay.sim_checks = [], []
+        replay.sim_orders, replay.sim_checks, replay.sim_dropped = [], [], set()
         return replay
 
     def test_replay_checks_against_orders_then_and_records_nothing(self):

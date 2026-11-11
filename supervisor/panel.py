@@ -494,6 +494,9 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
     if CORRECTION_ALERT_CYCLES > 0:
         for name in instance_names():
             out.extend(corrections.alerts(name, CORRECTION_ALERT_CYCLES, now))
+    from . import stats_head   # a mechanism whose own test has said "no gain" past its stated sample
+    for name in instance_names():
+        out.extend(stats_head.alerts(name))
     return out
 
 

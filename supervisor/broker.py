@@ -270,6 +270,8 @@ def _spec(name, description, properties, required=None):
 
 
 S = {"type": "string"}
+LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger",
+                "predictions": "predictions", "unrecorded_orders": "unrecorded"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -309,16 +311,71 @@ SPECS = {
                                             "nothing if it was settled there. An ended thread's answer goes to the "
                                             "From feed, linked to it"}},
                           ["to", "text"]),
-    "record_order": _spec("record_order", "Record a standing order the operator gave you: a decision that stays "
-                          "decided ('Retire it', 'Drop the X', 'the paper body has no process blocks'). The supervisor "
-                          "holds it, not your memory: you are shown it in every run and conversation, and every "
-                          "message you send the operator is checked against it. Only the operator can drop one.",
-                          {"text": {"type": "string", "description": "the order in his own words, verbatim"},
-                           "source": {"type": "string", "description": "the file of his message it came in (e.g. "
-                                      "inbox/20261101-091500-123456-from-operator.md); leave it empty in a "
-                                      "conversation with him. On refusal, the answer lists recent message files; "
-                                      "record(kind='runs') shows conversation ids in start talk/api lines"}},
-                          ["text"]),
+    "record_order": _spec("record_order", "Record a standing order: a decision that stays decided. The supervisor "
+                          "holds it, not your memory: you are shown it in every run and conversation, and what you send "
+                          "or change through the supervisor (a message to the operator or to another instance, a mail "
+                          "draft, a calendar change) is checked against it and refused when it goes against it. Two "
+                          "kinds. (1) An order the operator gave you ('Retire it', 'Drop the X', 'the paper body has "
+                          "no process blocks'): text in his own words, source = the file of his message or the "
+                          "conversation id (leave source empty in a conversation with him). Only he can drop it. "
+                          "(2) A rule of your own, to bind yourself: own=true, text = the rule, source = the time of "
+                          "the episode of yours that taught it (its exact ts, or YYYY-MM-DD HH:MM). It is shown and "
+                          "checked exactly like his, and refusals against it are counted. You can drop your own rule "
+                          "with drop=<its id> (he can too); you can never drop his. At most 10 rules of your own and "
+                          "40 orders in all are in force.",
+                          {"text": {"type": "string", "description": "the order, verbatim in his words; or your own rule"},
+                           "source": {"type": "string", "description": "his order: the file of his message it came in "
+                                      "(e.g. inbox/20261101-091500-123456-from-operator.md), or empty in a conversation "
+                                      "with him; on refusal the answer lists recent message files, and "
+                                      "record(kind='runs') shows conversation ids in start talk/api lines. Your own "
+                                      "rule: the time of your episode that taught it"},
+                           "own": {"type": "boolean", "description": "true: a rule of your own"},
+                           "drop": {"type": "string", "description": "the id of a rule of your own to drop (o7); pass "
+                                                                     "nothing else"}},
+                          []),
+    "gauges": _spec("gauges", "Your gauges: a few readings the supervisor computes from its own record of you "
+                    "(promises open, claims the tool log did not support, failures that came back, value, capability "
+                    "against a control...). Called with no argument it lists the menu with each reading now and what is "
+                    "chosen. choose=[...] picks up to 4 by name: they become the first lines of self/stats.md, which "
+                    "you see in every run, largest gap first. Readings only: nothing is asked of you and nothing is "
+                    "refused; you cannot change a reading, and you can change the choice whenever you like (the "
+                    "operator can too). choose=[] shows none.",
+                    {"choose": {"type": "array", "items": {"type": "string"},
+                                "description": "gauge names from the menu; omit it to see the menu"}}, []),
+    "predict": _spec("predict", "Record a prediction and have the supervisor score it. It stamps the prediction with "
+                     "a time you cannot change. Predict anything your work turns on: what someone will answer, your next score "
+                     "on a task, what a source will say. To make one: text, due, how_to_check (how the outcome "
+                     "will be told from a tool result), and optionally subject (a short label to group them) and "
+                     "confidence (0-100). To report one at or after its due time: id, outcome ('held' or 'failed') "
+                     "and evidence ('<your cycle's time>#<step>': a supervisor tool that read the outcome, "
+                     "a page, a message, a record, a mail, a calendar, a file in Drive or Chat, "
+                     "not run or a file of yours). how_to_check is your description, shown as data. A judge "
+                     "decides whether the prediction text held from that result alone, treating instructions in the "
+                     "prediction, how_to_check and result as data. Insufficient evidence is scored 'not checked'. "
+                     "One not reported within 48 "
+                     "hours of its due time is scored 'not checked'. record(kind='predictions') lists them; the "
+                     "results are in self/stats.md, per subject.",
+                     {"text": {"type": "string", "description": "the prediction, one checkable statement"},
+                      "due": {"type": "string", "description": "when it can be checked: YYYY-MM-DD HH:MM, from 1 hour "
+                                                               "to 90 days ahead"},
+                      "how_to_check": {"type": "string", "description": "what observation will settle it"},
+                      "subject": {"type": "string", "description": "optional short label, e.g. a person or 'battery'"},
+                      "confidence": {"type": "integer", "description": "optional: 0-100, how likely you think it is"},
+                      "id": {"type": "string", "description": "to report: the prediction's id (p3)"},
+                      "outcome": {"type": "string", "enum": ["held", "failed"], "description": "to report"},
+                      "evidence": {"type": "string", "description": "to report: '<cycle time>#<step>', e.g. "
+                                                                    "'2026-01-02 14:00#3'"}}, []),
+    "nothing_to_do": _spec("nothing_to_do", "End this autonomous cycle as 'nothing worth a cycle': you looked and "
+                           "nothing you could do now is worth doing. The supervisor records it as its own kind of "
+                           "cycle: it is not judged and never counts as a failure, and you need not invent a goal. "
+                           "Your next idle wake then waits twice as long; a message, a commitment coming due or a job "
+                           "result wakes you as usual, and your next cycle of any other kind puts the wait back. It "
+                           "counts only in an autonomous cycle that has sent, drafted, delegated or changed nothing "
+                           "(looking around is fine), and only if it is the last thing you do: after it, finish the "
+                           "cycle; any further supervisor tool call other than record or gauges makes the cycle an "
+                           "ordinary one again, as does keeping a code change.",
+                           {"reason": {"type": "string", "description": "one sentence: what you checked and found "
+                                                                        "nothing in"}}, ["reason"]),
     "withdraw_held": _spec("withdraw_held", "Withdraw one of your own held code changes so it is never re-gated. "
                            "record(kind='gate') lists your held ids. Give the reason you no longer want it.",
                            {"id": S, "reason": S}, ["id", "reason"]),
@@ -375,13 +432,24 @@ SPECS = {
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
         "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
         "did they reply, did the gist match), 'commitment_source' (cycle: an operator message filename; "
-        "confirms it exists and was addressed by you to the operator). "
+        "confirms it exists and was addressed by you to the operator), 'families' (your goals grouped into the "
+        "chains the judge said resemble each other: cycles, value, deliveries, the last time something new came of "
+        "each; work on your own capability is read by what survived probation instead), 'habits' (the same script or "
+        "file you ran or touched in many cycles, sequences you repeated, kinds of failed call that came back), "
+        "'usage' (each of your plugins and skill files: when built, how often called or read in your cycles, when "
+        "last), 'facts' (each fact in memory/facts.md: whether the log or page it cites shows it, and how many "
+        "later cycles restated it; `before` is not used, page with `offset`), 'predictions' (the predictions you made "
+        "with predict: due time, status, and the judge's result and reason for the scored ones), 'unrecorded_orders' (per ended "
+        "conversation: what the operator ordered for later that you did not record as a commitment or standing "
+        "order, in his quoted words). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar", "gate", "expectations"]},
+                                                    "consults", "calendar", "gate", "expectations", "families", "habits",
+                                                    "usage", "facts", "predictions", "unrecorded_orders"]},
+         "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -947,6 +1015,7 @@ class Broker:
         self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
         self.run_kind = None
         self.run_started = None
+        self.idle_declared = False             # nothing_to_do was honoured in this run (idle.py)
         self.talk_id: str | None = None         # the conversation this run replies in (runner._conversation)
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script)
         self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
@@ -1338,6 +1407,14 @@ class Broker:
         self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
+        if getattr(self, "idle_declared", False):   # a broker built without __init__ (tests) declared nothing
+            from . import idle
+            if tool not in idle.QUIET:
+                try:
+                    self._idle_withdrawn(tool)
+                    self.idle_declared = False
+                except Exception as e:      # the exit's bookkeeping never costs the call
+                    self._log(f"{self.name}: idle exit not withdrawn: {type(e).__name__}: {e}")
         thread = str(args.get("id") or "").strip()
         # a continuation page of a thread opened this run (#134): it still checks the label and counts as a call, but
         # not against the mail cap — at 6,000 characters a page, a 160,000-character thread needs ~28 pages. Only a read
@@ -1572,7 +1649,12 @@ class Broker:
                                  f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
                                  kind, stamp, body, atts, urgent=urgent, thread=thread, re_=re_)
             if check:
-                self._log_check(check)
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
@@ -1584,13 +1666,21 @@ class Broker:
                        f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
                     + (f"; should_have_waited=yes in your judged push cycles of the last 7 days: {waited}"
                        if waited else "") + checked)
+        check, checked = self._check_orders(text, f"to-{to}", stamp, "message to another instance")
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
         self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
         record_expectation()
-        return f"delivered to {to}{with_files}{expectation}"
+        if check:
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
+        return f"delivered to {to}{with_files}{expectation}{checked}"
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
@@ -1785,27 +1875,29 @@ class Broker:
             return None
         return pushes.waited_share(pushes.recent_judgments(js, as_of))
 
-    def _check_orders(self, text: str, file: str, stamp: datetime) -> tuple[dict | None, str]:
-        """A message to the operator, checked against his standing orders and the corrections still checked
-        (orders.py): (the check's row, to log once it is delivered; what the result says). One that goes against an
-        order is refused with the order quoted. One the judge could not check is delivered, and the result says so."""
+    def _check_orders(self, text: str, ref: str, stamp: datetime, what="message to the operator") -> tuple[dict | None, str]:
+        """Check outgoing content before writing; refusals are logged here, other verdicts after success.
+        Held corrections bind every checked tool, but only operator messages affect their pass count."""
         from . import metrics, orders
         from .core import log
         active, held = self._orders_in_force(), self._corrections_held()
         if not active and not held:
             return None, ""
-        row = {"ts": stamp.isoformat(timespec="seconds"), "message": file, "orders": [o["id"] for o in active],
+        row = {"ts": stamp.isoformat(timespec="seconds"), "message": ref, "orders": [o["id"] for o in active],
                "corrections": [c["id"] for c in held]}
+        row["tool"] = ("send_message" if what.startswith("message") else ref)
+        if row["tool"] == "send_message":
+            row["to"] = "operator" if what == "message to the operator" else "instance"
         try:
-            verdict = orders.check(self.name, text, active, held, exclude=metrics.own_models(self.name))
-        except Exception as e:                 # no verdict: the message goes, unchecked, and the instance is told
+            verdict = orders.check(self.name, f"## {what}\n{text}", active, held, exclude=metrics.own_models(self.name))
+        except Exception as e:                 # no verdict: the action proceeds unchecked, and the instance is told
             row["error"] = f"{type(e).__name__}: {e}"[:300]
-            log(f"{self.name}: message to the operator not checked against its standing orders: {row['error']}")
+            log(f"{self.name}: {what} not checked against its standing orders: {row['error']}")
             return row, f"; NOT checked against your standing orders (the judge gave no verdict: {row['error']})"
         row.update(verdict)
         if verdict["violates"]:
             self._log_check(row)
-            raise PermissionError(orders.refusal(verdict, active, held))
+            raise PermissionError(orders.refusal(verdict, active, held, what))
         return row, "; checked against your standing orders: it keeps to them"
 
     def _orders_in_force(self) -> list[dict]:
@@ -1828,23 +1920,132 @@ class Broker:
         except (OSError, ValueError) as e:     # said, not hidden: it knows it is not seeing them
             return f" Your standing orders could not be read ({type(e).__name__}: {e}); they still apply."
 
-    def _record_order(self, text: str, source: str = "") -> str:
-        """An order the instance heard from the operator, held by the supervisor (orders.py); only he drops it."""
+    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
+        """Record an operator order or an episode-backed self rule, or drop only a self rule."""
         from . import orders
-        order, new = orders.add(self.name, text, "instance", self._order_source(source))
+        if type(own) is not bool:
+            raise ValueError("own must be a boolean")
+        if drop:
+            if text or source or own:
+                raise ValueError("use drop alone with the id of your own rule")
+            orders.drop_own(self.name, drop)
+            return f"dropped own rule {drop}"
+        source = self._order_source(source, own=own)
+        order, new = orders.add(self.name, text, "self" if own else "instance", source)
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
-            ": you are shown it in every run and conversation, your messages to the operator are checked against "
-            "it, and only he can drop it")
+            ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
+            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
+
+    def _gauges(self, choose=None) -> str:
+        """The gauge menu with its readings, or the instance's choice of gauges recorded (gauges.py). The readings
+        are the supervisor's; only the choice is the instance's."""
+        from . import gauges
+        if choose is None:
+            return gauges.menu_text(self.name, as_of=self.as_of, extra=self._sim_gauges())
+        row = self._gauges_chosen(gauges.checked(choose))
+        if not row["chosen"]:
+            return "no gauge is chosen now: self/stats.md shows none from your next cycle"
+        return (f"chosen: {', '.join(row['chosen'])}. They are the first lines of self/stats.md from your next cycle, "
+                "largest gap first; gauges() shows the readings now")
+
+    def _sim_gauges(self) -> list[dict]:
+        return []
+
+    def _predict(self, text: str = "", due: str = "", how_to_check: str = "", subject: str = "", confidence=None,
+                 id: str = "", outcome: str = "", evidence: str = "") -> str:   # noqa: A002
+        """A prediction recorded with the supervisor's time, or the outcome of one reported for scoring
+        (predictions.py). The time is never the caller's: nothing here takes one."""
+        from . import predictions
+        if id:
+            event = self._prediction_event(lambda every, now: predictions.reported(self.name, every, id, outcome,
+                                                                                   evidence, now), report=True)
+            return (f"reported {event['id']} as {event['outcome']}: the supervisor scores it from the tool call you "
+                    "cited, after this cycle; record(kind='predictions') shows the result")
+        event = self._prediction_event(lambda every, now: predictions.made(self.name, every, text, due, how_to_check,
+                                                                           subject, confidence, now), report=False)
+        return (f"recorded prediction {event['id']}, made {event['at'][:16].replace('T', ' ')}, due {event['due'][:16]}"
+                f". When it is due, report what happened: predict(id=\"{event['id']}\", outcome=\"held\" or "
+                "\"failed\", evidence=\"<cycle time>#<step>\")")
+
+    def _sim_predictions(self) -> list[dict]:
+        return []
+
+    def _prediction_event(self, build, report: bool) -> dict:
+        from . import predictions
+        if report:
+            return predictions.report_built(self.name, build)
+        return predictions.add_built(self.name, build)
+
+    def _nothing_to_do(self, reason: str) -> str:
+        """The instance ends its cycle as nothing worth one (idle.py): recorded as its own class, and the scheduler
+        lets its next idle wake wait longer. Not honoured where it would hide work from the judge."""
+        from . import idle
+        if not str(reason or "").strip():
+            raise ValueError("say in one sentence what you checked and found nothing in")
+        if self.run_kind != "live":
+            return ("not counted: only an autonomous cycle can end as nothing worth a cycle (this is a "
+                    f"{self.run_kind or 'different kind of run'})")
+        sent = [t for t in idle.PRIOR if self.counts.get(t)]
+        if sent:
+            return (f"not counted: this cycle already called {', '.join(sent)}, so it is judged as the work it did. "
+                    "Finish it as a normal cycle")
+        self._idle_exit(reason)
+        from .autonomy import IDLE_BACKOFF, IDLE_WAKE_MIN
+        return ("recorded: this cycle counts as nothing worth a cycle. It is not judged and is not a failure. Your "
+                f"next idle wake waits {IDLE_WAKE_MIN * IDLE_BACKOFF} min instead of {IDLE_WAKE_MIN}; a message, a due "
+                "commitment or a job result still wakes you at once. Finish the cycle now: any further supervisor "
+                "tool call other than record or gauges makes this an ordinary cycle again")
+
+    def _idle_exit(self, reason: str) -> None:
+        from . import autonomy, idle
+        from .core import log
+        idle.record(self.name, self.run_started, reason)
+        self.idle_declared = True
+        try:
+            autonomy.record("idle_exit", self.name)
+        except Exception as e:   # the exit exists and must remain withdrawable even without its backoff
+            log(f"{self.name}: idle exit backoff not recorded: {type(e).__name__}: {e}")
+        log(f"{self.name}: cycle ended as nothing worth a cycle: {' '.join(str(reason).split())[:200]}")
+
+    def _idle_withdrawn(self, tool: str) -> None:
+        """A supervisor tool called after nothing_to_do: the cycle did something after all, so the exit is withdrawn
+        (the call itself goes through: this refuses nothing) and the cycle is judged like any other."""
+        from . import autonomy, idle
+        from .core import log
+        idle.revoke(self.name, self.run_started, f"called {tool} after nothing_to_do")
+        autonomy.record("idle_revoke", self.name)
+        log(f"{self.name}: nothing-worth-a-cycle exit withdrawn: it called {tool} afterwards")
+
+    def _gauges_chosen(self, names: list[str]) -> dict:
+        from . import gauges
+        from .core import log
+        row = gauges.choose(self.name, names, "instance")
+        log(f"{self.name}: gauges chosen by the instance: {', '.join(names) or '(none)'}")
+        return row
 
     def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
         from . import gate_held
         return gate_held.withdraw(self.name, id, reason)
 
-    def _order_source(self, source) -> str:
-        """Where the operator gave the order: this conversation (its id), an earlier one (its id, from the supervisor's
-        log), or a message he sent this instance (its file). Anything else is refused."""
+    def _order_source(self, source, own: bool = False) -> str:
+        """Validate the operator's conversation/message source, or an own rule's past live cycle source.
+        Episode logs are read from this broker's root, including a replay's reconstructed state."""
         from . import pushes
         source = str(source or "").strip()
+        if own:
+            from . import metrics, orders
+            records = metrics._parsed_episodes(self.root)
+            cut = self.as_of or datetime.now()
+            eligible = {r['ts'] for r in records if r.get('kind') == 'live'
+                        and (at := orders._at(r.get('ts'))) is not None and at <= cut}
+            if source in eligible:
+                return source
+            hits = [ts for ts in eligible if len(source) == 16
+                    and ts[:16].replace('T', ' ') == source.replace('T', ' ')]
+            if len(hits) == 1:
+                return hits[0]
+            raise ValueError("own=true requires source: pass the exact ts of one of your past live cycles, "
+                             "or its unique YYYY-MM-DD HH:MM prefix (T accepted)")
         talk = self.talk_id
         if talk and source in ("", "conversation", talk):
             return talk
@@ -2218,7 +2419,7 @@ class Broker:
         return datetime.now()
 
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
-                format: str = "text") -> str:
+                format: str = "text", offset: int = 0) -> str:
         from .core import SUP_DIR
         if kind == "commitment_source":   # review I10: did I deliver this message to the operator?
             from . import commitments
@@ -2343,9 +2544,19 @@ class Broker:
             # Its own rows only (gate-runs/<its name>.jsonl), never another instance's; a replay sees the runs before
             # its cycle began
             text = gate_held.describe(self.name, limit, as_of=self.as_of)
+        elif kind in LEDGER_KINDS:
+            # Ledgers computed from the supervisor's record of the instance (its judged cycles, its tool logs as
+            # committed, its kept changes): what repeats, what was built and whether it is used, what its facts rest
+            # on. Readings only. A replay sees them as they stood when its cycle began.
+            import importlib
+            module = importlib.import_module(f".{LEDGER_KINDS[kind]}", __package__)
+            more = {"offset": max(0, int(offset))} if kind == "facts" else {}
+            if kind == "predictions":
+                more = {"extra": self._sim_predictions()}
+            text = module.record_text(self.name, limit=limit, as_of=self.as_of, **more)
         else:
-            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
-                             "or gate")
+            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
+                             "gate, " + " or ".join([", ".join(list(LEDGER_KINDS)[:-1]), list(LEDGER_KINDS)[-1]]))
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
@@ -2846,11 +3057,20 @@ class Broker:
             files = self._draft_files(attachments)
             raw = mail.build_message(acct.address, to, cc, bcc, subject, body, files,
                                      defaults.get('in_reply_to', ''), defaults.get('references', ''))
+            content = f"To: {', '.join(to)}\nCc: {', '.join(cc)}\nBcc: {', '.join(bcc)}\nSubject: {subject}\n\n{body}"
+            check, checked = self._check_orders(content, tool, self._message_stamp(), "mail draft")
             action = self._action_route(tool, {})
             if action and action['mode'] != 'direct':   # a demoted class: drafts have no proposal path, so refuse
                 raise PermissionError(f"{action['class']} actions wait for the operator after an over-reach; "
                                       f"shaft actions {self.name} restore {action['class']} (action {action['id']})")
             answer = self._draft_submit(acct, did, raw, tid)
+            if check:
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
             did, mid = answer['id'], answer['message']['id']
             registry[did] = {'account': account, 'thread': reply_to, 'message_id': mid, 'subject': subject,
                              'created': prior.get('created') or datetime.now().astimezone().isoformat()}
@@ -2878,7 +3098,7 @@ class Broker:
                     + f'\n{where}\nHandle: {account}/draft/{did}\n'
                     # authuser= picks the signed-in account; /mail/u/<address>/ answers 404 (checked live 2026-11-10)
                     + f'https://mail.google.com/mail/?authuser={urllib.parse.quote(acct.address)}#drafts?compose={mid}\n'
-                    + 'The operator reviews it and presses Send.')
+                    + 'The operator reviews it and presses Send.' + checked)
 
     def _mail_download(self, id: str, message, attachment) -> tuple[str, str, int, str, str, bytes]:   # noqa: A002
         """(alias, thread id, message number, file name, type, bytes) of one attachment of a visible thread."""
@@ -3463,20 +3683,40 @@ class Broker:
                     known.add(email.casefold())
                     added.append({"email": email})
             body["attendees"] = existing + added
+        content = {**original, **body}
+        text = (f"{tool}: {content.get('summary', '')}\nDescription: {content.get('description', '')}\n"
+                f"Location: {content.get('location', '')}\nStart: {content.get('start')}\nEnd: {content.get('end')}\n"
+                f"Attendees: {json.dumps(content.get('attendees', []), ensure_ascii=False)}")
+        check, checked = self._check_orders(text, tool, self._message_stamp(), "calendar change")
         proposal = actions.classify(tool, {'attendees': attendees}, event=original, address=acct.address) == 'staged'
         action = self._action_route(tool, {'attendees': attendees}, event=original, address=acct.address)
         if action:
             proposal = action['mode'] == 'staged'
         if proposal:
-            return self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
+            answer = self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
+            if check:
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
+            return answer + checked
         self._calendar_attempt["submitted"] = True
         url = f"{gcal.API}/{gcal._path(grant['calendar'], 'events', *([eid] if move else []))}"
         # If attendees changed since the read, Google must refuse the stale edit rather than bypass approval.
         answer = (acct.patch(url, body, etag=original["etag"], sendUpdates="none") if move else
                   acct.post(url, body, sendUpdates="none"))
         self._calendar_attempt["answer"] = answer
+        if check:
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
         return gcal.render_event(gcal.handle(grant["account"], grant["calendar"], answer["id"]),
-                                 f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address)
+                                 f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address) + checked
 
     def _calendar_propose(self, tool, target, grant, original, body, address, eid):
         """Freeze the Google request before notifying the operator.
@@ -3543,9 +3783,20 @@ class Broker:
         mine = [a for a in attendees if a.get('email', '').casefold() == acct.address.casefold()]
         if len(mine) != 1 or original.get('attendeesOmitted'):
             raise ValueError("the event must include the operator's own attendee and its full attendee list")
+        text = (f"calendar_respond: {original.get('summary', '')}\nDescription: {original.get('description', '')}\n"
+                f"Attendees: {json.dumps(attendees, ensure_ascii=False)}\nResponse: {response} ({statuses[response]})")
+        check, checked = self._check_orders(text, "calendar_respond", self._message_stamp(), "calendar change")
         mine[0]['responseStatus'] = statuses[response]
         self._action_route('calendar_respond', {'id': id, 'response': response}, event=original, address=acct.address)
-        return self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
+        answer = self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
+        if check:
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
+        return answer + checked
 
     # -- images ----------------------------------------------------------------------------------------
     def _image_file(self, path: str) -> tuple[str, bytes]:
@@ -3647,9 +3898,12 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._started = datetime.now()
+        self.sim_dropped: set[str] = set()
         self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self.sim_withdrawn: set[str] = set()
+        self.sim_gauges: list[dict] = []     # a choice of gauges made in this replay: seen by it, never written
+        self.sim_predictions: list[dict] = []   # predictions made or reported in this replay: likewise
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -4039,7 +4293,8 @@ class ReplayBroker(Broker):
 
     def _orders_in_force(self) -> list[dict]:
         from . import orders
-        return orders.listing(self.name, self.as_of, extra=self.sim_orders)
+        return [o for o in orders.listing(self.name, self.as_of, extra=self.sim_orders)
+                if o['id'] not in self.sim_dropped]
 
     def _corrections_held(self) -> list[dict]:
         from . import orders
@@ -4068,18 +4323,58 @@ class ReplayBroker(Broker):
         self._tag("simulated: not withdrawn")
         return answer
 
-    def _record_order(self, text: str, source: str = "") -> str:
-        from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written
+    def _sim_gauges(self) -> list[dict]:
+        return self.sim_gauges
+
+    def _idle_exit(self, reason: str) -> None:
+        self._tag("simulated: not recorded")   # answered as in a live cycle; no row, no change to the schedule
+
+    def _idle_withdrawn(self, tool: str) -> None:
+        pass                                   # nothing was recorded, so there is nothing to withdraw
+
+    def _sim_predictions(self) -> list[dict]:
+        return self.sim_predictions
+
+    def _prediction_event(self, build, report: bool) -> dict:
+        from . import predictions   # validated as the real call at the replay's clock, kept for this replay, never
+        event = build(predictions.fold(self.name, as_of=self.as_of, extra=self.sim_predictions), self.as_of)   # written or scored
+        self.sim_predictions.append(event)
+        self._tag("simulated: not recorded")
+        return event
+
+    def _gauges_chosen(self, names: list[str]) -> dict:
+        from . import gauges   # answered as the real call, kept for the rest of this replay, nothing written
+        row = gauges.row(names, "instance", self.as_of)
+        self.sim_gauges.append(row)
+        self._tag("simulated: not recorded")
+        return row
+
+    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
+        from . import orders  # same validation as live; all state changes remain in this replay
+        if type(own) is not bool:
+            raise ValueError("own must be a boolean")
+        if drop:
+            if text or source or own:
+                raise ValueError("use drop alone with the id of your own rule")
+            order = next((o for o in self._orders_in_force() if o['id'] == drop), None)
+            if order is None:
+                raise ValueError(f"no own rule in force with id {drop!r}")
+            if order['by'] != 'self':
+                raise ValueError("only the operator drops his orders")
+            self.sim_dropped.add(drop)
+            self._tag("simulated: not recorded")
+            return f"dropped own rule {drop}"
         text = orders.clean(text)
-        source = str(self._order_source(source))[:orders.SOURCE_MAX]
-        every = {o["id"]: o for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
-        order, new = orders.added(self.name, every, text, "instance", source, self.as_of)
+        source = str(self._order_source(source, own=own))[:orders.SOURCE_MAX]
+        every = {o["id"]: {**o, "dropped_at": self.as_of.isoformat()} if o['id'] in self.sim_dropped else o
+                 for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
+        order, new = orders.added(self.name, every, text, "self" if own else "instance", source, self.as_of)
         if new:
             self.sim_orders.append(order)
         self._tag("simulated: not recorded")
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
-            ": you are shown it in every run and conversation, your messages to the operator are checked against "
-            "it, and only he can drop it")
+            ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
+            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE

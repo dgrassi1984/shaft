@@ -486,18 +486,46 @@ def cmd_channel(name: str, value: str | None) -> int:
     return 0
 
 
+def cmd_gauges(name: str, action: str | None, value: list[str]) -> int:
+    """An instance's gauges (supervisor/gauges.py): the menu with each reading now and the choice in force; `set a,b,c`
+    chooses for it (up to four, the first lines of its self/stats.md); `clear` shows none. The instance can choose
+    too (the broker's `gauges` tool); the last choice made is the one in force, and every choice is kept."""
+    from . import gauges
+    instance_root(name)
+    try:
+        if action in ("set", "clear"):
+            names = [n for part in value for n in part.split(",") if n.strip()] if action == "set" else []
+            if action == "set" and not names:
+                print(f"which gauges? e.g. shaft gauges {name} set promises,claims", file=sys.stderr)
+                return 2
+            row = gauges.choose(name, names, "operator")
+            log(f"{name}: gauges chosen by the operator: {', '.join(row['chosen']) or '(none)'}")
+            print(f"chosen: {', '.join(row['chosen'])}" if row["chosen"] else "no gauge is chosen now")
+            return 0
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    print(gauges.menu_text(name))
+    past = gauges.history(name)
+    if past:
+        print("\nChoices made:")
+        for r in past:
+            print(f"  {r['ts'][:16].replace('T', ' ')} by {r['by']}: {', '.join(r['chosen']) or '(none)'}")
+    return 0
+
+
 def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli") -> int:
-    """The operator's standing orders for an instance (supervisor/orders.py, review I2): list them, add one (its text,
-    verbatim), drop one by id. The instance is shown the orders in force every run and conversation, and every message
-    it sends you is checked against them; it can record an order it heard from you, never drop one."""
+    """List orders and refusal counts, add an operator order, or drop any order by id."""
     from . import orders
     root = instance_root(name)
     try:
         if action == "add":
+            previous = orders.in_force(orders.listing(name), " ".join(value).strip())
             order, new = orders.add(name, " ".join(value), "operator", via)
             if new:
                 log(f"{name}: standing order {order['id']} added by the operator ({via}): {order['text'][:200]}")
-            print(f"{'added' if new else 'already in force:'} {orders.line(order)}")
+            action_text = "took over" if new and previous else "added" if new else "already in force:"
+            print(f"{action_text} {orders.line(order)}")
             return 0
         if action == "drop":
             if len(value) != 1:
@@ -511,10 +539,12 @@ def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli"
         print(f"refused: {e}", file=sys.stderr)
         return 1
     every = orders.listing(name, dropped=True)
+    counts = orders.violations(name)
     for o in every:
         state = f"dropped {o['dropped_at'][:16].replace('T', ' ')}" if o.get("dropped_at") else "in force"
         print(f"{o['id']:5} {state:22} by {o['by']:8} {o['added_at'][:16].replace('T', ' ')}"
-              + (f" ({o['source']})" if o.get("source") else "") + f": {o['text']}")
+              + (f" ({o['source']})" if o.get("source") else "") + f": {o['text']}"
+              + f" ({counts.get(o['id'], 0)} message(s)/action(s) refused)")
     for c in orders.corrections(name, root):
         print(f"{c['id']} still checked on its messages to you ({c['passes']} of {orders.CORRECTION_PASSES} passed): "
               f"{c['what_operator_said']}")
@@ -1549,6 +1579,11 @@ def main(argv: list[str]) -> int:
                                        "or telegram; alone shows it and where a message would go now")
     p.add_argument("name")
     p.add_argument("value", nargs="?", choices=["auto", "web", "telegram"])
+    p = sub.add_parser("gauges", help="an instance's gauges: readings it sees first in self/stats.md; alone lists the "
+                                      "menu and the choice, set a,b,c chooses up to four, clear shows none")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["list", "set", "clear"])
+    p.add_argument("names", nargs="*", help="set: gauge names, comma or space separated")
     p = sub.add_parser("orders", help="an instance's standing orders (decisions that stay decided): list them, add "
                                       "TEXT, or drop ID; it is shown them every run and its messages to you are checked "
                                       "against them")
@@ -1779,6 +1814,8 @@ def main(argv: list[str]) -> int:
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "channel":
         return cmd_channel(args.name, args.value)
+    if args.cmd == "gauges":
+        return cmd_gauges(args.name, args.action, args.names)
     if args.cmd == "orders":
         return cmd_orders(args.name, args.action, args.text, args.via)
     if args.cmd == "secret":

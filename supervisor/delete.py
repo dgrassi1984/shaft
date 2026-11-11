@@ -67,7 +67,12 @@ def own_files(name: str) -> list[Path]:
              s / "expectations" / f"{name}-operator-said.jsonl",
              s / "expectations" / f"{name}-scored.jsonl", s / "expectations" / f"{name}-baselines.jsonl",
              s / "experiments" / f"{name}.jsonl",
-             s / "experiments" / f"{name}-workspace.jsonl"]
+             s / "experiments" / f"{name}-workspace.jsonl",
+             s / "gauges" / f"{name}.jsonl", s / "claimlint" / f"{name}.jsonl", s / "claimlint" / f"{name}.lock",
+             s / "probation" / f"{name}.jsonl", s / "verdicts" / f"{name}.json", s / "idle_exits" / f"{name}.jsonl",
+             s / "predictions" / f"{name}.jsonl", s / "unrecorded_orders" / f"{name}.jsonl",
+             s / "unrecorded_orders" / f"{name}.lock", s / "wake_reasons" / f"{name}.json",
+             s / "wake_reasons" / f"{name}.tmp"]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")
     found += _matching(s / "gate-logs", rf"{n}-{ts}-\d+\.log")
@@ -205,7 +210,8 @@ def shared_edits(name: str) -> list[Edit]:
 
     edits = [Edit(s / "jobs" / "state.json", _json(jobs_state), jobs._editing_lock),
              Edit(s / "api-answered.json", _json(answered)),
-             Edit(s / "schedule.json", _json(_all(_pop("wakes", name), _pop("cycles", name), _pop("skipped", name))),
+             Edit(s / "schedule.json", _json(_all(_pop("wakes", name), _pop("cycles", name), _pop("skipped", name),
+                                                   _pop("idle_exits", name))),
                   autonomy.editing_lock),
              Edit(s / "battery" / "schedule.json", _json(_pop(name)), battery.schedule_lock),
              Edit(s / "recaps.json", _json(_pop(name))),

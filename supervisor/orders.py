@@ -1,21 +1,32 @@
-"""Standing orders: what the operator decided stays decided (review I2, I4).
+"""Standing orders: what the operator decided stays decided (review I2, I4), and what an instance bound itself to.
 
 shaft re-asked "continue or retire?" four times after the operator said "Retire", and a correction came back once the
 instance had closed it by writing a fact. An order is held here, outside the instance's reach:
 SUP_DIR/orders/<name>.jsonl, append-only, one row per add or drop {id, text, added_at, by, source, dropped_at}; the
-last row of an id is its state. The operator adds and drops orders (`shaft orders`, the web UI's Config page); an
-instance records one it heard from him (the broker's record_order) and never drops one. The orders in force are shown
-to the instance verbatim in every live cycle and conversation (broker.tool_specs), and every message it sends the
-operator is checked against them by the judge (check): one that goes against an order is refused with the order quoted.
+last row of an id is its state. Three authors (`by`):
+  - operator: he adds and drops any order (`shaft orders`, the web UI's Config page);
+  - instance: an order the instance heard from him (the broker's record_order, source: his conversation or message);
+    it never drops one;
+  - self: a rule the instance set for itself (record_order own=true, source: the live cycle of its own that taught it).
+    A rule written in its own notes did not hold; one held here is shown and checked like the operator's. It may
+    drop its own rules (record_order drop=...), never his; at most SELF_MAX are in force. Operator additions count only non-self
+    orders against ACTIVE_MAX, so self rules cannot crowd them out.
+The orders in force are shown to the instance verbatim in every live cycle and conversation (broker.tool_specs), and
+what it is about to send or change through the broker is checked against them by the judge (check): a message to the
+operator or to another instance, a mail draft, a calendar change. One that goes against an order is refused with the
+order quoted, before anything is written. Its own keys (`http_request`, `run`) are not checked: they have no single
+text to check and no bound on their number. Refusals are counted per order (violations).
 
 The same check holds the instance's corrections (memory/corrections.jsonl, read as supervisor/corrections.py reads it):
 a correction is checked until the next SHAFT_CORRECTION_PASSES messages to the operator after it pass the check
-against its text, whatever the instance's own ledger says about closing it. A message refused for going against it
-starts the count again; a message the judge could not check (no verdict, or one that does not fit CHECK_SCHEMA) does
-not count. Every check is a row of SUP_DIR/orders/<name>-checks.jsonl, from which the passes are counted — as of a
-trial replay's cutoff, only the checks made by then. A trial replay writes nothing here: the orders it records and the
-checks it makes are kept by its ReplayBroker and passed in as `extra` rows, so the rest of that replay sees them as a
-live cycle would.
+against its text, whatever the instance's own ledger says about closing it. A message to the operator refused for
+going against it starts the count again; a message the judge could not check (no verdict, or one that does not fit
+CHECK_SCHEMA) does not count; a check of a draft, a calendar change or a message to an instance neither counts as a
+pass nor restarts the count. Checks go in SUP_DIR/orders/<name>-checks.jsonl, from which the passes are
+counted, as of a trial replay's cutoff, only the checks made by then. Logging failures after successful outward
+writes do not change the action's answer. A trial replay writes nothing here: the orders
+it records or drops and the checks it makes are kept by its ReplayBroker and passed in as `extra` rows, so the rest
+of that replay sees them as a live cycle would.
 """
 from __future__ import annotations
 
@@ -33,20 +44,21 @@ CORRECTION_PASSES, _ = core.knob(
     "correction before it stops being checked (0: corrections are not checked)",
     group="Runs and conversations", services=("runs", "api", "web"))
 TEXT_MAX = 1000          # one order, verbatim
-ACTIVE_MAX = 40          # orders in force for one instance: every one is shown and checked on each message
+ACTIVE_MAX = 40          # operator adds count non-self orders; instance adds count all orders
 SOURCE_MAX = 200
 CHECK_TIMEOUT_S = 90     # the instance's broker client gives a tool call 120 s (template shaft/broker.py)
 ID = re.compile(r"o[1-9]\d*")
-BY = ("operator", "instance")
+SELF_MAX = 10            # rules an instance set for itself, separate from the operator's ACTIVE_MAX allowance
+BY = ("operator", "instance", "self")
 
 CHECK_SYSTEM = """\
-You check one message an AI agent is about to send its operator against the operator's standing orders and the \
-corrections he gave it. Decide only whether the message goes against one of them: it asks again about something an \
-order already decided, does or proposes what an order rules out, or repeats the behaviour a correction named. A \
-message that only mentions the same subject, reports keeping to an order, or asks about something the orders leave \
-open does not go against it. Judge what the message says and asks, never its tone. When you are not sure, it does \
-not. order_id is the id of the order or correction it goes against ("" when none); reason, one or two sentences, \
-quotes the part of the message that goes against it."""
+You check what an AI agent is about to send or change: a message, mail draft or calendar change, against standing \
+orders and corrections from the operator. Some rules are the agent's own; they bind it in exactly the same way. \
+Decide only whether the content goes against one of them: it asks again about something an order already decided, \
+does or proposes what an order rules out, or repeats the behaviour a correction named. Content that only mentions \
+the same subject, reports keeping to an order, or asks about something the orders leave open does not go against \
+it. Judge what it says and asks, never its tone. When you are not sure, it does not. order_id is the id of the \
+order or correction it goes against ("" when none); reason, one or two sentences, quotes the part that goes against it."""
 CHECK_SCHEMA = {"type": "object", "additionalProperties": False,
                 "properties": {"violates": {"type": "boolean"}, "order_id": {"type": "string"},
                                "reason": {"type": "string"}},
@@ -126,7 +138,7 @@ def in_force(orders: list[dict], text: str) -> dict | None:
 
 
 def add(name: str, text: str, by: str, source: str, now: datetime | None = None) -> tuple[dict, bool]:
-    """Record an order: (the order, whether it is new). The same text already in force is not added twice."""
+    """Record an order: (the order, whether a row was appended). Operator takeovers keep the same id."""
     text = clean(text)
     if by not in BY:
         raise ValueError(f"by must be one of {BY}")
@@ -136,22 +148,29 @@ def add(name: str, text: str, by: str, source: str, now: datetime | None = None)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        rows = [json.loads(line) for line in f if line.strip()]
+        rows = _lines(p)
         row, new = added(name, _fold(rows), text, by, source, now)
         if new:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.seek(0)
+            text = f.read()
+            f.write(("\n" if text and not text.endswith("\n") else "") + json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
     return row, new
 
 
 def added(name: str, items: dict[str, dict], text: str, by: str, source: str, now: datetime) -> tuple[dict, bool]:
     """The row recording `text` given the orders `items` (id -> order, as _fold): (the order already in force with
-    that text, False) or (the new row, True). Refused over ACTIVE_MAX. Written by add; kept in memory by a replay."""
+    that text, False) or (a new or operator takeover row, True). Operator adds exclude self rules from ACTIVE_MAX.
+    Written by add; kept in memory by a replay."""
     active = [o for o in items.values() if not o.get("dropped_at")]
     if same := in_force(active, text):
+        if by == "operator" and same.get("by") != "operator":
+            return {**same, "by": "operator", "source": source,
+                    "added_at": now.isoformat(timespec="seconds")}, True
         return same, False
-    if len(active) >= ACTIVE_MAX:
+    if by == "self" and sum(o.get("by") == "self" for o in active) >= SELF_MAX:
+        raise ValueError(f"at most {SELF_MAX} self rules in force; use record_order(drop='o7') to drop one first")
+    if sum(by != "operator" or o.get("by") != "self" for o in active) >= ACTIVE_MAX:
         raise ValueError(f"{name} already has {ACTIVE_MAX} standing orders: drop one first (shaft orders {name})")
     number = max((int(oid[1:]) for oid in items), default=0) + 1
     return {"id": f"o{number}", "text": text, "added_at": now.isoformat(timespec="seconds"), "by": by,
@@ -159,25 +178,40 @@ def added(name: str, items: dict[str, dict], text: str, by: str, source: str, no
 
 
 def drop(name: str, oid: str, now: datetime | None = None) -> dict:
-    """The operator's alone: the order stops being shown and checked. Refused for an unknown or dropped id."""
+    """The operator can drop any order, including a self rule."""
+    return _drop(name, oid, now, own=False)
+
+
+def drop_own(name: str, oid: str, now: datetime | None = None) -> dict:
+    """Drop only an instance's own rule, checking ownership under the ledger lock."""
+    return _drop(name, oid, now, own=True)
+
+
+def _drop(name: str, oid: str, now: datetime | None, own: bool) -> dict:
     p = path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        items = _fold([json.loads(line) for line in f if line.strip()])
+        items = _fold(_lines(p))
         order = items.get(str(oid).strip())
         if order is None:
             raise ValueError(f"{name} has no order {oid!r}" + (f"; orders: {', '.join(items)}" if items else ""))
+        if own and order.get("by") != "self":
+            raise ValueError("only the operator drops his orders")
         if order.get("dropped_at"):
             raise ValueError(f"order {oid} of {name} was already dropped at {order['dropped_at']}")
         row = {**order, "dropped_at": (now or datetime.now()).isoformat(timespec="seconds")}
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.seek(0)
+        text = f.read()
+        f.write(("\n" if text and not text.endswith("\n") else "") + json.dumps(row, ensure_ascii=False) + "\n")
         f.flush()
     return row
 
 
 def line(o: dict) -> str:
+    if o["by"] == "self":
+        return (f"{o['id']} (my own rule, {o['added_at'][:10]}; from my cycle of "
+                f"{o['source'][:16].replace('T', ' ')}): {o['text']}")
     by = "from the operator" if o["by"] == "operator" else "heard from the operator, recorded by you"
     return f"{o['id']} ({by}, {o['added_at'][:16].replace('T', ' ')}): {o['text']}"
 
@@ -188,6 +222,8 @@ def _passes(rows: list[dict], as_of: datetime | None = None) -> dict[str, int]:
     the checks made by `as_of` (a replay must not be shown a correction cleared by later messages)."""
     out: dict[str, int] = {}
     for row in rows:
+        if "tool" in row and (row["tool"] != "send_message" or row.get("to") != "operator"):
+            continue  # other outward checks neither advance nor restart operator-message passes
         if as_of is not None and ((ts := _at(row.get("ts"))) is None or ts > as_of):
             continue
         if row.get("violates") and row.get("order_id"):
@@ -223,15 +259,17 @@ def corrections(name: str, root: Path, as_of: datetime | None = None, extra=()) 
 
 # -- the check -------------------------------------------------------------------------------------------------------
 def case(text: str, orders: list[dict], held: list[dict]) -> str:
-    parts = ["## Standing orders\n" + ("\n".join(f"- [{o['id']}] {o['text']}" for o in orders) or "(none)"),
+    parts = ["## Standing orders\n" + ("\n".join(
+                 f"- [{o['id']}] {o['text']}" + (" (agent's own rule)" if o["by"] == "self" else "")
+                 for o in orders) or "(none)"),
              "## Corrections\n" + ("\n".join(f"- [{c['id']}] what was wrong: {c['what_was_wrong']} | what the operator "
                                             f"said: {c['what_operator_said']}" for c in held) or "(none)"),
-             "## The message to the operator\n" + text]
+             "## Outgoing content or change\n" + text]
     return "\n\n".join(parts)
 
 
 def check(name: str, text: str, orders: list[dict], held: list[dict], exclude=()) -> dict:
-    """The judge's verdict on one message: {violates, order_id, reason, judge}. Raises judge.JudgeError when it gives
+    """The judge's verdict on outgoing content: {violates, order_id, reason, judge}. Raises judge.JudgeError when it gives
     none within CHECK_TIMEOUT_S, or names an id that is not one of the orders and corrections it was shown."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as Late
     from . import judge
@@ -255,7 +293,7 @@ def check(name: str, text: str, orders: list[dict], held: list[dict], exclude=()
 
 
 def log_check(name: str, row: dict) -> None:
-    """One row per check of a message to the operator: what it was checked against and the verdict (or the error)."""
+    """One row per outward check: what it was checked against and the verdict (or the error)."""
     p = checks_path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as f:
@@ -263,25 +301,50 @@ def log_check(name: str, row: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def refusal(verdict: dict, orders: list[dict], held: list[dict]) -> str:
+def refusal(verdict: dict, orders: list[dict], held: list[dict], what="message to the operator") -> str:
     """What the instance is told: the order (or correction) quoted, the judge's reason, and that it may rewrite."""
     oid = verdict["order_id"]
     order = next((o for o in orders if o["id"] == oid), None)
     quoted = (f"standing order {line(order)}" if order else
               next(f"correction {c['id']} (what was wrong: {c['what_was_wrong']}; what the operator said: "
                    f"{c['what_operator_said']})" for c in held if c["id"] == oid))
-    return (f"not sent: the judge found this message goes against {quoted}. Why: {verdict['reason']} "
-            "Rewrite it so it keeps to that, or do not send it.")
+    done = "not sent" if what.startswith("message") else "not written" if what == "mail draft" else "not done"
+    return (f"{done}: the judge found this {what} goes against {quoted}. Why: {verdict['reason']} "
+            "Rewrite it so it keeps to that and retry, or leave it.")
 
 
 def shown(orders: list[dict], held: list[dict]) -> str:
     """The block the instance is shown every run (broker.tool_specs): the orders in force (listing), verbatim, and the
-    corrections its messages are still checked against (corrections)."""
-    text = (" STANDING ORDERS from the operator, in force until he drops them (you cannot): "
-            + " | ".join(line(o) for o in orders) if orders else " No standing orders from the operator now.")
+    corrections its covered outward tools are still checked against (corrections)."""
+    text = (" STANDING ORDERS in force; only the operator drops his orders, you may drop your own rules: "
+            + " | ".join(line(o) for o in orders) if orders else " No standing orders now.")
     if held:
-        text += (f" Corrections your messages to the operator are still checked against (each until "
-                 f"{CORRECTION_PASSES} in a row pass): " + " | ".join(
+        text += (f" Corrections checked on messages, mail drafts and calendar changes (each until "
+                 f"{CORRECTION_PASSES} messages to the operator in a row pass): " + " | ".join(
                      f"{c['id']} ({c['passes']} passed): {c['what_operator_said']}" for c in held))
-    return text + (" Every message you send the operator is checked against these; one that goes against them is "
-                   "refused with the order quoted." if orders or held else "")
+    return text + (" Messages to the operator or another instance, mail drafts and calendar changes are checked "
+                   "against these; one that goes against them is refused with the order quoted."
+                   if orders or held else "")
+
+
+def violations(name: str, as_of: datetime | None = None, extra=()) -> dict[str, int]:
+    """Order id -> refusals across all outward checks, including replay checks when supplied."""
+    counts: dict[str, int] = {}
+    for row in _lines(checks_path(name)) + list(extra):
+        if as_of is not None and ((ts := _at(row.get("ts"))) is None or ts > as_of):
+            continue
+        if row.get("violates") is True and ID.fullmatch(str(row.get("order_id", ""))):
+            oid = row["order_id"]
+            counts[oid] = counts.get(oid, 0) + 1
+    return counts
+
+
+def stats_lines(name: str) -> list[str]:
+    """Self rules in force and the refusals recorded against each."""
+    own = [o for o in listing(name) if o.get("by") == "self"]
+    if not own:
+        return []
+    counts = violations(name)
+    return ["## My own rules"] + [
+        f"- {o['id']} (since {o['added_at'][:10]}): {o['text'][:80]} — "
+        f"{counts.get(o['id'], 0)} message(s)/action(s) refused against it" for o in own] + [""]

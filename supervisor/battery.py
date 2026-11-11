@@ -72,6 +72,9 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
             "withdraw_held", "record_order",   # keyed by the live instance's name: held changes and standing orders
+            "predict",                         # keyed by the live instance's name: its predictions ledger
+            "nothing_to_do",                   # an exam is not a cycle: it must not slow the live instance's wakes
+            "gauges",                          # likewise: an exam must not set the live instance's choice of gauges
             *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS, *GCHAT_TOOLS}   # the operator's mail, calendars, Drive and Google
                                             # Chat never reach an exam (its broker has none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
@@ -841,7 +844,66 @@ def stats_lines(name: str) -> list[str]:
         lines.append(f"- {cat}: **{now:.1f}** (mean of the last 3 runs, {len(inst)} items)"
                      + (f"; control {c:.1f}" if c is not None else "")
                      + (f"; first run in this era {first:.1f}" if any(len(v) > 1 for v in inst.values()) else ""))
+        if cat == "recall" and (by_age := recall_by_age(name, mine)):
+            lines.append("  - " + by_age)
     return lines + [""]
+
+
+RECALL_OLD_DAYS = 14   # where "old" starts when recall is read by the age of what was asked about
+
+
+def recall_by_age(name: str, rows: list[dict]) -> str:
+    """Recall read apart for journal entries under and over RECALL_OLD_DAYS old when they were asked about: whether
+    old knowledge is lost, or only the recent is kept. The age is the exam's time minus the entry's; nothing of the
+    question is shown. '' when the entries' dates are not known."""
+    entries = {i["id"]: i.get("entry") for i in load_items(name) if i["category"] == "recall"}
+    groups: dict[str, list[float]] = {"under": [], "over": []}
+    for r in rows:
+        if r.get("category") != "recall" or r.get("arm") != "instance" or r.get("score") is None:
+            continue
+        try:
+            age = datetime.fromisoformat(r["at"]) - datetime.fromisoformat(str(entries.get(r["item"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        groups["over" if age >= timedelta(days=RECALL_OLD_DAYS) else "under"].append(r["score"])
+    if not groups["under"] and not groups["over"]:
+        return ""
+    part = lambda key, label: (f"{label} {sum(groups[key]) / len(groups[key]):.1f} (n={len(groups[key])})"   # noqa: E731
+                               if groups[key] else f"{label} no answer yet")
+    return (f"recall by the age of what was asked: {part('under', f'under {RECALL_OLD_DAYS} days old')}; "
+            f"{part('over', f'{RECALL_OLD_DAYS} days or older')}")
+
+
+# What each self-knowledge truth is about, in words: all that a miss tells the instance. Never the item, its
+# prompt, the reference answer or the grader's reasoning: the items stay secret.
+SELF_TOPICS = {"model": "which model I run on",
+               "judged_counts": "how my judged cycles divide into yes, partial and no",
+               "last_sleep": "when my last sleep ran and whether it completed",
+               "code_changes": "how many of my code changes were kept or reverted",
+               "unsupported_claim": "my most recent claim that the tool log did not support",
+               "latest_origin": "where my latest goal came from"}
+
+
+def self_miss_topics(name: str) -> list[str]:
+    """The topics of the self-knowledge items whose latest scored answer in this era was not correct."""
+    try:
+        e = era(name)
+    except FileNotFoundError:
+        return []
+    keys = {i["id"]: i.get("truth") for i in load_items(name) if i["category"] == "self"}
+    latest = {}
+    for r in results(name):
+        if (_same_era(r, e) and r.get("status") == "scored" and r.get("arm") == "instance"
+                and r.get("category") == "self"):
+            latest[r["item"]] = r
+    missed = {keys.get(item) for item, r in latest.items() if (r.get("grade") or {}).get("correct") != "yes"}
+    return [topic for key, topic in SELF_TOPICS.items() if key in missed]
+
+
+def self_miss_lines(name: str) -> list[str]:
+    topics = self_miss_topics(name)
+    return ["- On the battery, what I said about myself did not match the supervisor's record on: "
+            + "; ".join(topics)] if topics else []
 
 
 def _per_item(rows: list[dict], cat: str, arm: str) -> dict[str, list[float]]:

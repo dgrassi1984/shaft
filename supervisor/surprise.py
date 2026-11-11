@@ -563,6 +563,24 @@ def _number(value):
     return "missing" if value is None else f"{value:.3f}"
 
 
+def coin_comparison(name: str, since: datetime | None = None) -> dict:
+    """The curiosity coin is random, so cycles it drew against the instance's other self-chosen cycles is a fair
+    comparison that costs nothing: mean judged value (0-5) and count per arm, on the latest model only.
+    {"drawn": {"n", "value"}, "undrawn": {"n", "value"}} (value None with no valued cycle)."""
+    js = [j for j in metrics.judgments_for_stats(name) if j.get("origin") == "self"
+          and (since is None or datetime.fromisoformat(j["episode_ts"]) >= since)]
+    if js:
+        latest = js[-1].get("model")
+        js = [j for j in js if j.get("model") == latest]
+    by_ts = {e["ts"]: e for e in metrics.live_episodes(name)}
+    out = {}
+    for label, drawn in (("drawn", True), ("undrawn", False)):
+        group = metrics.valued([j for j in js
+                                if _part(by_ts.get(j["episode_ts"], {}), "curiosity").get("drawn") is drawn])
+        out[label] = {"n": len(group), "value": _mean([j["value"] for j in group])}
+    return out
+
+
 def m5_report(name, since: datetime, until: datetime | None = None,
               baseline: dict | None = None, min_cycles: int = 30, days: int = 6) -> str:
     """Evaluate the pre-registered window; missing measurements never pass a gate."""

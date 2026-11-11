@@ -100,6 +100,9 @@ OFF_IN_JOBS = {"delegate_coding": "in a scheduled job (it is a script; your next
                "secret_set": "in a scheduled job (keys are managed in a cycle)",
                "secret_delete": "in a scheduled job (keys are managed in a cycle)",
                "set_config": "in a scheduled job (your config is changed in a cycle)",
+               "predict": "in a scheduled job (a prediction is made and reported in a cycle)",
+               "nothing_to_do": "in a scheduled job (a job is not a cycle)",
+               "gauges": "in a scheduled job (your gauges are chosen in a cycle)",
                "record_order": "in a scheduled job (an order is recorded by the cycle or conversation that heard it)"}
 
 
