@@ -45,7 +45,12 @@ All Google credentials stay with the supervisor; the broker checks the grant on 
   on a label also lets an instance leave drafts in that account (a reply in a thread it can read, or a new message),
   never send them: you open Gmail's Drafts and press Send. Gmail has no drafts-only scope, so the `gmail.compose`
   token the supervisor holds could send; no broker tool calls a send endpoint, and a test fails if one ever does. An
-  instance can update only a draft it created and you have not edited since; it has no delete. A draft can carry
+  instance can update only a draft it created and you have not edited since; it has no delete. It can put on its
+  draft a label you granted it for drafts on that account, which needs `gmail.modify` on the supervisor's token: that
+  scope could trash or relabel any message, and the only such call in the code changes labels on a draft the
+  instance wrote (a test fails on any other). The supervisor's one door to Google also refuses every Gmail write on your
+  accounts except a draft upload and that label change, before a request exists, so a send from your address
+  cannot leave it whatever a tool asks. An instance sends mail only from its own account. A labelled draft you send is mail under that label. A draft can carry
   what a hostile email asked for: read its recipients and attachments before you send it.
 - **Operator calendars:** read access per calendar. Write grants let an instance create and move events. A change that
   involves other attendees, and every reply to an invitation, becomes a proposal that waits for your approval. For
