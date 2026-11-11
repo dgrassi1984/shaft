@@ -544,7 +544,7 @@ def _stream(req: Request, n: str) -> Response:
     if not raw.isdigit():
         raise Refusal(400, "bad_request", "after is the seq of the last event the app has, 0 for none.")
     after, reply, at = int(raw), qs.get("reply"), web._page_ms(qs.get("at"))
-    chat = _chat_of(n, qs["cid"]) if qs.get("cid") else web_chat.current(n)
+    chat = _chat_of(n, qs["cid"]) if qs.get("cid") else web_chat.target(n, "", writing=False)   # none: Main
     relay = web_chat.stream_of(chat["id"]) if chat else None
     if relay is not None and reply is not None and reply != relay.id:
         after = 0                                  # a newer reply than the app's: all of it
@@ -614,7 +614,7 @@ def _feedback(req: Request, n: str) -> Response:
 def _doc_chat(req: Request, n: str) -> dict | None:
     from . import web_chat
     cid = req.query.get("cid")
-    return _chat_of(n, cid) if cid else web_chat.shown(n)
+    return _chat_of(n, cid) if cid else web_chat.target(n, "", writing=False)        # none: Main
 
 
 def _docs(req: Request, n: str) -> Response:

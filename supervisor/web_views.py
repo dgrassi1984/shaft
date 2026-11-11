@@ -1615,8 +1615,7 @@ def _answer_item(name: str, cid: str, it: dict, archived: bool, seen: str | None
     body = markdown(it["content"]) if it["content"] else Html("")
     if not it["content"] and not it["failure"]:
         body = Html('<p class="dim">(no answer)</p>')
-    # From has no documents panel: its cards open the document on the chat page, as an earlier chat's do
-    cards = join([doc_cards(it["docs"], name if archived or seen == "from" else ""),
+    cards = join([doc_cards(it["docs"], name if archived else ""),
                   _comment_chips(it["answered"], "answered"),
                   _comment_chips(it["opened"], "opened")])
     seen = _seen_attrs(name, seen or cid, "seen-reply", it["ts"]) if not archived else Html("")
@@ -1747,10 +1746,11 @@ def _from_html(model: dict) -> Html:
 
 
 def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[str], csrf: str,
-              later: str = "", whole: bool = False) -> Html:
-    """/i/<n>/from: the From <instance> feed, refreshed like a chat's, and a thread's composer: what is written here is
-    answered now, in the From conversation (web_chat.from_chat), or left for its next cycle (2026-11-11: it was only
-    ever left for the next cycle)."""
+              later: str = "", whole: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
+              folder: str = "", sort: str = "", listing_only: bool = False) -> Html:
+    """/i/<n>/chat: Main, the instance's own conversation (web_chat.from_chat) — its turns and what the instance sent
+    outside any thread, refreshed like a thread's — with a thread's composer and the documents panel beside it.
+    Clicking the instance opens it (2026-11-11: it was "From <instance>", a row of its own)."""
     from . import messages
     feed_url = f"/fragment/from/{q(name)}" + ("?all=1" if whole else "")    # all of it asked for: its refreshes too
     feed = feed_html(model, from_feed=True)
@@ -1761,8 +1761,9 @@ def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[
                    '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',
                    u=feed_url, t=etag(str(feed).encode()), f=feed), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>')])
+    aside = _docs_aside(name, panel, doc=doc, att=att, folder=folder, listing_only=listing_only, sort=sort)
     return chat_frame(name, chat_header(name, live, None, past, from_feed=True),
-                      h('<div class="chatgrid"><div class="chatpage">{b}</div></div>', b=body),
+                      h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/from/{q(name)}/header", thread="from")
 
 
@@ -1832,15 +1833,23 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',
                          u=feed_url, t=etag(str(feed).encode()), f=feed), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
-    docs_url = (f"/fragment/docs/{q(name)}?" + (f"att={q(att)}" if att else f"list=1&dir={q(folder)}"
-                                                if (folder or listing_only) and not doc else f"doc={q(doc)}")
-                + (f"&id={q(chat['id'])}" if read_only and chat else "") + (f"&sort={sort}" if sort else ""))
-    aside = h('<aside class="docs" id="docs" data-poll="{u}" data-every="1500" data-lazy="1" data-etag="{t}" '
-              'data-etag-url="{u}">{p}</aside>', u=docs_url, t=etag(str(panel).encode()), p=panel)
+    aside = _docs_aside(name, panel, doc=doc, att=att, folder=folder, listing_only=listing_only, sort=sort,
+                        archived_id=chat["id"] if read_only and chat else "")
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"
                       + thread_query, thread=chat["id"] if selected and chat else "current")
+
+
+def _docs_aside(name: str, panel: Html, *, doc: str = "", att: str = "", folder: str = "", listing_only: bool = False,
+                sort: str = "", archived_id: str = "") -> Html:
+    """The documents panel beside a conversation, refreshed on its own. `archived_id`: an ended chat's, whose panel
+    shows the documents as they were."""
+    docs_url = (f"/fragment/docs/{q(name)}?" + (f"att={q(att)}" if att else f"list=1&dir={q(folder)}"
+                                                if (folder or listing_only) and not doc else f"doc={q(doc)}")
+                + (f"&id={q(archived_id)}" if archived_id else "") + (f"&sort={sort}" if sort else ""))
+    return h('<aside class="docs" id="docs" data-poll="{u}" data-every="1500" data-lazy="1" data-etag="{t}" '
+             'data-etag-url="{u}">{p}</aside>', u=docs_url, t=etag(str(panel).encode()), p=panel)
 
 
 def calendar_proposals_body(rows: list[dict]) -> Html:
