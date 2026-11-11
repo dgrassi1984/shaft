@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "c52807b94cd977b9",
+  "version": "4be271549e35e81e",
   "live": "",
   "reply": null,
   "chat": {
@@ -11,7 +11,7 @@
     "created": "2026-11-03T13:58:40+01:00",
     "ended": "2026-11-03T14:30:00+01:00"
   },
-  "archived": false,
+  "archived": true,
   "earlier": 0,
   "items": [
     {
@@ -221,5 +221,5 @@
   "last": "2026-11-03T14:13:00+01:00",
   "can_stop": false,
   "can_end": false,
-  "can_clear": true
+  "can_clear": false
 }

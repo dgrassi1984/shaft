@@ -139,19 +139,44 @@ console.log(JSON.stringify(sent));
 
 @unittest.skipUnless(NODE, "node is not installed")
 class SeenMarksTest(unittest.TestCase):
-    def test_a_mark_from_before_threads_counts_for_every_thread_until_each_is_seen(self):
-        script = function("seenAt") + function("seenMark") + r"""
+    def test_server_marks_decide_thread_and_instance_unread(self):
+        """Since 2026-11-11 Main and threads share server read marks across devices, replacing local comparisons."""
+        script = function("markRail") + r"""
 const assert = require("node:assert/strict");
-const seen = { wisp: "2026-10-20T10:00:00" };
-assert.equal(seenAt(seen, "wisp", "web-a"), "2026-10-20T10:00:00");
-seenMark(seen, "wisp", "web-a", "2026-10-20T11:00:00");
-assert.deepEqual(seen.wisp, { "*": "2026-10-20T10:00:00", "web-a": "2026-10-20T11:00:00" });
-assert.equal(seenAt(seen, "wisp", "web-a"), "2026-10-20T11:00:00");
-assert.equal(seenAt(seen, "wisp", "from"), "2026-10-20T10:00:00");
-assert.equal(seenAt(seen, "kiln", "web-k"), "");
-seenMark(seen, "kiln", "from", "2026-10-20T12:00:00");
-assert.deepEqual(seen.kiln, { from: "2026-10-20T12:00:00" });
+const row = (dataset, unread) => ({dataset, unread, classList: {
+  toggle(name, on) { assert.equal(name, "unread"); this.owner.unread = on; }
+}});
+const main = row({seenKey: "from", unread: "1", last: "2026-10-20T10:00:00"}, false);
+const thread = row({seenKey: "web-a", unread: "0", last: "2099-01-01T00:00:00"}, true);
+const instance = row({inst: "wisp", unread: "1"}, false);
+for (const a of [main, thread, instance]) a.classList.owner = a;
+let migrated = 0, news;
+const rail = {querySelectorAll(q) {
+  if (q === "a[data-seen-key]") return [main, thread];
+  if (q === "a[data-inst]") return [instance];
+  if (q === "a[data-inst].unread") return instance.unread ? [instance] : [];
+  throw Error(q);
+}};
+const migrateSeen = r => { assert.equal(r, rail); migrated++; };
+const document = {title: "SHAFT", querySelectorAll: () => [{classList: {
+  toggle(name, on) { assert.equal(name, "news"); news = on; }
+}}]};
+const navigator = {};
+markRail(rail);
+assert.equal(main.unread, true);
+assert.equal(thread.unread, false);
+assert.equal(instance.unread, true);
+assert.equal(news, true);
+assert.equal(document.title, "(1) SHAFT");
+main.dataset.unread = instance.dataset.unread = "0";
+thread.dataset.unread = "1";
+markRail(rail);
+assert.equal(main.unread, false);
+assert.equal(thread.unread, true);
+assert.equal(instance.unread, false);
+assert.equal(news, false);
+assert.equal(document.title, "SHAFT");
+assert.equal(migrated, 2);
 """
         out = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("function seenAt", JS)

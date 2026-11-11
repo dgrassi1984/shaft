@@ -474,8 +474,8 @@ class FeedTest(AppTest):
 
     def test_the_json_and_the_html_show_the_same_items_with_the_same_keys(self):
         self.rich_chat(pending_edits={"ledger.md": {"old": "a", "new": "b"}})
-        feed = self.get("/app/v1/chat/wisp")
-        html = self.html()
+        feed = self.get(f"/app/v1/chat/wisp/{CID}")
+        html = self.html(f"?id={CID}")
         self.assertEqual(html_keys(html), json_keys(feed))
         self.assertEqual([i["type"] for i in feed["items"]],
                          ["user", "assistant", "sent", "later", "retried", "user", "user", "assistant"])
@@ -492,8 +492,8 @@ class FeedTest(AppTest):
                        queued=[{"role": "user", "mid": "q-1", "shown": "and then", "content": "and then",
                                 "attachments": [{"name": "x.png", "path": "p", "bytes": 3}]}],
                        pending_feedback=[{"id": "f-" + "a" * 24, "note": "n"}])
-        feed = self.get("/app/v1/chat/wisp")
-        html = self.html()
+        feed = self.get(f"/app/v1/chat/wisp/{CID}")
+        html = self.html(f"?id={CID}")
         self.assertEqual(html_keys(html), json_keys(feed))
         self.assertEqual(json_keys(feed)[-2:], ["queue-q-1", "queue-feedback-f-" + "a" * 24])
         self.assertIn('data-k="live"', html)
@@ -518,22 +518,23 @@ class FeedTest(AppTest):
         turns = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-03T{10 + k // 60:02d}:{k % 60:02d}:00", f"t{k}",
                       shown=f"t{k}") for k in range(90)]
         self.chat(turns)
-        feed = self.get("/app/v1/chat/wisp")
+        feed = self.get(f"/app/v1/chat/wisp/{CID}")
         self.assertEqual((feed["earlier"], feed["items"][0]["key"]), (10, "u10"))
-        html = self.html()
+        html = self.html(f"?id={CID}")
         self.assertIn("Show the 10 earlier messages", html)
         self.assertEqual(html_keys(html), json_keys(feed))
-        whole = self.get("/app/v1/chat/wisp?all=1")
+        whole = self.get(f"/app/v1/chat/wisp/{CID}?all=1")
         self.assertEqual((whole["earlier"], len(whole["items"])), (0, 90))
-        self.assertEqual(html_keys(self.html("?all=1")), json_keys(whole))
+        self.assertEqual(html_keys(self.html(f"?id={CID}&all=1")), json_keys(whole))
         self.assertEqual(whole["version"], feed["version"])      # the window changes neither revision
 
-    def test_no_chat_shows_what_the_instance_sent_since(self):
-        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wisp.md", "Unread", read=False)
+    def test_main_without_a_record_shows_what_the_instance_sent(self):
+        """Since 2026-11-11 an untargeted feed is Main, even before its first conversation turn."""
+        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wisp.md", "Unread", read=False, talk=None)
         feed = self.get("/app/v1/chat/wisp")
         self.assertIsNone(feed["chat"])
         self.assertEqual([i["type"] for i in feed["items"]], ["sent"])
-        self.assertEqual(html_keys(self.html()), json_keys(feed))
+        self.assertEqual(html_keys(self.html("")), json_keys(feed))
 
     def test_times_carry_the_offset_in_effect_then(self):
         with mock.patch.dict(os.environ, {"TZ": "Europe/Rome"}):
@@ -552,7 +553,7 @@ class FeedTest(AppTest):
         f.parent.mkdir(parents=True)
         f.write_bytes(PNG)
         self.rich_chat()
-        att = self.get("/app/v1/chat/wisp")["items"][0]["attachments"][0]
+        att = self.get(f"/app/v1/chat/wisp/{CID}")["items"][0]["attachments"][0]
         self.assertEqual(att, {"name": "ci-run.png", "bytes": 72, "image": True, "text": False,
                                "url": f"/app/v1/file/chat/{CID}/0/0"})
         r = self.api(att["url"])
@@ -562,7 +563,7 @@ class FeedTest(AppTest):
         (self.inst / "wisp" / "b.csv").write_text("a,b\n")
         self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wisp.md", "csv", read=True,
                      attachments=[{"name": "b.csv", "path": "instances/wisp/b.csv", "bytes": 4}])
-        sent = next(i for i in self.get("/app/v1/chat/wisp")["items"] if i.get("file") == "20261103-140230-1-from-wisp.md")
+        sent = next(i for i in self.get(f"/app/v1/chat/wisp/{CID}")["items"] if i.get("file") == "20261103-140230-1-from-wisp.md")
         self.assertEqual(sent["attachments"][0]["url"], "/app/v1/file/message/20261103-140230-1-from-wisp.md/0")
         r = self.api(sent["attachments"][0]["url"])
         self.assertEqual((r.status, r.body), (200, b"a,b\n"))
@@ -580,14 +581,14 @@ class LongPollTest(AppTest):
     def test_held_poll_without_at_does_not_undo_away(self):
         """A held poll without at re-marked watching after away and suppressed native push."""
         self.chat([turn("assistant", "2026-11-03T14:00:00", "hello")])
-        first = self.get("/app/v1/chat/wisp")
+        first = self.get(f"/app/v1/chat/wisp/{CID}")
         for at in (None, 100):
             with self.subTest(at=at):
                 clock, observed = [0.0], []
                 def wait(seconds):
                     if not observed:
-                        observed.append(web_chat.watchers("wisp"))
-                        self.assertEqual(self.api("/app/v1/chat/wisp/away", "POST", {"at": 200}).status, 200)
+                        observed.append(web_chat.watchers("wisp", cid=CID))
+                        self.assertEqual(self.api("/app/v1/chat/wisp/away", "POST", {"at": 200, "cid": CID}).status, 200)
                     clock[0] += seconds
                 web_chat._away.clear()
                 with mock.patch.object(app_api.time, "monotonic", side_effect=lambda: clock[0]), \
@@ -596,16 +597,16 @@ class LongPollTest(AppTest):
                     status, body, _ = self.feed(since=first["version"], live=first["live"], wait=4, **q)
                     self.assertEqual((status, body), (304, None))
                     self.assertEqual(observed, [{self.device}])
-                    self.assertEqual(web_chat.watchers("wisp"), set())
+                    self.assertEqual(web_chat.watchers("wisp", cid=CID), set())
 
     def feed(self, **q) -> tuple[int, dict | None, float]:
         start = time.monotonic()
-        r = self.api("/app/v1/chat/wisp?" + urllib.parse.urlencode(q))
+        r = self.api(f"/app/v1/chat/wisp/{CID}?" + urllib.parse.urlencode(q))
         return r.status, (json.loads(r.body) if r.body else None), time.monotonic() - start
 
     def test_nothing_new_answers_304_after_wait(self):
         self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
-        first = self.get("/app/v1/chat/wisp")
+        first = self.get(f"/app/v1/chat/wisp/{CID}")
         status, body, took = self.feed(since=first["version"], live=first["live"], wait=1)
         self.assertEqual((status, body), (304, None))
         self.assertGreaterEqual(took, 0.9)
@@ -613,7 +614,7 @@ class LongPollTest(AppTest):
 
     def test_a_new_turn_answers_at_once_with_the_whole_feed(self):
         chat = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
-        first = self.get("/app/v1/chat/wisp")
+        first = self.get(f"/app/v1/chat/wisp/{CID}")
 
         def later():
             time.sleep(0.3)
@@ -630,7 +631,7 @@ class LongPollTest(AppTest):
     def test_only_the_reply_moving_answers_partial(self):
         chat = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")], state="replying",
                          reply={"started": "2026-11-03T13:58:41", "activity": ["one"], "answer": ""})
-        first = self.get("/app/v1/chat/wisp")
+        first = self.get(f"/app/v1/chat/wisp/{CID}")
         self.assertTrue(first["live"])
 
         def later():
@@ -646,23 +647,23 @@ class LongPollTest(AppTest):
         self.assertNotEqual(body["live"], first["live"])
 
     def test_since_without_live_and_a_wait_out_of_range_are_bad_requests(self):
-        self.error(self.api("/app/v1/chat/wisp?since=abc"), 400, "bad_request")
-        self.error(self.api("/app/v1/chat/wisp?wait=26"), 400, "bad_request")
-        self.error(self.api("/app/v1/chat/wisp?wait=x"), 400, "bad_request")
+        self.error(self.api(f"/app/v1/chat/wisp/{CID}?since=abc"), 400, "bad_request")
+        self.error(self.api(f"/app/v1/chat/wisp/{CID}?wait=26"), 400, "bad_request")
+        self.error(self.api(f"/app/v1/chat/wisp/{CID}?wait=x"), 400, "bad_request")
 
     def test_a_held_poll_marks_the_device_watching_and_watch_0_does_not(self):
         self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
-        self.get("/app/v1/chat/wisp")
-        self.assertIn(self.device, web_chat.watchers("wisp"))
-        self.get("/app/v1/chat/wisp?watch=0")
-        self.assertNotIn(self.device, web_chat.watchers("wisp"))
-        self.get(f"/app/v1/chat/wisp/{CID}")                    # an explicit open thread is on screen too
-        self.assertIn(self.device, web_chat.watchers("wisp"))
-        self.get("/app/v1/chat/wisp?at=2000")
-        self.assertEqual(self.get("/app/v1/chat/wisp/away", method="POST", data={"at": 3000}), {"ok": True})
-        self.assertNotIn(self.device, web_chat.watchers("wisp"))
-        self.get("/app/v1/chat/wisp?at=2500")                  # sent before it went away: not watching again
-        self.assertNotIn(self.device, web_chat.watchers("wisp"))
+        self.get(f"/app/v1/chat/wisp/{CID}")
+        self.assertIn(self.device, web_chat.watchers("wisp", cid=CID))
+        self.get(f"/app/v1/chat/wisp/{CID}?watch=0")
+        self.assertNotIn(self.device, web_chat.watchers("wisp", cid=CID))
+        self.get(f"/app/v1/chat/wisp/{CID}")                    # another poll renews the same thread
+        self.assertIn(self.device, web_chat.watchers("wisp", cid=CID))
+        self.get(f"/app/v1/chat/wisp/{CID}?at=2000")
+        self.assertEqual(self.get("/app/v1/chat/wisp/away", method="POST", data={"at": 3000, "cid": CID}), {"ok": True})
+        self.assertNotIn(self.device, web_chat.watchers("wisp", cid=CID))
+        self.get(f"/app/v1/chat/wisp/{CID}?at=2500")                  # sent before it went away: not watching again
+        self.assertNotIn(self.device, web_chat.watchers("wisp", cid=CID))
 
 
 # -- sending (§6) and the chat's actions (§7) ----------------------------------------------------------------------------
@@ -697,18 +698,18 @@ class SendTest(AppTest):
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["instance"], rows[0]["key"], rows[0]["in_reply_to"]),
                          ("wisp", "send:wisp:cross-route", "stable.md"))
-        self.assertEqual(len(web_chat.load(chat_id)["turns"]), 1)
+        self.assertEqual(len(web_chat.target("wisp", chat_id, writing=False)["turns"]), 1)
 
     def test_absent_or_invalid_reply_identity_does_not_change_the_turn(self):
         self.message(datetime.now().isoformat(), "other.md", "Hi", frm="other")
         for target in (None, "", "unknown.md", "../stable.md", "other.md", "x" * 256, "bad\nname"):
             with self.subTest(target=target), mock.patch.object(core, "log") as log:
                 self.chat([])
-                r = self.send(mid="same", text="Yes", in_reply_to=target)
+                r = self.send(mid="same", text="Yes", in_reply_to=target, cid=CID)
                 self.assertEqual(r.status, 200, r.body)
                 self.assertFalse((self.sup / "reply-links.jsonl").exists())
                 self.assertEqual(log.call_count, int(target is not None))
-                chat = web_chat.load(json.loads(r.body)["chat"])
+                chat = web_chat.target("wisp", json.loads(r.body)["chat"], writing=False)
                 self.assertEqual(chat["turns"][0]["shown"], "Yes")
                 self.assertNotIn("in_reply_to", chat["turns"][0])
 
@@ -762,7 +763,7 @@ class SendTest(AppTest):
         r = self.send(text="hello", mid="m-1")
         got = json.loads(r.body)
         self.assertEqual((r.status, got["said"], got["file"]), (200, "sent to wisp", None))
-        chat = web_chat.load(got["chat"])
+        chat = web_chat.target("wisp", got["chat"], writing=False)
         for mode in ("now", "queue", "background"):
             again = json.loads(self.send(mode, text="hello", mid="m-1").body)
             self.assertIn("already sent to wisp", again["said"])
@@ -770,11 +771,13 @@ class SendTest(AppTest):
         self.assertEqual(list((self.inst / "wisp" / "inbox").iterdir()), [])
         self.assertIn("m-1", self.get("/app/v1/chat/wisp")["mids"])
 
-    def test_next_cycle_goes_to_its_inbox(self):
+    def test_next_cycle_goes_to_its_inbox_and_appears_in_main(self):
+        """Since 2026-11-11 the untargeted feed is Main and includes next-cycle messages."""
         got = json.loads(self.send("background", text="later please", mid="m-2").body)
         self.assertEqual((got["said"], got["chat"]), (NEXT, None))
         self.assertTrue((self.inst / "wisp" / "inbox" / got["file"]).is_file())
-        self.assertFalse([i for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "later"])
+        self.assertEqual([i["file"] for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "later"],
+                         [got["file"]])
         later = [i for i in web_chat.from_feed("wisp")["items"] if i["type"] == "later"]
         self.assertEqual([(i["file"], i["mid"], i["text"]) for i in later], [(got["file"], "m-2", "later please")])
 
@@ -790,7 +793,7 @@ class SendTest(AppTest):
         r = self.send(text="Rerun it", mid="m-3",
                       quotes=json.dumps([{"quote": "Keep the lines?", "answer": "Yes", "doc": ""}]))
         self.assertEqual(r.status, 200, r.body)
-        chat = web_chat.load(json.loads(r.body)["chat"])
+        chat = web_chat.target("wisp", json.loads(r.body)["chat"], writing=False)
         self.assertEqual(chat["turns"][-1]["shown"], "Rerun it\n\n> Keep the lines?\n\nYes")
 
     def test_bad_sends_are_refused(self):
@@ -808,11 +811,11 @@ class SendTest(AppTest):
         self.chat([turn("user", "2026-11-03T13:58:40", "ask", shown="ask"),
                    turn("assistant", "2026-11-03T13:59:00", "", note="error: CloudError: OpenRouter HTTP 502",
                         note_kind="model", note_retry=True, retry_text="ask")])
-        failure = self.get("/app/v1/chat/wisp")["items"][-1]["failure"]
+        failure = self.get(f"/app/v1/chat/wisp/{CID}")["items"][-1]["failure"]
         self.assertEqual(failure["retry"], {"text": "ask", "retry_of": 1, "confirm": None})
-        r = self.send(text=failure["retry"]["text"], mid="m-4", retry_of=str(failure["retry"]["retry_of"]))
+        r = self.send(text=failure["retry"]["text"], mid="m-4", retry_of=str(failure["retry"]["retry_of"]), cid=CID)
         self.assertEqual(r.status, 200, r.body)
-        types = [i["type"] for i in self.get("/app/v1/chat/wisp")["items"]]
+        types = [i["type"] for i in self.get(f"/app/v1/chat/wisp/{CID}")["items"]]
         self.assertEqual(types, ["retried", "user"])
 
     def test_web_thread_actions_and_composer_keep_the_named_thread(self):
@@ -820,13 +823,14 @@ class SendTest(AppTest):
         headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)}
         response = self.req("/chat/wisp/new", "POST", body=b"title=Ledger", headers=headers, cookie=cookie)
         self.assertEqual(response.status, 200, response.body)
-        a = web_chat.target("wisp", "", writing=False)["id"]
+        a = web_chat.threads("wisp")[0]["id"]
         self.assertIn(f'data-cid="{a}"'.encode(), response.body)
         self.assertNotIn("HX-Redirect", response.headers)
         b = web_chat.new_thread("wisp", "operator")
         b["created"] = "2099-01-01T00:00:00"
         web_chat.save(b)
-        self.assertEqual(web_chat.target("wisp", "", writing=False)["id"], b["id"])
+        self.assertIsNone(web_chat.target("wisp", "", writing=False))
+        self.assertEqual(web_chat.target("wisp", b["id"], writing=False)["id"], b["id"])
         page = self.req(f"/i/wisp/chat?id={a}", cookie=cookie).body.decode()
         composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
         self.assertIn(f'name="cid" value="{a}"', composer)
@@ -881,7 +885,7 @@ class SendTest(AppTest):
                    turn("assistant", "2026-11-03T13:59:00", "hello")], state="replying",
                   reply={"started": "2026-11-03T13:59:01", "activity": [], "answer": ""},
                   queued=[{"role": "user", "mid": "q-1", "shown": "x", "content": "x", "attachments": []}])
-        self.assertEqual(self.get("/app/v1/chat/wisp/unqueue", method="POST", data={"mid": "q-1"})["said"],
+        self.assertEqual(self.get("/app/v1/chat/wisp/unqueue", method="POST", data={"mid": "q-1", "cid": CID})["said"],
                          "queued message cancelled")
         self.assertEqual(web_chat.load(CID)["queued"], [])
         self.error(self.api("/app/v1/chat/wisp/stop", "POST", {"cid": CID}), 409, "refused")       # no relay runs
@@ -925,21 +929,21 @@ class SeenTest(AppTest):
                 self.c["turns"].append(turn("assistant", "2026-11-03T14:00:00", "another answer"))
                 web_chat.save(self.c)
             else:
-                self.message("2026-11-03T14:00:00", f"same-second-{len(messages.history())}.md", "another message")
+                self.message("2026-11-03T14:00:00", f"same-second-{len(messages.history())}.md", "another message", talk=None)
             self.assertEqual(self.rail(), (True, 1))
             self.assertEqual(web_seen.badge(self.device), 1)
             self.assertEqual(web_chat.feed("wisp")["last"], web_chat.summary("wisp", messages.history())["last"])
         # Old seen.json entries still use their stamp; a later second remains unread.
         web._write(web_seen.STORE, {self.device: {"wisp": {"last": "2026-11-03T14:00:00"}}})
         self.assertEqual(self.rail(), (False, 0))
-        self.message("2026-11-03T14:00:01", "later.md", "later")
+        self.message("2026-11-03T14:00:01", "later.md", "later", talk=None)
         self.assertEqual(self.rail(), (True, 1))
 
     def setUp(self):
         super().setUp()
         self.paired_since("2026-11-03T12:00:00")
         self.c = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi"),
-                            turn("assistant", "2026-11-03T14:00:00", "hello")])
+                            turn("assistant", "2026-11-03T14:00:00", "hello")], kind="from")
 
     def rail(self) -> tuple[bool, int]:
         got = self.get("/app/v1/instances")
@@ -955,7 +959,7 @@ class SeenTest(AppTest):
         self.c["turns"].append(turn("user", "2026-11-03T14:05:00", "thanks", shown="thanks"))     # the operator's own
         web_chat.save(self.c)
         self.assertEqual(self.rail(), (False, 0))
-        self.message("2026-11-03T14:06:00", "20261103-140600-1-from-wisp.md", "One more thing")     # the instance's
+        self.message("2026-11-03T14:06:00", "20261103-140600-1-from-wisp.md", "One more thing", talk=None)     # the instance's
         self.assertEqual(self.rail(), (True, 1))
 
     def test_a_stale_version_is_refused_with_the_current_one(self):
@@ -972,7 +976,7 @@ class SeenTest(AppTest):
         self.assertEqual(self.rail(), (False, 0))
 
     def test_the_rail_and_the_feed_take_last_from_one_helper(self):
-        self.message("2026-11-03T14:03:00", "20261103-140300-1-from-wisp.md", "a message after the answer")
+        self.message("2026-11-03T14:03:00", "20261103-140300-1-from-wisp.md", "a message after the answer", talk=None)
         self.message("2026-11-03T14:04:00", "20261103-140400-1-from-operator.md", "mine, for its next cycle",
                      frm="operator", to="wisp", via=messages.BACKGROUND)
         last = web_chat.summary("wisp", messages.history())["last"]
@@ -989,11 +993,11 @@ class FeedbackTest(AppTest):
         got = self.get("/app/v1/feedback/wisp", method="POST",
                        data={"op": "rate", "kind": "chat", "cid": CID, "k": 1, "thumb": "down", "reason": "wrong"})
         fid = got["id"]
-        rating = self.get("/app/v1/chat/wisp")["items"][-1]["rating"]
+        rating = self.get(f"/app/v1/chat/wisp/{CID}")["items"][-1]["rating"]
         self.assertEqual(rating, {"id": fid, "thumb": "down", "reason": "wrong", "sent": None, "pending": False})
         got = self.get("/app/v1/feedback/wisp", method="POST", data={"op": "send", "id": fid})
         self.assertEqual(got, {"said": "Feedback goes with your next message.", "id": fid})
-        feed = self.get("/app/v1/chat/wisp")
+        feed = self.get(f"/app/v1/chat/wisp/{CID}")
         self.assertTrue(feed["items"][-1]["rating"]["pending"])
         self.assertEqual([p["id"] for p in feed["pending_feedback"]], [fid])
         self.assertEqual(self.get("/app/v1/feedback/wisp", method="POST", data={"op": "clear", "id": fid}),
@@ -1016,7 +1020,7 @@ class DocsTest(AppTest):
         sha = self.doc("ledger.md", "# Ledger\n")
         self.doc("big.md", "x" * (docs.MAX_BYTES + 1))
         self.chat([turn("assistant", "2026-11-03T14:01:12", "made", docs=[{"path": "ledger.md", "created": True}])])
-        listing = self.get("/app/v1/docs/wisp")
+        listing = self.get(f"/app/v1/docs/wisp?cid={CID}")
         self.assertEqual((listing["dir"], listing["max_bytes"]), ("notes/docs", 262144))
         rows = {d["path"]: d for d in listing["docs"]}
         self.assertEqual((rows["ledger.md"]["sha"], rows["ledger.md"]["in_chat"], rows["ledger.md"]["too_big"]),
@@ -1192,7 +1196,7 @@ class FixturesTest(AppTest):
         # idle: a plain answered chat
         idle = self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "October is done: 214 accounts.",
                                        activity=["run report --month 2026-10"])], mids=mids)
-        self.keep("idle", self.get("/app/v1/chat/wisp"))
+        self.keep("idle", self.get(f"/app/v1/chat/wisp/{CID}"))
         # failed: the contract's failed reply with a safe Retry, a stopped one and an unsafe one
         failed = turns + [
             turn("assistant", "2026-11-03T14:06:40", "", note="error: CloudError: OpenRouter HTTP 502 (tools_ran=false)",
@@ -1204,25 +1208,25 @@ class FixturesTest(AppTest):
             turn("assistant", "2026-11-03T14:08:20", "", note="stopped by you", note_kind="stopped"),
         ]
         self.chat(failed, mids=mids)
-        self.keep("failed", self.get("/app/v1/chat/wisp"))
+        self.keep("failed", self.get(f"/app/v1/chat/wisp/{CID}"))
         # live, then a partial when only the reply moved; queued while it runs
         live = self.chat(turns, state="replying", mids=mids,
                          reply={"started": "2026-11-03T14:07:02", "activity": ["read_file notes/docs/ledger.md",
                                                                                  "run report --month 2026-10"],
                                 "answer": "October's report is running; so far"})
-        first = self.get("/app/v1/chat/wisp")
+        first = self.get(f"/app/v1/chat/wisp/{CID}")
         self.keep("live", first)
         live["reply"].update(activity=live["reply"]["activity"] + ["write notes/docs/october.md"],
                              answer="October's report is running; so far 214 accounts reconciled.")
         web_chat.save(live)
-        self.keep("live-partial", self.get(f"/app/v1/chat/wisp?since={first['version']}&live={first['live']}&wait=0"))
+        self.keep("live-partial", self.get(f"/app/v1/chat/wisp/{CID}?since={first['version']}&live={first['live']}&wait=0"))
         live["queued"] = [{"role": "user", "content": "And send me the totals.", "shown": "And send me the totals.",
                            "mid": "9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f", "attachments": [
                                {"name": "totals.csv", "path": "instances/wisp/attachments/from-operator/y/totals.csv",
                                 "bytes": 1200}]}]
         live["mids"] = mids + ["9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f"]
         web_chat.save(live)
-        self.keep("queued", self.get("/app/v1/chat/wisp"))
+        self.keep("queued", self.get(f"/app/v1/chat/wisp/{CID}"))
         # quotes: several Reply cards, one from a document, made into the text on the server
         self.chat([turn("user", "2026-11-03T14:10:00", "...", mid="c1a2b3c4-0000-4000-8000-000000000001",
                         shown=app_api.quote_text("Thanks.", [
@@ -1230,7 +1234,7 @@ class FixturesTest(AppTest):
                              "doc": ""},
                             {"quote": "Net daily totals are rounded once,\nat the end.", "answer": "Per account.",
                              "doc": "ledger.md"}]))])
-        self.keep("quotes", self.get("/app/v1/chat/wisp"))
+        self.keep("quotes", self.get(f"/app/v1/chat/wisp/{CID}"))
         # attachments both ways
         self.message("2026-11-03T14:11:00", "20261103-141100-000001-from-wisp.md", "The chart and the data.",
                      attachments=[{"name": "chart.png", "path": "instances/wisp/out/chart.png", "bytes": 20480},
@@ -1239,7 +1243,7 @@ class FixturesTest(AppTest):
         self.chat([turn("user", "2026-11-03T14:10:30", "...", shown="Two files.", mid="c1a2b3c4-0000-4000-8000-000000000002",
                         attachments=[{"name": "ci-run.png", "path": "instances/wisp/a/ci-run.png", "bytes": 48213},
                                      {"name": "notes.md", "path": "instances/wisp/a/notes.md", "bytes": 300}])])
-        self.keep("attachments", self.get("/app/v1/chat/wisp"))
+        self.keep("attachments", self.get(f"/app/v1/chat/wisp/{CID}"))
         # sent: what it sent (a message, an answered question), what was left for its next cycle
         self.message("2026-11-03T14:12:00", "20261103-141200-000001-from-wisp.md", "Answered question?",
                       kind="question", read=True)
@@ -1247,7 +1251,7 @@ class FixturesTest(AppTest):
         self.message("2026-11-03T14:13:00", "20261103-141300-000001-from-wisp.md", "March reconciles: 3 lines moved.",
                      talk=None, thread=CID)
         self.chat([turn("user", "2026-11-03T14:01:00", "hi", shown="hi")])
-        self.keep("sent", self.get("/app/v1/chat/wisp"))
+        self.keep("sent", self.get(f"/app/v1/chat/wisp/{CID}"))
         # from: an answer for a thread that had ended shows in From, linked to it (re)
         self.chat([turn("user", "2026-11-03T09:00:00", "Check the fees", shown="Check the fees")],
                   state="ended", cid="web-00000000000000e1", created="2026-11-03T09:00:00", title="Fees",
@@ -1263,11 +1267,12 @@ class FixturesTest(AppTest):
         self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "September's report."),
                            turn("user", "2026-11-03T14:20:00", "...", shown="", feedback=["f-333333333333333333333333"])],
                   mids=mids, pending_feedback=[{"id": "f-111111111111111111111111", "note": "n"}])
-        self.keep("feedback", self.get("/app/v1/chat/wisp"))
+        self.keep("feedback", self.get(f"/app/v1/chat/wisp/{CID}"))
+        # Since 2026-11-11 every ended thread is archived, including the last active one; it cannot be cleared.
         # ended, and earlier: a long chat's window
         self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "Done.")], state="ended", ended="2026-11-03T14:30:00",
                   mids=mids)
-        self.keep("ended", self.get("/app/v1/chat/wisp"))
+        self.keep("ended", self.get(f"/app/v1/chat/wisp/{CID}"))
         self.keep("chats", self.get("/app/v1/chats/wisp"))
         many = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-02T{9 + k // 60:02d}:{k % 60:02d}:00",
                      f"Answer {k}." if k % 2 else "", shown=f"Message {k}.") for k in range(84)]
@@ -1303,8 +1308,8 @@ class FixturesTest(AppTest):
                         "ts": "2026-11-03T12:30:00", "sent": "inbox/20261103-123000-1-from-operator.md"}]}}}
         (self.sup / "web" / "comments").mkdir(parents=True, exist_ok=True)
         (self.sup / "web" / "comments" / "wisp.json").write_text(json.dumps(store))
-        self.keep("docs", self.get("/app/v1/docs/wisp"))
-        self.keep("doc-comments", self.get("/app/v1/docs/wisp/doc?path=ledger.md"))
+        self.keep("docs", self.get(f"/app/v1/docs/wisp?cid={CID}"))
+        self.keep("doc-comments", self.get(f"/app/v1/docs/wisp/doc?path=ledger.md&cid={CID}"))
         webpush._save_queue({self.device: {"pending": [
             {"title": "wisp replied", "body": "Done.", "url": "/i/wisp/chat", "tag": "wisp", "at": time.time()},
             {"title": "wisp asks", "body": "Should the nightly report keep the per-account lines?",
@@ -1316,14 +1321,14 @@ class FixturesTest(AppTest):
                 mock.patch.object(web.secrets, "token_urlsafe", return_value="fixture-secret"):
             self.keep("pair", self.get("/app/v1/pair", method="POST", bearer=False,
                                        data={"link": link, "platform": "ios"}))
-        self.keep("send", json.loads(self.send(text="Fixture message.").body))
+        self.keep("send", json.loads(self.send(text="Fixture message.", cid=CID).body))
         with mock.patch.object(feedback.secrets, "token_hex", return_value="0" * 24):
             self.keep("feedback-response", self.get("/app/v1/feedback/wisp", method="POST",
                       data={"op": "rate", "kind": "chat", "cid": CID, "k": 1, "thumb": "up"}))
         self.chat([turn("user", "2026-11-03T14:05:50", "Again.", shown="Again.", retried=True),
                    turn("assistant", "2026-11-03T14:06:40", "", retried=True),
                    turn("user", "2026-11-03T14:07:02", "Again.", shown="Again.")])
-        self.keep("retried", self.get("/app/v1/chat/wisp"))
+        self.keep("retried", self.get(f"/app/v1/chat/wisp/{CID}"))
         self.cycles_scenario()
         self.keep("plan", self.get("/app/v1/plan/wisp"))
         self.keep("cycles", self.get("/app/v1/cycles/wisp"))
@@ -1345,7 +1350,7 @@ class FixturesTest(AppTest):
                              ("draft", {"text": "It is sunny in Milan."}), ("step_end", {"answer": True})):
             relay.emit(kind, **fields)
         relay.close_stream("It is sunny in Milan.", None)
-        r = self.api("/app/v1/chat/wisp/stream")
+        r = self.api(f"/app/v1/chat/wisp/stream?cid={CID}")
         self.assertEqual(r.status, 200, r.body)
         raw = b"".join(r.stream).decode()
         return [json.loads(line[6:]) for line in raw.split("\n") if line.startswith("data: ")]
@@ -1369,7 +1374,7 @@ class FixturesTest(AppTest):
         p = self.inst / "wisp" / "notes" / "docs" / "huge.md"
         p.write_text("x" * (docs.MAX_BYTES + 1))
         grab("too_big", self.api("/app/v1/docs/wisp/doc?path=huge.md"))
-        grab("stale_version", self.api("/app/v1/chat/wisp/seen", "POST", {"version": feed["version"]}))
+        grab("stale_version", self.api("/app/v1/chat/wisp/seen", "POST", {"version": feed["version"], "cid": CID}))
         grab("not_replying", self.api("/app/v1/chat/wisp/stream"))
         out["too_large"] = {"status": 413, "body": json.loads(app_api.error(
             413, "too_large", f"Too large: at most {(messages.ATTACH_MAX_TOTAL + 1_000_000) // 1_000_000} MB can be "

@@ -165,22 +165,31 @@ class RecoveryTest(unittest.TestCase):
         self.assertIn("data-retry-confirm=", rendered)            # the restart may have cut it after tools ran
 
     def test_issue_11_end_requested_clear_retained_and_failures_preserved(self):
-        """Reverting #11 claims journal completion as soon as End is accepted, before recovery finishes."""
+        """Reverting #11 claims journal completion as soon as End is accepted, before recovery finishes.
+        Since 2026-11-11 shown() is Main; inspect this thread by id and clear only an open thread."""
         chat = self.chat()
         chat.update(state="idle", reply=None)
         web_chat.save(chat)
         with mock.patch.object(web_chat, "_post", return_value=(503, {"error": {"message": "unavailable"}})):
             with self.assertRaises(web_chat.Refused):
                 web_chat.clear("wisp", chat["id"])
-        self.assertEqual(web_chat.shown("wisp")["state"], "idle")
+        self.assertEqual(web_chat.load(chat["id"])["state"], "idle")
         with mock.patch.object(web_chat, "_post", return_value=(202, {"ended": "api-1"})):
             self.assertIn("journal write-up requested", web_chat.end(chat["id"]))
-        ended = web_chat.shown("wisp")
+        ended = web_chat.load(chat["id"])
         rendered = str(web_views.chat_feed("wisp", ended, []))
         self.assertIn("journal write-up requested", rendered)
         self.assertNotIn("written up in its journal", rendered)
         self.assertIn("original", rendered)
-        web_chat.clear("wisp", chat["id"])
+        with self.assertRaisesRegex(web_chat.Refused, "it is in Earlier chats"):
+            web_chat.clear("wisp", chat["id"])
+        open_chat = self.chat()
+        open_chat.update(state="idle", reply=None)
+        web_chat.save(open_chat)
+        with mock.patch.object(web_chat, "_post", return_value=(202, {"ended": "api-2"})):
+            web_chat.clear("wisp", open_chat["id"])
+        self.assertTrue(web_chat.load(open_chat["id"])["cleared"])
+        self.assertEqual(web_chat.load(open_chat["id"])["turns"], open_chat["turns"])
         self.assertIsNone(web_chat.shown("wisp"))
         self.assertEqual(web_chat.load(chat["id"])["turns"], chat["turns"])
 
