@@ -270,7 +270,8 @@ def _spec(name, description, properties, required=None):
 
 
 S = {"type": "string"}
-LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger"}   # record kind -> module
+LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger",
+                "predictions": "predictions"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -329,6 +330,26 @@ SPECS = {
                     "operator can too). choose=[] shows none.",
                     {"choose": {"type": "array", "items": {"type": "string"},
                                 "description": "gauge names from the menu; omit it to see the menu"}}, []),
+    "predict": _spec("predict", "Record a prediction and have the supervisor score it. It stamps the prediction with "
+                     "a time you cannot change and checks it at its due time; that is the one thing you cannot do "
+                     "for yourself. Predict anything your work turns on: what someone will answer, your next score "
+                     "on a task, what a source will say. To make one: text, due, how_to_check (how the outcome "
+                     "will be told from a tool result), and optionally subject (a short label to group them) and "
+                     "confidence (0-100). To report one at or after its due time: id, outcome ('held' or 'failed') "
+                     "and evidence ('<your cycle's time>#<step>': the tool call that shows the outcome). A judge "
+                     "then scores it from that tool result alone, not from what you said. One not reported within 48 "
+                     "hours of its due time is scored 'not checked'. record(kind='predictions') lists them; the "
+                     "results are in self/stats.md, per subject.",
+                     {"text": {"type": "string", "description": "the prediction, one checkable statement"},
+                      "due": {"type": "string", "description": "when it can be checked: YYYY-MM-DD HH:MM, from 1 hour "
+                                                               "to 90 days ahead"},
+                      "how_to_check": {"type": "string", "description": "what observation will settle it"},
+                      "subject": {"type": "string", "description": "optional short label, e.g. a person or 'battery'"},
+                      "confidence": {"type": "integer", "description": "optional: 0-100, how likely you think it is"},
+                      "id": {"type": "string", "description": "to report: the prediction's id (p3)"},
+                      "outcome": {"type": "string", "enum": ["held", "failed"], "description": "to report"},
+                      "evidence": {"type": "string", "description": "to report: '<cycle time>#<step>', e.g. "
+                                                                    "'2026-01-02 14:00#3'"}}, []),
     "nothing_to_do": _spec("nothing_to_do", "End this autonomous cycle as 'nothing worth a cycle': you looked and "
                            "nothing you could do now is worth doing. The supervisor records it as its own kind of "
                            "cycle: it is not judged and never counts as a failure, and you need not invent a goal. "
@@ -400,14 +421,15 @@ SPECS = {
         "file you ran or touched in many cycles, sequences you repeated, kinds of failed call that came back), "
         "'usage' (each of your plugins and skill files: when built, how often called or read in your cycles, when "
         "last), 'facts' (each fact in memory/facts.md: whether the log or page it cites shows it, and how many "
-        "later cycles restated it; `before` is not used, page with `offset`). "
+        "later cycles restated it; `before` is not used, page with `offset`), 'predictions' (the predictions you made "
+        "with predict: due time, status, and the judge's result and reason for the scored ones). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
                                                     "consults", "calendar", "gate", "expectations", "families", "habits",
-                                                    "usage", "facts"]},
+                                                    "usage", "facts", "predictions"]},
          "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
@@ -1873,6 +1895,31 @@ class Broker:
     def _sim_gauges(self) -> list[dict]:
         return []
 
+    def _predict(self, text: str = "", due: str = "", how_to_check: str = "", subject: str = "", confidence=None,
+                 id: str = "", outcome: str = "", evidence: str = "") -> str:   # noqa: A002
+        """A prediction recorded with the supervisor's time, or the outcome of one reported for scoring
+        (predictions.py). The time is never the caller's: nothing here takes one."""
+        from . import predictions
+        if id:
+            event = self._prediction_event(lambda every, now: predictions.reported(self.name, every, id, outcome,
+                                                                                   evidence, now), report=True)
+            return (f"reported {event['id']} as {event['outcome']}: the supervisor scores it from the tool call you "
+                    "cited, after this cycle; record(kind='predictions') shows the result")
+        event = self._prediction_event(lambda every, now: predictions.made(self.name, every, text, due, how_to_check,
+                                                                           subject, confidence, now), report=False)
+        return (f"recorded prediction {event['id']}, made {event['at'][:16].replace('T', ' ')}, due {event['due'][:16]}"
+                f". When it is due, report what happened: predict(id=\"{event['id']}\", outcome=\"held\" or "
+                "\"failed\", evidence=\"<cycle time>#<step>\")")
+
+    def _sim_predictions(self) -> list[dict]:
+        return []
+
+    def _prediction_event(self, build, report: bool) -> dict:
+        from . import predictions
+        if report:
+            return predictions.report_built(self.name, build)
+        return predictions.add_built(self.name, build)
+
     def _nothing_to_do(self, reason: str) -> str:
         """The instance ends its cycle as nothing worth one (idle.py): recorded as its own class, and the scheduler
         lets its next idle wake wait longer. Not honoured where it would hide work from the judge."""
@@ -2420,6 +2467,8 @@ class Broker:
             import importlib
             module = importlib.import_module(f".{LEDGER_KINDS[kind]}", __package__)
             more = {"offset": max(0, int(offset))} if kind == "facts" else {}
+            if kind == "predictions":
+                more = {"extra": self._sim_predictions()}
             text = module.record_text(self.name, limit=limit, as_of=self.as_of, **more)
         else:
             raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
@@ -3688,6 +3737,7 @@ class ReplayBroker(Broker):
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self.sim_withdrawn: set[str] = set()
         self.sim_gauges: list[dict] = []     # a choice of gauges made in this replay: seen by it, never written
+        self.sim_predictions: list[dict] = []   # predictions made or reported in this replay: likewise
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -4108,6 +4158,16 @@ class ReplayBroker(Broker):
 
     def _idle_exit(self, reason: str) -> None:
         self._tag("simulated: not recorded")   # answered as in a live cycle; no row, no change to the schedule
+
+    def _sim_predictions(self) -> list[dict]:
+        return self.sim_predictions
+
+    def _prediction_event(self, build, report: bool) -> dict:
+        from . import predictions   # validated as the real call at the replay's clock, kept for this replay, never
+        event = build(predictions.fold(self.name, as_of=self.as_of, extra=self.sim_predictions), self.as_of)   # written or scored
+        self.sim_predictions.append(event)
+        self._tag("simulated: not recorded")
+        return event
 
     def _gauges_chosen(self, names: list[str]) -> dict:
         from . import gauges   # answered as the real call, kept for the rest of this replay, nothing written

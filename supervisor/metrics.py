@@ -1856,7 +1856,8 @@ def _stats_text(name: str) -> str:
         achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
                            f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
     achieved[-1:-1] = ran_out_by_model(name, all_js)
-    lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _battery_section(name)
+    lines += achieved + _surprise_section(name) + _sections(name, ("tom",))
+    lines += _part_lines(name, "predictions", "stats_lines") + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -1906,6 +1907,16 @@ def _stats_text(name: str) -> str:
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
+
+
+def _part_lines(name: str, module: str, function: str, *args) -> list[str]:
+    """A ledger module's lines for the page; one that cannot be read costs only its own lines."""
+    import importlib
+    try:
+        return getattr(importlib.import_module(f".{module}", __package__), function)(name, *args)
+    except Exception as e:
+        log(f"{name}: stats part {module}.{function} failed: {type(e).__name__}: {e}")
+        return []
 
 
 # The self-knowledge sections, each from its own module. Each in its own try: a record one of them
@@ -2410,11 +2421,11 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    from . import claimlint, judge_probe, tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    from . import claimlint, judge_probe, predictions, tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
     # claim_lint: model-free checks of what the cycle claimed against its tool log, on every cycle, before the page
     # is written, so a finding stands at its head for the next cycle (not in a sampled verdict after the next sleep)
     for label, step in (("judge_pending", judge_pending), ("judge_catch", judge_probe.run), ("score_expectations", tom.score),
-                        ("claim_lint", claimlint.run),
+                        ("claim_lint", claimlint.run), ("score_predictions", predictions.score),
                         ("write_stats", write_stats), ("check_probation", check_probation)):
         try:
             done[label] = step(name)

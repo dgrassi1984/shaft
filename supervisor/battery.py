@@ -72,6 +72,7 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
             "withdraw_held", "record_order",   # keyed by the live instance's name: held changes and standing orders
+            "predict",                         # keyed by the live instance's name: its predictions ledger
             "nothing_to_do",                   # an exam is not a cycle: it must not slow the live instance's wakes
             "gauges",                          # likewise: an exam must not set the live instance's choice of gauges
             *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS, *GCHAT_TOOLS}   # the operator's mail, calendars, Drive and Google

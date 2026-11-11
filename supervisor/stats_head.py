@@ -135,12 +135,15 @@ def _part(name: str, label: str, build) -> list[str]:
 
 def head(name: str, now: datetime | None = None, save: bool = False) -> list[str]:
     """The head's lines ([] when there is nothing to say). `save`: keep the verdicts for the panel's alerts."""
-    from . import battery, claimlint, gauges
+    from . import battery, claimlint, gauges, predictions
     now = now or datetime.now()
     lines = _part(name, "gauges", lambda: gauges.head_lines(name, now))
     lint = _part(name, "claim lint", lambda: claimlint.head_lines(name, since=_last_sleep(name)))
     if lint:
         lines += ["## Claims my tool log did not show (checked on every cycle, since my last sleep)"] + lint + [""]
+    due = _part(name, "predictions due", lambda: predictions.due_lines(name, now))
+    if due:
+        lines += ["## Predictions of mine that are due"] + due + [""]
     found = _part(name, "verdicts", lambda: verdicts(name))
     if save:
         try:
