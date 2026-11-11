@@ -226,7 +226,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
         items.append(h('<section class="railinstance{selected}" data-order-id="{n}" data-name="{n}" data-title="{n}">'
                        '<div class="railrow instrow"><a href="/i/{n}/chat" class="inst{on}" data-inst="{n}" '
                        'data-last="{last}" data-unread="{unread}" data-unread-main="{main}" '
-                       'data-unread-threads="{count}" data-lasts="{lasts}"{cur}>{dot}'
+                       'data-unread-threads="{count}" data-lasts="{lasts}"{inventory}{cur}>{dot}'
                        '<span class="who" aria-hidden="true">{n}</span><span class="sr">{accessible}</span>'
                        '<time class="railtime" aria-hidden="true">{time}</time><span class="unread-dot" aria-hidden="true"></span><span class="threadcount" aria-hidden="true">{pill}</span>'
                        '<span class="last" aria-hidden="true">{line}</span></a>{disclosure}'
@@ -236,6 +236,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
                        notes=notes, n=n, selected=" selected-instance" if selected else "", on=" on" if selected and thread in ("from", "current") else "",
                        cur=Html(' aria-current="page"') if selected and thread in ("from", "current") else "",
                        last=c.get("from_last") or "", unread=int(any(unread.values())), main=int(main), count=count,
+                       inventory=Html(' data-inventory="1"') if "threads" in c else "",
                        lasts=json.dumps(lasts, separators=(",", ":")), time=(c.get("from_last") or "")[11:16], dot=dot, line=line, pill=count or "",
                        accessible=", ".join(x for x in [n, state, "unread" if main else ""] if x),
                        disclosure=disclosure, compose=icon("compose", 14), controls=_rail_controls(n), a=post_attrs("the chats"),

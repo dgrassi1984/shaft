@@ -43,7 +43,7 @@ const classes = (...initial) => {
 };
 // the instance (its data-lasts: each open thread's newest, and From's) and, under it, its threads
 const lasts = input.lasts || {current: latest};
-const link = {dataset: {inst: "wisp", last: latest, lasts: JSON.stringify(lasts)}, classList: classes("inst", "on")};
+const link = {dataset: {inst: "wisp", inventory: "1", last: latest, lasts: JSON.stringify(lasts)}, classList: classes("inst", "on")};
 const rows = Object.entries(lasts).map(([k, last]) =>
   ({dataset: {threadOf: "wisp", seenKey: k, last}, classList: classes("thread")}));
 if (input.stored !== undefined) stored = JSON.stringify(input.stored);
@@ -116,6 +116,10 @@ const check = unread => {
   await rail._tick();
   await drain();
   const key = input.key || "current";
+  if (input.expectedCount !== undefined) {
+    const seen = posts.find(m => m.key === key && m.last === latest);
+    assert.equal(seen?.count, String(input.expectedCount), 'POST includes only the rendered count');
+  }
   if (input.mode === "current") assert.equal(mark(server.wisp, key), latest, "initial loaded reply is seen");
   emit("shaft:swapped", {target: rail});
   if (input.mode === "current") {
@@ -178,6 +182,9 @@ class UnreadTest(unittest.TestCase):
             "mode": mode, "html": html, "newHtml": feed(), **extra,
         })], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_browser_posts_rendered_same_second_count(self):
+        self.run_page("current", feed() + feed(), expectedCount=2)
 
     def test_issue_28_config_keeps_reply_unread(self):
         """Reverting #28 consumes the unseen reply on Config through the active rail link."""

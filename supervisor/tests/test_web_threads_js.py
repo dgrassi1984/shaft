@@ -146,7 +146,7 @@ class SeenMarksTest(unittest.TestCase):
 const assert = require("node:assert/strict");
 let seenMigrating = false, removed = false; const posted = [];
 const localStorage = {getItem: () => JSON.stringify({example:"2026-10-20T10:00:00"}), removeItem: () => {removed=true;}};
-const rail = {querySelectorAll: () => [{dataset:{inst:"example",lasts:JSON.stringify({"web-a":"",from:""})}}]};
+const rail = {querySelectorAll: () => [{dataset:{inst:"example",inventory:"1",lasts:JSON.stringify({"web-a":"",from:""})}}]};
 const sendSeen = async mark => { posted.push(mark); return true; };
 ''' + re.search(r'^  async function migrateSeen\(.*?^  \}\n', JS, re.S | re.M)[0] + r'''
 (async () => {await migrateSeen(rail);

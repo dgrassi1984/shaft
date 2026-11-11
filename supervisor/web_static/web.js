@@ -1749,10 +1749,10 @@
   // Read marks belong to the operator. Browser storage is read only to migrate old marks.
   const seenSent = new Map(), seenPending = new Map(), seenInFlight = new Map();
   let seenPostTimer = null, seenMigrating = false;
-  function queueSeen(inst, key, last, signature = last) {
+  function queueSeen(inst, key, last, signature = last, count = 0) {
     const id = JSON.stringify([inst, key]);
     if (seenSent.get(id) === signature || seenInFlight.get(id) === signature) return;
-    seenPending.set(id, {inst, key, last, signature});
+    seenPending.set(id, {inst, key, last, signature, count});
     clearTimeout(seenPostTimer);
     seenPostTimer = setTimeout(flushSeen, 150);
   }
@@ -1761,7 +1761,7 @@
     try {
       const r = await fetch("/seen", {method: "POST", credentials: "same-origin", signal: ctl.signal,
         headers: {"X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded"},
-        body: new URLSearchParams({inst: mark.inst, key: mark.key, last: mark.last})});
+        body: new URLSearchParams({inst: mark.inst, key: mark.key, last: mark.last, count: mark.count || 0})});
       if (r.status === 404 && mark.migration) return true;  // an old instance or cleared thread
       if (pairAgain(r) || !r.ok) return false;
       const rail = document.querySelector("nav .rail");
@@ -1780,7 +1780,8 @@
     }));
   }
   async function migrateSeen(rail) {
-    if (seenMigrating) return;
+    const inventory = [...rail.querySelectorAll("a[data-inst]")];
+    if (seenMigrating || !inventory.length || inventory.some(a => a.dataset.inventory !== "1")) return;
     let stored;
     try { stored = localStorage.getItem("shaft.seen"); } catch (e) { return; }
     if (!stored) return;
@@ -1831,7 +1832,7 @@
       if (!mark || last > mark.last) visible.set(id, {inst, key, last, count: 1});
       else if (last === mark.last) mark.count++;
     });
-    visible.forEach(m => queueSeen(m.inst, m.key, m.last, `${m.last}:${m.count}`));
+    visible.forEach(m => queueSeen(m.inst, m.key, m.last, `${m.last}:${m.count}`, m.count));
   }
   const railCollapsed = new Map();
   let railNavigationExpanded = false, railEditing = false;
@@ -1848,13 +1849,15 @@
         catch (e) { /* no storage */ }
         railCollapsed.set(name, closed);
       }
-      if (!railNavigationExpanded && group.classList.contains("selected-instance")) railCollapsed.set(name, false);
+      if (!railNavigationExpanded && group.classList.contains("selected-instance")) {
+        railCollapsed.set(name, false);
+        railNavigationExpanded = true;
+      }
       const closed = railCollapsed.get(name);
       group.querySelector(".railthreads").hidden = closed;
       group.classList.toggle("collapsed", closed);
       button.setAttribute("aria-expanded", String(!closed));
     });
-    railNavigationExpanded = true;
   }
   function manageState(root) {
     root.querySelectorAll('details.manage').forEach(details => {

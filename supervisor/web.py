@@ -586,7 +586,13 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         if not key or not last:
             return _html(400, web_pages.h("<p>inst, key and last are required.</p>"))
-        if not web_seen.seen_until(dev, name, key, last):
+        try:
+            count = int(form.get("count", "0"))
+        except ValueError:
+            count = -1
+        if count < 0:
+            return _html(400, web_pages.h("<p>count must be a nonnegative integer.</p>"))
+        if not web_seen._seen_until(dev, name, key, last, count):
             return _not_found(req.path)
         return _html(200, web_pages.h("<p>Seen.</p>"))
     if req.path == "/unpair":
@@ -1166,7 +1172,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
     comment threads, which are in the fragment so a comment alone changes its ETag.
     att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview).
     folder (?dir=, a subfolder of notes/docs/): the list shows that folder; asking for one is asking for the list."""
-    from . import doc_comments, docs, web_views as v
+    from . import doc_comments, docs, web_chat, web_views as v
     if att:
         return "", v.attachment_panel(name, *_attachment_preview(name, att))
     marked = v.in_chat(chat)
@@ -1197,7 +1203,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
                              ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
                              thread=thread, archived=archived, folder=folder, sort=sort,
-                             chat_id=(chat or {}).get("id", "") if archived else "")
+                             chat_id=(chat or {}).get("id", "") if not web_chat.is_from(chat) else "")
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens

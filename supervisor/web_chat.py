@@ -258,16 +258,14 @@ _away: dict[tuple[str, str, str], float] = {}
 
 
 def watching(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     if at is not None and at <= _away.get((name, cid, device), float("-inf")):
         return
     _watched[(name, cid, device)] = time.monotonic()
 
 
 def unwatch(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     _watched.pop((name, cid, device), None)
     if at is not None:
         _away[(name, cid, device)] = max(at, _away.get((name, cid, device), float("-inf")))
@@ -275,8 +273,7 @@ def unwatch(name: str, device: str, at: float | None = None, cid: str | None = N
 
 def watchers(name: str, cid: str | None = None) -> set[str]:
     """Only devices looking at this thread suppress its push."""
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     now = time.monotonic()
     return {d for (n, c, d), at in list(_watched.items()) if n == name and c == cid and now - at < WATCH_S}
 

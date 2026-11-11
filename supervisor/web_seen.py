@@ -25,7 +25,12 @@ def _operator(data: dict) -> dict:
         for name, marks in (instances or {}).items():
             marks = marks or {}
             if "version" in marks or "last" in marks or "at" in marks:
-                chat = web_chat.shown(name)
+                chats = web_chat.chats(name)
+                opened = [c for c in chats if c.get("state") != "ended"]
+                def activity(c):
+                    turns = c.get("turns") or []
+                    return (turns[-1]["ts"] if turns else c.get("created", ""), c.get("created", ""))
+                chat = max(opened, key=activity) if opened else next(iter(chats), None)
                 marks = {"from": marks, **({web_chat.public_id(name, chat["id"]): marks} if chat else {})}
             target = shared.setdefault(name, {})
             for cid, mark in marks.items():
@@ -74,6 +79,11 @@ def seen_until(device: str, name: str, cid: str, last: str) -> bool:
 
     Bound future browser stamps to the feed, so later arrivals remain unread.
     """
+    return _seen_until(device, name, cid, last, None)
+
+
+def _seen_until(device: str, name: str, cid: str, last: str, count: int | None) -> bool:
+    """Bound browser counts to both the rendered items and the current feed."""
     from . import web_chat
     model = web_chat.from_feed(name, whole=True) if cid == "from" else web_chat.feed(name, cid, whole=True)
     if model is None:
@@ -82,7 +92,8 @@ def seen_until(device: str, name: str, cid: str, last: str) -> bool:
               and i.get("ts") and i["ts"] <= last]
     if stamps:
         at = max(stamps)
-        count = model["last_count"] if at == model["last"] else stamps.count(at)
+        available = model["last_count"] if at == model["last"] else stamps.count(at)
+        count = available if count is None else min(count, available)
         _advance(name, web_chat.public_id(name, cid) or "from", {"last": at, "last_count": count})
     return True
 

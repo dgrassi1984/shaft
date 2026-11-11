@@ -73,7 +73,7 @@ def doc_sort(value: str | None) -> str:
 def _sort_bar(sort: str, folder: str, chat_id: str = "") -> Html:
     """The list's column heads: Name, Size, Modified; the one it is sorted by is marked, with its direction. Each is a
     link that works without the script too: it asks for the list (list=1: without it the page opens what this chat
-    last changed), in this folder, of this archived chat (id)."""
+    last changed), in this folder, of this conversation (id)."""
     keep = (f"&dir={q(folder)}" if folder else "") + (f"&id={q(chat_id)}" if chat_id else "")
     key, reverse = DOC_SORTS[sort]
     heads = []
@@ -1279,6 +1279,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     from .web_actions import post_attrs
     if open_path:
         folder = open_path.rpartition("/")[0]
+    keep = f"&id={q(chat_id)}" if chat_id else ""
     prefix = folder + "/" if folder else ""
     subs: dict[str, dict] = {}
     here_docs = []
@@ -1305,17 +1306,17 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     items = []
     for rest, d, n in here_docs:
         big = d["sha"] == "too-big"
-        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{f}{ccount}{big}</span>'
+        items.append(h('<a href="?doc={u}{keep}" data-open-doc="{p}"><span>{dot}{f}{ccount}{big}</span>'
                        '<span class="dim docsize" title="{b} bytes">{size}</span>{when}</a>',
-                       u=q(d["path"]), p=d["path"], f=rest, b=f"{d['bytes']:,}", size=size_label(d["bytes"]),
+                       u=q(d["path"]), keep=keep, p=d["path"], f=rest, b=f"{d['bytes']:,}", size=size_label(d["bytes"]),
                        when=when_label(d["mtime"]), dot=_DOT if d["path"] in marked else "",
                        ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else "",
                        big=h(' <span class="bad toobig" title="over {m}: it cannot be shown or edited here, only downloaded">'
                              'too big to show</span>', m=size_label(MAX_BYTES)) if big else ""))
-    folders = [h('<a href="?dir={u}" data-open-dir="{p}" class="folder"><span>{dot}📁 {f} '
+    folders = [h('<a href="?dir={u}{keep}" data-open-dir="{p}" class="folder"><span>{dot}📁 {f} '
                  '<span class="dim">· {k} document{s}</span>{ccount}</span>'
                  '<span class="dim docsize" title="{b} bytes in all">{size}</span>{when}</a>',
-                 u=q(prefix + f), p=prefix + f, f=f, k=s["docs"], s="" if s["docs"] == 1 else "s",
+                 u=q(prefix + f), keep=keep, p=prefix + f, f=f, k=s["docs"], s="" if s["docs"] == 1 else "s",
                  b=f"{s['bytes']:,}", size=size_label(s["bytes"]), when=when_label(s["mtime"]),
                  dot=_DOT if s["marked"] else "",
                  ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=s["comments"])
@@ -1335,8 +1336,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                   to=f"{folder}/" if folder else "the documents", dir=DIR)
     elif folder:                                   # Documents / a / b: each one above is a link up
         steps = folder.split("/")
-        crumbs = [h('<a href="?dir=" data-open-dir="">Documents</a>')] + [
-            h('<a href="?dir={u}" data-open-dir="{p}">{s}</a>', u=q("/".join(steps[:k + 1])), p="/".join(steps[:k + 1]),
+        crumbs = [h('<a href="?dir={keep}" data-open-dir="">Documents</a>', keep=keep)] + [
+            h('<a href="?dir={u}{keep}" data-open-dir="{p}">{s}</a>', u=q("/".join(steps[:k + 1])), keep=keep, p="/".join(steps[:k + 1]),
               s=s) for k, s in enumerate(steps[:-1])] + [h('<b>{s}</b>', s=here)]
         title = h('<button type="button" class="small" data-back-docs data-dir="{p}" aria-label="Up to {w}">←</button> '
                   '<span class="crumbs">{c}</span>', p=parent, w=f"{parent}/" if parent else "the documents",
@@ -1874,7 +1875,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          u=feed_url, t=etag(str(feed).encode()), f=feed), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     aside = _docs_aside(name, panel, doc=doc, att=att, folder=folder, listing_only=listing_only, sort=sort,
-                        archived_id=chat["id"] if read_only and chat else "")
+                        archived_id=chat["id"] if (selected or read_only) and chat else "")
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid" data-conversation-docs="{touched}"><div class="chatpage">{b}</div>{a}</div>',
                         touched=int(bool(in_chat(chat))), b=body, a=aside),
@@ -1884,8 +1885,10 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
 
 def _docs_aside(name: str, panel: Html, *, doc: str = "", att: str = "", folder: str = "", listing_only: bool = False,
                 sort: str = "", archived_id: str = "") -> Html:
-    """The documents panel beside a conversation, refreshed on its own. `archived_id`: an ended chat's, whose panel
-    shows the documents as they were."""
+    """The documents panel beside a conversation, refreshed on its own.
+
+    `archived_id` retains the selected conversation's id.
+    """
     docs_url = (f"/fragment/docs/{q(name)}?" + (f"att={q(att)}" if att else f"list=1&dir={q(folder)}"
                                                 if (folder or listing_only) and not doc else f"doc={q(doc)}")
                 + (f"&id={q(archived_id)}" if archived_id else "") + (f"&sort={sort}" if sort else ""))

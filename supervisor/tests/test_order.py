@@ -82,6 +82,18 @@ class OrderTest(unittest.TestCase):
             with self.assertRaises(order.Refused):
                 order.thread_rev(name)
 
+    def test_instance_first_sight_persists_baseline_and_appends_without_rewriting_reads(self):
+        from supervisor import order
+        self.assertEqual(order.instances(["example-b", "example-c"]), ["example-b", "example-c"])
+        self.assertEqual(order.instances(["example-a", "example-c", "example-b"]),
+                         ["example-b", "example-c", "example-a"])
+        self.assertEqual(order.instances(["example-d", "example-a", "example-b", "example-c"]),
+                         ["example-b", "example-c", "example-a", "example-d"])
+        saved = json.loads((self.sup / "web/instance-order.json").read_text())
+        self.assertEqual(saved, {"rev": 2, "ids": ["example-b", "example-c", "example-a", "example-d"]})
+        with mock.patch.object(order, "_write", side_effect=AssertionError("unchanged reads must not write")):
+            self.assertEqual(order.instances(["example-c", "example-b"]), ["example-b", "example-c"])
+
     def test_instance_order_new_names_last_and_move_semantics(self):
         from supervisor import order, web
         with mock.patch.object(core, "instance_names", return_value=["wisp", "kiln"]):
@@ -95,7 +107,7 @@ class OrderTest(unittest.TestCase):
                 order.move_instance("missing", None)
         self.assertEqual(order.instances(["wisp", "example"]), ["wisp", "example"])
         self.assertEqual(order.instances(["wisp", "kiln", "example"]), ["kiln", "wisp", "example"])
-        self.assertEqual(order.instance_rev(), 3)
+        self.assertEqual(order.instance_rev(), 4)
         self.assertEqual((self.sup / "web/instance-order.json").stat().st_mode & 0o777, 0o600)
 
 

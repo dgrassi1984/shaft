@@ -25,7 +25,7 @@ class SeenSyncTest(WebTest):
             mock.patch.object(web_chat, "feed", side_effect=lambda n, cid=None, **kw: self.models.get(cid or "web-a")),
             mock.patch.object(web_chat, "from_feed", side_effect=lambda n, **kw: self.models["from"]),
             mock.patch.object(web_chat, "public_id", side_effect=lambda n, cid: cid),
-            mock.patch.object(web_chat, "shown", return_value={"id": "web-a"}),
+            mock.patch.object(web_chat, "SUP_DIR", self.sup),
             mock.patch.object(web_chat, "threads", return_value=[{"id": "web-a", "state": "idle"}, {"id": "web-b", "state": "idle"}]),
             mock.patch.object(core, "instance_names", return_value=["example"]),
             mock.patch.object(web, "_names", return_value=["example"]),
@@ -68,11 +68,25 @@ class SeenSyncTest(WebTest):
         self.flags("A")
         self.assertEqual(web._read(web_seen.STORE), expected)
 
-    def test_legacy_single_mark_migrates_to_shown_conversation_and_main(self):
+    def test_legacy_single_mark_migrates_to_last_active_open_thread_and_main(self):
+        for chat in (
+            {"id": "web-a", "created": OLD, "state": "idle", "turns": [{"ts": LATER}]},
+            {"id": "web-b", "created": LAST, "state": "idle", "turns": []},
+            {"id": "web-ended", "created": LATER, "state": "ended", "turns": []},
+        ):
+            web_chat.save({"instance": "example", **chat})
+        self.assertIsNone(web_chat.shown("example"))
         web._write(web_seen.STORE, {"A": {"example": {"last": LAST}}})
         self.assertEqual(self.flags(), {"web-a": False, "web-b": True, "from": False})
         self.assertEqual(web._read(web_seen.STORE), {
             "operator": {"example": {"web-a": {"last": LAST}, "from": {"last": LAST}}}})
+
+    def test_legacy_single_mark_falls_back_to_newest_ended_chat(self):
+        for cid, created in (("web-a", OLD), ("web-b", LAST)):
+            web_chat.save({"id": cid, "instance": "example", "created": created,
+                           "state": "ended", "turns": []})
+        web._write(web_seen.STORE, {"A": {"example": {"last": LAST}}})
+        self.assertEqual(self.flags(), {"web-a": True, "web-b": False, "from": False})
 
     def test_unpair_keeps_shared_marks(self):
         web_seen.seen("A", "example", self.models["web-a"]["version"], "web-a")
@@ -113,13 +127,13 @@ class SeenSyncTest(WebTest):
                               f'data-unread-main="{int(expected[0])}"', rail)
                 self.assertNotIn('data-seen-key="from"', rail)  # Main is the instance, with no child row.
 
-    def post_seen(self, last, token=True):
+    def post_seen(self, last, token=True, count=1):
         cookie = self.cookie
         headers = {"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded"}
         if token:
             headers["x-csrf-token"] = self.csrf(cookie)
         return self.req("/seen", "POST", cookie=cookie, headers=headers,
-                        body=urlencode({"inst": "example", "key": "web-a", "last": last}).encode())
+                        body=urlencode({"inst": "example", "key": "web-a", "last": last, "count": count}).encode())
 
     def test_web_post_seen_requires_csrf_and_advances_only_visible_conversation(self):
         self.cookie = self.paired()
@@ -135,6 +149,15 @@ class SeenSyncTest(WebTest):
         self.models["web-a"] = model("web-a", LATER)
         self.assertTrue(self.flags()["web-a"])
 
+    def test_web_seen_post_does_not_consume_same_second_arrival(self):
+        self.cookie = self.paired()
+        # The browser drew one item at LAST; another arrives before its POST.
+        self.models["web-a"] = model("web-a", LAST, 2)
+        self.assertEqual(self.post_seen(LAST).status, 200)
+        mark = web._read(web_seen.STORE)["operator"]["example"]["web-a"]
+        self.assertEqual(mark["last_count"], 1)
+        self.assertTrue(self.flags()["web-a"])
+
     def test_web_partial_feed_and_same_second_counts(self):
         self.cookie = self.paired()
         self.models["web-a"] = model("web-a", LATER, 2)
@@ -142,7 +165,7 @@ class SeenSyncTest(WebTest):
         self.assertEqual(self.post_seen(LAST).status, 200)
         self.assertEqual(web._read(web_seen.STORE)["operator"]["example"]["web-a"]["last"], LAST)
         self.assertTrue(self.flags()["web-a"])
-        self.assertEqual(self.post_seen(LATER).status, 200)
+        self.assertEqual(self.post_seen(LATER, count=2).status, 200)
         self.assertFalse(self.flags()["web-a"])
         self.models["web-a"]["last_count"] += 1
         self.assertTrue(self.flags()["web-a"])

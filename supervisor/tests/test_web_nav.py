@@ -1,4 +1,5 @@
 """Main navigation and instance-wide note contracts through the shipped web routes."""
+import html
 import json
 import re
 import unittest
@@ -20,6 +21,43 @@ class NavigationTest(test_web_chat.ChatRoutesCase):
         response = self.req(path, cookie=self.cookie)
         self.assertEqual(response.status, 200, response.body[:200])
         return response.body.decode()
+
+    def test_open_thread_docs_poll_and_sort_keep_conversation(self):
+        chat = self.chat_with([{'role': 'assistant', 'content': 'done', 'ts': '2026-11-01',
+                               'docs': [{'path': 'a.md'}]}])
+        chat['saved_docs'] = {'a.md': {'sha': 'old', 'text': 'operator line', 'added': ['operator line']}}
+        web_chat.save(chat)
+        with mock.patch('supervisor.docs.listing', return_value=[
+                {'path': p, 'sha': 'x', 'bytes': 1, 'mtime': 0} for p in ('a.md', 'b.md')]), \
+                mock.patch('supervisor.docs.read', return_value=('changed', 'new')), \
+                mock.patch('supervisor.doc_comments.threads', return_value=[]), \
+                mock.patch('supervisor.doc_comments.open_counts', return_value={}):
+            page = self.html(f'/i/wisp/chat?id={chat["id"]}&list=1')
+            poll = re.search(r'<aside class="docs"[^>]*data-poll="([^"]+)"', page)[1]
+            self.assertIn(f'&amp;id={chat["id"]}', poll)
+            panel = self.html(html.unescape(poll))
+            self.assertIn(f'id={chat["id"]}', panel)
+            self.assertIn(f'href="?doc=a.md&amp;id={chat["id"]}"', panel)
+            opened = self.html(f'/fragment/docs/wisp?id={chat["id"]}&doc=a.md')
+            self.assertIn('class="overwritten warn"', opened)
+            self.main_with([])
+            main = self.html('/fragment/docs/wisp?list=1')
+            self.assertIn('href="?doc=a.md"', main)
+
+    def test_untargeted_watch_and_away_use_main_before_its_first_message(self):
+        patches = (mock.patch.object(web_chat, '_watched', {}), mock.patch.object(web_chat, '_away', {}))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertIsNone(web_chat.from_chat('wisp'))
+        web_chat.watching('wisp', 'test-device', 1000, cid='from')
+        self.assertEqual(web_chat.watchers('wisp'), {'test-device'})
+        web_chat.unwatch('wisp', 'test-device', 2000)
+        web_chat.watching('wisp', 'test-device', 1500, cid='from')
+        self.assertEqual(web_chat.watchers('wisp', 'from'), set())
+        web_chat.watching('wisp', 'test-device', 3000)
+        self.assertEqual(web_chat.watchers('wisp', 'from'), {'test-device'})
+        web_chat.unwatch('wisp', 'test-device')
 
     def test_main_is_one_selected_instance_and_threads_have_no_from_row(self):
         """Main fills only the instance; a topic fills only its child row."""

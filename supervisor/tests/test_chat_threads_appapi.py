@@ -70,13 +70,12 @@ class ThreadsAppTest(AppTest):
         other = {"wisp": {"web-a": {"version": "other", "last": "2026-11-03T13:00:00"}}}
         web._write(web_seen.STORE, {self.device: {"wisp": mark}, "other-device": other})
         got = self.get("/app/v1/threads/wisp")
-        # a mark from before threads stood for the chat the page showed: since 2026-11-11 that is Main, not the newest
-        # thread, so it counts for Main alone
-        self.assertEqual([c["unread"] for c in got["threads"]], [True, True])
+        # The legacy mark stood for the most recently active open thread, also shared with Main.
+        self.assertEqual([c["unread"] for c in got["threads"]], [False, True])
         self.assertFalse(got["from"]["unread"])
-        self.assertEqual(web._read(web_seen.STORE), {"operator": {"wisp": {"from": mark, **other["wisp"]}}})
+        self.assertEqual(web._read(web_seen.STORE), {"operator": {"wisp": {"from": mark, "web-b": mark, **other["wisp"]}}})
         self.seen("web-a")
-        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "from"})
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "web-b", "from"})
         self.assertNotIn("other-device", web._read(web_seen.STORE))
 
     def test_away_and_late_polls_are_scoped_to_the_thread(self):

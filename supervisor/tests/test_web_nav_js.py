@@ -31,6 +31,25 @@ const a = parent.children[0], b = parent.children[1], c = parent.children[2], d 
 
 @unittest.skipUnless(shutil.which('node'), 'node is not installed')
 class NavigationJS(unittest.TestCase):
+    def test_seen_migration_waits_for_populated_inventory(self):
+        node(r'''
+const assert = require('node:assert/strict');
+let seenMigrating = false, stored = JSON.stringify({example: {'*': '2026-11-01'}});
+const localStorage = {getItem: () => stored, removeItem: () => { stored = null; }};
+const sent = [], sendSeen = async mark => {sent.push(mark.key); return true;};
+const link = {dataset: {inst: 'example', lasts: '{"from":""}'}};
+const rail = {querySelectorAll: () => [link]};
+''' + function('migrateSeen') + r'''
+(async () => {
+  await migrateSeen(rail);
+  assert.notEqual(stored, null, 'initial rail must retain legacy marks');
+  assert.deepEqual(sent, []);
+  link.dataset.inventory = '1'; link.dataset.lasts = '{"from":"","web-topic":""}';
+  await migrateSeen(rail);
+  assert.deepEqual(sent.sort(), ['from', 'web-topic']); assert.equal(stored, null);
+})().catch(e => {console.error(e); process.exitCode = 1;});
+''')
+
     def test_move_placement_and_authoritative_order(self):
         """Optimistic thread placement converges to the server's order and announces its position."""
         node(ROWS + r'''
@@ -96,6 +115,21 @@ const rail = { classList: { toggle() {} }, querySelector: () => null, querySelec
 railDisclosure(rail); assert.equal(list.hidden, false); assert.equal(button['aria-expanded'], 'true');
 railCollapsed.set('example', true); railDisclosure(rail); assert.equal(list.hidden, true);
 assert.equal(button['aria-expanded'], 'false');
+''')
+
+    def test_disclosure_waits_for_selected_group_to_have_threads(self):
+        node(r'''
+const assert = require('node:assert/strict');
+const railCollapsed = new Map(); let railNavigationExpanded = false, railEditing = false, populated = false;
+const localStorage = {getItem: () => '1'};
+const button = {setAttribute(k,v) {this[k] = v;}}, list = {};
+const group = {dataset: {name: 'example'}, classList: {contains: () => true, toggle() {}},
+  querySelector: s => s === '[data-disclose]' ? (populated ? button : null) : list};
+const rail = {classList: {toggle() {}}, querySelector: () => null, querySelectorAll: () => [group]};
+''' + function('railDisclosure') + r'''
+railDisclosure(rail); populated = true; railDisclosure(rail);
+assert.equal(list.hidden, false, 'navigation must expand the selected thread after the populated poll');
+railCollapsed.set('example', true); railDisclosure(rail); assert.equal(list.hidden, true);
 ''')
 
     def test_busy_rail_blocks_lift_move_and_menu(self):

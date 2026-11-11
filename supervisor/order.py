@@ -105,7 +105,15 @@ def move_thread(name: str, cid: str, after: str | None) -> dict:
 def instances(names: list[str]) -> list[str]:
     """Append new instances without disturbing the operator's existing order."""
     with _lock:
-        return _ordered(_read(_instance_path())["ids"], names)
+        path = _instance_path()
+        data = _read(path)
+        recorded = set(data["ids"])
+        unseen = list(dict.fromkeys(n for n in names if n not in recorded))
+        if unseen:
+            # The first inventory is the baseline; later additions advance its revision.
+            data = {"rev": data["rev"] + bool(data["ids"]), "ids": data["ids"] + unseen}
+            _write(path, data)
+        return _ordered(data["ids"], names)
 
 
 def move_instance(name: str, after: str | None) -> dict:
