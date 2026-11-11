@@ -334,6 +334,15 @@ private struct InstanceStateMark: View {
     }
 }
 
+#if os(macOS)
+private enum SidebarMetrics {
+    static let chevron: CGFloat = 14
+    static let compose: CGFloat = 20
+    static let rowInsets = EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
+    static let nameIndent: CGFloat = chevron + 4 + 16 + 4
+}
+#endif
+
 struct InstanceRowView: View {
     let row: InstanceRow
     var main: FromRow? = nil
@@ -353,14 +362,22 @@ struct InstanceRowView: View {
                     .fontWeight(unread ? .bold : .semibold)
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                #if os(iOS)
                 if let last = main?.last ?? row.last {
                     Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                 }
+                #endif
                 if unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
                 if collapsed, let count = row.unreadThreads, count > 0 {
                     Text("\(count)").font(.caption).padding(.horizontal, 6)
                         .background(Color.rowSelected, in: Capsule())
                 }
+                #if os(macOS)
+                if let last = main?.last ?? row.last {
+                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                        .fixedSize()
+                }
+                #endif
             }
             if !subline.isEmpty {
                 Text(subline)
@@ -370,7 +387,11 @@ struct InstanceRowView: View {
             }
         }
         .foregroundStyle(Color.textPrimary)
+        #if os(macOS)
+        .frame(minHeight: subline.isEmpty ? 24 : 36)
+        #else
         .frame(minHeight: 44)
+        #endif
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarRowLabels.instance(row, main: main, collapsed: collapsed, subline: subline))
     }
@@ -450,14 +471,15 @@ struct InstancesList: View {
                 Label(error.message, systemImage: "exclamationmark.triangle")
                     .font(.footnote).foregroundStyle(Color.warning)
             }
-            ForEach(store.instances) { row in
-                Section {
-                    instanceRow(row)
-                    if isExpanded(row.name), let threads = store.threads(row.name) {
-                        threadRows(row.name, threads)
-                    }
-                }
+            #if os(macOS)
+            Section {
+                instanceRows
+            } header: {
+                Text("Chats").font(.caption.weight(.semibold)).foregroundStyle(Color.textSecondary)
             }
+            #else
+            instanceRows
+            #endif
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
                     .foregroundStyle(Color.textSecondary)
@@ -469,6 +491,8 @@ struct InstancesList: View {
         .listSectionSpacing(0)
         .background(Color.elevated)
         #else
+        .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, 28)
         .background(QuietListSelection())
         #endif
         .overlay { if !store.loaded && store.error == nil { ProgressView() } }
@@ -509,6 +533,23 @@ struct InstancesList: View {
         }
     }
 
+    private var instanceRows: some View {
+        ForEach(store.instances) { row in
+            #if os(iOS)
+            Section { instanceContents(row) }
+            #else
+            instanceContents(row)
+            #endif
+        }
+    }
+
+    @ViewBuilder private func instanceContents(_ row: InstanceRow) -> some View {
+        instanceRow(row)
+        if isExpanded(row.name), let threads = store.threads(row.name) {
+            threadRows(row.name, threads)
+        }
+    }
+
     private var closeTitle: String { "End the conversation with \(closing?.instance ?? "")?" }
 
     private func isExpanded(_ name: String) -> Bool { SidebarDisclosure.values(expanded)[name] ?? false }
@@ -524,12 +565,21 @@ struct InstancesList: View {
             if hasThreads {
                 Button { SidebarDisclosure.set(row.name, expanded: !isExpanded(row.name)) } label: {
                     Image(systemName: isExpanded(row.name) ? "chevron.down" : "chevron.right")
-                        .font(.caption).frame(width: 20, height: 44)
+                        .font(.caption)
+                        #if os(macOS)
+                        .frame(width: SidebarMetrics.chevron, height: 24)
+                        #else
+                        .frame(width: 20, height: 44)
+                        #endif
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(SidebarRowLabels.disclosure(row.name, expanded: isExpanded(row.name)))
             } else {
+                #if os(macOS)
+                Color.clear.frame(width: SidebarMetrics.chevron, height: 24).accessibilityHidden(true)
+                #else
                 Color.clear.frame(width: 20, height: 44).accessibilityHidden(true)
+                #endif
             }
             InstanceRowView(row: row, main: store.threads(row.name)?.from, collapsed: !isExpanded(row.name),
                             notes: store.pendingNotes[row.name]?.count ?? 0)
@@ -538,17 +588,23 @@ struct InstancesList: View {
                     SidebarDisclosure.set(row.name, expanded: true)
                     selection = tag
                 }
-            if composeVisible(row.name) {
-                Button { newThread(row.name) } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.borderless)
-                    .focused($composeFocus, equals: row.name)
-                    .disabled(store.threads(row.name) == nil)
-                    .accessibilityLabel("New thread with \(row.name)")
-            }
+            #if os(macOS)
+            composeButton(row.name)
+                .frame(width: SidebarMetrics.compose, height: 24)
+                .opacity(composeVisible(row.name) ? 1 : 0)
+                .allowsHitTesting(composeVisible(row.name))
+                .accessibilityHidden(!composeVisible(row.name))
+            #else
+            if composeVisible(row.name) { composeButton(row.name) }
+            #endif
         }
         .tag(tag)
         .onHover { hovering = $0 ? row.name : nil }
+        #if os(macOS)
+        .listRowInsets(SidebarMetrics.rowInsets)
+        #else
         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        #endif
         .listRowSeparator(.hidden)
         .listRowBackground(rowFill(selected: selection == tag))
         .contextMenu {
@@ -567,6 +623,14 @@ struct InstancesList: View {
         #endif
     }
 
+    private func composeButton(_ name: String) -> some View {
+        Button { newThread(name) } label: { Image(systemName: "square.and.pencil") }
+            .buttonStyle(.borderless)
+            .focused($composeFocus, equals: name)
+            .disabled(store.threads(name) == nil)
+            .accessibilityLabel("New thread with \(name)")
+    }
+
     private func threadRows(_ name: String, _ threads: ThreadsResponse) -> some View {
         ForEach(threads.threads) { thread in
             threadRow(name, thread)
@@ -583,7 +647,11 @@ struct InstancesList: View {
         return ThreadRowView(thread: thread)
             .tag(tag)
             .help(thread.title)
+            #if os(macOS)
+            .listRowInsets(SidebarMetrics.rowInsets)
+            #else
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            #endif
             .listRowSeparator(.hidden)
             .listRowBackground(rowFill(selected: selection == tag))
             .contextMenu {
@@ -672,9 +740,14 @@ struct InstancesList: View {
     private var title: String { store.badge > 0 ? "SHAFT (\(store.badge))" : "SHAFT" }
 
     private func rowFill(selected: Bool) -> some View {
+        #if os(macOS)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(selected ? Color.rowSelected : Color.clear)
+        #else
         RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)
             .fill(selected ? Color.rowSelected : Color.clear)
             .padding(.horizontal, Design.Space.s8)
+        #endif
     }
 }
 
@@ -687,14 +760,28 @@ struct ThreadRowView: View {
             ConversationStateMark(state: thread.state, waiting: thread.waiting, failed: thread.failed == true)
             Text(thread.title).font(.subheadline).fontWeight(thread.unread ? .bold : .medium).lineLimit(1)
             Spacer(minLength: 4)
+            #if os(macOS)
+            if thread.unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
+            #endif
             if let last = thread.last {
                 Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                    #if os(macOS)
+                    .fixedSize()
+                    #endif
             }
+            #if os(iOS)
             if thread.unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
+            #endif
         }
         .foregroundStyle(Color.textPrimary)
+        #if os(macOS)
+        .padding(.leading, SidebarMetrics.nameIndent)
+        .padding(.trailing, SidebarMetrics.compose + 4)
+        .frame(minHeight: 24)
+        #else
         .padding(.leading, Self.indent)
         .frame(minHeight: 44)
+        #endif
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarRowLabels.thread(thread))
     }
