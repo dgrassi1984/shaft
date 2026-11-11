@@ -10,7 +10,6 @@ from bisect import bisect_left
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import jsonl_lines
 from . import core
 
 PUSH_BUDGET, _ = core.knob(
@@ -147,19 +146,12 @@ def _time(text: str) -> datetime | None:
 
 def records(sup_dir: Path) -> list[dict]:
     """The supervisor's message rows, without history()'s instance-controlled inbox read state."""
+    from . import messages
     try:
-        lines = jsonl_lines((sup_dir / "messages.jsonl").read_text(errors="replace"))
+        rows = messages.logged_rows(sup_dir / "messages.jsonl")
     except FileNotFoundError:
         return []
-    rows = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict) and _time(row.get("ts")):
-            rows.append(row)
-    return rows
+    return [row for row in rows if not row.get("cancelled") and _time(row.get("ts"))]
 
 
 def _is_push(row: dict, name: str) -> bool:

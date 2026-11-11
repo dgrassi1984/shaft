@@ -10,17 +10,23 @@ from . import core, pushes
 
 
 def records() -> list[dict]:
+    from . import messages
     try:
         lines = jsonl_lines((core.SUP_DIR / "reply-links.jsonl").read_text())
     except FileNotFoundError:
         return []
+    try:
+        cancelled = {f"send:{r['to']}:{r['mid']}" for r in messages.logged_rows(core.SUP_DIR / messages.LOG_NAME)
+                     if r.get("cancelled") and r.get("mid")}
+    except FileNotFoundError:
+        cancelled = set()
     rows = []
     for line in lines:
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and isinstance(row.get("in_reply_to"), str):
+        if isinstance(row, dict) and isinstance(row.get("in_reply_to"), str) and row.get("key") not in cancelled:
             rows.append(row)
     return rows
 

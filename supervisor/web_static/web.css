@@ -282,6 +282,8 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .laterchip { font-size: .78rem; font-weight: 400; margin-left: .3rem; }
 .laterchip.waiting { color: var(--warn); }
 .laterchip.read { color: var(--good); }
+.laterchip.cancelled { color: var(--dim); }
+.cancelled-text { text-decoration: line-through; opacity: .6; }
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
 .activity { font-size: .78rem; color: var(--dim); margin: .2rem 0 .4rem; }

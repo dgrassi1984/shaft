@@ -1430,15 +1430,17 @@ def _later_card(m: dict) -> Html:
     return _later_item(web_chat.message_item(m.get("to", ""), m, {}))
 
 
-def _later_item(it: dict) -> Html:
+def _later_item(it: dict, cancel: Html = Html("")) -> Html:
     atts = join(h('<a href="{u}" target="_blank">📎 {n}</a>', u=file_url(a["path"]), n=a["name"])
                 for a in it["attachments"])
-    state = "read" if it["read"] else "waiting"
+    state = "cancelled" if it.get("cancelled") else "read" if it["read"] else "waiting"
     return h('<div class="turn me later" data-k="{key}" data-raw="{raw}"{mid}><div class="who">you <span class="dim">{ts}</span> '
              '<a href="/messages/{f}" class="laterchip {state}" title="Not answered now: it reads this in its next '
              'cycle">⏾ next cycle · {state}</a>{chips}<button type="button" class="copy small icon" data-copy '
-             'title="copy the message as Markdown" aria-label="Copy the message">{copy}</button></div>{text}'
-             '<div class="atts">{a}</div></div>', key=it["key"], f=q(it["file"]), raw=it["text"], ts=_turn_time(it["ts"]),
+             'title="copy the message as Markdown" aria-label="Copy the message">{copy}</button></div>'
+             '<div class="{cls}">{text}</div><div class="atts">{a}</div>{cancel}</div>',
+             key=it["key"], f=q(it["file"]), raw=it["text"], ts=_turn_time(it["ts"]),
+             cls="cancelled-text" if it.get("cancelled") else "", cancel=cancel,
              state=state, mid=_mid_attr(it["mid"]),
              chips=_comment_chips(it["comments"]), copy=ICONS["copy"],
              text=_my_text(it["text"]) if it["text"] else Html(""), a=atts)
@@ -1488,8 +1490,14 @@ def _seen_attrs(name: str, key: str | None, attr: str, ts: str) -> Html:
 def _message_item(name: str, it: dict, archived: bool, key: str | None = None) -> Html:
     """A logged message in the chat (web_chat.message_item): one the instance sent you, or one you left for its next
     cycle."""
+    from .web_actions import post_attrs
     if it["type"] == "later":                   # left for its next cycle (web_chat.sent_during)
-        return _later_item(it)
+        cancel = Html("") if archived or not it.get("cancellable") else h(
+            '<form class="act" data-post="/chat/{n}/uncycle"{a}>'
+            '<input type="hidden" name="file" value="{file}">'
+            '<button type="submit" class="act small">Cancel</button></form>',
+            n=q(name), file=it["file"], a=post_attrs("the note (has a cycle already read it?)"))
+        return _later_item(it, cancel)
     # Files open in a sheet of their own: in an app, a link replaced its only view. A text file previews in the
     # documents panel (/fragment/docs/<name>?att=<file>/<j>); the link still downloads.
     atts = join(h('<a href="{u}" target="_blank"{preview}>{img}</a>', u=file_url(a["path"]),
