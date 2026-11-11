@@ -190,7 +190,11 @@ The broker reads branch and mind-store metadata on the supervisor side. Sandbox 
 limit direct access; the profile does not prohibit executing the git binary itself. With `save_as`, it restores one file as it was after a commit, written whole to a new path in its
 folder (never over an existing file), so it can bring back a record a bad write damaged without the operator. **`record`**: the supervisor's own record about it; the judge's verdicts with reasoning, its
 runs, its tool calls, its kept code changes, its internet connections; so it can check its claims about
-itself.
+itself. `broker.LEDGER_KINDS` also exposes `families` for judged goal chains, `habits` for repeated specific calls
+and sequences (`habits.MIN_CYCLES=3`), `usage` for per-plugin calls and per-skill-file reads from live tool logs,
+`facts` for current facts with checked sources and later restatements, `predictions` for reports and scores,
+and `unrecorded_orders` for future orders found in ended conversations. Scheduled job runs are not cycle calls.
+`facts` uses `offset` paging. These records are readings, not instructions or gates.
 
 ### Decision model
 
@@ -243,7 +247,8 @@ call allowance.
 
 `send_message` to the operator or another instance, `mail_draft`, `mail_draft_update`, `calendar_create`,
 `calendar_move` and `calendar_respond` are checked against standing orders and held corrections.
-`http_request` and `run` are not checked. Violations are refused before delivery, draft submission,
+`http_request` and `run` are not checked: they have no single text to check and no bound on their number
+(`supervisor/orders.py`). Violations are refused before delivery, draft submission,
 calendar writing or proposal creation, quoting the rule and the judge's reason. The instance may rewrite
 and retry. A judge error lets the call proceed with a NOT checked note. No rules or held corrections
 means no judge call (`supervisor/broker.py`, `Broker._check_orders`).
@@ -439,6 +444,14 @@ sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_T
 `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
 trials: `.supervisor/trials/<name>/<id>/`.
 
+### Replay records
+
+`ReplayBroker` in `supervisor/broker.py` validates and answers `gauges(choose=...)`, `predict`, `record_order`
+and own-rule drops as live calls. Gauge choices, prediction events, recorded rules, drops and outgoing-check
+results remain in that replay; later calls see them. Nothing is written to their live supervisor ledgers.
+Prediction events use the replay clock and are not scored. A replayed `nothing_to_do` answers as a live call
+but keeps no idle-exit row and makes no schedule change. Its simulated call remains in the replay trace.
+
 ## Probation
 
 A kept self-change is undone if the achieved difficulty per cycle (success ×
@@ -461,6 +474,15 @@ pool that still lists it uses it only when no other judge may grade, and that cy
 collection, zero retention). A trial pair keeps
 one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
 feed `self/stats.md`.
+
+### Conversation order checks
+
+`supervisor/unrecorded.py` sends the judge the last `TRANSCRIPT_CHARS=24000` characters of an ended,
+written-up conversation, including agent and operator turns, plus that conversation's recorded commitment
+promises and due times and standing-order texts sourced to it. Open conversations are excluded.
+Returned quotes must match visible operator turns. The check runs in `metrics.after_cycle`, with
+`PER_RUN=3` judge calls at most; the first run skips write-ups older than `FIRST_RUN_HOURS=24` hours.
+It records findings only, never commitments or standing orders.
 
 ## Git
 

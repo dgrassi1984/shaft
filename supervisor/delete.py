@@ -71,7 +71,8 @@ def own_files(name: str) -> list[Path]:
              s / "gauges" / f"{name}.jsonl", s / "claimlint" / f"{name}.jsonl", s / "claimlint" / f"{name}.lock",
              s / "probation" / f"{name}.jsonl", s / "verdicts" / f"{name}.json", s / "idle_exits" / f"{name}.jsonl",
              s / "predictions" / f"{name}.jsonl", s / "unrecorded_orders" / f"{name}.jsonl",
-             s / "unrecorded_orders" / f"{name}.lock"]
+             s / "unrecorded_orders" / f"{name}.lock", s / "wake_reasons" / f"{name}.json",
+             s / "wake_reasons" / f"{name}.tmp"]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")
     found += _matching(s / "gate-logs", rf"{n}-{ts}-\d+\.log")

@@ -411,6 +411,7 @@ shaft drive <name> reject <id> --reason "…"
 shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]
 shaft limits [name] [wake-floor <min|off>|cloud-cap <usd|off>|consult-cap <usd|off>]
 shaft tools <name> [on|off <tool>]
+shaft gauges <name> [list|set a,b,c|clear]
 shaft orders <name> [list|add TEXT|drop ID]
 shaft actions <name>
 shaft actions <name> restore reversible|staged|irreversible
@@ -473,7 +474,14 @@ proposal once. Ordinary rejection does not demote a class.
 jobs, batteries, and trial replays. A live run still settles its journal, gate, and commit. It waits up to
 `--wait` seconds, default 120. Resume removes the pause.
 
+`shaft gauges` lists every gauge's reading, the choice in force and choice history. `set a,b,c` selects up to
+`gauges.MAX_CHOSEN=4` keys; `clear` shows none in the stats head. The instance can also choose with the broker's
+`gauges` tool. The last choice wins; the ledger keeps both authors' choices. Readings are not editable and impose
+no instruction, refusal or gate. See [stats head and gauges](architecture.md#stats-head-and-gauges).
+
 `shaft delete` removes the instance folder, branch, mind store, supervisor records, and Telegram token. It
+also removes gauge choices, claim-lint findings and locks, probation history, saved head verdicts, idle exits,
+predictions, and unrecorded-order findings and locks (`supervisor/delete.py`, `own_files`). It
 refuses active instances; kill first. It asks for the name unless `--yes` is set. By default it archives the
 mind store, branch bundle, supervisor records, purged shared-record rows, and instance folder in
 `.supervisor/deleted/<name>-<stamp>.tar.gz`, with `RESTORE.md`. The folder excludes `.git`, `.venv`, `.uv`,
