@@ -16,7 +16,7 @@ class ThreadsAppTest(AppTest):
         self.a = self.chat([turn("assistant", "2026-11-03T14:00:00", "Answer A")],
                            cid="web-a", title="Topic A")
         self.b = self.chat([turn("assistant", "2026-11-03T14:01:00", "Answer B")],
-                           cid="web-b", title="Topic B", state="replying",
+                           cid="web-b", title="Topic B", created="2026-11-03T13:59:00", state="replying",
                            reply={"started": "2026-11-03T14:01:00", "waiting": "waiting for Topic A"})
         self.from_model = web_chat.build("wisp", None, [{
             "from": "wisp", "to": "operator", "file": "note.md", "text": "From a cycle",
@@ -32,16 +32,17 @@ class ThreadsAppTest(AppTest):
     def test_threads_and_rail_include_each_open_thread_and_from(self):
         self.chat([], state="ended", cid="web-ended")
         got = self.get("/app/v1/threads/wisp")
+        self.assertRegex(got.pop("threads_rev"), r"^[0-9a-f]{16}$")
         self.assertEqual(got, {"threads": [
             {"id": "web-b", "title": "Topic B", "created": app_api.stamp(self.b["created"]),
              "last": app_api.stamp("2026-11-03T14:01:00"), "line": "Answer B", "state": "replying",
-             "waiting": "waiting for Topic A", "unread": True},
+             "waiting": "waiting for Topic A", "unread": True, "failed": False},
             {"id": "web-a", "title": "Topic A", "created": app_api.stamp(self.a["created"]),
              "last": app_api.stamp("2026-11-03T14:00:00"), "line": "Answer A", "state": "idle",
-             "waiting": None, "unread": True}],
+             "waiting": None, "unread": True, "failed": False}],
             # From's state is its conversation's: idle before its first message (2026-11-11)
             "from": {"line": "From a cycle", "last": app_api.stamp("2026-11-03T14:02:00"), "unread": True,
-                     "state": "idle", "waiting": None}})
+                     "state": "idle", "waiting": None, "failed": False}})
         rail = self.get("/app/v1/instances")
         self.assertEqual((rail["instances"][0]["threads"], rail["instances"][0]["replying"], rail["badge"]), (2, True, 1))
 
@@ -64,18 +65,18 @@ class ThreadsAppTest(AppTest):
         self.from_model["last_count"] += 1
         self.assertEqual(web_seen.badge(self.device), 1)
 
-    def test_legacy_marks_migrate_without_losing_other_devices_or_threads(self):
+    def test_legacy_marks_merge_other_devices_into_shared_threads(self):
         mark = {"version": "old", "last": "2026-11-03T14:02:00", "last_count": 1}
         other = {"wisp": {"web-a": {"version": "other", "last": "2026-11-03T13:00:00"}}}
         web._write(web_seen.STORE, {self.device: {"wisp": mark}, "other-device": other})
         got = self.get("/app/v1/threads/wisp")
+        # The legacy mark stood for the most recently active open thread, also shared with Main.
         self.assertEqual([c["unread"] for c in got["threads"]], [False, True])
         self.assertFalse(got["from"]["unread"])
-        self.assertEqual(web._read(web_seen.STORE), {
-            self.device: {"wisp": {"web-b": mark, "from": mark}}, "other-device": other})
+        self.assertEqual(web._read(web_seen.STORE), {"operator": {"wisp": {"from": mark, "web-b": mark, **other["wisp"]}}})
         self.seen("web-a")
-        self.assertEqual(set(web._read(web_seen.STORE)[self.device]["wisp"]), {"web-a", "web-b", "from"})
-        self.assertEqual(web._read(web_seen.STORE)["other-device"], other)
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "web-b", "from"})
+        self.assertNotIn("other-device", web._read(web_seen.STORE))
 
     def test_away_and_late_polls_are_scoped_to_the_thread(self):
         for cid in ("web-a", "web-b"):
@@ -106,7 +107,7 @@ class ThreadsAppTest(AppTest):
                 mock.patch.object(webpush, "subscriptions", return_value={}):
             web_alerts.forward_new()
         event = webpush.notify.call_args.args[0]
-        self.assertEqual((event["url"], event["cid"]), ("/i/wisp/from", "from"))
+        self.assertEqual((event["url"], event["cid"]), ("/i/wisp/chat", "from"))
         self.assertEqual(webpush.notify.call_args.kwargs["skip"], {"other"})
 
     def test_latest_filters_both_url_forms_and_retains_cid_and_other_instances(self):
@@ -146,7 +147,8 @@ class ThreadsAppTest(AppTest):
         self.req("/fragment/chat/wisp?id=web-a&away=1&at=2000", cookie=cookie)
         self.assertEqual(web_chat.watchers("wisp", "web-a"), set())
 
-    def test_omitted_cid_marks_only_the_shown_chat(self):
+    def test_omitted_cid_marks_only_main(self):
+        """An app that names no conversation reads and marks Main (the instance's own conversation), not a thread."""
         feed = self.get("/app/v1/chat/wisp")
         self.get("/app/v1/chat/wisp/seen", method="POST", data={"version": feed["version"]})
-        self.assertEqual(set(web._read(web_seen.STORE)[self.device]["wisp"]), {"web-b"})
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"from"})

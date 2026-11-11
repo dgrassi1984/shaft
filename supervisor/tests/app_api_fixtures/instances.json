@@ -11,10 +11,14 @@
       "last": "2026-11-03T14:14:00+01:00",
       "replying": false,
       "threads": 2,
+      "threads_rev": "2ea85e40fbc01302",
       "unread": true,
+      "unread_main": true,
+      "unread_threads": 2,
       "next_cycle": "for wisp's next cycle, which this starts now",
       "voice_mode": "off"
     }
   ],
+  "instances_rev": 0,
   "badge": 1
 }

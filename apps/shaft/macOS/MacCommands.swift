@@ -24,7 +24,7 @@ struct MacCommands: Commands {
             if now.threads {
                 Button("New Thread") { state.newThread() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .disabled(!now.chat)
+                    .disabled(!now.current)
             } else {
                 Button("New Chat…") { screen?.confirmingNewChat = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -67,6 +67,21 @@ struct MacCommands: Commands {
                 .keyboardShortcut(.upArrow, modifiers: .option)
                 .disabled(!now.instances)
             Divider()
+            Button("Next Instance") { state.stepInstance(1) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .shift])
+                .disabled(!now.instances)
+            Button("Previous Instance") { state.stepInstance(-1) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .shift])
+                .disabled(!now.instances)
+            Button("Move Thread Up") { state.moveThread(-1) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .disabled(!now.canMoveUp)
+            Button("Move Thread Down") { state.moveThread(1) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .disabled(!now.canMoveDown)
+            Button("Move Thread to Top") { state.moveThread(nil) }
+                .disabled(!now.canMoveUp)
+            Divider()
             Button("Reload") { state.reload() }
                 .keyboardShortcut("r")
                 .disabled(!now.paired)
@@ -95,6 +110,9 @@ final class MacMenu: ObservableObject {
         var replying = false
         var instances = false
         var paired = false
+        var selectedThread: String? = nil
+        var canMoveUp = false
+        var canMoveDown = false
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -103,13 +121,21 @@ final class MacMenu: ObservableObject {
     static func snapshot(_ state: MacState) -> Snapshot {
         let screen = state.currentScreen
         let content = screen?.chat.content
+        let selectedThread: String?
+        if case .thread(let id) = state.selection?.ref { selectedThread = id } else { selectedThread = nil }
+        let ids = state.selection.flatMap { state.store?.threads($0.instance)?.threads.map(\.id) } ?? []
+        let index = selectedThread.flatMap { ids.firstIndex(of: $0) }
+        let moving = state.selection.map { state.store?.moving.contains($0.instance) == true } ?? false
         return Snapshot(chat: state.screen != nil, current: screen != nil, canStop: content?.canStop == true,
                         canEnd: content?.canEnd == true, canClear: content?.canClear == true,
                         threads: state.selection.map { state.store?.threads($0.instance) != nil } ?? false,
                         canSend: screen.map { !$0.chat.draft.isEmpty && !$0.showVoice } ?? false,
                         canTalk: screen.map { state.store?.row($0.instance)?.voiceMode == "on" } ?? false,
                         replying: screen?.chat.feed?.reply != nil,
-                        instances: !(state.store?.instances.isEmpty ?? true), paired: state.store != nil)
+                        instances: !(state.store?.instances.isEmpty ?? true), paired: state.store != nil,
+                        selectedThread: selectedThread,
+                        canMoveUp: !moving && index.map { $0 > 0 } == true,
+                        canMoveDown: !moving && index.map { $0 + 1 < ids.count } == true)
     }
 
     func publish(_ snapshot: Snapshot) {

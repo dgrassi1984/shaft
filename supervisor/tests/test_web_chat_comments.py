@@ -155,15 +155,15 @@ class CommentChatTest(unittest.TestCase):
     def test_retry_after_mark_sent_failure_and_an_ended_chat_does_not_resend(self):
         """Grok review 2026-10-20: the mid dedup only sees the open chat; an ended one still says the post went."""
         _, pid = self.add()
+        first = web_chat.new_thread("wisp", ME)
         with mock.patch.object(comments, "mark_sent", side_effect=OSError("disk full")):
             with self.assertRaisesRegex(web_chat.Refused, "disk full"):
-                web_chat.send_comment("wisp", ME, pid)
-        first = next(iter(web_chat.chats("wisp")))
+                web_chat.send_comment("wisp", ME, pid, cid=first["id"])
         with web_chat._lock(first["id"]):
             c = web_chat.load(first["id"])
             c["state"], c["reply"] = "ended", None
             web_chat.save(c)
-        self.assertIsNone(web_chat.current("wisp"))
+        self.assertEqual(web_chat.threads("wisp"), [])
         _, said = web_chat.send_comment("wisp", ME, pid)
         self.assertEqual(said, "already sent to wisp")
         self.start.assert_called_once()                       # the first send only: never a second copy

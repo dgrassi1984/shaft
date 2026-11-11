@@ -21,7 +21,6 @@ struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("chat.last") private var last = ""
     @State private var selection: ChatSelection?
     @State private var path: [ArchivedRoute] = []
@@ -72,27 +71,15 @@ struct ChatsLayout: View {
     private var phone: some View {
         NavigationStack(path: $path) {
             chat
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        if reduceTransparency {
-                            chatsButton
-                                .frame(width: Design.Header.height, height: Design.Header.height)
-                                .glassSurface(in: Circle())
-                        } else {
-                            chatsButton
-                        }
-                    }
-                    .sharedBackgroundVisibility(reduceTransparency ? .hidden : .automatic)
-                }
                 .navigationDestination(for: ArchivedRoute.self) { route in
                     ArchivedChatView(route: route) { path.removeAll() }
                 }
         }
+        .environment(\.openConversationSwitcher, { switching = true })
         .sheet(isPresented: $switching) {
             NavigationStack {
                 InstancesList(switcher: true, selection: Binding(get: { selection }, set: { chosen in
-                    if let chosen { open(chosen) }
-                    switching = false
+                    if let chosen { open(chosen); switching = false }
                 }), settings: {
                     switching = false
                     settings = true
@@ -107,23 +94,6 @@ struct ChatsLayout: View {
             .presentationDetents([.medium, .large])
             .presentationBackground(Color.elevated)
         }
-    }
-
-    private var chatsButton: some View {
-        Button { switching = true } label: {
-            Image(systemName: "list.bullet")
-                .overlay(alignment: .topTrailing) {
-                    if store.badge > 0 {
-                        Circle()
-                            .fill(Color.brand)
-                            .frame(width: Design.Space.s8, height: Design.Space.s8)
-                            .offset(x: Design.Space.s4, y: -Design.Space.s4)
-                            .accessibilityHidden(true)
-                    }
-                }
-        }
-        .accessibilityLabel("Chats")
-        .accessibilityValue(store.badge > 0 ? "\(store.badge) unread" : "")
     }
 
     private var pad: some View {
@@ -246,7 +216,8 @@ struct ChatsLayout: View {
     private func open(_ chosen: ChatSelection) {
         inspectorRestore?.cancel()
         if selection != chosen { path.removeAll() }
-        selection = chosen
+        SidebarDisclosure.set(chosen.instance, expanded: true)
+        selection = ChatSelection.settled(chosen.instance, store.resolve(chosen))
         last = chosen.instance
         compactColumn = .detail
         if documentsTakeSidebar { columns = .detailOnly }       // the sidebar laid over the chat goes with the choice

@@ -17,6 +17,7 @@ NODE = shutil.which("node")
 
 HARNESS = r"""
 const sheet = null;
+let railGeneration = 0;
 const POLL_LIMIT_MS = 15000;
 const net = { down: new Set() };
 const busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {}, checkVersion = () => {};
@@ -32,6 +33,7 @@ const window = { addEventListener: () => {}, innerHeight: 0, scrollY: 0 };
 const navigator = { onLine: true };
 const shown = ["START"];                 // every content the panel was given, in order
 const el = {
+  classList: { contains: () => false },
   dataset: { poll: "/fragment/overview", every: "2000" }, isConnected: true,
   get innerHTML() { return shown[shown.length - 1]; }, set innerHTML(v) { shown.push(v); },
   getClientRects: () => [1], querySelectorAll: () => [], closest: () => null, dispatchEvent: () => {},
@@ -63,6 +65,7 @@ setTimeout(() => {                       // 2.05 s: the first poll (sent at 2 s)
 
 HEADER_HARNESS = r"""
 const sheet = null;
+let railGeneration = 0;
 const POLL_LIMIT_MS = 15000, net = { down: new Set() };
 const pairAgain = () => false;
 const busyIn = () => false, netNote = () => {}, checkVersion = () => {};
@@ -88,7 +91,7 @@ document.activeElement = summary;
 const classes = new Set();
 const el = {
   dataset: { poll: "/fragment/chat/wisp/header" }, isConnected: true,
-  classList: { add: x => classes.add(x), remove: x => classes.delete(x) },
+  classList: { contains: () => false, add: x => classes.add(x), remove: x => classes.delete(x) },
   parentNode: { insertBefore: n => { el.previousElementSibling = n; } },
   get innerHTML() { return html; },
   set innerHTML(v) {
@@ -182,6 +185,7 @@ console.log(JSON.stringify({ notifications, sheets, unread }));
 
 SHOW_HARNESS = r"""
 const sheet = null;
+let railGeneration = 0;
 const POLL_LIMIT_MS = 15000, net = { down: new Set() };
 const pairAgain = () => false, busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {};
 const checkVersion = () => {}, textOf = s => s, toBottom = () => {};

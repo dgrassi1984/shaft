@@ -31,8 +31,8 @@ struct FeedView: View {
         let newest = FeedRows.newestKey(feed)
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Space.turn) {
-                if feed.content?.chat == nil && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
-                    EmptyChat(instance: feed.instance).padding(.horizontal, Design.Space.gutter)
+                if !screen.archived && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
+                    EmptyChat(instance: feed.instance, main: screen.chat.ref.isFrom).padding(.horizontal, Design.Space.gutter)
                 }
                 ForEach(rows) { row in
                     // Each row keeps its own margins, capped and centred on the column (spec §5).
@@ -170,12 +170,18 @@ private struct FloatingPill: ViewModifier {
 /// "Chat with <n>": no chat shown (§4.2 `chat` null).
 struct EmptyChat: View {
     let instance: String
+    var main = false
 
     var body: some View {
         VStack(spacing: Design.Space.inTurn) {
             ShaftMark()
             Text("Chat with \(instance)").font(.title3.weight(.semibold))
-            Text("Your message starts a new conversation.").font(.callout).foregroundStyle(Color.textSecondary)
+            if main {
+                Text("Your conversation with \(instance). What it sends from its cycles lands here too. For a separate topic, start a thread.")
+                    .font(.callout).foregroundStyle(Color.textSecondary)
+            } else {
+                Text("Your message starts a new conversation.").font(.callout).foregroundStyle(Color.textSecondary)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

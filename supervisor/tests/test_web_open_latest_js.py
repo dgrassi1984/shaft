@@ -18,12 +18,14 @@ JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 SEEN, ASKED, SENT, LATEST = "2026-10-21T09:00:00", "2026-10-21T10:00:00", "2026-10-21T10:05:00", "2026-10-21T10:30:00"
 
 
-def feed(archived=False):
+def feed(archived=False, followup=False):
     """A reply already seen, a question, a message the instance sent meanwhile, and the newest reply."""
     chat = {"id": "old" if archived else "current", "state": "ended" if archived else "idle", "ended": LATEST,
             "turns": [{"role": "assistant", "content": "Seen answer", "ts": SEEN},
                       {"role": "user", "content": "and then?", "ts": ASKED},
                       {"role": "assistant", "content": "Newest answer", "ts": LATEST}]}
+    if followup:
+        chat["turns"].append({"role": "user", "content": "One more question", "ts": LATEST})
     sent = [{"ts": SENT, "file": "m9.md", "text": "a note meanwhile", "kind": "note", "read": False}]
     return str(web_views.chat_feed("wisp", chat, sent, archived=archived))
 
@@ -63,22 +65,20 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wi
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
 const observers = [];
 class ResizeObserver { constructor(f) { this.f = f; this.seen = []; observers.push(this); } observe(n) { this.seen.push(n); } }
+const queued = [];
 let clock = 1e12;                                    // Date.now, moved on by hand: a gesture counts for 1.5 s
 class FakeDate extends Date { static now() { return clock; } }
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver, Date: FakeDate,
   window: { addEventListener() {}, innerHeight: 0, scrollY: 0, scrollTo() {}, getSelection: () => ({ isCollapsed: true }) },
   localStorage: { getItem: k => k === "shaft.seen" ? stored : null, setItem(k, v) { if (k === "shaft.seen") stored = v; } },
-  setTimeout: () => 1, clearTimeout() {}, setInterval() {}, AbortController,
+  setTimeout: (f, ms) => {if (ms === 150) queued.push(f); return 1;}, clearTimeout() {}, setInterval() {}, AbortController, URLSearchParams,
   CustomEvent: class { constructor(type) { this.type = type; } }, fetch: () => new Promise(() => {}) });
 for (const f of handlers.DOMContentLoaded || []) f();
 const end = () => box.scrollHeight - box.clientHeight;
 assert.equal(box.scrollTop, end(), "opened at the last message");
 assert.equal(newbelow.hidden, true, "nothing new below the last message");
-// marks are per thread now; a mark from before threads ("*") still counts for the thread until it is seen again
-if (input.seen !== null && !input.archived) {
-  const w = JSON.parse(stored).wisp, mark = typeof w === "string" ? w : [w.current || "", w["*"] || ""].sort()[1];
-  assert.equal(mark, input.after, "what is on screen is seen");
-}
+// Visible replies queue a server write; opening never changes legacy browser storage.
+assert.equal(queued.length > 0, !input.archived && input.after === input.latest);
 // Pinned: the feed's box and the feed itself are watched; growth after the jump goes back to the end ...
 const pin = observers.find(o => o.seen.includes(box) && o.seen.includes(feed));
 assert.ok(pin, "the feed and its box are watched for size changes");
@@ -121,9 +121,9 @@ assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");
 
 @unittest.skipUnless(NODE, "node is not installed")
 class OpenAtLastMessageTest(unittest.TestCase):
-    def opens(self, seen, archived=False, after=LATEST, height=250):
+    def opens(self, seen, archived=False, after=LATEST, height=250, followup=False):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
-            "html": feed(archived), "seen": seen, "archived": archived, "after": after, "height": height})],
+            "html": feed(archived, followup), "seen": seen, "latest": LATEST, "archived": archived, "after": after, "height": height})],
             capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -137,9 +137,9 @@ class OpenAtLastMessageTest(unittest.TestCase):
         self.opens(None)                    # a new browser: no mark
 
     def test_w8_a_reply_whose_start_is_above_the_fold_is_not_seen(self):
-        """W8: seen means its start is on screen. A box too short for the newest reply's start above the actions row:
+        """W8: seen means its start is on screen. A box too short for the newest reply's start above a later operator message:
         opened at the end, nothing new is marked seen."""
-        self.opens(SEEN, after=SEEN, height=150)
+        self.opens(SEEN, after=SEEN, height=150, followup=True)
 
     def test_an_earlier_chat_opens_at_the_end(self):
         """An archived chat carries no seen marks, and it does not mark the current chat seen."""

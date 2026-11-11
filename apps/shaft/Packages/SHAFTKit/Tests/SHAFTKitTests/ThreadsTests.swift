@@ -263,11 +263,12 @@ struct ThreadsTests {
 
     /// Regression: drafts were per instance, so with threads a draft typed in thread A showed in thread B, and B's save
     /// pruned A's attached files from the instance's one folder.
-    @Test func aDraftTypedInThreadAIsNotInThreadB() throws {
+    @Test func aDraftTypedInThreadAIsNotInThreadB() async throws {
         let folder = try temporaryFolder("thread-drafts")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try threadsServer()
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("wisp")
         let a = store.chat("wisp", .thread(Self.threadA))
         let b = store.chat("wisp", .thread(Self.threadB))
         #expect(a !== b)
@@ -305,6 +306,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-outbox")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let a = store.chat("wisp", .thread(Self.threadA))
@@ -340,6 +342,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-from")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let from = store.chat("wisp", .from)
@@ -364,6 +367,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-later")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let a = store.chat("wisp", .thread(Self.threadA))
@@ -422,7 +426,7 @@ struct ThreadsTests {
         #expect(store.threadsError["gone"]?.code == "not_found")
     }
 
-    @Test func loadedThreadsPickTheNewestAndAnEndedThreadGivesWay() async throws {
+    @Test func loadedThreadsOpenMainAndAnEndedThreadKeepsItsHistory() async throws {
         let folder = try temporaryFolder("thread-load")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try threadsServer()
@@ -430,16 +434,16 @@ struct ThreadsTests {
         await store.refresh()
         await store.refreshMovedThreads()
         #expect(store.threads("wisp")?.threads.count == 2)
-        #expect(store.defaultRef("wisp") == .thread(Self.threadB))
-        #expect(store.resolve("wisp", nil) == .thread(Self.threadB))
+        #expect(store.defaultRef("wisp") == .from)
+        #expect(store.resolve("wisp", nil) == .from)
         #expect(store.resolve("wisp", .thread(Self.threadA)) == .thread(Self.threadA))
         #expect(store.resolve("wisp", .from) == .from)
-        #expect(store.resolve("wisp", .thread("web-ended")) == .thread(Self.threadB))
+        #expect(store.resolve("wisp", .thread("web-ended")) == .earlier("web-ended"))
 
         // Nothing moved: not asked again.
-        let asked = server.requests.count
+        let asked = server.requests.filter { $0.path.hasPrefix("/app/v1/threads/") }.count
         await store.refreshMovedThreads()
-        #expect(server.requests.count == asked)
+        #expect(server.requests.filter { $0.path.hasPrefix("/app/v1/threads/") }.count == asked)
 
         // A thread's feed reads `/chat/<n>/<cid>`.
         let chat = store.chat("wisp", .thread(Self.threadA))
@@ -571,6 +575,6 @@ struct ThreadsTests {
         #expect(model.openChat == ChatTarget(instance: "tundra", cid: "web-a"))
         #expect(model.openChat?.ref == .thread("web-a"))
         model.notificationTapped(instance: "tundra")
-        #expect(model.openChat?.ref == nil)
+        #expect(model.openChat?.ref == .from)
     }
 }

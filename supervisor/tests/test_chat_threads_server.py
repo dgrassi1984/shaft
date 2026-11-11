@@ -17,6 +17,7 @@ class ServerThreadsTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         self.patch(web_chat, "SUP_DIR", self.root)
+        self.patch("supervisor.core", "SUP_DIR", self.root)
         self.patch("supervisor.feedback", "by_target", return_value={})
 
     def patch(self, target, name, *args, **kwargs):
@@ -110,7 +111,7 @@ class ServerThreadsTest(unittest.TestCase):
         self.assertEqual([web_alerts._cid_of_message(r) for r in rows], [c["id"], "from", "from"])
         self.assertEqual(web_alerts.event(rows[0])["url"], f"/i/example/chat?id={c['id']}")
 
-    def test_digest_lists_only_other_open_threads_newest_first(self):
+    def test_digest_lists_only_other_open_threads_in_saved_order(self):
         a = self.chat(turns=[dict(role="user", content="current", ts="2026-02-01")])
         self.assertEqual(web_chat._api_messages(a), [{"role": "user", "content": "current"}])
         self.chat("web-b", turns=[dict(role="user", content="question\nextra", ts="2026-02-02"),
@@ -118,11 +119,13 @@ class ServerThreadsTest(unittest.TestCase):
         self.chat("web-c", turns=[dict(role="user", content="newest", ts="2026-02-04")])
         self.chat("web-d", state="ended")
         self.chat("web-e", name="other")
+        from supervisor import order
+        order.move_thread("example", "web-b", None)
         digest = web_chat._api_messages(a)[0]
         self.assertEqual(digest["role"], "system")
         self.assertEqual(digest["content"], "Other open threads:\n"
-                         "- web-c «web-c» (last moved 2026-02-04): you: newest / me: \n"
                          "- web-b «web-b» (last moved 2026-02-03): you: question / me: answer\n"
+                         "- web-c «web-c» (last moved 2026-02-04): you: newest / me: \n"
                          "read_thread reads any of them.")
 
     def test_read_thread_lists_reads_scopes_and_refuses_replay(self):

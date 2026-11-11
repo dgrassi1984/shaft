@@ -53,7 +53,7 @@ def event(m: dict) -> dict:
     from .web_md import first_line
     first = first_line(m["text"]) or "(a file)"                       # the text, not its Markdown
     return {"title": f"{name} {'asks' if m.get('kind') == 'question' else 'says'}", "body": first[:160],
-            "url": f"/i/{name}/from" if cid == "from" else f"/i/{name}/chat?id={cid}",
+            "url": f"/i/{name}/chat" if cid == "from" else f"/i/{name}/chat?id={cid}",
             "cid": cid, "tag": f"{name}-{m['file']}"}   # its own: a second never replaces it
 
 

@@ -158,12 +158,19 @@ def _activity(chat: dict) -> tuple[str, str]:
 
 
 def threads(name: str) -> list[dict]:
-    """Open conversations, most recently active first."""
-    return sorted((c for c in chats(name) if c.get("state") != "ended"), key=_activity, reverse=True)
+    """Keep the operator's order while replies arrive."""
+    from . import order
+    return order.threads(name, [c for c in chats(name) if c.get("state") != "ended"])
 
 
-def current(name: str) -> dict | None:
-    return next(iter(threads(name)), None)
+def target(name: str, cid: str | None, login: str = "", *, writing: bool = True) -> dict | None:
+    """The conversation a message, a stream, a document or an action names: a thread's id, or Main — no cid, "from" or
+    "current" (the plain chat page of a build from before Main). Main is the instance's own conversation (from_chat),
+    made when first written to; None while there is none and nothing writes (2026-11-11: the instance opens Main; an
+    untargeted message went to the most recently active thread, a target that moved with every reply)."""
+    if not cid or cid in (FROM, "current"):
+        return from_chat(name, login, create=writing)
+    return thread_of(name, cid, writing=writing)
 
 
 def from_chat(name: str, login: str = "", create: bool = False) -> dict | None:
@@ -177,7 +184,7 @@ def from_chat(name: str, login: str = "", create: bool = False) -> dict | None:
         if found := next((c for c in _all_chats(name) if c.get("kind") == FROM), None):
             return found
         chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "kind": FROM, "login": login,
-                "created": _now(), "state": "idle", "turns": [], "reply": None, "title": f"From {name}"}
+                "created": _now(), "state": "idle", "turns": [], "reply": None, "title": name}
         save(chat)
         return chat
 
@@ -204,7 +211,7 @@ def thread_of(name: str, cid: str, *, writing: bool = True) -> dict:
     if cid == FROM:
         chat = from_chat(name, create=writing)
         if not chat:
-            raise Refused(f"no conversation in From {name} yet")
+            raise Refused(f"no conversation with {name} yet")
         return chat
     chat = load(cid)
     if not chat or chat.get("instance") != name:
@@ -219,6 +226,9 @@ def _title(text: str) -> str:
 
 
 def title(chat: dict) -> str:
+    """A thread's title; Main is called by its instance's name (it is the instance's own conversation)."""
+    if is_from(chat):
+        return chat["instance"]
     return chat.get("title") or excerpt(chat)[0][:80] or "New thread"
 
 
@@ -248,16 +258,14 @@ _away: dict[tuple[str, str, str], float] = {}
 
 
 def watching(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     if at is not None and at <= _away.get((name, cid, device), float("-inf")):
         return
     _watched[(name, cid, device)] = time.monotonic()
 
 
 def unwatch(name: str, device: str, at: float | None = None, cid: str | None = None) -> None:
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     _watched.pop((name, cid, device), None)
     if at is not None:
         _away[(name, cid, device)] = max(at, _away.get((name, cid, device), float("-inf")))
@@ -265,8 +273,7 @@ def unwatch(name: str, device: str, at: float | None = None, cid: str | None = N
 
 def watchers(name: str, cid: str | None = None) -> set[str]:
     """Only devices looking at this thread suppress its push."""
-    cid = cid if cid is not None else (shown(name) or {}).get("id", "")
-    cid = public_id(name, cid) or ""          # the From conversation, by its id or as "from": one key
+    cid = public_id(name, cid or "from") or "from"          # the From conversation, by its id or as "from": one key
     now = time.monotonic()
     return {d for (n, c, d), at in list(_watched.items()) if n == name and c == cid and now - at < WATCH_S}
 
@@ -279,7 +286,7 @@ def reply_event(chat: dict) -> dict:
     first = first_line(t.get("content") or "") or (t.get("note") or "")          # the text, not its Markdown
     title = f"{name}'s reply failed" if t.get("note") else f"{name} replied"
     if is_from(chat):                          # its reply opens From, as a message from a cycle does
-        return {"title": title, "body": first[:160], "url": f"/i/{name}/from", "cid": FROM, "tag": name}
+        return {"title": title, "body": first[:160], "url": f"/i/{name}/chat", "cid": FROM, "tag": name}
     return {"title": title, "body": first[:160], "url": f"/i/{name}/chat?id={chat['id']}", "cid": chat["id"], "tag": name}
 
 
@@ -305,42 +312,27 @@ def _short_line(line: str) -> str:
 
 
 def summary(name: str, history: list[dict] = ()) -> dict:
-    """For the rail: the last line of the chat its page shows (the most recently active open thread, else the newest
-    chat — the one `shown` and the feed's `last` read, so the apps' unread mark never compares two chats), when the
-    instance last answered in it or sent the operator a message (`history`: messages.history(); its send_message cards
-    show in the chat over the span sent_during gives, and one never lit the rail: W8, review 2026-10-24), and whether
-    any of its threads is replying."""
-    c = current(name) or next(iter(chats(name)), None)
-    since = (c.get("cleared") or c["created"]) if c else ""
-    sent_all = [m for m in history if m["from"] == name and m["to"] == "operator" and m["ts"] >= since
-                and (since or not m.get("read"))]
-    sent = next(iter(reversed(sent_all)), None)
-    sent_line = first_line((sent or {}).get("text", ""))
-    # A reply in From counts as one in a thread: with no thread open, the rail said nothing was going on
-    replying = any(x.get("state") == "replying" for x in open_chats(name))
-    if not c or c.get("cleared"):
-        out = {"line": _short_line(sent_line), "last": last_from(None, sent_all),
-               "last_count": last_count(None, sent_all)} if sent else {}
-        return {**out, "replying": True} if replying else out
-    turns = c.get("turns") or []
-    text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
-    who = "you: " if turns and turns[-1]["role"] == "user" else ""
-    # The instance's reply as the page shows it, not its Markdown (the rail read "Finished the **smoke** reply.");
-    # the operator's own text as they wrote it, as the chat shows it, without the lines they quoted
-    first = (next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "") if who
+    """For the rail and the apps' instance rows: Main's last line (what the instance row opens: its last turn or
+    message, the operator's own as they wrote it), when it last moved, and whether any conversation of the instance
+    is replying. Main's model holds its turns and every message from the instance outside a thread, so it reads them
+    whether or not its record exists yet. `history`: kept for callers; Main reads the message log itself."""
+    model = from_feed(name)
+    item = next((i for i in reversed(model["items"]) if i.get("text") or i.get("content")), None)
+    out = {"replying": True} if any(x.get("state") == "replying" for x in open_chats(name)) else {}
+    if not item:
+        return out
+    text = item.get("text") or item.get("content") or ""
+    mine = item["type"] in ("user", "later")
+    # The instance's reply as the page shows it, not its Markdown; the operator's own text without the lines they quoted
+    first = (next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "") if mine
              else first_line(text, quotes=False))
-    if sent and sent["ts"] >= (turns[-1]["ts"] if turns else ""):
-        who, first = "", sent_line
-    return {"line": _short_line(who + first), "last": last_from(c, sent_all) or "",
-            "last_count": last_count(c, sent_all),
-            "replying": replying}
+    return {**out, "line": _short_line(("you: " if mine else "") + first), "last": model["last"] or "",
+            "last_count": model["last_count"]}
 
 
 def shown(name: str) -> dict | None:
-    """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one) — unless
-    the operator cleared it: then none, until they write again."""
-    c = current(name) or next(iter(chats(name)), None)
-    return None if c and c.get("cleared") else c
+    """The conversation the instance's own page shows: Main (none before its first message)."""
+    return from_chat(name)
 
 
 def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
@@ -440,6 +432,36 @@ FAILURE_WHY = {"connection": "The connection to the instance failed.",
                "service": "The service could not finish the reply.",
                "model": "The model could not finish the reply."}
 RETRY_CONFIRM = "Actions may already have run. Send it again anyway?"
+
+
+def failed(chat: dict | None) -> bool:
+    """The latest assistant turn failed, excluding a stopped or retried reply."""
+    turn = next((t for t in reversed((chat or {}).get("turns") or []) if t.get("role") == "assistant"), {})
+    return bool(turn.get("note") and not turn.get("retried")
+                and turn.get("note_kind", "stopped" if turn.get("note") == "stopped by you" else "unknown") != "stopped")
+
+
+def pending_notes(name: str) -> list[dict]:
+    """Unread next-cycle notes across the instance, independent of the feed window."""
+    from . import messages
+    rows = [row for row in messages.history() if row.get("from") == "operator" and row.get("to") == name
+            and row.get("via") == messages.BACKGROUND and not row.get("read") and not row.get("cancelled")]
+    if not rows:
+        return []
+    opened = {c["id"]: c for c in threads(name)}
+    main = from_chat(name)
+    busy = (any(c.get("state") == "replying" for c in opened.values())
+            or bool(main and main.get("state") == "replying") or _cycle_alive(name))
+    out = []
+    for row in rows:
+        chat = opened.get(row.get("thread"))
+        cancellable = takes_back(row) and not busy
+        out.append({"file": row["file"], "mid": row.get("mid"), "text": row.get("shown", row.get("text", "")),
+                    "ts": row["ts"], "cid": chat["id"] if chat else "from",
+                    "title": title(chat) if chat else name, "cancellable": cancellable,
+                    "reason": None if cancellable else ("A cycle or reply may already have read this note." if busy else
+                                                       "This note delivered an answer, comment, rating or decision.")})
+    return out
 
 
 def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | None = None) -> dict | None:
@@ -610,8 +632,8 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
 def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
     """What `name`'s chat shows now (build): the current one (`shown`), or its chat `cid` — read-only when that one has
     ended. None when `cid` is not a chat of `name`."""
-    if cid is None:
-        chat, archived = shown(name), False
+    if cid is None or cid == FROM:                 # the instance's own page: Main
+        return from_feed(name, whole=whole)
     else:
         chat = load(cid)
         if not chat or chat.get("instance") != name:
@@ -621,6 +643,7 @@ def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
 
 
 def new_thread(name: str, login: str, title: str = "") -> dict:
+    from . import order
     chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "login": login, "created": _now(), "state": "idle",
             "turns": [], "reply": None}
     if value := _title(title):
@@ -628,6 +651,7 @@ def new_thread(name: str, login: str, title: str = "") -> dict:
     with _inst_lock(name):
         _adopt_edits(name, chat)
         save(chat)
+        order.add_thread(name, chat["id"])
     return chat
 
 
@@ -794,9 +818,9 @@ def spoken(chat: dict) -> bool:
     return last.get("via") == "voice"
 
 
-FROM_NOTE = ("This conversation is From {name}: the operator's page of what you sent from your cycles outside any "
-             "thread, and of what they left for your next cycle; they now write to you here too. Its earliest part "
-             "may be cut: read_thread reads more of it.")
+FROM_NOTE = ("This is your main conversation with the operator. It also holds what you sent them from your cycles "
+             "outside any thread, and what they left for your next cycle. Its earliest part may be cut: read_thread "
+             "reads more of it.")
 FROM_ITEM_CHARS = 3000      # one From message in a From reply's request: a cycle's report can be long
 FROM_CHARS = 60000          # a From reply's request: From never ends, and every cycle message is in it
 
@@ -829,8 +853,9 @@ def _api_messages(chat: dict) -> list[dict]:
                + "\nread_thread reads any of them."}] if digest else []
     items = _dialogue(chat)
     if is_from(chat):
-        prefix += [{"role": "system", "content": FROM_NOTE.format(name=chat["instance"])}]
         items = _from_window(items)
+        if any(it[3] for it in items):        # said only when something from outside its replies is in it
+            prefix += [{"role": "system", "content": FROM_NOTE}]
     own = [k for k, it in enumerate(items) if not it[3]]          # the thread's own turns, not routed in
     if own and items[own[-1]][1] == "user":
         # The reply answers the operator's last message: what a cycle routed here at or after it (the same second, or
@@ -1222,7 +1247,7 @@ def doc_saved(name: str, login: str, path: str, old: str | None, new: str | None
 
 
 def _doc_saved(name: str, login: str, path: str, old: str | None, new: str | None, sha: str, cid: str = "") -> str:
-    chat = thread_of(name, cid) if cid else current(name) or new_thread(name, login)
+    chat = target(name, cid, login)
     with _lock(chat["id"]):
         chat = load(chat["id"])
         pend = chat.setdefault("pending_edits", {})
@@ -1344,9 +1369,10 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
                 raise Refused(str(e)) from None
         asked = messages.quoted_questions(name, text)
         body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
-        chat = (current(name) if cid == "current" else from_chat(name, login, create=True) if cid == FROM
-                else load(cid) if cid else None)
-        thread = ((chat["id"], title(chat)) if chat and chat.get("instance") == name and chat.get("state") != "ended"
+        chat = target(name, cid, login) if not cid or cid in (FROM, "current") else load(cid)
+        # Main is named for the instance reading the note: its main conversation with the operator
+        thread = ((chat["id"], "main conversation" if is_from(chat) else title(chat))
+                  if chat and chat.get("instance") == name and chat.get("state") != "ended"
                   else None)
         try:
             path = messages.deliver_background(name, body, shown=text, attachments=atts, mid=mid, comments=comments,
@@ -1399,9 +1425,9 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
         # named is checked: that one may have ended since.
         if found := next((t for t in open_chats(name) if _in_chat(t, mid)), None):
             return found, f"already sent to {name}"
-        c = thread_of(name, cid) if cid else current(name)
+        c = target(name, cid, login)
         if messages.sent_mid(name, mid):          # the same message, sent for its next cycle before its answer was lost
-            return current(name) or {}, f"already sent to {name} for its next cycle"
+            return c or {}, f"already sent to {name} for its next cycle"
         if retry_of.isdigit() and c and c.get("state") != "replying" and not files:
             with _lock(c["id"]):
                 c = load(c["id"])
@@ -1421,7 +1447,7 @@ def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid:
     """Keep a message for the next reply; an idle chat sends it now."""
     from . import messages
     with _inst_lock(name):
-        chat = thread_of(name, cid) if cid else current(name)
+        chat = target(name, cid, login)
         if not chat or chat["state"] != "replying":
             return send(name, login, text, files, mid=mid, voice=voice, cid=cid)
         if messages.sent_mid(name, mid):
@@ -1492,7 +1518,7 @@ def uncycle(name: str, login: str, mid: str = "", file: str = "") -> str:
 
 def unqueue(name: str, mid: str, cid: str = "") -> str:
     with _inst_lock(name):
-        chat = thread_of(name, cid) if cid else current(name)
+        chat = target(name, cid, writing=False)
         if chat:
             with _lock(chat["id"]):
                 chat = load(chat["id"])
@@ -1506,12 +1532,11 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
           voice: bool = False, cid: str = "") -> tuple[dict, str]:
     from . import messages, doc_comments
     text = text.strip()
-    chat = thread_of(name, cid) if cid else current(name)
+    chat = target(name, cid, login)
     if not text and not files and not comment_block and not (chat or {}).get("pending_edits"):
         raise Refused("an empty message is not sent")
     if len(text) > MAX_TEXT:
         raise Refused(f"a message is at most {MAX_TEXT} characters ({len(text)})")
-    chat = chat or new_thread(name, login)
     cid = chat["id"]
     atts, lines = ([], "")
     if files:
@@ -1645,8 +1670,8 @@ def _clear(name: str, cid: str) -> str:
     chat = thread_of(name, cid, writing=False)
     if chat.get("cleared"):
         raise Refused("there is nothing to clear")
-    if chat.get("state") == "ended" and (shown(name) or {}).get("id") != cid:
-        raise Refused("that is not the chat on this page any more: reload it")
+    if chat.get("state") == "ended":         # no page shows it but Earlier chats: there is nothing on screen to clear
+        raise Refused("that thread has ended: it is in Earlier chats")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
     said = end(chat["id"]) if chat.get("state") != "ended" else ""

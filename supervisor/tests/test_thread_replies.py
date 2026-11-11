@@ -229,26 +229,27 @@ class ThreadRepliesTest(unittest.TestCase):
         refused = self.send(b, CID)                        # the note is something the operator wrote there since
         self.assertIn("wrote there 1 more time(s)", refused["error"])
 
-    def test_a_note_from_the_plain_page_joins_the_thread_it_follows(self):
-        """The plain chat page's composer is drawn before its first message opens a thread: it names "current", so
-        a note sent from it after that message still belongs to the thread (found in the browser check)."""
+    def test_a_note_with_no_thread_named_goes_to_main_not_the_newest_thread(self):
+        """2026-11-11: the instance's own page is Main. A note that names no thread — or "current", the plain page of a
+        build from before Main — names Main, not the most recently active thread (a target that moved with every
+        reply). A note written in a thread still names it."""
         self.thread()
-        file, _ = web_chat.background("wisp", ME, "and the second half", [], mid="m1", cid="current")
-        self.assertIn(f"Conversation: {CID} («Report review»)", (self.f.root / "inbox" / file).read_text())
-        self.assertEqual(messages.history()[0]["thread"], CID)
-
-    def test_a_note_from_from_or_for_an_ended_thread_stays_in_from(self):
-        """None, an ended thread or no thread to follow: From, naming no conversation. Written in From itself, it names
-        the From conversation (2026-11-11: From answers like a thread), and still shows in From."""
-        self.thread(state="ended")
-        for cid in ("", CID, "current"):
+        for cid in ("", "current", "from"):
             file, _ = web_chat.background("wisp", ME, f"note {cid}", [], mid=f"m-{cid or 0}", cid=cid)
-            self.assertNotIn("Conversation:", (self.f.root / "inbox" / file).read_text())
-        file, _ = web_chat.background("wisp", ME, "note from", [], mid="m-from", cid="from")
-        fc = web_chat.from_chat("wisp")
-        self.assertIn(f"Conversation: {fc['id']} («From wisp»)", (self.f.root / "inbox" / file).read_text())
-        self.assertEqual([m.get("thread") for m in messages.history()], [None, None, None, fc["id"]])
-        self.assertEqual(len(web_chat.from_feed("wisp")["items"]), 4)
+            fc = web_chat.from_chat("wisp")
+            self.assertIn(f"Conversation: {fc['id']} («main conversation»)", (self.f.root / "inbox" / file).read_text())
+        file, _ = web_chat.background("wisp", ME, "in the thread", [], mid="m-t", cid=CID)
+        self.assertIn(f"Conversation: {CID} («Report review»)", (self.f.root / "inbox" / file).read_text())
+        self.assertEqual([m.get("thread") for m in messages.history()], [fc["id"]] * 3 + [CID])
+
+    def test_a_note_for_an_ended_thread_goes_to_main_naming_no_conversation(self):
+        """A note written in a thread that has ended since: it shows in Main and names no conversation (its cycle
+        answers in Main, outside any thread)."""
+        self.thread(state="ended")
+        file, _ = web_chat.background("wisp", ME, "late note", [], mid="m-late", cid=CID)
+        self.assertNotIn("Conversation:", (self.f.root / "inbox" / file).read_text())
+        self.assertEqual([m.get("thread") for m in messages.history()], [None])
+        self.assertEqual(len(web_chat.from_feed("wisp")["items"]), 1)
 
 
 class ThreadNoteRouteTest(WebTest):
@@ -261,15 +262,19 @@ class ThreadNoteRouteTest(WebTest):
         self.addCleanup(p.stop)
         self.cookie = self.paired()
 
-    def test_the_plain_pages_composer_names_its_thread_and_the_route_passes_it(self):
+    def test_the_instance_page_writes_to_main_a_threads_page_to_its_thread(self):
+        """The instance's own page (/i/<n>/chat) is Main: its composer names it ("from"). A thread's page names the
+        thread. An older page still sending thread=current reaches the route unchanged (target() reads it as Main)."""
         web_chat.save({"id": CID, "instance": "wisp", "login": ME, "created": "2026-11-10T21:08:48", "state": "idle",
                        "turns": [turn("user", "2026-11-10T21:11:33", "hi")], "reply": None, "talks": []})
         page = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
-        self.assertIn('<input type="hidden" name="thread" value="current">', page)
+        composer = page.split('class="composer"', 1)[1].split("</form>", 1)[0]
+        self.assertIn('<input type="hidden" name="cid" value="from">', composer)
+        self.assertNotIn('name="thread"', composer)
         pinned = self.req(f"/i/wisp/chat?id={CID}", cookie=self.cookie).body.decode()
         self.assertIn(f'<input type="hidden" name="cid" value="{CID}">', pinned)
         self.assertNotIn('name="thread"', pinned)
-        self.assertNotIn('name="cid"', page.split('class="composer"', 1)[1].split("</form>", 1)[0])
+        self.assertEqual(self.req("/i/wisp/from", cookie=self.cookie).status, 302)
         body = (b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nlater\r\n'
                 b'--B\r\nContent-Disposition: form-data; name="background"\r\n\r\n1\r\n'
                 b'--B\r\nContent-Disposition: form-data; name="thread"\r\n\r\ncurrent\r\n'

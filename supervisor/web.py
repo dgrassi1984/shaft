@@ -578,6 +578,23 @@ def feedback_action(name: str, login: str, form: dict) -> tuple[str, dict | None
 
 
 def _post(req: Request, dev: str) -> Response:
+    if req.path == "/seen":
+        from . import web_seen
+        form = req.form()
+        name, key, last = (form.get(k, "") for k in ("inst", "key", "last"))
+        if name not in _names():
+            return _not_found(req.path)
+        if not key or not last:
+            return _html(400, web_pages.h("<p>inst, key and last are required.</p>"))
+        try:
+            count = int(form.get("count", "0"))
+        except ValueError:
+            count = -1
+        if count < 0:
+            return _html(400, web_pages.h("<p>count must be a nonnegative integer.</p>"))
+        if not web_seen._seen_until(dev, name, key, last, count):
+            return _not_found(req.path)
+        return _html(200, web_pages.h("<p>Seen.</p>"))
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
@@ -641,6 +658,21 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if req.path == "/instances/move" or re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/move", req.path):
+        from . import order
+        form = req.form()
+        try:
+            if req.path == "/instances/move":
+                moved = order.move_instance(form.get("name", ""), form.get("after") or None)
+            else:
+                name = req.path.split("/")[2]
+                if name not in _names():
+                    return _not_found(req.path)
+                moved = order.move_thread(name, form.get("id", ""), form.get("after") or None)
+        except order.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h('<p data-rev="{rev}" data-ids="{ids}">Order saved.</p>',
+                                      rev=moved["rev"], ids=json.dumps(moved["ids"])))
     if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/unqueue", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -747,8 +779,8 @@ IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/pn
 
 
 def _names() -> list[str]:
-    from .core import instance_names
-    return instance_names()
+    from . import core, order
+    return order.instances(core.instance_names())
 
 
 def _get(req: Request, csrf: str) -> Response | None:
@@ -808,11 +840,13 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
-        if chat and chat.get("instance") != m[1]:
-            return None
         past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
-        read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
+        if not qs.get("id"):                 # an older page of the instance's own chat: Main's header
+            return _html(200, v.chat_header(m[1], _live(m[1]), None, past, from_feed=True))
+        chat = web_chat.load(qs["id"])
+        if not chat or chat.get("instance") != m[1]:
+            return None
+        read_only = chat.get("state") == "ended"
         return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=read_only))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
@@ -821,10 +855,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if qs.get("away"):                          # its page went hidden on this device: push to it again (W9)
             web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid=qs.get("id"))
             return Response(204, b"")
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
-        if chat and chat.get("instance") != m[1]:
+        if not qs.get("id"):                 # an older page of the instance's own chat: Main's feed
+            at = _page_ms(req.headers.get("x-shaft-at"))
+            (web_chat.unwatch if req.headers.get("x-shaft-watching") == "0" else web_chat.watching)(
+                m[1], req.device, at, cid="from")
+            return _html(200, v.feed_html(web_chat.from_feed(m[1], whole=qs.get("all") == "1"), from_feed=True))
+        chat = web_chat.load(qs["id"])
+        if not chat or chat.get("instance") != m[1]:
             return None
-        if not chat or chat.get("state") != "ended":
+        if chat.get("state") != "ended":
             # A covering sheet still polls the feed, but must not silence push. Stamp both paths so a late
             # poll sent before the sheet opened cannot restore watching (as with the page's away signal).
             at = _page_ms(req.headers.get("x-shaft-at"))
@@ -1133,7 +1172,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
     comment threads, which are in the fragment so a comment alone changes its ETag.
     att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview).
     folder (?dir=, a subfolder of notes/docs/): the list shows that folder; asking for one is asking for the list."""
-    from . import doc_comments, docs, web_views as v
+    from . import doc_comments, docs, web_chat, web_views as v
     if att:
         return "", v.attachment_panel(name, *_attachment_preview(name, att))
     marked = v.in_chat(chat)
@@ -1164,7 +1203,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
                              ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
                              thread=thread, archived=archived, folder=folder, sort=sort,
-                             chat_id=(chat or {}).get("id", "") if archived else "")
+                             chat_id=(chat or {}).get("id", "") if not web_chat.is_from(chat) else "")
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -1240,15 +1279,24 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         body = v.join([v.link(f"/i/{v.q(name)}/chat", "Back to the current chat"),
                        v.section("Earlier chats", v.earlier_chats(name, past))])
         return _html(200, v.instance_frame(name, "chat", "Earlier chats", body, names, csrf))
-    if tab == "from":
+    if tab == "from":                  # From became Main, the instance's own page (2026-11-11): old links land there
+        return Response(302, b"", {"Location": f"/i/{name}/chat" + ("?all=1" if qs.get("all") == "1" else "")})
+    if tab == "chat" and not qs.get("id"):     # the instance's own page: Main
         from . import web_chat
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
         whole = qs.get("all") == "1"
+        doc, panel = _docs_panel(name, web_chat.from_chat(name), qs.get("doc", ""), qs.get("thread", ""),
+                                 att=qs.get("att", ""), folder=qs.get("dir", ""), sort=doc_sort,
+                                 listing_only=qs.get("list") == "1")
         return _html(200, v.from_page(name, web_chat.from_feed(name, whole=whole), past, _live(name), names, csrf,
-                                      later=_next_cycle(name), whole=whole))
+                                      later=_next_cycle(name), whole=whole, panel=panel, doc=doc,
+                                      att=qs.get("att", ""), folder=qs.get("dir", ""),
+                                      sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
+                                      listing_only=qs.get("list") == "1" and not qs.get("doc")),
+                     {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab == "chat":
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
+        chat = web_chat.load(qs["id"])
         if chat and chat.get("instance") != name:
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
@@ -1320,12 +1368,14 @@ def _rail_chats(names: list[str]) -> dict[str, dict]:
             waiting = (c.get("reply") or {}).get("waiting") if c.get("state") == "replying" else None
             threads.append({"id": c["id"], "title": web_chat.title(c), "waiting": waiting,
                             "state": "waiting" if waiting else "replying" if c.get("state") == "replying" else "idle",
+                            "failed": web_chat.failed(c),
                             "last": web_chat.last_from(c, web_chat.sent_during(n, c)) or ""})
         fc = web_chat.from_chat(n)               # a reply in From pulses its dot, as a thread's does
         waiting = (fc.get("reply") or {}).get("waiting") if fc and fc.get("state") == "replying" else None
         out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or "",
                   "from_state": ("waiting" if waiting else "replying" if fc and fc.get("state") == "replying"
-                                 else "idle"), "from_waiting": waiting}
+                                 else "idle"), "from_waiting": waiting, "from_failed": web_chat.failed(fc),
+                  "notes": web_chat.pending_notes(n)}
     return out
 
 
@@ -1333,10 +1383,8 @@ def _rail_thread(names: list[str], current: str, thread: str) -> str:
     """The thread lit in the rail: the one the page named (?t=: an id, or "from"); on an instance's plain chat page
     (t=current), which follows its current thread, the one that page shows; none on its other pages."""
     from . import web_chat
-    if thread != "current":
-        return thread
-    shown = web_chat.shown(current[2:]) if current.startswith("i:") and current[2:] in names else None
-    return shown["id"] if shown and shown.get("state") != "ended" else ""
+    # the plain chat page of an older build ("current") is Main now
+    return "from" if thread == "current" else thread
 
 
 def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:

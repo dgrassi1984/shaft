@@ -71,7 +71,7 @@ class PagesTest(WebTest):
 class EveryPageShowsWhatItsTabShows(PagesTest):
     """The strings test_control_panel.test_every_tab_renders_its_data asserts for each TUI tab."""
 
-    def test_issue_61_running_web_version_outside_polled_rail(self):
+    def test_issue_61_running_web_version_inside_manage_footer(self):
         """#61: reverting removes the running version and checkout link from shared navigation."""
         from supervisor import version
         rec = {"commit": "abc1234+changes", "describe": "v0.2.0-60-gabc1234+changes"}
@@ -89,7 +89,8 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
                 self.assertIn('<a href="/services">checked out: v0.2.0-61-gdef5678</a>', body)
                 rec.update(commit="def5678", describe="v0.2.0-61-gdef5678")
                 self.assertNotIn("checked out:", self.get("/overview"))
-        self.assertNotIn("nav-version", web_pages.rail([]))
+        # M2b moves the version into the polled Manage footer with the links and Reload.
+        self.assertIn("nav-version", web_pages.rail([]))
         self.assertIn('aria-haspopup="dialog">unknown — restart to record</button>', self.get("/overview"))
 
     def test_issue_61_services_version_column_and_checkout(self):
