@@ -318,30 +318,41 @@ private struct InstanceStateMark: View {
         Group {
             if state.waiting != nil || state.state == "waiting" || state.state == "replying" || state.failed {
                 ConversationStateMark(state: state.state, waiting: state.waiting, failed: state.failed)
+                    .font(.system(size: 13))
+                    .scaleEffect(0.85)
             } else if row.state.hasPrefix("in a cycle") || row.state.contains("running") {
                 Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(Color.warning)
                     .symbolEffect(.pulse, isActive: !reduceMotion)
             } else if row.state.hasPrefix("sleeping") {
-                Image(systemName: "bed.double").font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+                Image(systemName: "bed.double").font(.system(size: 11)).foregroundStyle(Color.textSecondary)
             } else if row.state.contains("paused") {
-                Image(systemName: "pause.circle").font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+                Image(systemName: "pause.circle").font(.system(size: 11)).foregroundStyle(Color.textSecondary)
             } else {
                 Color.clear
             }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: SidebarMetrics.state, height: 16)
         .accessibilityHidden(true)
     }
 }
 
-#if os(macOS)
 private enum SidebarMetrics {
+    static let stateGap: CGFloat = 6
+    static let nameIndent: CGFloat = state + stateGap
+    #if os(macOS)
+    static let state: CGFloat = 12
     static let chevron: CGFloat = 14
     static let compose: CGFloat = 20
+    static let controlHeight: CGFloat = 24
     static let rowInsets = EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
-    static let nameIndent: CGFloat = chevron + 4 + 16 + 4
+    #else
+    static let state: CGFloat = 14
+    static let chevron: CGFloat = 44
+    static let compose: CGFloat = 44
+    static let controlHeight: CGFloat = 44
+    static let rowInsets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+    #endif
 }
-#endif
 
 struct InstanceRowView: View {
     let row: InstanceRow
@@ -355,7 +366,7 @@ struct InstanceRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: Design.Space.s4) {
+            HStack(spacing: SidebarMetrics.stateGap) {
                 InstanceStateMark(row: row, main: main)
                 Text(row.name)
                     .font(.headline)
@@ -383,7 +394,7 @@ struct InstanceRowView: View {
                 Text(subline)
                     .font(.subheadline).foregroundStyle(Color.textSecondary)
                     .lineLimit(1)
-                    .padding(.leading, 16 + Design.Space.s4)
+                    .padding(.leading, SidebarMetrics.nameIndent)
             }
         }
         .foregroundStyle(Color.textPrimary)
@@ -458,6 +469,7 @@ struct InstancesList: View {
     @Binding var selection: ChatSelection?
     var settings: () -> Void
     @Environment(InstancesStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(SidebarDisclosure.key) private var expanded = ""
     @State private var closing: ChatSelection?
     @State private var renaming: ChatSelection?
@@ -562,25 +574,6 @@ struct InstancesList: View {
         let tag = ChatSelection(row.name, store.defaultRef(row.name))
         let hasThreads = store.threads(row.name)?.threads.isEmpty == false
         return HStack(spacing: 4) {
-            if hasThreads {
-                Button { SidebarDisclosure.set(row.name, expanded: !isExpanded(row.name)) } label: {
-                    Image(systemName: isExpanded(row.name) ? "chevron.down" : "chevron.right")
-                        .font(.caption)
-                        #if os(macOS)
-                        .frame(width: SidebarMetrics.chevron, height: 24)
-                        #else
-                        .frame(width: 20, height: 44)
-                        #endif
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(SidebarRowLabels.disclosure(row.name, expanded: isExpanded(row.name)))
-            } else {
-                #if os(macOS)
-                Color.clear.frame(width: SidebarMetrics.chevron, height: 24).accessibilityHidden(true)
-                #else
-                Color.clear.frame(width: 20, height: 44).accessibilityHidden(true)
-                #endif
-            }
             InstanceRowView(row: row, main: store.threads(row.name)?.from, collapsed: !isExpanded(row.name),
                             notes: store.pendingNotes[row.name]?.count ?? 0)
                 .contentShape(Rectangle())
@@ -595,16 +588,32 @@ struct InstancesList: View {
                 .allowsHitTesting(composeVisible(row.name))
                 .accessibilityHidden(!composeVisible(row.name))
             #else
-            if composeVisible(row.name) { composeButton(row.name) }
+            Group {
+                if composeVisible(row.name) { composeButton(row.name) }
+                else { Color.clear.accessibilityHidden(true) }
+            }
+            .frame(width: SidebarMetrics.compose, height: SidebarMetrics.controlHeight)
             #endif
+            if hasThreads {
+                Button { SidebarDisclosure.set(row.name, expanded: !isExpanded(row.name)) } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.textSecondary)
+                        .rotationEffect(.degrees(isExpanded(row.name) ? 90 : 0))
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isExpanded(row.name))
+                        .frame(width: SidebarMetrics.chevron, height: SidebarMetrics.controlHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(SidebarRowLabels.disclosure(row.name, expanded: isExpanded(row.name)))
+            } else {
+                Color.clear.frame(width: SidebarMetrics.chevron, height: SidebarMetrics.controlHeight)
+                    .accessibilityHidden(true)
+            }
         }
         .tag(tag)
         .onHover { hovering = $0 ? row.name : nil }
-        #if os(macOS)
         .listRowInsets(SidebarMetrics.rowInsets)
-        #else
-        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-        #endif
         .listRowSeparator(.hidden)
         .listRowBackground(rowFill(selected: selection == tag))
         .contextMenu {
@@ -624,11 +633,17 @@ struct InstancesList: View {
     }
 
     private func composeButton(_ name: String) -> some View {
-        Button { newThread(name) } label: { Image(systemName: "square.and.pencil") }
-            .buttonStyle(.borderless)
-            .focused($composeFocus, equals: name)
-            .disabled(store.threads(name) == nil)
-            .accessibilityLabel("New thread with \(name)")
+        Button { newThread(name) } label: {
+            Image(systemName: "square.and.pencil")
+                #if os(iOS)
+                .frame(width: SidebarMetrics.compose, height: SidebarMetrics.controlHeight)
+                .contentShape(Rectangle())
+                #endif
+        }
+        .buttonStyle(.borderless)
+        .focused($composeFocus, equals: name)
+        .disabled(store.threads(name) == nil)
+        .accessibilityLabel("New thread with \(name)")
     }
 
     private func threadRows(_ name: String, _ threads: ThreadsResponse) -> some View {
@@ -647,11 +662,7 @@ struct InstancesList: View {
         return ThreadRowView(thread: thread)
             .tag(tag)
             .help(thread.title)
-            #if os(macOS)
             .listRowInsets(SidebarMetrics.rowInsets)
-            #else
-            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-            #endif
             .listRowSeparator(.hidden)
             .listRowBackground(rowFill(selected: selection == tag))
             .contextMenu {
@@ -753,11 +764,13 @@ struct InstancesList: View {
 
 struct ThreadRowView: View {
     let thread: ThreadRow
-    static let indent: CGFloat = 24
 
     var body: some View {
-        HStack(spacing: Design.Space.s4) {
+        HStack(spacing: SidebarMetrics.stateGap) {
             ConversationStateMark(state: thread.state, waiting: thread.waiting, failed: thread.failed == true)
+                .font(.system(size: 13))
+                .scaleEffect(0.85)
+                .frame(width: SidebarMetrics.state)
             Text(thread.title).font(.subheadline).fontWeight(thread.unread ? .bold : .medium).lineLimit(1)
             Spacer(minLength: 4)
             #if os(macOS)
@@ -774,12 +787,11 @@ struct ThreadRowView: View {
             #endif
         }
         .foregroundStyle(Color.textPrimary)
-        #if os(macOS)
         .padding(.leading, SidebarMetrics.nameIndent)
-        .padding(.trailing, SidebarMetrics.compose + 4)
+        .padding(.trailing, SidebarMetrics.compose + SidebarMetrics.chevron + 8)
+        #if os(macOS)
         .frame(minHeight: 24)
         #else
-        .padding(.leading, Self.indent)
         .frame(minHeight: 44)
         #endif
         .accessibilityElement(children: .ignore)
