@@ -121,6 +121,18 @@ class MailDraftGrantTest(unittest.TestCase):
                     self.assertEqual(web_config.run("mail", "example", form), (200, "ok"))
                 self.assertEqual(run.call_args.args[0], ["mail", "example", op, "work", "AssistantAccess"])
 
+    def test_missing_only_modify_keeps_reads_and_draft_grants_and_explains_labelling(self):
+        self.saved["scope"] = " ".join(s for s in google.SCOPES if s != google.GMAIL_MODIFY)
+        google._save_account("work", self.saved)
+        account = google.Account("work", self.env)
+        for scope in (google.GMAIL, google.GMAIL_COMPOSE, google.CALENDAR, google.DRIVE_READONLY):
+            self.assertIs(account.require(scope), account)
+        self.assertEqual(self.command("grant-draft")[0], 0)
+        body = str(web_config.google_accounts("example", {"work": self.saved}))
+        self.assertIn("Labelling drafts needs Log in again.", body)
+        self.assertIn("lacks gmail.modify", body)
+        self.assertNotIn("Drafting needs Log in again.", body)
+
     def test_missing_only_compose_keeps_reads_and_explains_drafting(self):
         self.saved["scope"] = " ".join(s for s in google.SCOPES if s != google.GMAIL_COMPOSE)
         google._save_account("work", self.saved)
