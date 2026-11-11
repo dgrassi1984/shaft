@@ -120,6 +120,8 @@ public struct FromRow: Codable, Sendable, Equatable {
     public var line: String
     public var last: Date?
     public var unread: Bool
+    public var state: String? = nil
+    public var waiting: String? = nil
 
     public init(line: String, last: Date?, unread: Bool) {
         self.line = line
@@ -127,13 +129,15 @@ public struct FromRow: Codable, Sendable, Equatable {
         self.unread = unread
     }
 
-    private enum CodingKeys: String, CodingKey { case line, last, unread }
+    private enum CodingKeys: String, CodingKey { case line, last, unread, state, waiting }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         line = try container.decode(String.self, forKey: .line)
         last = try container.decodeIfPresent(Date.self, forKey: .last)
         unread = try container.decode(Bool.self, forKey: .unread)
+        state = try container.decodeIfPresent(String.self, forKey: .state)
+        waiting = try container.decodeIfPresent(String.self, forKey: .waiting)
     }
 }
 
@@ -468,6 +472,8 @@ public struct LaterItem: Codable, Sendable, Equatable {
     public var ts: Date
     public var text: String
     public var mid: String?
+    public var cancellable: Bool?
+    public var cancelled: Date?
     public var read: Bool
     public var attachments: [Attachment]
     public var comments: [CommentRef]

@@ -28,8 +28,9 @@ New thread; a thread's row has Rename… in its context menu, and the chat's ⋯
 is a `ChatSelection` (instance, and a `ChatRef` or nil for its default: the most recently active thread), resolved by
 `InstancesStore.resolve`; a thread that ended gives way to the default. Each conversation has its own `ChatStore`, draft
 and unsent messages (SHAFTKit keys them by thread), so nothing typed in one thread shows in another. The header shows
-the thread's title after the name, and New thread (it ends nothing) replaces New chat. The From feed's composer sends
-for the next cycle only. Next cycle written in a thread carries the thread's id (`cid`): the note shows in that thread,
+the thread's title after the name, and New thread (it ends nothing) replaces New chat. The From feed has its own
+conversation with Send now, Queue after reply, and Next cycle. Next cycle written in a thread carries the thread's id
+(`cid`): the note shows in that thread,
 and the answer its cycle writes later comes there too, marked **⏾ from its cycle** beside "sent you a message". An
 answer for a thread that had ended by then comes to From with **re: «title»** beside its heading, which opens that
 earlier chat. A notification opens the thread it names. A server before threads answers `404` for

@@ -167,16 +167,16 @@ struct ThreadsTests {
     }
 
     /// A message goes to the thread it was written in, in every mode: `cid` with `now` and `queue`, and with the next
-    /// cycle too, so the note shows in that thread and the cycle's answer comes there. None from the From feed, none
+    /// cycle too, so the note shows in that conversation and the cycle's answer comes there. None
     /// for the current chat.
     /// Regression: a Next-cycle note went without `cid`, so it and its answer landed in From, away from the thread.
-    @Test func aSendCarriesItsThreadInEveryModeButNotFromFrom() async throws {
+    @Test func aSendCarriesItsConversationInEveryMode() async throws {
         let server = StubServer { _ in .json(200, #"{"said": "sent", "chat": "web-a", "file": null}"#) }
         let cases: [(OutgoingMessage, String?)] = [
             (OutgoingMessage(text: "a", mode: .now, cid: "web-a"), "web-a"),
             (OutgoingMessage(text: "b", mode: .queue, cid: "web-a"), "web-a"),
             (OutgoingMessage(text: "c", mode: .background, cid: "web-a"), "web-a"),
-            (OutgoingMessage(text: "d", mode: .background, cid: "from"), nil),
+            (OutgoingMessage(text: "d", mode: .background, cid: "from"), "from"),
             (OutgoingMessage(text: "e", mode: .now), nil),
             (OutgoingMessage(text: "f", mode: .background), nil),
             (OutgoingMessage(text: "g", mode: .background, cid: ""), nil),
@@ -196,6 +196,67 @@ struct ThreadsTests {
         #expect(restored.cid == "web-a")
         let old = #"{"mid": "m", "text": "t", "mode": "now", "quotes": [], "files": []}"#
         #expect(try SHAFTJSON.decoder().decode(OutgoingMessage.self, from: Data(old.utf8)).cid == nil)
+    }
+
+    @Test func fromConversationAndCancellation() async throws {
+        let server = StubServer { _ in .json(200, #"{"said":"cancelled"}"#) }
+        _ = try await server.client.send("wisp", OutgoingMessage(text: "Answer here", mode: .now, cid: "from"))
+        let form = try ParsedMultipart(body: server.requests[0].body,
+                                       contentType: #require(server.requests[0].header("Content-Type")))
+        #expect(form.field("cid") == "from")
+        #expect(form.field("mode") == "now")
+        _ = try await server.client.uncycle("wisp", mid: "m1", file: "ignored.md")
+        _ = try await server.client.uncycle("wisp", file: "note.md")
+        #expect(server.requests[1].path == "/app/v1/chat/wisp/uncycle")
+        #expect(server.requests[1].json as? [String: String] == ["mid": "m1"])
+        #expect(server.requests[2].json as? [String: String] == ["file": "note.md"])
+
+        var json = try #require(JSONSerialization.jsonObject(with: APIClientTests.idle) as? [String: Any])
+        json["chat"] = ["id": "web-from", "title": "From wisp", "state": "idle",
+                        "created": "2026-11-10T09:00:00+01:00", "ended": NSNull()]
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(feed.content?.chat?.title == "From wisp")
+        #expect(feed.content?.items.contains { if case .user = $0 { true } else { false } } == true)
+        #expect(feed.content?.items.contains { if case .assistant = $0 { true } else { false } } == true)
+
+        let later = #"{"key":"bnote","file":"note","ts":"2026-11-10T09:00:00Z","text":"later","mid":null,"read":false,"attachments":[],"comments":[]}"#
+        let old = try SHAFTJSON.decoder().decode(LaterItem.self, from: Data(later.utf8))
+        #expect(old.cancellable == nil && old.cancelled == nil)
+        var note = try #require(JSONSerialization.jsonObject(with: Data(later.utf8)) as? [String: Any])
+        note["cancellable"] = true
+        note["cancelled"] = NSNull()
+        let active = try SHAFTJSON.decoder().decode(LaterItem.self, from: JSONSerialization.data(withJSONObject: note))
+        #expect(active.cancellable == true && active.cancelled == nil)
+        note["cancellable"] = false
+        note["cancelled"] = "2026-11-10T10:00:00Z"
+        let cancelled = try SHAFTJSON.decoder().decode(LaterItem.self, from: JSONSerialization.data(withJSONObject: note))
+        #expect(cancelled.cancellable == false && cancelled.cancelled != nil)
+
+        let fromJSON = #"{"line":"you: hello","last":null,"unread":false,"state":"waiting","waiting":"answering elsewhere"}"#
+        let row = try SHAFTJSON.decoder().decode(FromRow.self, from: Data(fromJSON.utf8))
+        #expect(row.state == "waiting" && row.waiting == "answering elsewhere")
+        let oldRow = try SHAFTJSON.decoder().decode(FromRow.self, from: Data(#"{"line":"","last":null,"unread":false}"#.utf8))
+        #expect(oldRow.state == nil && oldRow.waiting == nil)
+    }
+
+    @Test func fromActionsUseFromAndCancellationRefusalsReachTheScreen() async throws {
+        let folder = try temporaryFolder("from-actions")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            if request.path.hasSuffix("/uncycle") {
+                return .json(409, #"{"error":{"code":"refused","message":"already read in a cycle"}}"#)
+            }
+            return .json(200, #"{"said":"ok"}"#)
+        }
+        let store = try makeStore(server, folder: folder)
+        let from = store.chat("wisp", .from)
+        await from.stopReply()
+        await from.unqueue("queued-mid")
+        #expect(server.requests[0].json?["cid"] as? String == "from")
+        #expect(server.requests[1].json?["cid"] as? String == "from")
+        let note = try SHAFTJSON.decoder().decode(LaterItem.self, from: Data(#"{"key":"bnote","file":"note","ts":"2026-11-10T09:00:00Z","text":"later","mid":"m1","read":false,"attachments":[],"comments":[]}"#.utf8))
+        await from.uncycle(note)
+        #expect(from.actionError?.message == "already read in a cycle")
     }
 
     // MARK: Drafts and the outbox never cross threads
@@ -274,9 +335,8 @@ struct ThreadsTests {
         #expect(reopened.entries(for: "wisp").isEmpty)
     }
 
-    /// The From feed's composer writes for the next cycle: whatever mode is asked, it goes `background`, with no
-    /// thread, and stays the From feed's while it is not sent.
-    @Test func theFromFeedWritesForTheNextCycle() async throws {
+    /// From sends now with its own cid; its feed can reconcile a send whose response was lost.
+    @Test func theFromFeedSendsNowInItsOwnConversation() async throws {
         let folder = try temporaryFolder("thread-from")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
@@ -286,10 +346,15 @@ struct ThreadsTests {
         from.draft.text = "Check the nightly totals"
         #expect(try store.drafts.load("wisp", cid: "from").text == "Check the nightly totals")
         _ = await from.send(mode: .now)
-        #expect(sender.sent.first?.message.mode == .background)
+        #expect(sender.sent.first?.message.mode == .now)
         #expect(sender.sent.first?.message.cid == "from")
-        #expect(sender.sent.first?.message.sentCid == nil)
-        #expect(from.unsent.map(\.text) == ["Check the nightly totals"])
+        #expect(sender.sent.first?.message.sentCid == "from")
+        try store.outbox.enqueue(OutgoingMessage(text: "Still sending", cid: "from"), to: "wisp")
+        #expect(from.unsent.contains { $0.state == .sending })
+        var arrived = try SHAFTJSON.decoder().decode(Feed.self, from: APIClientTests.idle)
+        arrived.content?.mids = from.unsent.map(\.mid)
+        from.apply(.feed(arrived))
+        #expect(from.unsent.isEmpty)
         #expect(store.chat("wisp", .thread(Self.threadA)).unsent.isEmpty)
     }
 

@@ -339,9 +339,8 @@ public final class ChatStore {
     /// An earlier chat: read-only, with no draft, no unsent messages, no seen marks.
     public var isEarlier: Bool { ref.isEarlier }
 
-    /// The chat id actions name (§7): the thread's own, else the one the feed shows (the current chat's). Nil for the
-    /// From feed, and before the feed came.
-    public var chatID: String? { ref.cid ?? (ref.isFrom ? nil : feed?.content?.chat?.id) }
+    /// The chat id actions name (§7): `"from"`, the thread's own, or the current chat's from the feed.
+    public var chatID: String? { ref.seenID ?? feed?.content?.chat?.id }
 
     /// Messages of this conversation that are on their way or did not get there, oldest first. Only its own: another
     /// thread's never show here.
@@ -443,8 +442,7 @@ public final class ChatStore {
     @discardableResult
     public func send(mode: SendMode = .now) async -> Result<SendResponse, APIError> {
         guard let owner, !isEarlier else { return .failure(.notPaired) }
-        // The From feed's composer writes for the next cycle only (§3.4).
-        let message = OutgoingMessage(text: draft.text, mode: ref.isFrom ? .background : mode, quotes: draft.quotes,
+        let message = OutgoingMessage(text: draft.text, mode: mode, quotes: draft.quotes,
                                       files: owner.drafts.outgoingFiles(draft, for: instance, cid: ref.draftKey),
                                       cid: ref.draftKey)
         do {
@@ -606,8 +604,13 @@ public final class ChatStore {
 
     public func unqueue(_ mid: String) async {
         let name = instance
-        let cid = ref.cid
+        let cid = ref.seenID
         await act { try await $0.unqueue(name, mid: mid, cid: cid) }
+    }
+
+    public func uncycle(_ item: LaterItem) async {
+        let name = instance
+        await act { try await $0.uncycle(name, mid: item.mid, file: item.file) }
     }
 
     public func stopReply() async {

@@ -544,10 +544,11 @@ struct ThreadRowView: View {
     }
 }
 
-/// "From <instance>": what it sent from its cycles, and where to write for its next one.
+/// "From <instance>": its cycle messages and its From conversation.
 struct FromRowView: View {
     let instance: String
     let from: FromRow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -563,7 +564,17 @@ struct FromRowView: View {
                     Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                 }
             }
-            if !from.line.isEmpty {
+            if let state = from.state, state != "idle" {
+                HStack(spacing: Design.Space.s4) {
+                    Image(systemName: "ellipsis.bubble")
+                        .symbolEffect(.pulse, isActive: state == "replying" && from.waiting == nil && !reduceMotion)
+                        .accessibilityHidden(true)
+                    Text(from.waiting ?? (state == "waiting" ? String(localized: "waiting…") : String(localized: "replying…")))
+                        .lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(state == "waiting" || from.waiting != nil ? Color.textSecondary : Color.brand)
+            } else if !from.line.isEmpty {
                 Text(RenderedText.plain(PartialMarkdown.closed(from.line)))
                     .font(.caption)
                     .foregroundStyle(Color.textSecondary)

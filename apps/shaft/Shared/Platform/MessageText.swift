@@ -14,6 +14,7 @@ struct MessageMenuContext {
     var k: Int?
     var file: String?
     var rateable: Bool
+    var cancel: (() -> Void)? = nil
 }
 
 extension EnvironmentValues {
