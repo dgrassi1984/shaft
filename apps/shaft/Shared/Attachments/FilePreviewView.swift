@@ -29,7 +29,7 @@ extension View {
 }
 
 /// A Markdown file as a document reads, read-only: it is the message's, so nothing here edits or comments on it. Share
-/// keeps the way out that Quick Look gave, which is what Download on a document leads to.
+/// keeps the way out that Quick Look gave.
 private struct MarkdownFileSheet: View {
     let page: MarkdownPage
     #if os(iOS)

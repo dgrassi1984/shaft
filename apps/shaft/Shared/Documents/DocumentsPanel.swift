@@ -13,6 +13,8 @@ struct DocumentsPanel: View {
     @Environment(ChatScreenModel.self) private var screen
     /// The panel's own file preview: as a sheet over the chat, the chat's could not present over it.
     @State private var preview = FilePreview()
+    /// Download on a row or a document's page: the bytes saved where the operator picks.
+    @State private var saver = DocumentSaver()
     @State private var docs: DocumentsStore
     @State private var path: [Route] = []
     @State private var creating = false
@@ -35,11 +37,14 @@ struct DocumentsPanel: View {
                     .environment(docs)
                     .environment(screen)
                     .environment(preview)
+                    .environment(saver)
                 }
         }
         .environment(docs)
         .environment(preview)
+        .environment(saver)
         .filePreview(preview)
+        .documentSaver(saver)
         .task {
             await docs.refresh()
             // Live while it shows: a document the instance writes, a comment it answers.
@@ -101,6 +106,7 @@ struct DocsListView: View {
     var newDocument: () -> Void
     @Environment(DocumentsStore.self) private var docs
     @Environment(ChatScreenModel.self) private var screen
+    @Environment(DocumentSaver.self) private var saver
     @Environment(\.dismiss) private var dismiss
     @AppStorage("docs.sort") private var sort = DocsTree.Sort.modified.rawValue
     @AppStorage("docs.ascending") private var ascending = false
@@ -190,6 +196,20 @@ struct DocsListView: View {
                        tooBig: entry.tooBig)
             }
             .docRow()
+            // Download without opening it: right-click (or long-press) the row, or swipe it on a phone.
+            .contextMenu {
+                Button { saver.download(entry.path, from: docs) } label: {
+                    Label("Download…", systemImage: "arrow.down.doc")
+                }
+            }
+            #if os(iOS)
+            .swipeActions(edge: .leading) {
+                Button { saver.download(entry.path, from: docs) } label: {
+                    Label("Download", systemImage: "arrow.down.doc")
+                }
+                .tint(Color.brand)
+            }
+            #endif
         }
     }
 
