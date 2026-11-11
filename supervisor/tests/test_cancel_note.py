@@ -185,3 +185,13 @@ class CancelReviewTest(unittest.TestCase):
         web_chat.uncycle("demo", web_tests.ME, file=file)
         [row] = messages.history()
         self.assertIn("cancelled before demo read it", str(web_views.message_page(row, {}, ["demo"], "t")))
+
+    def test_the_app_gets_the_cancel_time_with_its_offset(self):
+        """Found in the simulator: the app could not read a feed holding a cancelled note — `cancelled` went out
+        without the offset every time the app reads has (docs/app-api.md §1.6)."""
+        from supervisor import app_api
+        file = self.note()
+        web_chat.uncycle("demo", web_tests.ME, file=file)
+        [item] = app_api.to_json(web_chat.from_feed("demo"))["items"]
+        self.assertEqual(item["cancelled"], app_api.stamp(messages.history()[0]["cancelled"]))
+        self.assertRegex(item["cancelled"], r"[+-]\d\d:\d\d$|Z$")

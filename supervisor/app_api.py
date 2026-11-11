@@ -104,6 +104,8 @@ def to_json(model: dict) -> dict:
         out["chat"].update(created=stamp(out["chat"]["created"]), ended=stamp(out["chat"]["ended"]))
     for it in out["items"]:
         it["ts"] = stamp(it["ts"])
+        if it.get("cancelled"):             # a next-cycle note taken back: a time like any other (§1.6)
+            it["cancelled"] = stamp(it["cancelled"])
         for a in it.get("attachments", []):
             a["url"] = file_url(a.pop("path"))
         if (r := it.get("rating")) and r["sent"]:
