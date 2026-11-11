@@ -52,21 +52,30 @@ class IsolatedCase(unittest.TestCase):
         else:
             b = broker.Broker("ember", self.base, {}, self.sup / "broker.log", root=self.root, network=False)
         b.run_kind = "live"
+        b.run_started = (NOW - timedelta(minutes=10)).isoformat()
         return b
 
 
 class IdleExitTest(IsolatedCase):
     def test_live_exit_records_one_row_and_schedule_without_failure(self):
-        result = self.box().call("nothing_to_do", {"reason": "Inbox empty; no work due"})
+        """An exit must retain the supervisor run stamp rather than just its recording time."""
+        b = self.box()
+        result = b.call("nothing_to_do", {"reason": "Inbox empty; no work due"})
         self.assertTrue(result["ok"], result)
         self.assertIn("not a failure", result["result"])
         row, = idle.rows("ember")
+        self.assertEqual(set(row), {"at", "run", "reason"})
+        self.assertEqual(row["run"], b.run_started)
         self.assertEqual(row["reason"], "Inbox empty; no work due")
         self.assertIn("ember", json.loads(autonomy.STATE.read_text())["idle_exits"])
 
-    def test_nonlive_outward_and_empty_reason_never_record_exit(self):
+    def test_nonlive_prior_work_and_empty_reason_never_record_exit(self):
+        """Delegation, predictions and mutations must not escape judging as idle cycles."""
         cases = [("talk", {}, "nothing due", "not counted")]
-        cases += [("live", {tool: 1}, "nothing due", "not counted") for tool in idle.OUTWARD]
+        prior = ("send_message", "mail_draft", "mail_draft_update", "calendar_create", "calendar_move",
+                 "calendar_respond", "delegate_coding", "set_config", "secret_set", "secret_delete",
+                 "trial", "record_order", "predict")
+        cases += [("live", {tool: 1}, "nothing due", "not counted") for tool in prior]
         cases += [("live", {}, "  ", "error")]
         for kind, counts, reason, expected in cases:
             with self.subTest(kind=kind, counts=counts, reason=reason):
@@ -106,29 +115,57 @@ class IdleExitTest(IsolatedCase):
         self.assertNotIn("ember", st["idle_exits"])
         self.assertIn("ember", starts(NOW + idle_time))
 
-    def test_idle_windows_are_open_at_start_closed_at_end_with_fallback(self):
-        eps = [{"ts": "2026-11-11T10:00:00", "run_started": "2026-11-11T09:00:00"},
-               {"ts": "2026-11-11T11:00:00"}]
-        for at, expected in [("08:59:59", set()), ("09:00:00", set()),
-                             ("10:00:00", {eps[0]["ts"]}), ("10:00:01", {eps[1]["ts"]}),
-                             ("11:00:00", {eps[1]["ts"]}), ("11:00:01", set())]:
+    def test_run_identity_replaces_windows_and_previous_episode_fallback(self):
+        """An old exit cannot exempt a backdated window or an episode without its run id."""
+        run = "2026-11-11T09:00:00"
+        eps = [{"ts": "2026-11-11T10:00:00", "run_started": run},
+               {"ts": "2026-11-11T11:00:00"},
+               {"ts": "2026-11-11T12:00:00", "run_started": "2026-11-11T08:00:00"}]
+        for at, expected in [("08:59:59", set()), ("09:00:00", {eps[0]["ts"]}),
+                             ("10:00:00", {eps[0]["ts"]}), ("10:00:01", set()),
+                             ("11:00:00", set()), ("11:00:01", set())]:
             with self.subTest(at=at):
-                self.write(idle.path("ember"), [{"at": "2026-11-11T" + at, "reason": "empty"}])
+                self.write(idle.path("ember"), [{"at": "2026-11-11T" + at, "run": run, "reason": "empty"}])
                 self.assertEqual(idle.exits("ember", eps), expected)
 
+    def test_duplicate_run_claim_only_exempts_earliest_episode(self):
+        """Duplicating a run id must not hide a second episode from judging."""
+        run = "2026-11-11T09:00:00"
+        idle.record("ember", run, "empty", NOW - timedelta(hours=2))
+        for later in ("2026-11-11T12:00:00", "2026-11-11 12:00:00"):
+            with self.subTest(later=later):
+                eps = [{"ts": later, "run_started": run},
+                       {"ts": "2026-11-11T11:00:00", "run_started": run}]
+                self.assertEqual(idle.exits("ember", eps), {eps[1]["ts"]})
+
+    def test_exit_times_parse_both_separators_and_kept_code_prevents_exemption(self):
+        """String ordering must not lose exits or hide a cycle that kept code."""
+        for sep in ("T", " "):
+            with self.subTest(separator=sep):
+                run = "2026-11-11" + sep + "09:00:00"
+                ep = {"ts": "2026-11-11" + sep + "12:00:00", "run_started": run}
+                self.write(idle.path("ember"), [{"at": "2026-11-11" + (" " if sep == "T" else "T")
+                    + "10:00:00", "run": run, "reason": "empty"}])
+                self.assertEqual(idle.exits("ember", [ep]), {ep["ts"]})
+                self.assertEqual(idle.exits("ember", [ep], changed=["2026-11-11T11:00:00"]), set())
+
     def test_stats_counts_recent_window_and_empty_is_empty(self):
+        """Withdrawn and old exits must not inflate the standing idle count."""
         self.assertEqual(idle.stats_lines("ember", NOW), [])
         for age in (idle.WINDOW_DAYS + 1, idle.WINDOW_DAYS, 1):
-            idle.record("ember", "empty", NOW - timedelta(days=age))
+            idle.record("ember", str(age), "empty", NOW - timedelta(days=age))
         self.assertIn(f"days): 2.", idle.stats_lines("ember", NOW)[0])
+        idle.revoke("ember", "1", "more work", NOW)
+        self.assertIn("days): 1.", idle.stats_lines("ember", NOW)[0])
 
     def test_judging_skips_idle_with_or_without_intent_but_keeps_no_intent_rule(self):
+        """Run-bound idle exits must bypass judging without exempting ordinary goalless cycles."""
         eps = [{"kind": "live", "ts": (NOW + timedelta(hours=i)).isoformat(),
                 "run_started": (NOW + timedelta(hours=i, minutes=-10)).isoformat(),
                 "intent": {"goal": "check work"} if i == 1 else None, "tools": []} for i in range(3)]
         self.write(self.root / "memory/episodes/day.jsonl", eps)
         for ep in eps[:2]:
-            idle.record("ember", "empty", datetime.fromisoformat(ep["ts"]))
+            idle.record("ember", ep["run_started"], "empty", datetime.fromisoformat(ep["ts"]))
         with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(judge, "ask") as ask, \
              mock.patch.object(metrics, "cycle_model", return_value="example"):
             self.assertEqual(metrics.judge_pending("ember"), 1)
@@ -139,9 +176,10 @@ class IdleExitTest(IsolatedCase):
         self.assertEqual(metrics.unsampled_rows("ember"), [])
 
     def test_idle_episode_is_not_added_to_unsampled_even_when_sampling_rejects(self):
+        """An idle run must not pollute the unsampled ledger when the sampling coin rejects it."""
         ep = {"kind": "live", "ts": NOW.isoformat(), "run_started": (NOW - timedelta(minutes=5)).isoformat()}
         self.write(self.root / "memory/episodes/day.jsonl", [ep])
-        idle.record("ember", "empty", NOW)
+        idle.record("ember", ep["run_started"], "empty", NOW)
         with mock.patch.object(judge, "JUDGE_EVERY", 100), mock.patch.object(metrics.secrets, "randbelow", return_value=1):
             self.assertEqual(metrics.judge_pending("ember"), 0)
         self.assertEqual(metrics.unsampled_rows("ember"), [])
@@ -152,3 +190,70 @@ class IdleExitTest(IsolatedCase):
             edit = next(e for e in delete.shared_edits("ember") if e.path.name == "schedule.json")
         delete._edit(edit, apply=True)
         self.assertEqual(json.loads(autonomy.STATE.read_text()), {"idle_exits": {"example": "at"}})
+
+    def test_looking_around_before_exit_is_allowed(self):
+        """Local runs and HTTP reads before an exit must not count as prior outward work."""
+        b = self.box()
+        b.counts = {"run": 1, "http_request": 1}
+        self.assertIn("recorded:", b.call("nothing_to_do", {"reason": "empty"})["result"])
+        self.assertEqual(len(idle.rows("ember")), 1)
+
+    def test_later_work_withdraws_once_still_dispatches_and_is_judged(self):
+        """An idle declaration must not conceal later messaging or even a web search."""
+        for tool in ("send_message", "web_search"):
+            with self.subTest(tool=tool):
+                idle.path("ember").unlink(missing_ok=True)
+                (self.sup / "judgments/ember.jsonl").unlink(missing_ok=True)
+                b = self.box()
+                b.call("nothing_to_do", {"reason": "empty"})
+                with mock.patch.object(b, "_" + tool, return_value="dispatched") as dispatch:
+                    self.assertEqual(b.call(tool, {}), {"ok": True, "result": "dispatched"})
+                    self.assertEqual(b.call(tool, {}), {"ok": True, "result": "dispatched"})
+                self.assertEqual(dispatch.call_count, 2)
+                opened, revoked = idle.rows("ember")
+                self.assertEqual(opened["run"], b.run_started)
+                self.assertEqual(revoked["run"], b.run_started)
+                self.assertIn(tool, revoked["revoked"])
+                self.assertFalse(b.idle_declared)
+                self.assertNotIn("ember", json.loads(autonomy.STATE.read_text())["idle_exits"])
+                ep = {"kind": "live", "ts": revoked["at"], "run_started": b.run_started, "tools": []}
+                self.assertEqual(idle.exits("ember", [ep]), set())
+                self.write(self.root / "memory/episodes/day.jsonl", [ep])
+                with mock.patch.object(judge, "JUDGE_EVERY", 1), \
+                     mock.patch.object(metrics, "cycle_model", return_value="example"):
+                    self.assertEqual(metrics.judge_pending("ember"), 1)
+                self.assertEqual(metrics.judgments("ember")[0]["episode_ts"], ep["ts"])
+
+    def test_quiet_reads_after_exit_do_not_withdraw(self):
+        """Reading record or gauges after an exit must preserve the scheduler backoff."""
+        b = self.box()
+        b.call("nothing_to_do", {"reason": "empty"})
+        for tool in ("record", "gauges"):
+            with mock.patch.object(b, "_" + tool, return_value="read"):
+                self.assertTrue(b.call(tool, {})["ok"])
+        self.assertTrue(b.idle_declared)
+        self.assertEqual(len(idle.rows("ember")), 1)
+        self.assertIn("ember", json.loads(autonomy.STATE.read_text())["idle_exits"])
+
+    def test_replay_later_work_writes_neither_exit_revoke_nor_schedule(self):
+        """Replay withdrawal must never create real exit or scheduling records."""
+        b = self.box(replay=True)
+        self.assertTrue(b.call("nothing_to_do", {"reason": "empty"})["ok"])
+        with mock.patch.object(b, "_web_search", return_value="simulated search"):
+            self.assertTrue(b.call("web_search", {})["ok"])
+        self.assertFalse(b.idle_declared)
+        self.assertFalse(idle.path("ember").exists())
+        self.assertFalse(autonomy.STATE.exists())
+
+    def test_commitment_citation_wins_over_idle_exit_and_sampling(self):
+        """A kept promise must not escape evidence judging through an idle exit."""
+        ep = {"kind": "live", "ts": NOW.isoformat(), "run_started": (NOW - timedelta(minutes=5)).isoformat()}
+        self.write(self.root / "memory/episodes/day.jsonl", [ep])
+        idle.record("ember", ep["run_started"], "empty", NOW)
+        with mock.patch.object(commitments, "ledger", return_value={"example": {
+                 "status": "kept", "evidence": "2026-11-11 12:00"}}), \
+             mock.patch.object(judge, "JUDGE_EVERY", 100), \
+             mock.patch.object(metrics.secrets, "randbelow", return_value=1), \
+             mock.patch.object(metrics, "cycle_model", return_value="example"):
+            self.assertEqual(metrics.judge_pending("ember"), 1)
+        self.assertTrue(metrics.judgments("ember")[0]["cited"])

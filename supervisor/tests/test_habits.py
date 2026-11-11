@@ -118,3 +118,13 @@ class HabitsTest(unittest.TestCase):
         self.assertEqual(calls[0], {"call": S("a"), "cycles": 3, "last": "2026-11-03T10:00:00"})
         self.assertEqual(calls[1]["call"], "run[python3 tools/check.py]")
         self.assertIn("run[python3 tools/check.py]: in 3 cycles", habits.record_text("ember", as_of=NOW))
+
+    def test_malformed_calls_and_tools_do_not_erase_surrounding_valid_cycles(self):
+        """Malformed tool logs must not crash habit reporting or hide valid repeated work."""
+        self.live.return_value = [episode(1, ["a", "b"]),
+            episode(2, [{"tool": "run", "args": None}, "a", 42, {"tool": []}, "b"]),
+            {"ts": "2026-11-02T11:00:00", "tools": 42}, episode(3, ["a", "b"])]
+        self.assertEqual(habits.sequences("ember", as_of=NOW),
+                         [{"tools": [S("a"), S("b")], "cycles": 3, "last": "2026-11-03T10:00:00"}])
+        self.assertEqual(habits.repeated_calls("ember", as_of=NOW), [
+            {"call": S(key), "cycles": 3, "last": "2026-11-03T10:00:00"} for key in ("a", "b")])

@@ -1,4 +1,4 @@
-"""Gauge choices are append-only; readings remain supervisor-owned, including in replays."""
+"""Gauge choices are append-only; readings use their recorded sources and replay clock."""
 import io
 import json
 import tempfile
@@ -125,9 +125,12 @@ class GaugesTest(unittest.TestCase):
             "Work I chose myself that the judge found anticipated a need: 1 of 2 judged self-chosen cycles (14 days)", .5))
 
     def test_value_uses_last_twenty_integer_grades_and_delivery_count(self):
+        """Dated grades must retain the last-twenty limit and exclude noninteger values."""
         self.judgments.return_value = [{"value": 1}] * 3 + [
             {"value": v, "delivery_supported": "yes" if v == 5 else "no"} for v in [3, 5] * 10
         ] + [{"value": None}, {"value": True}]
+        for row in self.judgments.return_value:
+            row["episode_ts"] = NOW.isoformat()
         self.assertEqual(gauges._value("ember", NOW), gauges.Reading(
             "Judged value per cycle, last 20: 4.0 of 5 (1 = nobody would miss it); delivered to the operator in 10", .2))
 
@@ -203,6 +206,50 @@ class GaugesTest(unittest.TestCase):
         self.assertIn("Choices made:", out.getvalue())
         self.assertIn("by operator: claims, value", out.getvalue())
         self.assertIn("by operator: (none)", out.getvalue())
+
+    def test_replay_head_and_menu_ignore_future_value_battery_and_recurrence(self):
+        """Replay readings must not leak future grades, battery scores or repeated failures."""
+        past = NOW - timedelta(hours=1)
+        future = NOW + timedelta(hours=1)
+        self.judgments.return_value = [
+            {"episode_ts": past.isoformat(), "value": 2, "delivery_supported": "no"},
+            {"episode_ts": future.isoformat(), "value": 5, "delivery_supported": "yes"}]
+        rows = [{"at": at.isoformat(), "status": "scored", "category": "self", "arm": "instance",
+                 "item": "example", "score": score} for at, score in [(past, 2), (future, 10)]]
+        events = [{"episode": at.isoformat(), "episode_kind": "live", "flag": "error",
+                   "tool": "read_file", "target": "notes/example.md"} for at in (past, future)]
+        gauges.choose("ember", ["value", "battery", "recurrence"], "instance", past)
+        with mock.patch.object(battery, "era", return_value={}), \
+             mock.patch.object(battery, "results", return_value=rows), \
+             mock.patch.object(surprise, "events", return_value=events):
+            for text in ("\n".join(gauges.head_lines("ember", future, as_of=NOW)),
+                         gauges.menu_text("ember", future, as_of=NOW)):
+                self.assertIn("last 1: 2.0 of 5", text)
+                self.assertIn("self 2.0 of 10", text)
+                self.assertIn("came back in a later cycle: 0 of 1", text)
+                self.assertNotIn("could not be read", text)
+            self.assertEqual(gauges._value("ember", NOW).gap, .6)
+            self.assertEqual(gauges._battery("ember", NOW).gap, .8)
+            self.assertEqual(gauges._recurrence("ember", NOW).gap, 0)
+            self.assertIn("last 2: 3.5 of 5", gauges._value("ember", future).text)
+            self.assertIn("self 6.0 of 10", gauges._battery("ember", future).text)
+            self.assertIn("1 of 1", gauges._recurrence("ember", future).text)
+
+    def test_system_exit_source_costs_only_its_gauge_in_head_and_menu(self):
+        """A deleted-instance SystemExit must not abort the remaining gauge readings."""
+        menu = {"bad": ("broken", mock.Mock(side_effect=SystemExit("missing instance"))),
+                "good": ("working", mock.Mock(return_value=gauges.Reading("still here", .2)))}
+        with mock.patch.object(gauges, "MENU", menu):
+            gauges.choose("ember", list(menu), "instance", NOW)
+            for text in ("\n".join(gauges.head_lines("ember", NOW)), gauges.menu_text("ember", NOW)):
+                self.assertIn("could not be read (SystemExit: missing instance)", text)
+                self.assertIn("still here", text)
+
+    def test_menu_discloses_which_readings_come_from_instance_ledgers(self):
+        """The menu must not claim an instance's own files cannot affect any reading."""
+        text = gauges.menu_text("ember", NOW)
+        self.assertIn("promises, corrections and plan from your own ledgers as the supervisor re-checks them", text)
+        self.assertNotIn("Neither you nor a file of yours can change a reading", text)
 
 
 if __name__ == "__main__":

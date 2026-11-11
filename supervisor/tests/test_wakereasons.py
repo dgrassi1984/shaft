@@ -3,7 +3,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import autonomy, commitments, jobs, projects, wakereasons
+from supervisor import autonomy, battery, commitments, delete, jobs, projects, wakereasons
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -70,3 +70,30 @@ class WakeReasonsTest(IsolatedCase):
             facts = autonomy.wake_facts("ember", NOW - timedelta(minutes=5), NOW)
         self.assertEqual(facts.unread, 1)
         self.assertEqual(facts.error, "")
+
+    def test_order_text_stays_stable_across_clock_change_so_mark_paces_it(self):
+        """Elapsed hours in order text must not make a scheduler mark miss its reason."""
+        self.write(self.root / commitments.FILE, [{"event": "made", "id": "c1110-0001-1",
+            "at": (NOW - timedelta(hours=24, minutes=30)).isoformat(),
+            "due": (NOW + timedelta(days=3)).isoformat(), "promise": "Check report",
+            "criterion": "Report checked", "made_to": "operator", "source": "talk", "talk_id": "example"}])
+        first, = wakereasons.reasons("ember", NOW)
+        later = NOW + timedelta(minutes=59)
+        self.assertEqual(wakereasons.reasons("ember", later), [first])
+        wakereasons.mark("ember", first[1], later)
+        self.assertEqual(wakereasons.due("ember", later), ("", ""))
+        self.assertEqual(json.loads((self.sup / "wake_reasons/ember.json").read_text()),
+                         {first[0]: later.isoformat()})
+
+    def test_delete_lists_both_wake_files_but_not_another_instances(self):
+        """Deleting an instance must remove pacing state and a leftover atomic-write temp file."""
+        folder = self.sup / "wake_reasons"
+        folder.mkdir()
+        own = [folder / "ember.json", folder / "ember.tmp"]
+        peer = folder / "example.json"
+        for path in [*own, peer]:
+            path.write_text("{}")
+        with mock.patch.object(delete, "SUP_DIR", self.sup), \
+             mock.patch.object(battery, "BACKUP", self.sup / "battery-backup"):
+            found = delete.own_files("ember")
+        self.assertEqual(set(found), set(own))

@@ -29,8 +29,9 @@ def _last_sleep(name: str) -> str | None:
     """The end of the last sleep that finished: one cut short writes no entry (`content`) and consolidated nothing,
     so it must not start a new reporting window."""
     from . import metrics
-    return max((ep["ts"] for ep in metrics._episodes(name, "sleep")
-                if isinstance(ep.get("ts"), str) and isinstance(ep.get("content"), str)), default=None)
+    done = [(at, ep["ts"]) for ep in metrics._episodes(name, "sleep")
+            if isinstance(ep.get("content"), str) and isinstance(ep.get("ts"), str) and (at := metrics._ts(ep["ts"]))]
+    return max(done)[1] if done else None
 
 
 def _after(ts, last: str) -> bool:

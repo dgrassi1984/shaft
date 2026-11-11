@@ -18,10 +18,17 @@ def verdict(**updates):
 
 
 class JudgeLinksTest(IsolatedCase):
-    def test_schema_requires_links_but_old_stored_rows_load_into_families(self):
+    def test_only_main_schema_requires_links_and_old_rows_still_load_into_families(self):
+        """Link questions must not alter control schemas or break older stored verdicts."""
         for key in ("resembles", "unsupported_claim"):
-            self.assertIn(key, metrics.JUDGE_SCHEMA["required"])
+            self.assertNotIn(key, metrics.JUDGE_SCHEMA["properties"])
+            self.assertNotIn(key, metrics.JUDGE_SCHEMA["required"])
+            self.assertIn(key, metrics.MAIN_SCHEMA["required"])
             self.assertIn(key, metrics.LINK_PROPS)
+        self.assertEqual(metrics.MAIN_SCHEMA["properties"],
+                         {**metrics.JUDGE_SCHEMA["properties"], **metrics.LINK_PROPS})
+        self.assertEqual(set(metrics.MAIN_SCHEMA["required"]),
+                         set(metrics.JUDGE_SCHEMA["required"]) | set(metrics.LINK_PROPS))
         old = {"episode_ts": NOW.isoformat(), "goal": "Check report"}
         self.write(self.sup / "judgments/ember.jsonl", [old])
         self.assertEqual(metrics.judgments("ember"), [old])
@@ -64,6 +71,7 @@ class JudgeLinksTest(IsolatedCase):
              mock.patch.object(judge, "pick", return_value="example-judge"), mock.patch.object(judge, "ask", return_value=v) as ask:
             self.assertEqual(metrics.judge_pending("ember"), 1)
             ask.assert_called_once()
+            self.assertIs(ask.call_args.args[2], metrics.MAIN_SCHEMA)
         return metrics.judgments("ember")[-1]
 
     def test_judge_persists_resemblance_and_families_join_cycles(self):
@@ -84,3 +92,37 @@ class JudgeLinksTest(IsolatedCase):
             row = self.judge_one(verdict(claim_supported=False, unsupported_claim="Report exists"))
         self.assertEqual(row["unsupported_claim"], "Report exists")
         self.assertEqual(row["judge"], "example-judge")
+
+    def test_missing_link_fields_are_defaulted_without_discarding_verdict(self):
+        """Older judge responses without links must still produce a stored judgment."""
+        v = verdict()
+        del v["resembles"], v["unsupported_claim"]
+        row = self.judge_one(v)
+        self.assertEqual((row["resembles"], row["unsupported_claim"]), ("", ""))
+
+    def test_second_judge_uses_schema_without_main_only_links(self):
+        """Adding main-judge links must not change the blind second-judge question."""
+        with mock.patch.object(judge, "ask_second", return_value=verdict()) as ask:
+            self.assertEqual(metrics.second_opinion("ember", "example case")["criterion_met"], "yes")
+        self.assertIs(ask.call_args.args[2], metrics.JUDGE_SCHEMA)
+
+    def test_baseline_and_control_keep_their_original_judge_schemas(self):
+        """Main-only link fields must not alter either arm of the surprise comparison."""
+        ep = {"kind": "live", "ts": NOW.isoformat(), "intent": {"goal": "Check report"}, "tools": []}
+        self.write(self.root / "memory/episodes/day.jsonl", [ep])
+        self.write(self.sup / "judgments/ember.jsonl", [{"episode_ts": ep["ts"], "judge": "example-judge"}])
+        with mock.patch.object(metrics, "own_models", return_value=["example-model"]), \
+             mock.patch.object(metrics, "_judgment_cost", return_value=(0, "fixture")), \
+             mock.patch.object(metrics, "_written_files", return_value=""), \
+             mock.patch.object(metrics, "_provenance_evidence", return_value=""), \
+             mock.patch.object(metrics, "_followed_surprise", return_value=""), \
+             mock.patch.object(metrics, "cycle_model", return_value="example-model"), \
+             mock.patch.object(judge, "ask", side_effect=lambda *a, **kw: verdict()) as ask:
+            self.assertEqual(metrics.surprise_baseline("ember")["done"], 1)
+            self.assertIs(ask.call_args.args[2], metrics.JUDGE_SCHEMA)
+            ask.reset_mock()
+            self.assertEqual(metrics.surprise_control("ember")["done"], 1)
+            ask.assert_called_once()
+            self.assertIs(ask.call_args.args[2], metrics.CONTROL_SCHEMA)
+        for schema in (metrics.JUDGE_SCHEMA, metrics.CONTROL_SCHEMA):
+            self.assertTrue(set(metrics.LINK_PROPS).isdisjoint(schema["properties"]))

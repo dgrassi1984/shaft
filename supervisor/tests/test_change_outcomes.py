@@ -150,7 +150,8 @@ class ChangeOutcomesTest(unittest.TestCase):
                          "probation aaaaaaaa failed but its restore could not be done — kept on probation: gate failed")])
         self.assertEqual(metrics.change_outcomes("ember")[0]["outcome"], "on probation")
 
-    def test_history_replaces_newer_log_events_but_retains_older_log_probations(self):
+    def test_history_merges_with_log_instead_of_hiding_log_closes(self):
+        """Creating history must not hide either older or newer passes in the log."""
         later = NOW + timedelta(hours=2)
         self.write("code_changes", [self.change(), self.change(later)])
         self.log_lines([(NOW, "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)"),
@@ -160,7 +161,7 @@ class ChangeOutcomesTest(unittest.TestCase):
         self.write("probation", [self.event(since=later, commit="b" * 40)])
         rows = metrics.change_outcomes("ember")
         self.assertEqual(len(rows), 2)
-        self.assertEqual([r["outcome"] for r in rows], ["passed", "on probation"])
+        self.assertEqual([r["outcome"] for r in rows], ["passed", "passed"])
 
     def test_start_and_check_probation_append_history_for_open_and_closed_windows(self):
         metrics.start_probation("ember", "a" * 40, FILES, trial={"id": "example", "verdict": "better"})
@@ -198,6 +199,36 @@ class ChangeOutcomesTest(unittest.TestCase):
         row, = [json.loads(line) for line in path.read_text().splitlines()]
         self.assertEqual(row["outcome"], "not on probation")
         self.assertFalse((self.sup / "probation/ember.json").exists())
+
+    def test_log_only_start_and_history_only_close_complete_one_probation(self):
+        """Starting history mid-probation must not turn its eventual pass into unknown."""
+        self.write("code_changes", [self.change()])
+        self.log_lines([(NOW, "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)")])
+        self.write("probation", [self.event("passed", at=NOW + timedelta(minutes=10))])
+        self.assertEqual(metrics.change_outcomes("ember"), [{"ts": NOW.isoformat(), "files": FILES,
+            "commit": "aaaaaaaa", "outcome": "passed", "tested": False}])
+
+    def test_duplicate_sources_cannot_assign_one_probation_to_two_changes(self):
+        """A duplicated start must not consume a second change; history metadata wins."""
+        self.write("code_changes", [self.change(), self.change(NOW + timedelta(seconds=1))])
+        self.log_lines([(NOW, "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)"),
+                        (NOW + timedelta(minutes=10), "ember", "probation aaaaaaaa passed (0.5 vs baseline 0.4)")])
+        self.write("probation", [self.event(since=NOW + timedelta(seconds=2), trial="better"),
+                                 self.event("passed", at=NOW + timedelta(minutes=20))])
+        rows = metrics.change_outcomes("ember", NOW + timedelta(minutes=15))
+        self.assertEqual([(r["outcome"], r["tested"]) for r in rows],
+                         [("on probation", True), ("unknown", None)])
+        self.assertEqual([r["outcome"] for r in metrics.change_outcomes("ember")], ["passed", "unknown"])
+
+    def test_trial_marks_immediate_nonruntime_change_not_older_runtime_probation(self):
+        """A test-only change's trial must not be attributed to an older open probation."""
+        later = NOW + timedelta(seconds=30)
+        self.write("code_changes", [self.change(), {"ts": later.isoformat(), "files": ["tests/test_example.py"]}])
+        self.log_lines([(NOW, "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)"),
+                        (later, "ember", "change bbbbbbbb not on probation: no cycle runs tests/test_example.py"),
+                        (later, "ember", "kept change is trial example-trial's (better)")])
+        self.assertEqual([(r["outcome"], r["tested"]) for r in metrics.change_outcomes("ember")],
+                         [("on probation", False), ("not on probation", True)])
 
 
 if __name__ == "__main__":

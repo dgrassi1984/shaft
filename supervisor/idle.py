@@ -104,8 +104,8 @@ def exits(name: str, episodes: list[dict], changed: list[str] = ()) -> set[str]:
         return set()
     kept = sorted(at for ts in changed if (at := _at(ts)) is not None)
     out, used = set(), set()
-    for ep in sorted((e for e in episodes if isinstance(e, dict) and isinstance(e.get("ts"), str)),
-                     key=lambda e: e["ts"]):
+    dated = [(at, e) for e in episodes if isinstance(e, dict) and (at := _at(e.get("ts"))) is not None]
+    for _, ep in sorted(dated, key=lambda pair: pair[0]):   # by time, not by string: the files mix 'T' and space
         run = ep.get("run_started")
         row = open_.get(run) if isinstance(run, str) else None
         if row is None or run in used:

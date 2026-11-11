@@ -126,13 +126,13 @@ def _recurrence(name: str, now: datetime) -> Reading:
 
 
 def _battery(name: str, now: datetime) -> Reading:
-    from . import battery
+    from . import battery, metrics
     try:
         e = battery.era(name)
     except FileNotFoundError:
         return Reading("Capability on fixed tasks: no battery items for me")
     rows = [r for r in battery.results(name) if battery._same_era(r, e) and r.get("status") == "scored"
-            and str(r.get("at", "")) <= now.isoformat(timespec="seconds")]
+            and (at := metrics._ts(str(r.get("at", "")))) is not None and at <= now]
     parts, gaps = [], []
     for cat in battery.CATEGORIES:
         mine = battery._per_item(rows, cat, "instance")

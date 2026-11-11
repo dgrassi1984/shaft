@@ -10,6 +10,8 @@ from unittest import mock
 
 from supervisor import battery, claimlint, core, gauges, metacog, metrics, panel, stats_head, surprise
 
+from supervisor.tests.test_idle_exit import IsolatedCase
+
 NOW = datetime(2026, 11, 11, 12)
 
 
@@ -221,6 +223,51 @@ class BatteryTopicsTest(unittest.TestCase):
                              {"drawn": {"n": 2, "value": 3}, "undrawn": {"n": 1, "value": 1}})
             self.assertEqual(surprise.coin_comparison("ember", datetime(2026, 11, 11, 10, 5)),
                              {"drawn": {"n": 0, "value": None}, "undrawn": {"n": 1, "value": 1}})
+
+
+class StatsHeadRecordsTest(IsolatedCase):
+    def test_unfinished_sleep_does_not_hide_earlier_claim_lint(self):
+        """A sleep cut short must not reset the window and erase an unresolved lint finding."""
+        finished = (NOW - timedelta(hours=8)).isoformat()
+        finding = (NOW - timedelta(hours=4)).isoformat()
+        self.write(self.root / "memory/episodes/day.jsonl", [
+            {"kind": "sleep", "ts": finished, "content": "Consolidated notes"},
+            {"kind": "sleep", "ts": (NOW - timedelta(hours=1)).isoformat()}])
+        self.write(self.sup / "claimlint/ember.jsonl", [{"at": finding, "episode_ts": finding,
+            "findings": [{"episode_ts": finding, "what": "Report had no checked source"}]}])
+        self.assertEqual(stats_head._last_sleep("ember"), finished)
+        with mock.patch.object(stats_head, "verdicts", return_value=[]), \
+             mock.patch.object(battery, "self_miss_lines", return_value=[]):
+            text = "\n".join(stats_head.head("ember", NOW))
+        self.assertIn("Report had no checked source", text)
+
+    def test_since_sleep_parses_mixed_separators_for_cycles_judgments_and_changes(self):
+        """A space-separated noon timestamp must sort after a T-separated morning sleep."""
+        self.write(self.root / "memory/episodes/day.jsonl", [
+            {"kind": "sleep", "ts": "2026-11-11T04:00:00", "content": "Consolidated notes"},
+            {"kind": "live", "ts": "2026-11-11 12:00:00"}])
+        self.write(self.sup / "code_changes/ember.jsonl", [{"ts": "2026-11-11 12:00:00"}])
+        with mock.patch.object(metrics, "judgments_for_stats", return_value=[
+                {"episode_ts": "2026-11-11 12:00:00", "criterion_met": "yes"}]):
+            self.assertEqual(stats_head.since_sleep("ember"), [
+                "- Since my last sleep (2026-11-11 04:00): 1 cycles, 1 judged "
+                "(yes 1, partial 0, no 0); code changes kept 1"])
+
+    def test_system_exit_in_one_head_part_preserves_stats_page_and_other_parts(self):
+        """A part exiting for a missing instance must not drop the whole head or page."""
+        body = metrics.TITLE + "\n\n## Tables\nExample body\n"
+        with mock.patch.object(metrics, "_stats_text", return_value=body), \
+             mock.patch.object(stats_head, "verdicts", return_value=[]), \
+             mock.patch.object(stats_head, "since_sleep", return_value=["- Surviving note"]), \
+             mock.patch.object(battery, "self_miss_lines", side_effect=SystemExit("missing instance")) as part, \
+             mock.patch.object(stats_head, "log") as log:
+            text = metrics.stats_text("ember")
+        part.assert_called_once_with("ember")
+        self.assertIn("- Surviving note", text)
+        self.assertIn(stats_head.BODY_MARK, text)
+        self.assertTrue(text.endswith("## Tables\nExample body\n"))
+        self.assertIn("battery topics failed: SystemExit", log.call_args.args[0])
+
 
 
 if __name__ == "__main__":
