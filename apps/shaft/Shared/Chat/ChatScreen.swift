@@ -36,7 +36,6 @@ struct ChatScreen: View {
     /// Rename… asks for the thread's new title.
     @State private var renaming = false
     @State private var newTitle = ""
-    @State private var showingNotes = false
     @State private var columnWidth: CGFloat = 700
 
     init(chat: ChatStore, openArchived: @escaping (String) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil,
@@ -365,7 +364,6 @@ struct ChatScreen: View {
             Button { newThread() } label: { Image(systemName: "square.and.pencil") }
                 .disabled(screen.archived || chat.isEarlier)
                 .accessibilityLabel("New thread with \(chat.instance)")
-                .keyboardShortcut("n", modifiers: [.command, .shift])
                 .accessibilityHint("Starts another conversation with \(chat.instance); this one stays open")
         } else {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
@@ -382,11 +380,6 @@ struct ChatScreen: View {
             if !screen.archived {
                 Button { screen.showInstanceSettings = true } label: {
                     Label("Settings for \(chat.instance)", systemImage: "gearshape")
-                }
-            }
-            if !screen.archived {
-                Button { showingNotes = true } label: {
-                    Label("For next cycle (\(store.pendingNotes[chat.instance]?.count ?? 0))", systemImage: "moon")
                 }
             }
             if cyclesInMenu {
@@ -415,9 +408,6 @@ struct ChatScreen: View {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("More")
-        .popover(isPresented: $showingNotes) {
-            PendingNotesView(instance: chat.instance).padding().frame(idealWidth: 320)
-        }
         .confirmationDialog("End the conversation with \(chat.instance)?",
                             isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
             Button("End it", role: .destructive) { Task { await chat.end() } }
@@ -564,24 +554,29 @@ struct ChatTitle: View {
                 .help("Open Main with \(instance)")
             } else {
                 Text(label).lineLimit(1)
-                if let count = store.pendingNotes[instance]?.count, count > 0 {
-                    Button { showPendingNotes = true } label: {
-                        Text("☾ \(count)").lineLimit(1)
-                    }
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .accessibilityLabel("\(count) notes for next cycle")
-                    .popover(isPresented: $showPendingNotes) {
-                        PendingNotesView(instance: instance)
-                            .padding(Design.Space.s16)
-                            .frame(idealWidth: 320)
-                            .presentationCompactAdaptation(.popover)
-                    }
-                }
+            }
+            if (store.pendingNotes[instance]?.count ?? 0) > 0 {
+                pendingNotesButton
             }
         }
         .font(Design.Text.metadata)
         .foregroundStyle(Color.textSecondary)
+    }
+
+    private var pendingNotesButton: some View {
+        let count = store.pendingNotes[instance]?.count ?? 0
+        return Button { showPendingNotes = true } label: {
+            Label("\(count)", systemImage: "moon").lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel("\(count) notes for next cycle")
+        .popover(isPresented: $showPendingNotes) {
+            PendingNotesView(instance: instance)
+                .padding(Design.Space.s16)
+                .frame(idealWidth: 320)
+                .presentationCompactAdaptation(.popover)
+        }
     }
 }
 

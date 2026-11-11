@@ -691,7 +691,7 @@ struct SentItemView: View {
             }
             AttachmentsView(attachments: message.attachments)
             AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
-                         keepActions: asking, hovering: hovering, asksReply: asking)
+                         keepActions: asking, hovering: hovering, asksReply: !screen.archived)
                 .padding(.bottom, -Design.Footer.slack)     // keep the footer target within the card padding
         }
         .padding(Design.Space.s12)

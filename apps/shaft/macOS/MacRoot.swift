@@ -51,14 +51,16 @@ final class MacState {
             }
         }
         guard !rows.isEmpty else { return }
-        let index = selection.flatMap { rows.firstIndex(of: $0) } ?? (by > 0 ? -1 : 0)
+        let index = selection.flatMap { chosen in
+            rows.firstIndex(of: chosen) ?? rows.firstIndex { $0.instance == chosen.instance }
+        } ?? (by > 0 ? -1 : 0)
         open(rows[(index + by + rows.count) % rows.count])
     }
 
     func stepInstance(_ by: Int) {
         guard let store, !store.instances.isEmpty else { return }
         let names = store.instances.map(\.name)
-        let index = selection.flatMap { chosen in names.firstIndex(of: chosen.instance) } ?? 0
+        let index = selection.flatMap { chosen in names.firstIndex(of: chosen.instance) } ?? (by > 0 ? -1 : 0)
         open(names[(index + by + names.count) % names.count])
     }
 

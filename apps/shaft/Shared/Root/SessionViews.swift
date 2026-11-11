@@ -291,7 +291,8 @@ struct ConversationStateMark: View {
                     .foregroundStyle(Color.brand)
                     .symbolEffect(.pulse, isActive: !reduceMotion)
             } else if failed {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warning)
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 13)).foregroundStyle(Color.danger)
             } else {
                 Color.clear
             }
@@ -307,13 +308,37 @@ struct ConversationStateMark: View {
     }
 }
 
+private struct InstanceStateMark: View {
+    let row: InstanceRow
+    let main: FromRow?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let state = ConversationRowState(row: row, main: main)
+        Group {
+            if state.waiting != nil || state.state == "waiting" || state.state == "replying" || state.failed {
+                ConversationStateMark(state: state.state, waiting: state.waiting, failed: state.failed)
+            } else if row.state.hasPrefix("in a cycle") || row.state.contains("running") {
+                Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(Color.warning)
+                    .symbolEffect(.pulse, isActive: !reduceMotion)
+            } else if row.state.hasPrefix("sleeping") {
+                Image(systemName: "bed.double").font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+            } else if row.state.contains("paused") {
+                Image(systemName: "pause.circle").font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+    }
+}
+
 struct InstanceRowView: View {
     let row: InstanceRow
     var main: FromRow? = nil
     var collapsed = false
     var notes = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     private var unread: Bool { main?.unread ?? row.unreadMain ?? row.unread }
     private var subline: String {
         RenderedText.plain(PartialMarkdown.closed(ConversationLabels.mainSubline(row, main: main, pendingNotes: notes)))
@@ -322,12 +347,7 @@ struct InstanceRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: Design.Space.s4) {
-                Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
-                    .font(.caption)
-                    .foregroundStyle(row.replying ? Color.brand : Color.textSecondary)
-                    .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
-                    .frame(width: 16, height: 16)
-                    .accessibilityHidden(true)
+                InstanceStateMark(row: row, main: main)
                 Text(row.name)
                     .font(.headline)
                     .fontWeight(unread ? .bold : .semibold)
@@ -352,7 +372,7 @@ struct InstanceRowView: View {
         .foregroundStyle(Color.textPrimary)
         .frame(minHeight: 44)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([row.name, row.state, subline, unread ? "unread" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel(SidebarRowLabels.instance(row, main: main, collapsed: collapsed, subline: subline))
     }
 }
 
@@ -418,6 +438,7 @@ struct InstancesList: View {
     var settings: () -> Void
     @Environment(InstancesStore.self) private var store
     @AppStorage(SidebarDisclosure.key) private var expanded = ""
+    @State private var closing: ChatSelection?
     @State private var renaming: ChatSelection?
     @State private var newTitle = ""
     @State private var hovering: String?
@@ -430,12 +451,13 @@ struct InstancesList: View {
                     .font(.footnote).foregroundStyle(Color.warning)
             }
             ForEach(store.instances) { row in
-                instanceRow(row)
-                if isExpanded(row.name), let threads = store.threads(row.name) {
-                    threadRows(row.name, threads)
+                Section {
+                    instanceRow(row)
+                    if isExpanded(row.name), let threads = store.threads(row.name) {
+                        threadRows(row.name, threads)
+                    }
                 }
             }
-            .onMove(perform: moveInstances)
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
                     .foregroundStyle(Color.textSecondary)
@@ -444,6 +466,7 @@ struct InstancesList: View {
         .tint(Color.brand)
         #if os(iOS)
         .scrollContentBackground(.hidden)
+        .listSectionSpacing(0)
         .background(Color.elevated)
         #else
         .background(QuietListSelection())
@@ -462,6 +485,18 @@ struct InstancesList: View {
                 Button(action: settings) { Image(systemName: "gearshape") }.accessibilityLabel("Settings")
             }
         }
+        .confirmationDialog(closeTitle, isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
+                            titleVisibility: .visible) {
+            Button("End it", role: .destructive) {
+                if let closing, let ref = closing.ref {
+                    Task { await store.chat(closing.instance, ref).end() }
+                }
+                closing = nil
+            }
+            Button("Cancel", role: .cancel) { closing = nil }
+        } message: {
+            Text("It writes up its journal. Its other threads stay open.")
+        }
         .alert("Rename the thread", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $newTitle)
             Button("Rename") {
@@ -473,6 +508,8 @@ struct InstancesList: View {
             Button("Cancel", role: .cancel) {}
         }
     }
+
+    private var closeTitle: String { "End the conversation with \(closing?.instance ?? "")?" }
 
     private func isExpanded(_ name: String) -> Bool { SidebarDisclosure.values(expanded)[name] ?? false }
 
@@ -490,7 +527,9 @@ struct InstancesList: View {
                         .font(.caption).frame(width: 20, height: 44)
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel(isExpanded(row.name) ? "Collapse threads" : "Expand threads")
+                .accessibilityLabel(SidebarRowLabels.disclosure(row.name, expanded: isExpanded(row.name)))
+            } else {
+                Color.clear.frame(width: 20, height: 44).accessibilityHidden(true)
             }
             InstanceRowView(row: row, main: store.threads(row.name)?.from, collapsed: !isExpanded(row.name),
                             notes: store.pendingNotes[row.name]?.count ?? 0)
@@ -499,17 +538,17 @@ struct InstancesList: View {
                     SidebarDisclosure.set(row.name, expanded: true)
                     selection = tag
                 }
-            if !switcher {
+            if composeVisible(row.name) {
                 Button { newThread(row.name) } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.borderless)
                     .focused($composeFocus, equals: row.name)
-                    .opacity(composeVisible(row.name) ? 1 : 0)
                     .disabled(store.threads(row.name) == nil)
                     .accessibilityLabel("New thread with \(row.name)")
             }
         }
         .tag(tag)
         .onHover { hovering = $0 ? row.name : nil }
+        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         .listRowSeparator(.hidden)
         .listRowBackground(rowFill(selected: selection == tag))
         .contextMenu {
@@ -517,9 +556,9 @@ struct InstancesList: View {
             moveInstanceMenu(row.name)
         }
         .accessibilityAction(named: "New thread") { newThread(row.name) }
-        .accessibilityAction(named: "Move to Top") { moveInstance(row.name, offset: nil) }
-        .accessibilityAction(named: "Move Up") { moveInstance(row.name, offset: -1) }
-        .accessibilityAction(named: "Move Down") { moveInstance(row.name, offset: 1) }
+        .accessibilityActions {
+            moveInstanceMenu(row.name)
+        }
         #if os(iOS)
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
             Button { newThread(row.name) } label: { Label("New thread", systemImage: "square.and.pencil") }
@@ -544,21 +583,18 @@ struct InstancesList: View {
         return ThreadRowView(thread: thread)
             .tag(tag)
             .help(thread.title)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             .listRowSeparator(.hidden)
             .listRowBackground(rowFill(selected: selection == tag))
             .contextMenu {
                 Text(thread.title)
-                Button("Move to Top") { moveThread(name, thread.id, offset: nil) }
-                Button("Move Up") { moveThread(name, thread.id, offset: -1) }
-                Button("Move Down") { moveThread(name, thread.id, offset: 1) }
+                moveThreadMenu(name, thread.id)
                 Button("Rename…") { newTitle = thread.title; renaming = tag }
                 Button("Close Thread", role: .destructive) { closeThread(name, thread.id) }
             } preview: {
                 Text(thread.title).padding().fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityAction(named: "Move to Top") { moveThread(name, thread.id, offset: nil) }
-            .accessibilityAction(named: "Move Up") { moveThread(name, thread.id, offset: -1) }
-            .accessibilityAction(named: "Move Down") { moveThread(name, thread.id, offset: 1) }
+            .accessibilityActions { moveThreadMenu(name, thread.id) }
             .accessibilityAction(named: "Rename") { newTitle = thread.title; renaming = tag }
             .accessibilityAction(named: "Close Thread") { closeThread(name, thread.id) }
             #if os(iOS)
@@ -569,9 +605,21 @@ struct InstancesList: View {
     }
 
     @ViewBuilder private func moveInstanceMenu(_ name: String) -> some View {
-        Button("Move to Top") { moveInstance(name, offset: nil) }
-        Button("Move Up") { moveInstance(name, offset: -1) }
-        Button("Move Down") { moveInstance(name, offset: 1) }
+        let moves = SidebarMoveAvailability(id: name, ids: store.instances.map(\.name))
+        if moves.up {
+            Button("Move to Top") { moveInstance(name, offset: nil) }
+            Button("Move Up") { moveInstance(name, offset: -1) }
+        }
+        if moves.down { Button("Move Down") { moveInstance(name, offset: 1) } }
+    }
+
+    @ViewBuilder private func moveThreadMenu(_ name: String, _ id: String) -> some View {
+        let moves = SidebarMoveAvailability(id: id, ids: store.threads(name)?.threads.map(\.id) ?? [])
+        if moves.up {
+            Button("Move to Top") { moveThread(name, id, offset: nil) }
+            Button("Move Up") { moveThread(name, id, offset: -1) }
+        }
+        if moves.down { Button("Move Down") { moveThread(name, id, offset: 1) } }
     }
 
     private func newThread(_ name: String) {
@@ -579,7 +627,7 @@ struct InstancesList: View {
     }
 
     private func closeThread(_ name: String, _ id: String) {
-        Task { await store.chat(name, .thread(id)).end() }
+        closing = ChatSelection(name, .thread(id))
     }
 
     private func moveThread(_ name: String, _ id: String, offset: Int?) {
@@ -602,12 +650,6 @@ struct InstancesList: View {
         let remaining = ids.filter { $0 != id }
         apply(id, target == 0 ? nil : remaining[target - 1])
         selectionHaptic()
-    }
-
-    private func moveInstances(_ source: IndexSet, _ destination: Int) {
-        moveRows(store.instances.map(\.name), source: source, destination: destination) { id, after in
-            Task { await store.moveInstance(id, after: after) }
-        }
     }
 
     private func moveRows(_ ids: [String], source: IndexSet, destination: Int, apply: (String, String?) -> Void) {
@@ -638,11 +680,7 @@ struct InstancesList: View {
 
 struct ThreadRowView: View {
     let thread: ThreadRow
-    static let indent: CGFloat = 20
-
-    private var stateLabel: String {
-        ConversationStateMark.label(state: thread.state, waiting: thread.waiting, failed: thread.failed == true)
-    }
+    static let indent: CGFloat = 24
 
     var body: some View {
         HStack(spacing: Design.Space.s4) {
@@ -658,7 +696,7 @@ struct ThreadRowView: View {
         .padding(.leading, Self.indent)
         .frame(minHeight: 44)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([thread.title, stateLabel, thread.unread ? "unread" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel(SidebarRowLabels.thread(thread))
     }
 }
 

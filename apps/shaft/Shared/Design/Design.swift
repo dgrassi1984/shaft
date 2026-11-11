@@ -261,3 +261,61 @@ private struct QuietTarget: Shape {
     }
 }
 #endif
+
+/// Main's conversation state is independent of activity in the instance's other threads.
+struct ConversationRowState {
+    let state: String
+    let waiting: String?
+    let failed: Bool
+
+    init(row: InstanceRow, main: FromRow?) {
+        state = main?.state ?? (row.replying ? "replying" : "idle")
+        waiting = main?.waiting
+        failed = main?.failed == true
+    }
+
+    var label: String {
+        if let waiting, !waiting.isEmpty { return "waiting: \(waiting)" }
+        if state == "waiting" { return "waiting" }
+        if state == "replying" { return "replying" }
+        return failed ? "reply failed" : "idle"
+    }
+}
+
+enum SidebarRowLabels {
+    static func disclosure(_ name: String, expanded: Bool) -> String {
+        expanded ? "Collapse threads for \(name)" : "Expand threads for \(name)"
+    }
+
+    static func instance(_ row: InstanceRow, main: FromRow?, collapsed: Bool, subline: String) -> String {
+        let conversation = ConversationRowState(row: row, main: main)
+        let status = conversation.label == "idle" ? row.state : conversation.label
+        let unread = main?.unread ?? row.unreadMain ?? row.unread
+        var parts = [row.name, status, subline, unread ? "unread" : ""]
+        if collapsed, let count = row.unreadThreads, count > 0 {
+            parts.append(count == 1 ? "1 unread thread" : "\(count) unread threads")
+        }
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    static func thread(_ thread: ThreadRow) -> String {
+        let status: String
+        if let waiting = thread.waiting, !waiting.isEmpty { status = "waiting: \(waiting)" }
+        else if thread.state == "waiting" { status = "waiting" }
+        else if thread.state == "replying" { status = "replying" }
+        else { status = thread.failed == true ? "reply failed" : "idle" }
+        return [thread.title, status, thread.unread ? "unread" : ""]
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+struct SidebarMoveAvailability {
+    let up: Bool
+    let down: Bool
+
+    init(id: String, ids: [String]) {
+        let index = ids.firstIndex(of: id)
+        up = index.map { $0 > 0 } ?? false
+        down = index.map { $0 + 1 < ids.count } ?? false
+    }
+}

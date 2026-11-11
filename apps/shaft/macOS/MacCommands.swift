@@ -24,7 +24,7 @@ struct MacCommands: Commands {
             if now.threads {
                 Button("New Thread") { state.newThread() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .disabled(!now.chat)
+                    .disabled(!now.current)
             } else {
                 Button("New Chat…") { screen?.confirmingNewChat = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
