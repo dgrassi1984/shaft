@@ -166,9 +166,11 @@ class CancelReviewTest(unittest.TestCase):
 
     def test_a_note_that_did_something_when_sent_offers_no_cancel_and_is_refused(self):
         """Taking it back would not undo what sending it did: a decision the supervisor reports (no page id), a
-        quoted question it answered (kind reply), a rating's delivery (feedback)."""
+        quoted question it answered (kind reply), a rating's delivery (feedback). A note with no page id (an older
+        client's) is the operator's own and can be taken back."""
         from supervisor import messages as m
-        decided = m.deliver_background("demo", "Calendar proposal p1 approved", shown="calendar approval")
+        decided = m.deliver_background("demo", "Calendar proposal p1 approved", shown="calendar approval",
+                                       settled=True)
         feedback = m.deliver_feedback("demo", "too long", shown="👎", mid="rating-1")
         for path in (decided, feedback):
             row = next(r for r in m.history() if r["file"] == path.name)
@@ -179,6 +181,8 @@ class CancelReviewTest(unittest.TestCase):
         plain = self.note()
         row = next(r for r in m.history() if r["file"] == plain)
         self.assertTrue(web_chat.message_item("demo", row, {})["cancellable"])
+        no_id, _ = web_chat.background("demo", web_tests.ME, "from an older page", [])
+        self.assertEqual(web_chat.uncycle("demo", web_tests.ME, file=no_id), "next-cycle note cancelled")
 
     def test_the_message_page_says_cancelled_not_read(self):
         file = self.note()

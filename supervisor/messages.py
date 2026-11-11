@@ -24,7 +24,7 @@ LOG_NAME = "messages.jsonl"
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
            mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False,
-           talk: str | None = None, thread: str | None = None, re_: str | None = None) -> None:
+           talk: str | None = None, thread: str | None = None, re_: str | None = None, settled: bool = False) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
@@ -46,6 +46,8 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         row["thread"] = thread
     if re_:
         row["re"] = re_
+    if settled:                   # it reports something already decided (a calendar or voice decision): no Cancel
+        row["settled"] = True
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
     if alert:
@@ -258,7 +260,7 @@ BACKGROUND_NOTE = ("the web UI, for your next cycle — nobody is waiting on an 
 
 def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *, attachments: list[dict] | None = None,
              via: str = "", mid: str = "", shown: str | None = None, comments: list[dict] | None = None,
-             thread: tuple[str, str] | None = None) -> Path:
+             thread: tuple[str, str] | None = None, settled: bool = False) -> Path:
     root = instance_root(name)
     stamp = datetime.now()
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
@@ -269,7 +271,7 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
                       f"From: operator\nTo: {name}\nKind: {kind}\n{ref}{how}{conv}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
                       f"{text.strip()}\n")
     record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
-           comments=comments, thread=thread[0] if thread else None)
+           comments=comments, thread=thread[0] if thread else None, settled=settled)
     from .autonomy import event_wake   # it wakes for this once idle, not at its next timed wake (review C15)
     event_wake(name, "message from the operator")
     return path
@@ -277,12 +279,13 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
 
 def deliver_background(name: str, text: str, *, shown: str, in_reply_to: str | None = None,
                        attachments: list[dict] | None = None, mid: str = "", comments: list[dict] | None = None,
-                       thread: tuple[str, str] | None = None) -> Path:
+                       thread: tuple[str, str] | None = None, settled: bool = False) -> Path:
     """A message from the web chat's Next cycle: into the instance's inbox now, logged as BACKGROUND, read in its next
     cycle. A reply when it answers one of its questions (`in_reply_to`), as `shaft reply` writes it. `thread`: (id,
-    title) of the open thread it was written in — it shows there, and its file names it for the answer."""
+    title) of the open thread it was written in — it shows there, and its file names it for the answer. `settled`: the
+    supervisor's own report of something already decided (a calendar or voice decision): Cancel would undo nothing."""
     return _deliver(name, text, "reply" if in_reply_to else "message", in_reply_to, attachments=attachments,
-                    via=BACKGROUND, mid=mid, shown=shown, comments=comments, thread=thread)
+                    via=BACKGROUND, mid=mid, shown=shown, comments=comments, thread=thread, settled=settled)
 
 
 def deliver_feedback(name: str, text: str, *, shown: str, mid: str = "") -> Path:

@@ -58,7 +58,7 @@ def _outcome(row):
                                  "answer": row['outcome'], "submitted": False}) + '\n')
     try:   # decided and audited already: an instance that is gone (deleted) must not undo that
         messages.deliver_background(row['instance'], f"Calendar proposal {row['id']} {row['state']}: "
-                                    f"{row['summary']}\n{row['outcome']}", shown='calendar approval')
+                                    f"{row['summary']}\n{row['outcome']}", shown='calendar approval', settled=True)
     except Exception as e:
         core.log(f"calendar proposal {row['id']}: outcome not delivered to {row['instance']}: {e}")
 

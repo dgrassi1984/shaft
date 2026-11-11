@@ -1432,11 +1432,11 @@ def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid:
 
 
 def takes_back(row: dict) -> bool:
-    """A next-cycle note Cancel can take back whole: one the operator wrote in a composer (it has the page's id), that
-    did nothing when it was sent. One that answered a quoted question (kind "reply") closed it, a comment's marked the
-    comment sent, a rating's is the feedback's delivery, and the supervisor's own (a calendar or voice decision, no id)
-    reports something already decided: taking the note back would undo none of that (Grok review)."""
-    return bool(row.get("mid")) and row.get("kind") == "message" and not row.get("comments")
+    """A next-cycle note Cancel can take back whole: one the operator wrote, that did nothing when it was sent. One
+    that answered a quoted question (kind "reply") closed it, a comment's marked the comment sent, a rating's (kind
+    "feedback") is the feedback's delivery, and the supervisor's own (`settled`: a calendar or voice decision) reports
+    something already decided: taking the note back would undo none of that (Grok review)."""
+    return row.get("kind") == "message" and not row.get("comments") and not row.get("settled")
 
 
 def _cycle_alive(name: str) -> bool:
