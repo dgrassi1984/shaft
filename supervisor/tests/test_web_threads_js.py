@@ -2,6 +2,7 @@
 From's composer only ever sends for the next cycle, a document saved beside a thread names that thread, and a thread's
 page (?id=) or From says when it goes away, so a reply there is pushed to this device again."""
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -139,19 +140,19 @@ console.log(JSON.stringify(sent));
 
 @unittest.skipUnless(NODE, "node is not installed")
 class SeenMarksTest(unittest.TestCase):
-    def test_a_mark_from_before_threads_counts_for_every_thread_until_each_is_seen(self):
-        script = function("seenAt") + function("seenMark") + r"""
+    def test_legacy_seen_marks_are_sent_to_each_known_conversation(self):
+        """A legacy instance mark migrates to each known conversation before browser storage is removed."""
+        script = r'''
 const assert = require("node:assert/strict");
-const seen = { wisp: "2026-10-20T10:00:00" };
-assert.equal(seenAt(seen, "wisp", "web-a"), "2026-10-20T10:00:00");
-seenMark(seen, "wisp", "web-a", "2026-10-20T11:00:00");
-assert.deepEqual(seen.wisp, { "*": "2026-10-20T10:00:00", "web-a": "2026-10-20T11:00:00" });
-assert.equal(seenAt(seen, "wisp", "web-a"), "2026-10-20T11:00:00");
-assert.equal(seenAt(seen, "wisp", "from"), "2026-10-20T10:00:00");
-assert.equal(seenAt(seen, "kiln", "web-k"), "");
-seenMark(seen, "kiln", "from", "2026-10-20T12:00:00");
-assert.deepEqual(seen.kiln, { from: "2026-10-20T12:00:00" });
-"""
+let seenMigrating = false, removed = false; const posted = [];
+const localStorage = {getItem: () => JSON.stringify({example:"2026-10-20T10:00:00"}), removeItem: () => {removed=true;}};
+const rail = {querySelectorAll: () => [{dataset:{inst:"example",lasts:JSON.stringify({"web-a":"",from:""})}}]};
+const sendSeen = async mark => { posted.push(mark); return true; };
+''' + re.search(r'^  async function migrateSeen\(.*?^  \}\n', JS, re.S | re.M)[0] + r'''
+(async () => {await migrateSeen(rail);
+assert.deepEqual(posted.map(m => [m.inst,m.key,m.last]), [
+  ["example","web-a","2026-10-20T10:00:00"], ["example","from","2026-10-20T10:00:00"]]);
+assert.equal(removed,true); })().catch(e => {console.error(e);process.exitCode=1;});
+'''
         out = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("function seenAt", JS)

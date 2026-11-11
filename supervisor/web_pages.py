@@ -83,6 +83,8 @@ ICON_PATHS = {
     "compose": '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>'
                '<path d="M17.5 2.5a2.1 2.1 0 0 1 3 3L12 14l-4 1 1-4Z"/>',
     "history": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+    "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
+    "grip": '<path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-width="3"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
     "back": '<path d="m15 18-6-6 6-6"/>',
     "up": '<path d="m18 15-6-6-6 6"/>',
@@ -157,74 +159,91 @@ MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/prop
 THREAD_STATES = {"idle": "idle", "replying": "replying", "waiting": "waiting for its turn"}
 
 
+def _rail_state(state: str, waiting: str | None = None, failed: bool = False) -> tuple[Html, str]:
+    label = waiting or ("replying" if state == "replying" else "reply failed" if failed else "")
+    kind = "waiting" if waiting or state == "waiting" else "replying" if state == "replying" else "failed" if failed else "idle"
+    mark = icon("clock", 12) if kind == "waiting" else Html("!") if kind == "failed" else Html("")
+    return h('<span class="tdot t-{kind}" title="{label}" aria-hidden="true">{mark}</span>', kind=kind, mark=mark, label=label), label
+
+
+def _rail_controls(n: str, cid: str = "", title: str = "") -> Html:
+    key = f"{n}/{cid}" if cid else n
+    return h('<button type="button" class="railgrip" data-grip aria-pressed="false" data-focus="grip-{key}" '
+             'aria-label="Reorder {title}" title="Reorder {title}">{grip}</button>'
+             '<button type="button" class="railmore" data-row-menu data-focus="menu-{key}" '
+             'aria-label="Actions for {title}" aria-haspopup="menu">{more}</button>',
+             key=key, title=title or n, more=icon("more", 14), grip=icon("grip", 12))
+
+
 def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "", from_state: str = "idle",
                 from_waiting: str | None = None) -> Html:
-    """Under the instance being viewed: its open threads (title, a dot for idle / replying / waiting, the unread mark
-    web.js sets from server unread attributes), then From <instance>, then + New thread. `on`: the thread on screen (an id, "from")."""
-    from .web_actions import post_attrs
+    """Open topic threads in server hand order. Main is the instance row."""
     from . import web_seen
     unread = web_seen.unread_conversations("", n)
     rows = []
     for t in threads:
-        label = t.get("waiting") or THREAD_STATES[t["state"]]
-        rows.append(h('<a href="/i/{n}/chat?id={id}" class="thread{on}" data-thread-of="{n}" data-seen-key="{id}" '
-                      'data-last="{last}" data-unread="{unread}"{cur}><span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}">'
-                      '</span><span class="ttl">{title}</span></a>', n=n, id=t["id"], last=t.get("last") or "",
-                      unread=int(unread.get(t["id"], False)),
+        dot, state = _rail_state(t["state"], t.get("waiting"), t.get("failed", False))
+        news = bool(unread.get(t["id"]))
+        rows.append(h('<div class="railrow threadrow" data-order-id="{id}" data-name="{n}" data-title="{title}">'
+                      '<a href="/i/{n}/chat?id={id}" class="thread{on}" data-thread-of="{n}" data-seen-key="{id}" '
+                      'data-last="{last}" data-unread="{unread}" title="{title}"{cur}>{dot}'
+                      '<span class="ttl" aria-hidden="true">{title}</span><span class="sr">{accessible}</span>'
+                      '<time class="railtime" aria-hidden="true">{time}</time><span class="unread-dot" aria-hidden="true"></span></a>{controls}</div>',
+                      time=(t.get("last") or "")[11:16], n=n, id=t["id"], title=t["title"], last=t.get("last") or "", unread=int(news),
                       on=" on" if on == t["id"] else "", cur=Html(' aria-current="page"') if on == t["id"] else "",
-                      s=t["state"], label=label, title=t["title"]))
-    dot = (h('<span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}"></span>', s=from_state,
-             label=from_waiting or THREAD_STATES[from_state])
-           if from_state != "idle" else Html('<span class="tdot t-from" aria-hidden="true"></span>'))
-    rows.append(h('<a href="/i/{n}/from" class="thread from{on}" data-thread-of="{n}" data-seen-key="from" '
-                  'data-last="{last}" data-unread="{unread}"{cur}>{dot}<span class="ttl">From {n}</span></a>', n=n, last=from_last or "",
-                  unread=int(unread.get("from", False)),
-                  on=" on" if on == "from" else "", cur=Html(' aria-current="page"') if on == "from" else "", dot=dot))
-    rows.append(h('<form class="act newthread railnew" data-post="/chat/{n}/new" data-after="open-thread"{a}>'
-                  '<button type="submit" class="small" aria-label="New thread with {n}" data-focus="rail-new">'
-                  '+ New thread</button></form>', n=n, a=post_attrs("the chats")))
-    return h('<div class="railthreads" role="group" aria-label="Threads with {n}">{rows}</div>', n=n, rows=join(rows))
+                      dot=dot, accessible=", ".join(x for x in [t["title"], state, "unread" if news else ""] if x),
+                      controls=_rail_controls(n, t["id"], t["title"])))
+    return h('<div class="railthreads" id="threads-{n}" role="group" aria-label="Threads with {n}">{rows}</div>',
+             n=n, rows=join(rows))
 
 
 def rail(names: list[str], current: str = "", snap: dict | None = None, chats: dict | None = None,
          thread: str = "") -> Html:
-    """The left rail: a chat per instance first, then the pages used now and then. Without `snap`
-    (a page's first render) it lists the names; web.js refreshes it from /fragment/rail at once, with each instance's
-    state, its last line, and server unread attributes.
-    With threads (`chats[n]["threads"]`, web._rail_chats): the instance's data-lasts holds when the instance last wrote
-    in each open thread and in From (used only to migrate browser marks), and the instance being viewed lists them
-    (thread_rows; `thread`: the one on screen)."""
+    """Main is the instance row; optional children retain the server's manual order."""
     from . import web_seen
-    live = {i["name"]: i for i in (snap or {}).get("instances", [])}
+    from .web_actions import post_attrs
+    from .web_views import pending_notes_html
     items = []
     for n in names:
-        i, c = live.get(n), (chats or {}).get(n) or {}
-        unread = web_seen.unread_conversations("", n) if c.get("threads") is not None else {}
-        dot = h('<span class="dot st-{s}" title="{t}" role="img" aria-label="{t}"></span>', s=state_class(i["state"]),
-                t=i["state"]) if i else \
-            Html('<span class="dot"></span>')
-        line = (Html('<span class="last talk-text">replying…</span>') if c.get("replying") else
-                h('<span class="last">{t}</span>', t=c["line"]) if c.get("line") else Html(""))
-        threads = c.get("threads")
-        lasts = ({**{t["id"]: t.get("last") or "" for t in threads}, "from": c.get("from_last") or ""}
-                 if threads is not None else None)
-        items.append(h('<a href="/i/{n}/chat" class="inst {on}" data-inst="{n}" data-last="{last}" '
-                       'data-unread="{unread}" data-unread-main="{main}" data-unread-threads="{count}"{lasts}>{dot}'
-                       '<span class="who">{n}</span>{line}</a>', n=n, on="on" if current == f"i:{n}" else "",
-                       last=c.get("last", ""), dot=dot, line=line, unread=int(any(unread.values())),
-                       main=int(unread.get("from", False)), count=sum(v for k, v in unread.items() if k != "from"),
-                       lasts=h(' data-lasts="{j}"', j=json.dumps(lasts, separators=(",", ":"))) if lasts is not None
-                       else ""))
-        if threads is not None and current == f"i:{n}":
-            items.append(thread_rows(n, threads, c.get("from_last") or "", thread, c.get("from_state") or "idle",
-                                     c.get("from_waiting")))
+        c = (chats or {}).get(n) or {}
+        threads = c.get("threads") or []
+        unread = web_seen.unread_conversations("", n) if "threads" in c else {}
+        selected = current == f"i:{n}"
+        main = bool(unread.get("from"))
+        count = sum(v for k, v in unread.items() if k != "from")
+        dot, state = _rail_state(c.get("from_state", "idle"), c.get("from_waiting"), c.get("from_failed", False))
+        lasts = {**{t["id"]: t.get("last") or "" for t in threads}, "from": c.get("from_last") or ""}
+        disclosure = h('<button type="button" class="railchevron" data-disclose="{n}" data-focus="expand-{n}" '
+                       'aria-label="Threads with {n}" aria-expanded="{expanded}" aria-controls="threads-{n}">'
+                       '{chevron}</button>', n=n, expanded="true" if selected else "false", chevron=icon("back", 12)) if threads else Html("")
+        line = "" if c.get("notes") else c.get("line") or ""
+        notes = h('<div class="railpending">{notes}</div>', notes=pending_notes_html(n)) if c.get("notes") else Html("")
+        items.append(h('<section class="railinstance{selected}" data-order-id="{n}" data-name="{n}" data-title="{n}">'
+                       '<div class="railrow instrow"><a href="/i/{n}/chat" class="inst{on}" data-inst="{n}" '
+                       'data-last="{last}" data-unread="{unread}" data-unread-main="{main}" '
+                       'data-unread-threads="{count}" data-lasts="{lasts}"{cur}>{dot}'
+                       '<span class="who" aria-hidden="true">{n}</span><span class="sr">{accessible}</span>'
+                       '<time class="railtime" aria-hidden="true">{time}</time><span class="unread-dot" aria-hidden="true"></span><span class="threadcount" aria-hidden="true">{pill}</span>'
+                       '<span class="last" aria-hidden="true">{line}</span></a>{disclosure}'
+                       '<form class="act newthread railcompose" data-post="/chat/{n}/new" data-after="open-thread"{a}>'
+                       '<button type="submit" class="iconbtn" data-focus="compose-{n}" aria-label="New thread with {n}" '
+                       'title="New thread with {n}">{compose}</button></form>{controls}</div>{notes}{threads}</section>',
+                       notes=notes, n=n, selected=" selected-instance" if selected else "", on=" on" if selected and thread in ("from", "current") else "",
+                       cur=Html(' aria-current="page"') if selected and thread in ("from", "current") else "",
+                       last=c.get("from_last") or "", unread=int(any(unread.values())), main=int(main), count=count,
+                       lasts=json.dumps(lasts, separators=(",", ":")), time=(c.get("from_last") or "")[11:16], dot=dot, line=line, pill=count or "",
+                       accessible=", ".join(x for x in [n, state, "unread" if main else ""] if x),
+                       disclosure=disclosure, compose=icon("compose", 14), controls=_rail_controls(n), a=post_attrs("the chats"),
+                       threads=thread_rows(n, threads, c.get("from_last") or "", thread if selected else "") if threads else Html("")))
     alerts = len((snap or {}).get("alerts") or [])
     manage = [h('<a href="{href}" class="{on}">{label}{badge}</a>', href=href, label=label,
                 on="on" if current in (href, href.strip("/")) else "",
-                badge=h(' <span class="badge bad" title="alerts">{n}</span>', n=alerts) if href == "/overview" and alerts
-                else Html("")) for href, label in MANAGE]
-    return h('<div class="group">Chats</div>{items}<details class="manage" data-key="manage" open><summary class="group">Manage</summary>'
-             '{manage}</details>', items=join(items), manage=join(manage))
+                badge=h(' <span class="badge bad" title="alerts">{n}</span>', n=alerts) if href == "/overview" and alerts else Html(""))
+              for href, label in MANAGE]
+    return h('<div class="railheading"><span class="group">Chats</span><button type="button" class="railedit" '
+             'data-rail-edit aria-pressed="false">Edit</button></div>{items}'
+             '<details class="manage" data-key="manage"{opened}><summary class="group">Manage</summary>{manage}</details>',
+             items=join(items), manage=join(manage), opened="" if current.startswith("i:") else Html(" open"))
 
 
 def nav(names: list[str], current: str = "overview", thread: str = "") -> Html:
@@ -249,7 +268,7 @@ def nav(names: list[str], current: str = "overview", thread: str = "") -> Html:
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
-             '</button></form>{version}</nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"),
+             '</button></form>{version}</nav>', c=cur, rail=rail(names, cur, thread=thread), a=post_attrs("this page"),
              t=f"&t={quote(thread, safe='')}" if thread else "",
              version=running, x=icon("close"))
 

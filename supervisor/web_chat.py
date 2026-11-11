@@ -184,7 +184,7 @@ def from_chat(name: str, login: str = "", create: bool = False) -> dict | None:
         if found := next((c for c in _all_chats(name) if c.get("kind") == FROM), None):
             return found
         chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "kind": FROM, "login": login,
-                "created": _now(), "state": "idle", "turns": [], "reply": None, "title": f"From {name}"}
+                "created": _now(), "state": "idle", "turns": [], "reply": None, "title": name}
         save(chat)
         return chat
 
@@ -435,6 +435,36 @@ FAILURE_WHY = {"connection": "The connection to the instance failed.",
                "service": "The service could not finish the reply.",
                "model": "The model could not finish the reply."}
 RETRY_CONFIRM = "Actions may already have run. Send it again anyway?"
+
+
+def failed(chat: dict | None) -> bool:
+    """The latest assistant turn failed, excluding a stopped or retried reply."""
+    turn = next((t for t in reversed((chat or {}).get("turns") or []) if t.get("role") == "assistant"), {})
+    return bool(turn.get("note") and not turn.get("retried")
+                and turn.get("note_kind", "stopped" if turn.get("note") == "stopped by you" else "unknown") != "stopped")
+
+
+def pending_notes(name: str) -> list[dict]:
+    """Unread next-cycle notes across the instance, independent of the feed window."""
+    from . import messages
+    rows = [row for row in messages.history() if row.get("from") == "operator" and row.get("to") == name
+            and row.get("via") == messages.BACKGROUND and not row.get("read") and not row.get("cancelled")]
+    if not rows:
+        return []
+    opened = {c["id"]: c for c in threads(name)}
+    main = from_chat(name)
+    busy = (any(c.get("state") == "replying" for c in opened.values())
+            or bool(main and main.get("state") == "replying") or _cycle_alive(name))
+    out = []
+    for row in rows:
+        chat = opened.get(row.get("thread"))
+        cancellable = takes_back(row) and not busy
+        out.append({"file": row["file"], "mid": row.get("mid"), "text": row.get("shown", row.get("text", "")),
+                    "ts": row["ts"], "cid": chat["id"] if chat else "from",
+                    "title": title(chat) if chat else name, "cancellable": cancellable,
+                    "reason": None if cancellable else ("A cycle or reply may already have read this note." if busy else
+                                                       "This note delivered an answer, comment, rating or decision.")})
+    return out
 
 
 def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | None = None) -> dict | None:

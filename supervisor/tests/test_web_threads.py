@@ -56,7 +56,7 @@ class ThreadsWebTest(ChatRoutesCase):
                         reply={"started": "2026-11-10T12:00:01", "activity": [], "answer": ""})
         rail = self.get(f"/fragment/rail?c=i:wisp&t={a['id']}")
         rows = self.rows(rail)
-        self.assertEqual(len(rows), 4, rail)                          # three threads, newest first, then From
+        self.assertEqual(len(rows), 3, rail)                          # three topics; Main is the instance row
         self.assertIn(f'chat?id={c["id"]}', rows[0])
         self.assertIn('class="tdot t-replying" title="replying"', rows[0])
         self.assertIn(f'chat?id={b["id"]}', rows[1])
@@ -64,22 +64,23 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn(f'chat?id={a["id"]}', rows[2])
         self.assertIn('class="thread on"', rows[2])                     # the thread on screen
         self.assertIn('aria-current="page"', rows[2])
-        self.assertIn('<span class="ttl">Landlord &lt;mail&gt;</span>', rows[2])   # escaped
+        self.assertIn('<span class="ttl" aria-hidden="true">Landlord &lt;mail&gt;</span>', rows[2])   # escaped
         self.assertIn('data-last="2026-11-10T10:00:05"', rows[2])     # when it last answered there
         self.assertIn(f'data-seen-key="{a["id"]}"', rows[2])
-        self.assertIn('<span class="ttl">From wisp</span>', rows[3])
-        self.assertIn('data-seen-key="from"', rows[3])
+        self.assertNotIn("From wisp", rail)
+        self.assertNotIn("+ New thread", rail)
         self.assertIn('data-post="/chat/wisp/new" data-after="open-thread"', rail)
         self.assertIn('aria-label="New thread with wisp"', rail)
         lasts = json.loads(re.search(r'data-lasts="([^"]+)"', rail)[1].replace("&quot;", '"'))
         self.assertEqual(lasts, {a["id"]: "2026-11-10T10:00:05", b["id"]: "", c["id"]: "", "from": ""})
 
-    def test_rail_threads_only_under_the_viewed_instance_but_its_marks_everywhere(self):
+    def test_rail_threads_exist_under_every_instance_for_disclosure(self):
+        """Unselected instances retain their topic markup so disclosure can expand them without navigation."""
         self.thread("One", [{"role": "assistant", "content": "a", "ts": "2026-11-10T10:00:05"}])
         rail = self.get("/fragment/rail?c=/overview")
-        self.assertEqual(self.rows(rail), [])
+        self.assertEqual(len(self.rows(rail)), 1)
         self.assertIn("data-lasts=", rail)                             # the instance is still marked unread from them
-        self.assertNotIn("railthreads", rail)
+        self.assertIn("railthreads", rail)
 
     def test_rail_on_the_instance_page_lights_main_not_the_newest_thread(self):
         """2026-11-11: the instance's own page is Main. An older page polling the rail with t=current lit the most
@@ -87,13 +88,13 @@ class ThreadsWebTest(ChatRoutesCase):
         old = self.thread("Old", [{"role": "user", "content": "q", "ts": "2026-11-10T09:00:00"}])
         new = self.thread("New", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}])
         rail = self.get("/fragment/rail?c=i:wisp&t=current")
-        on = [r for r in self.rows(rail) if 'class="thread from on"' in r or 'class="thread on"' in r]
+        on = re.findall(r'<a [^>]*aria-current="page"[^>]*>.*?</a>', rail)
         self.assertEqual(len(on), 1)
-        self.assertIn('data-seen-key="from"', on[0])
-        self.assertNotIn(new["id"], on[0])
-        self.assertNotIn(old["id"], on[0])
+        self.assertIn('data-inst="wisp"', on[0])
+        self.assertNotIn(f'chat?id={new["id"]}', on[0])
+        self.assertNotIn(f'chat?id={old["id"]}', on[0])
         config = self.get("/fragment/rail?c=i:wisp")                 # its Config page: listed, none lit
-        self.assertEqual(len(self.rows(config)), 3)
+        self.assertEqual(len(self.rows(config)), 2)
         self.assertNotIn('class="thread on"', config)
 
     def test_rail_last_per_thread_is_the_feeds_last_and_from_has_its_own(self):
@@ -123,7 +124,7 @@ class ThreadsWebTest(ChatRoutesCase):
     def test_header_names_the_thread_renames_it_and_new_thread_ends_nothing(self):
         a = self.thread("Landlord mail", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}])
         header = self.get(f"/fragment/chat/wisp/header?id={a['id']}")
-        self.assertIn('<span class="ttl">Landlord mail</span>', header)
+        self.assertIn('Switch conversation">Landlord mail</button>', header)
         rename = re.search(r'<form class="act renameform" data-post="/chat/wisp/rename".*?</form>', header)[0]
         self.assertIn(f'name="cid" value="{a["id"]}"', rename)
         self.assertIn('<label>Thread title<input name="title" value="Landlord mail"', rename)
@@ -133,7 +134,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('data-post="/chat/wisp/clear"', header)
         r = self.post("/chat/wisp/rename", f"cid={a['id']}&title=Rent")
         self.assertEqual(r.status, 200, r.body)
-        self.assertIn('<span class="ttl">Rent</span>', self.get(f"/fragment/chat/wisp/header?id={a['id']}"))
+        self.assertIn('Switch conversation">Rent</button>', self.get(f"/fragment/chat/wisp/header?id={a['id']}"))
         r = self.post("/chat/wisp/new", "")
         self.assertEqual(r.status, 200, r.body)
         new = re.search(r'data-cid="(web-[0-9a-f]+)"><a href="/i/wisp/chat\?id=\1"', r.body.decode())[1]
@@ -142,7 +143,7 @@ class ThreadsWebTest(ChatRoutesCase):
     def test_an_ended_threads_header_shows_its_title_without_rename(self):
         a = self.thread("Done topic", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}], "ended")
         header = self.get(f"/fragment/chat/wisp/header?id={a['id']}")
-        self.assertIn('<span class="threadtitle">Done topic</span>', header)
+        self.assertIn('Switch conversation">Done topic</button>', header)
         self.assertNotIn("/chat/wisp/rename", header)
         self.assertNotIn("/chat/wisp/clear", header)
         self.assertIn('data-post="/chat/wisp/new"', header)              # a new thread is always one tap away
@@ -172,7 +173,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('data-draft="wisp/from"', composer)
         self.assertIn('<input type="hidden" name="cid" value="from">', composer)
         self.assertIn('name="queue"', composer)
-        self.assertIn('<span class="threadtitle">From wisp</span>', page)
+        self.assertIn('Switch conversation">wisp</button>', page)
         self.assertIn("data-show-docs", page)                            # Main has the documents panel (From had none)
         self.assertNotIn("/chat/wisp/clear", page)
         with mock.patch.object(web_chat, "background", return_value=("", "kept for its next cycle")) as bg, \
@@ -200,13 +201,13 @@ class ThreadsWebTest(ChatRoutesCase):
         self.get("/fragment/from/wisp", headers={"x-shaft-at": "3000", "x-shaft-watching": "0"})   # covered: not watching
         self.assertEqual(web_chat.watchers("wisp", "from"), set())
         header = self.get("/fragment/from/wisp/header")
-        self.assertIn("From wisp", header)
+        self.assertIn('Switch conversation">wisp</button>', header)
         self.assertEqual(self.req("/fragment/from/nobody", cookie=self.cookie).status, 404)
         self.assertEqual(self.req("/i/nobody/from", cookie=self.cookie).status, 404)
 
     def test_an_empty_from_says_what_it_is_for(self):
         feed = self.get("/fragment/from/wisp")
-        self.assertIn("From wisp", feed)
+        self.assertIn("Your conversation with wisp.", feed)
         self.assertNotIn("Write below to start one", feed)              # not the chat's empty text
 
     # -- the feed's items know their thread --------------------------------------------------------------------------
@@ -235,5 +236,5 @@ class RailMarkupTest(ChatRoutesCase):
     def test_first_render_without_threads_keeps_the_old_shape(self):
         """A page's first render (no snapshot) lists the names only; web.js fills the threads at once."""
         rail = str(web_pages.rail(["wisp"], "i:wisp"))
-        self.assertNotIn("data-lasts", rail)
+        self.assertIn("data-lasts", rail)
         self.assertNotIn("railthreads", rail)

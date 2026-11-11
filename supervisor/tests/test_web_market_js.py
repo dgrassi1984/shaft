@@ -66,6 +66,7 @@ for (const changed of [true, false]) {
         self.node(r'''
 const assert = require('node:assert/strict');
 let sheet = {kind:'docs'}, seen = {}, headers;
+let railGeneration = 0;
 const item = {dataset:{seenInst:'wisp', seenKey:'web-a', seenReply:'2026-10-27T10:00:00'},
   getClientRects:()=>[1], closest:()=>null, getBoundingClientRect:()=>({top:10,bottom:20})};
 const document = {visibilityState:'visible', querySelectorAll:()=>[item], addEventListener(){}};

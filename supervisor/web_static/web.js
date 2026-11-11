@@ -178,7 +178,9 @@
   // being edited (Save's check says if it changed), a field being typed in (a new document's name).
   // An editor counts while it is on screen or holds unsaved text: one left open, unchanged, in a closed documents
   // sheet stopped the panel's refresh for the rest of the visit (no new-document badge, nothing opened on its own).
+  let railGeneration = 0, railInteraction = null, railMoving = false;
   function busyIn(el) {
+    if (el.classList.contains("rail") && (railInteraction || railMoving || railMenu)) return true;
     if (selectingIn(el) && !el.dataset.keyed) return true;
     if ([...el.querySelectorAll(".editing")].some(v => v.getClientRects().length || editDirty(v))) return true;
     const typing = document.activeElement;
@@ -292,6 +294,7 @@
       const slow = (hidden ? 5 : 1) * (el.dataset.lazy && !el.getClientRects().length ? 6 : 1);
       if ((hidden && !el.dataset.hidden) || busyIn(el)) { later(every); return; }
       running = true;
+      const generation = railGeneration;
       const ctl = new AbortController();
       const limit = setTimeout(() => ctl.abort(), POLL_LIMIT_MS);
       try {
@@ -313,7 +316,7 @@
         if (r.ok) {
           fails = 0;
           // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
-          if (busyIn(el) || el.dataset.poll !== url || again) return;
+          if (busyIn(el) || el.dataset.poll !== url || again || (el.classList.contains("rail") && generation !== railGeneration)) return;
           el.dataset.etag = r.headers.get("ETag") || "";
           el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
@@ -529,7 +532,9 @@
     const mid = chatSend(form) ? form.querySelector("input[name=mid]") : null;
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
+    const destination = form._pendingCid !== undefined ? form._pendingCid : pageCid() || "from";
     const payload = new FormData(form);
+    if (form._pendingCid !== undefined) payload.set("cid", form._pendingCid);
     // A document saved, deleted or commented on beside a thread goes to that thread's next message, not the current one
     if (/^\/docs\//.test(form.dataset.post) && pageCid() && !payload.has("cid")) payload.set("cid", pageCid());
     const replyIdentity = form.querySelector("input[name=in_reply_to]");
@@ -543,7 +548,7 @@
       try {
         localStorage.setItem(draftKey(form), typed);
         // files: their names — a reload cannot keep the files themselves, so it says to attach them again
-        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed,
+        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed, cid: destination,
                                                                 ...(replyIdentity ? {in_reply_to: replyIdentity.value} : {}),
                                                                 files: sentFiles.map(f => f.name) }));
       } catch (e) { /* no storage: retry still works in this page */ }
@@ -658,7 +663,10 @@
   // New thread (POST /chat/<n>/new) answers a link to it: go there.
   function openThread(body) {
     const a = new DOMParser().parseFromString(body, "text/html").querySelector("[data-cid] a[href]");
-    if (a) location.href = a.getAttribute("href");
+    if (a) {
+      try { sessionStorage.setItem("shaft.focus-composer", "1"); } catch (e) { /* storage refused */ }
+      location.href = a.getAttribute("href");
+    }
   }
 
   // A composer (form[data-files]): files picked, pasted or dropped — anywhere on its page — go with the message, each
@@ -797,6 +805,7 @@
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
   function composerChanged(form) {
+    delete form._pendingCid;
     const mid = form.querySelector("input[name=mid]");
     if (mid) mid.value = "";
     if (form.dataset.draft) {
@@ -885,10 +894,36 @@
     return JSON.parse(form.dataset.sentMids || "[]").includes(mid)
       || [...document.querySelectorAll(".feed [data-mid]")].some(n => !n.classList.contains("sending") && n.dataset.mid === mid);
   }
+  function migrateMainDraft(form) {
+    const key = form.dataset.draft;
+    if (!key.endsWith("/from")) return;
+    const old = key.slice(0, -5), marker = `shaft.main-migrated.${old}`;
+    try {
+      if (localStorage.getItem(marker)) return;
+      const kinds = ["draft", "quote", "pending"];
+      const legacy = kinds.map(kind => localStorage.getItem(`shaft.${kind}.${old}`));
+      const occupied = kinds.some(kind => localStorage.getItem(`shaft.${kind}.${key}`) !== null);
+      const pending = legacy[2] === null ? null : JSON.parse(legacy[2]);
+      if (occupied && legacy.some(value => value !== null)) {
+        toast("A separate older draft was kept because this conversation already has a draft.", true);
+      } else if (pending && typeof pending.cid !== "string") {
+        toast("An older pending send was kept separately because its conversation is unknown.", true);
+      } else {
+        kinds.forEach((kind, index) => {
+          if (legacy[index] !== null) {
+            localStorage.setItem(`shaft.${kind}.${key}`, legacy[index]);
+            localStorage.removeItem(`shaft.${kind}.${old}`);
+          }
+        });
+      }
+      localStorage.setItem(marker, "1");
+    } catch (e) { /* keep the originals if storage is unavailable */ }
+  }
   function restoreDraft() {
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
     const box = form.querySelector("textarea[name=text]");
+    migrateMainDraft(form);
     form._quotes = keptQuotes(form);
     if (form._quotes.length) quoteChips(form);
     try {
@@ -901,6 +936,7 @@
           localStorage.removeItem(pendingKey(form));
         } else {
           form.querySelector("input[name=mid]").value = attempt.mid;
+          if (typeof attempt.cid === "string") form._pendingCid = attempt.cid;
           if (typeof attempt.in_reply_to === "string") {
             const field = document.createElement("input");
             field.type = "hidden"; field.name = "in_reply_to"; field.value = attempt.in_reply_to;
@@ -929,7 +965,8 @@
     mid.value = "";
     sent(form);
   }
-  function sent(form) {                          // the attempt went: neither its draft nor its retry id is kept
+  function sent(form) {
+    delete form._pendingCid;                          // the attempt went: neither its draft nor its retry id is kept
     form.querySelector("input[name=in_reply_to]")?.remove();
     try {
       localStorage.removeItem(draftKey(form));
@@ -1092,7 +1129,7 @@
       }
       return;
     }
-    if (sheet && ev.key !== "Escape") return;       // covered chat shortcuts stay inactive
+    if (sheet && sheet.kind !== "nav" && ev.key !== "Escape") return;       // covered chat shortcuts stay inactive
     // Shortcuts on a chat: / writes, Esc closes a menu, Alt-↑ / Alt-↓ go to the chat above or below in the rail.
     const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
     if (ev.key === "Escape") {
@@ -1110,11 +1147,25 @@
       composer().querySelector("textarea[name=text]").focus();
       return;
     }
+    if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.code === "KeyO") {
+      const form = document.querySelector(".chathead form.newthread");
+      if (form) { ev.preventDefault(); form.requestSubmit(); }
+      return;
+    }
     if (ev.altKey && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
-      // the instances and, under the one viewed, its threads: from the innermost lit one (its thread)
-      const chats = [...document.querySelectorAll("nav .rail a[data-inst], nav .rail a[data-seen-key]")];
-      const at = chats.map(a => a.classList.contains("on")).lastIndexOf(true);
-      const to = chats[at + (ev.key === "ArrowUp" ? -1 : 1)];
+      if (ev.defaultPrevented || railInteraction) return;
+      if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey && typing && ev.target.matches("form.composer textarea") && ev.target.value) return;
+      const step = ev.key === "ArrowUp" ? -1 : 1;
+      if (ev.metaKey || ev.ctrlKey) {
+        const row = document.querySelector(".thread.on")?.closest(".threadrow");
+        if (row && !railInteraction && !railMoving) { ev.preventDefault(); railStep(row, step); }
+        return;
+      }
+      const chats = [...document.querySelectorAll(ev.shiftKey ? "nav .rail a[data-inst]" :
+        "nav .rail a[data-inst], nav .rail a[data-seen-key]")].filter(a => !a.closest("[hidden]"));
+      const selected = document.querySelector("nav .rail [aria-current=page]");
+      const anchor = ev.shiftKey ? selected?.closest(".railinstance")?.querySelector("a[data-inst]") : selected;
+      const at = chats.indexOf(anchor), to = chats[at + step];
       if (at >= 0 && to) { ev.preventDefault(); location.href = to.href; }
     }
   });
@@ -1781,15 +1832,244 @@
     });
     visible.forEach(m => queueSeen(m.inst, m.key, m.last, `${m.last}:${m.count}`));
   }
+  const railCollapsed = new Map();
+  let railNavigationExpanded = false, railEditing = false;
+  function railDisclosure(rail) {
+    rail.classList.toggle("rail-editing", railEditing);
+    const edit = rail.querySelector("[data-rail-edit]");
+    if (edit) { edit.setAttribute("aria-pressed", String(railEditing)); edit.textContent = railEditing ? "Done" : "Edit"; }
+    rail.querySelectorAll(".railinstance").forEach(group => {
+      const name = group.dataset.name, button = group.querySelector("[data-disclose]");
+      if (!button) return;
+      if (!railCollapsed.has(name)) {
+        let closed = !group.classList.contains("selected-instance");
+        try { const saved = localStorage.getItem(`shaft.rail.closed.${name}`); if (saved !== null) closed = saved === "1"; }
+        catch (e) { /* no storage */ }
+        railCollapsed.set(name, closed);
+      }
+      if (!railNavigationExpanded && group.classList.contains("selected-instance")) railCollapsed.set(name, false);
+      const closed = railCollapsed.get(name);
+      group.querySelector(".railthreads").hidden = closed;
+      group.classList.toggle("collapsed", closed);
+      button.setAttribute("aria-expanded", String(!closed));
+    });
+    railNavigationExpanded = true;
+  }
+  function railItems(row) {
+    return [...row.parentElement.children].filter(el => el.dataset.orderId !== undefined);
+  }
+  function railPlace(row, index) {
+    const items = railItems(row).filter(el => el !== row);
+    row.parentElement.insertBefore(row, items[Math.max(0, index)] || (items.at(-1)?.nextSibling || null));
+  }
+  function railAnnounce(row) {
+    region("announce", "status").textContent = `Moved ${row.dataset.title} to ${railItems(row).indexOf(row) + 1} of ${railItems(row).length}`;
+  }
+  function railRefresh() {
+    const rail = document.querySelector("nav .rail");
+    if (rail) { delete rail.dataset.etag; delete rail.dataset.last; if (rail._tick) rail._tick(); }
+  }
+  async function railSave(row, original) {
+    railMoving = true;
+    railGeneration++;
+    const items = railItems(row), at = items.indexOf(row), thread = row.classList.contains("threadrow");
+    const body = new URLSearchParams({ [thread ? "id" : "name"]: row.dataset.orderId,
+      after: at > 0 ? items[at - 1].dataset.orderId : "" });
+    try {
+      const response = await fetch(thread ? `/chat/${encodeURIComponent(row.dataset.name)}/move` : "/instances/move", {
+        method: "POST", credentials: "same-origin", headers: { "X-CSRF-Token": csrf(),
+          "Content-Type": "application/x-www-form-urlencoded" }, body });
+      if (!response.ok) { railPlace(row, original); toast(textOf(await response.text()) || "Could not move this row.", true); }
+      else {
+        const data = new DOMParser().parseFromString(await response.text(), "text/html").querySelector("[data-ids]");
+        if (data) {
+          const ids = JSON.parse(data.dataset.ids), rev = Number(data.dataset.rev), parent = row.parentElement;
+          if (rev >= Number(parent.dataset.orderRev || 0)) {
+            parent.dataset.orderRev = String(rev);
+            const byId = new Map(railItems(row).map(el => [el.dataset.orderId, el]));
+            ids.forEach((id, index) => { if (byId.has(id)) railPlace(byId.get(id), index); });
+          }
+        }
+        railAnnounce(row);
+      }
+    } catch (e) {
+      // The server may have moved it. Refetch rather than restore an order that may now be false.
+      toast("Move could not be confirmed. Refreshing the order.", true);
+    } finally { railMoving = false; railGeneration++; railRefresh(); }
+  }
+  function railStep(row, step) {
+    if (railMoving) return;
+    const original = railItems(row).indexOf(row);
+    railPlace(row, Math.max(0, Math.min(railItems(row).length - 1, original + step)));
+    railSave(row, original);
+  }
+  function railCancel() {
+    if (!railInteraction) return;
+    const { row, original } = railInteraction;
+    railPlace(row, original);
+    railEnd();
+    region("announce", "status").textContent = "Move cancelled";
+  }
+  function railEnd() {
+    if (!railInteraction) return;
+    const { row, grip, timer } = railInteraction;
+    clearInterval(timer);
+    row.classList.remove("rail-dragging"); grip.setAttribute("aria-pressed", "false");
+    document.querySelectorAll(".rail-insert").forEach(el => el.classList.remove("rail-insert"));
+    railInteraction = null;
+    railGeneration++;
+    grip.focus({ preventScroll: true });
+  }
+  function railLift(row, grip, pointer = null) {
+    if (railMoving || railInteraction) return;
+    railInteraction = { row, grip, original: railItems(row).indexOf(row), pointer, active: !pointer };
+    railGeneration++;
+    grip.setAttribute("aria-pressed", "true");
+    if (!pointer) { row.classList.add("rail-dragging"); region("announce", "status").textContent = `Lifted ${row.dataset.title}. Use arrow keys, Space to drop, Escape to cancel.`; }
+  }
+  document.addEventListener("keydown", ev => {
+    const grip = ev.target.closest && ev.target.closest("[data-grip]");
+    if (railInteraction && ev.key === "Escape") { ev.preventDefault(); railCancel(); return; }
+    if (!grip) return;
+    const row = grip.closest(".threadrow, .railinstance");
+    if (ev.code === "Space" || ev.key === " ") {
+      ev.preventDefault();
+      if (!railInteraction) railLift(row, grip);
+      else { const original = railInteraction.original; railEnd(); railSave(row, original); }
+    } else if (railInteraction && ["ArrowUp", "ArrowDown"].includes(ev.key)) {
+      ev.preventDefault();
+      railPlace(row, Math.max(0, Math.min(railItems(row).length - 1, railItems(row).indexOf(row) + (ev.key === "ArrowUp" ? -1 : 1))));
+      railAnnounce(row);
+    }
+  });
+  document.addEventListener("pointerdown", ev => {
+    const grip = ev.target.closest && ev.target.closest("[data-grip]");
+    if (!grip || ev.button !== 0) return;
+    ev.preventDefault();
+    railLift(grip.closest(".threadrow, .railinstance"), grip, { x: ev.clientX, y: ev.clientY, id: ev.pointerId });
+    if (railInteraction) grip.setPointerCapture(ev.pointerId);
+  });
+  document.addEventListener("pointermove", ev => {
+    const move = railInteraction;
+    if (!move?.pointer || move.pointer.id !== ev.pointerId) return;
+    if (!move.active && Math.hypot(ev.clientX - move.pointer.x, ev.clientY - move.pointer.y) < 4) return;
+    ev.preventDefault(); move.active = true; move.row.classList.add("rail-dragging");
+    const rail = document.querySelector("nav");
+    const position = () => {
+      const bounds = rail.getBoundingClientRect();
+      const speed = ev.clientY < bounds.top + 40 ? -12 : ev.clientY > bounds.bottom - 40 ? 12 : 0;
+      rail.scrollTop += speed;
+      const items = railItems(move.row).filter(el => el !== move.row);
+      const anchor = items.find(el => ev.clientY < el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
+      move.row.parentElement.insertBefore(move.row, anchor || (items.at(-1)?.nextSibling || null));
+      document.querySelectorAll(".rail-insert").forEach(el => el.classList.remove("rail-insert"));
+      move.row.classList.add("rail-insert");
+    };
+    clearInterval(move.timer); position(); move.timer = setInterval(position, 40);
+  });
+  document.addEventListener("pointerup", ev => {
+    const move = railInteraction;
+    if (!move?.pointer || move.pointer.id !== ev.pointerId) return;
+    const { row, original, active } = move;
+    railEnd(); if (active) railSave(row, original);
+  });
+  document.addEventListener("pointercancel", () => railCancel());
+  document.addEventListener("click", ev => {
+    const toggle = ev.target.closest && ev.target.closest("[data-disclose]");
+    if (toggle) {
+      const name = toggle.dataset.disclose;
+      railCollapsed.set(name, toggle.getAttribute("aria-expanded") === "true");
+      try { localStorage.setItem(`shaft.rail.closed.${name}`, railCollapsed.get(name) ? "1" : "0"); } catch (e) { /* no storage */ }
+      railDisclosure(toggle.closest(".rail"));
+    }
+    const edit = ev.target.closest && ev.target.closest("[data-rail-edit]");
+    if (edit) { const on = edit.getAttribute("aria-pressed") !== "true"; railEditing = on; edit.setAttribute("aria-pressed", String(on));
+      edit.textContent = on ? "Done" : "Edit"; edit.closest(".rail").classList.toggle("rail-editing", on); }
+  });
+  let railMenu = null, railMenuOpener = null;
+  function closeRailMenu() {
+    if (railMenu) railMenu.remove();
+    railMenu = null;
+    if (railMenuOpener?.isConnected) railMenuOpener.focus();
+  }
+  async function railAction(row, action, fields = {}) {
+    try {
+      const url = action === "end" ? "/action/chat-end" : `/chat/${encodeURIComponent(row.dataset.name)}/${action}`;
+      const response = await fetch(url, { method: "POST", credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ cid: row.dataset.orderId, ...fields }) });
+      if (!response.ok) toast(textOf(await response.text()), true);
+      else if (action === "end" && row.querySelector("[aria-current=page]")) location.href = `/i/${encodeURIComponent(row.dataset.name)}/chat`;
+      document.dispatchEvent(new Event("shaft:refresh"));
+    } catch (e) { toast("Could not confirm the action. Refreshing.", true); railRefresh(); }
+  }
+  function openRailMenu(row, opener) {
+    closeRailMenu(); railMenuOpener = opener;
+    const menu = document.createElement("div"); menu.className = "railmenu"; menu.setAttribute("role", "menu");
+    const title = document.createElement("p"); title.textContent = row.dataset.title; menu.appendChild(title);
+    const add = (label, run, disabled = false) => {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+      button.setAttribute("role", "menuitem"); button.disabled = disabled;
+      button.addEventListener("click", () => { closeRailMenu(); run(); }); menu.appendChild(button);
+    };
+    const at = railItems(row).indexOf(row), last = railItems(row).length - 1;
+    if (row.classList.contains("threadrow")) add("Rename…", () => {
+      const title = window.prompt("Thread title", row.dataset.title);
+      if (title?.trim()) railAction(row, "rename", { title: title.trim() });
+    });
+    add("Move to top", () => railStep(row, -at), at === 0 || railMoving);
+    add("Move up", () => railStep(row, -1), at === 0 || railMoving);
+    add("Move down", () => railStep(row, 1), at === last || railMoving);
+    if (row.classList.contains("threadrow")) add("Close thread", () => railAction(row, "end"));
+    (row.closest("nav") || document.body).appendChild(menu); railMenu = menu;
+    const bounds = opener.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(bounds.bottom, window.innerHeight - menu.offsetHeight - 8))}px`;
+    menu.querySelector("button:not(:disabled)")?.focus();
+  }
+  document.addEventListener("click", ev => {
+    const button = ev.target.closest && ev.target.closest("[data-row-menu]");
+    if (button) openRailMenu(button.closest(".threadrow, .railinstance"), button);
+    else if (railMenu && !railMenu.contains(ev.target)) closeRailMenu();
+  });
+  document.addEventListener("contextmenu", ev => {
+    const link = ev.target.closest && ev.target.closest(".railrow a");
+    if (link) { ev.preventDefault(); openRailMenu(link.closest(".threadrow, .railinstance"), link); }
+  });
+  let railPress = null;
+  document.addEventListener("pointerdown", ev => {
+    const link = ev.target.closest && ev.target.closest(".railrow a");
+    if (!link || ev.pointerType !== "touch") return;
+    if (railPress) clearTimeout(railPress.timer);
+    railPress = { x: ev.clientX, y: ev.clientY, timer: setTimeout(() => { openRailMenu(link.closest(".threadrow, .railinstance"), link); railPress.open = true; }, 550) };
+  });
+  document.addEventListener("pointermove", ev => {
+    if (railPress && Math.hypot(ev.clientX - railPress.x, ev.clientY - railPress.y) > 8) clearTimeout(railPress.timer);
+  });
+  document.addEventListener("pointerup", () => { if (railPress) { clearTimeout(railPress.timer); if (!railPress.open) railPress = null; } });
+  document.addEventListener("pointercancel", () => { if (railPress) clearTimeout(railPress.timer); railPress = null; });
+  document.addEventListener("click", ev => {
+    if (railPress?.open) { ev.preventDefault(); ev.stopImmediatePropagation(); railPress = null; }
+  }, true);
+  document.addEventListener("keydown", ev => {
+    if (!railMenu) return;
+    if (ev.key === "Escape" || ev.key === "Tab") { if (ev.key === "Escape") { ev.preventDefault(); ev.stopImmediatePropagation(); } closeRailMenu(); return; }
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) {
+      ev.preventDefault(); const buttons = [...railMenu.querySelectorAll("button:not(:disabled)")];
+      const at = buttons.indexOf(document.activeElement);
+      buttons[ev.key === "Home" ? 0 : ev.key === "End" ? buttons.length - 1 : (at + (ev.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length].focus();
+    }
+  });
   function markRail(rail) {
+    railDisclosure(rail);
     migrateSeen(rail);
     rail.querySelectorAll("a[data-seen-key]").forEach(a => {
       a.classList.toggle("unread", a.dataset.unread === "1");
     });
     rail.querySelectorAll("a[data-inst]").forEach(a => {
-      a.classList.toggle("unread", a.dataset.unread === "1");
+      a.classList.toggle("unread", a.dataset.unreadMain === "1");
     });
-    const unread = rail.querySelectorAll("a[data-inst].unread").length;   // instances: the app badge counts them
+    const unread = [...rail.querySelectorAll("a[data-inst]")].filter(a => a.dataset.unread === "1").length;   // instances: the app badge counts them
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
       (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
@@ -2203,8 +2483,7 @@
     }
     if (panel && panel._tick) panel._tick();
   }
-  // Open or closed is the operator's: beside the chat the panel shows once there are documents unless he closed it
-  // (.hidedocs, remembered in this browser), and with none only when asked (.showdocs); on a phone it is a sheet.
+  // Documents open when requested (.showdocs); on a phone the panel is a sheet.
   function docsOn() {
     const panel = document.getElementById("docs");
     return !!panel && panel.getClientRects().length > 0;
@@ -2318,7 +2597,7 @@
     const rail = document.querySelector("nav .rail");
     if (rail) markRail(rail);
   }
-  document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
+  document.addEventListener("shaft:swapped", (ev) => {   // keep the requested document panel and editor in step
     if (ev.target.id === "docs") {
       syncSheets();
       ev.target.querySelectorAll(".docview").forEach(restoreDocDraft);
@@ -2368,7 +2647,7 @@
     showNav(open, open ? t : null);
   });
   document.addEventListener("keydown", (ev) => {
-    if (!sheet) return;
+    if (!sheet || ev.defaultPrevented) return;
     if (ev.key === "Escape") {
       ev.preventDefault();
       if (sheet.kind === "nav") showNav(false);
@@ -2462,6 +2741,12 @@
     document.querySelectorAll(".docview").forEach(decorate);
     document.querySelectorAll(".docview").forEach(restoreDocDraft);
     restoreDraft();
+    try {
+      if (sessionStorage.getItem("shaft.focus-composer")) {
+        sessionStorage.removeItem("shaft.focus-composer");
+        composer()?.querySelector("textarea[name=text]")?.focus();
+      }
+    } catch (e) { /* no storage */ }
     document.querySelectorAll("form[data-keep]").forEach(restoreKept);
     notifyButton();
   }

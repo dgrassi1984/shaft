@@ -181,15 +181,13 @@ class FromConversationTest(unittest.TestCase):
         """Without it, a reply running in From showed nowhere in the rail: the dot stayed From's plain mark."""
         fc = web_chat.from_chat("wisp", ME, create=True)
         from supervisor import web_pages
-        idle = str(web_pages.thread_rows("wisp", [], "", "", **{k: web._rail_chats(["wisp"])["wisp"][k]
-                                                               for k in ("from_state", "from_waiting")}))
-        self.assertIn("t-from", idle)
+        idle = str(web_pages.rail(["wisp"], "i:wisp", chats=web._rail_chats(["wisp"]), thread="from"))
+        self.assertIn("t-idle", idle)
         fc["state"] = "replying"
         web_chat.save(fc)
         rail = web._rail_chats(["wisp"])["wisp"]
         self.assertEqual(rail["from_state"], "replying")
-        self.assertIn("t-replying", str(web_pages.thread_rows("wisp", [], "", "", rail["from_state"],
-                                                              rail["from_waiting"])))
+        self.assertIn("t-replying", str(web_pages.rail(["wisp"], "i:wisp", chats={"wisp": rail}, thread="from")))
         self.assertTrue(web_chat.summary("wisp", [])["replying"])
 
     def test_stop_from_the_app_names_from_and_stops_the_from_reply(self):

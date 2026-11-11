@@ -36,13 +36,13 @@ class ThreadsAppTest(AppTest):
         self.assertEqual(got, {"threads": [
             {"id": "web-b", "title": "Topic B", "created": app_api.stamp(self.b["created"]),
              "last": app_api.stamp("2026-11-03T14:01:00"), "line": "Answer B", "state": "replying",
-             "waiting": "waiting for Topic A", "unread": True},
+             "waiting": "waiting for Topic A", "unread": True, "failed": False},
             {"id": "web-a", "title": "Topic A", "created": app_api.stamp(self.a["created"]),
              "last": app_api.stamp("2026-11-03T14:00:00"), "line": "Answer A", "state": "idle",
-             "waiting": None, "unread": True}],
+             "waiting": None, "unread": True, "failed": False}],
             # From's state is its conversation's: idle before its first message (2026-11-11)
             "from": {"line": "From a cycle", "last": app_api.stamp("2026-11-03T14:02:00"), "unread": True,
-                     "state": "idle", "waiting": None}})
+                     "state": "idle", "waiting": None, "failed": False}})
         rail = self.get("/app/v1/instances")
         self.assertEqual((rail["instances"][0]["threads"], rail["instances"][0]["replying"], rail["badge"]), (2, True, 1))
 

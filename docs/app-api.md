@@ -212,10 +212,9 @@ The rail has one row per instance in the operator's saved order (`supervisor.ord
 ### 3.1 `GET /app/v1/threads/<n>`
 
 Returns `{"threads": [...], "from": {"line": str, "last": timestamp or null, "unread": bool, "state": str,
-"waiting": str or null}}` — From's `state` and `waiting` are the From conversation's, as a thread's (`idle` before its
-first message).
+"waiting": str or null, "failed": bool}}`. Main's `state` and `waiting` describe its own conversation, like a topic's (`idle` before its first message).
 The response also has `threads_rev`, the same string returned in the instance row. It changes on creation,
-rename, close, state changes including waiting, and manual order changes. It stays stable otherwise.
+rename, close, state changes including waiting, failed outcomes, and manual order changes. It stays stable otherwise.
 Threads are open conversations in the operator's saved order. New threads go first. Activity never changes their
 order. Open threads missing from storage go first, newest creation first. Each row has:
 
@@ -228,9 +227,33 @@ order. Open threads missing from storage go first, newest creation first. Each r
 | `line` | str | First line of the newest text item, at most 80 characters |
 | `state` | str | `idle` or `replying` |
 | `waiting` | str or null | The running reply's waiting text |
+| `failed` | bool | The last assistant turn has a failure note, excluding stopped and retried replies |
 | `unread` | bool | The operator has unseen instance items in this feed |
 
-The From row uses the same preview and unread rules. Unknown instances return `404 not_found`.
+The `from` object represents Main and uses the same preview, unread, and failed rules. Lifecycle `state` remains unchanged. Unknown instances return `404 not_found`.
+
+### Pending next-cycle notes: `GET /app/v1/notes/<n>`
+
+Returns `{"notes": [...]}` from `supervisor.web_chat.pending_notes`, across the full instance history.
+Only operator BACKGROUND rows addressed to the instance, unread and not cancelled, are included.
+Each note has these fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `file` | str | Inbox filename used for cancellation |
+| `mid` | str or null | Original message id, when present |
+| `text` | str | Shown text, falling back to the stored text |
+| `ts` | timestamp or null | Offset timestamp, like other app API times |
+| `cid` | str | Open topic id, otherwise `from` for Main, including ended topics |
+| `title` | str | Topic title or instance name |
+| `cancellable` | bool | The note can be taken back, subject to a fresh cancellation check |
+| `reason` | str or null | Why Cancel is unavailable |
+
+Notes with delivery side effects cannot be taken back. A running reply or cycle also makes Cancel unavailable.
+Cancellation uses the existing `POST /app/v1/chat/<n>/uncycle` with `mid` or `file`.
+The web uses `POST /chat/<n>/uncycle` with the same identifiers and CSRF protection.
+A run that begins after the read can refuse cancellation. Clients retain the note and show the refusal.
+Unknown instances return `404 not_found`.
 
 ### 3.2 Order moves
 

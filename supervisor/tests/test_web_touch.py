@@ -121,14 +121,12 @@ class DocumentsCloseTest(unittest.TestCase):
         return re.sub(r"@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", CSS)    # the rules outside any @media
 
     def test_closed_beats_the_documents_holding_it_open(self):
+        """Documents stay closed until requested, even when the instance owns files."""
         css = self.desktop()
         self.assertIn(".chatgrid.hidedocs > aside.docs { display: none; }", css)
         self.assertIn(".chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }", css)
-        # Not "after it, same specificity": a :has() takes its argument's specificity, so :has(.doclist a) outranked
-        # .hidedocs wherever it stood (the closed drawer's list kept the chat at half width, 2026-10-25). The rule
-        # holding it open leaves a closed drawer out.
-        self.assertIn(".chatgrid:not(.hidedocs):has([data-back-docs]), .chatgrid:not(.hidedocs):has(.doclist a) {", css)
-        self.assertNotIn(".chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a)", css)
+        self.assertIn(".chatgrid:not(.showdocs) > aside.docs { display: none; }", css)
+        self.assertNotIn(".chatgrid:not(.hidedocs):has(.doclist a)", css)
 
     def test_the_close_button_shows_beside_the_chat(self):
         hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("On a phone the chat is the whole screen")[1],
@@ -192,13 +190,15 @@ class AccessibilityTest(unittest.TestCase):
         self.assertIn('note.setAttribute("role", "status");', JS)            # a panel not refreshed
 
     def test_icon_only_controls_and_state_dots_have_names(self):
+        """Conversation rows name state once, with decorative status marks and named icon controls."""
         from supervisor import web_pages
         page = str(web_views.chat_page("wisp", None, [], [], {"model": "m", "state": "idle"}, ["wisp"], "t"))
         for name in ('aria-label="Chats and pages"', 'aria-label="Documents"', 'aria-label="wisp: pages and actions"',
                      'aria-label="Message wisp"'):
             self.assertIn(name, page)
-        rail = str(web_pages.rail(["wisp"], "", {"instances": [{"name": "wisp", "state": "in a cycle"}]}))
-        self.assertIn('role="img" aria-label="in a cycle"', rail)
+        rail = str(web_pages.rail(["wisp"], chats={"wisp": {"from_state": "replying", "threads": []}}))
+        self.assertIn('<span class="sr">wisp, replying</span>', rail)
+        self.assertIn('title="replying" aria-hidden="true"', rail)
         self.assertIn('x.setAttribute("aria-label", `remove ${f.name}`);', JS)
 
     def test_the_keyboard_reaches_attach_and_reply(self):

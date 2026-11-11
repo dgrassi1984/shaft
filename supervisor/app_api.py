@@ -371,8 +371,8 @@ def _threads_rev(n: str, chats: list[dict]) -> str:
     """Refetch rows when titles, lifecycle, waiting state or manual order changes."""
     from . import web_chat
     rows = [(c["id"], web_chat.title(c),
-             "waiting" if c["state"] == "replying" and (c.get("reply") or {}).get("waiting") else c["state"]) for c in chats]
-    return hashlib.sha256(json.dumps([order.thread_rev(n), rows]).encode()).hexdigest()[:16]
+             "waiting" if c["state"] == "replying" and (c.get("reply") or {}).get("waiting") else c["state"], web_chat.failed(c)) for c in chats]
+    return hashlib.sha256(json.dumps([order.thread_rev(n), rows, web_chat.failed(web_chat.from_chat(n))]).encode()).hexdigest()[:16]
 
 
 def _move(req: Request, n: str | None = None) -> Response:
@@ -403,9 +403,14 @@ def _threads(req: Request, n: str) -> Response:
     return _json(200, {"threads_rev": _threads_rev(n, chats), "threads": [
         {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
          "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
-         **preview(c["id"])} for c in chats],
-        "from": {**preview("from"), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
+         **preview(c["id"]), "failed": web_chat.failed(c)} for c in chats],
+        "from": {**preview("from"), "failed": web_chat.failed(web_chat.from_chat(n)), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
                  "waiting": ((web_chat.from_chat(n) or {}).get("reply") or {}).get("waiting") or None}})
+
+
+def _notes(req: Request, n: str) -> Response:
+    from . import web_chat
+    return _json(200, {"notes": [{**row, "ts": stamp(row["ts"])} for row in web_chat.pending_notes(n)]})
 
 
 def _from(req: Request, n: str) -> Response:
@@ -1065,6 +1070,7 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
     (rf"/threads/{N}", {"GET": _threads}),
+    (rf"/notes/{N}", {"GET": _notes}),
     (rf"/threads/{N}/move", {"POST": _move}),
     (rf"/from/{N}", {"GET": _from}),
     (rf"/file/chat/{CID}/(?P<k>\d+)/(?P<j>\d+)", {"GET": _chat_file}),

@@ -289,31 +289,48 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   sessionStorage, the notice cannot survive reload.
 - Unread marks are per thread, and for From: one clears when that thread's reply, or a message the instance sent you
   there, is on screen in its feed in a visible tab (scrolled into view, not only rendered: one below the fold stays
-  unread until you scroll to it). The rail marks the thread, and its instance while any of its threads or From is
-  unread; the app badge counts instances. Config, Journal, earlier chats, another thread and a failed feed refresh do
+  unread until you scroll to it). The rail marks each conversation separately; the app badge counts instances with anything unread. Config, Journal, earlier chats, another thread and a failed feed refresh do
   not consume a new reply. Marks live on the server and sync across every paired device. `POST /seen` accepts form fields
   `inst`, `key` (thread id or `from` for Main), and `last` (the visible item's time), with the page's CSRF token.
   It advances only that conversation, bounded to actual instance items at or before `last`; at the feed's newest
   timestamp it records the feed's count. Existing `shaft.seen` browser marks migrate once and are then removed.
   The rail reads server unread attributes and refreshes through its existing poll after a seen write.
-- **Topic threads.** Under the instance being viewed, the rail lists its open threads in the operator's saved order:
-  the title (the first line of its first message until renamed), a dot (hollow idle, pulsing replying, amber while
-  it waits for the instance because another thread's reply holds it) and the unread mark; then **From <instance>**,
-  then **+ New thread**, which opens a new thread (`POST /chat/<name>/new`) and goes to it. A thread's page is
-  `/i/<name>/chat?id=<id>`: its feed, header and composer stay on that thread (the composer sends its id, and a
-  document saved or commented on beside it goes to that thread's next message); its draft is its own. The plain
-  `/i/<name>/chat` follows the first thread in that order. **From <instance>** (`/i/<name>/from`) shows what it sent
-  you outside any thread (a cycle, a terminal or Telegram talk, an answer for a thread that had ended) and what you left
-  for its next cycle outside a thread, refreshed like a
-  chat (`/fragment/from/<name>`). Its composer is a thread's: a message written there is answered now, in the From
-  conversation (`web_chat.from_chat`, made on its first message), and Next cycle stays behind the arrow — a note left
-  there names the From conversation, so its cycle answers in From after reading it. The From conversation is no
-  thread: it never ends, no thread list or Earlier chats shows it, End, Clear and Rename refuse it, and pages, apps,
-  pushes and seen marks name it `from`. Its replies read what From shows (the cycles' messages, the notes) as part of
-  the conversation, each message cut at 3,000 characters and the request at its newest 60,000 (it never ends) — the
-  operator's message being answered is always whole, so a long queued batch can go past that — with a line saying it
-  is From. "Show the N earlier messages" (`?all=1`) shows all of From, its turns too. A reply waiting for its turn says so on
-  its own line, `waiting: answering in «<title>»`, until it starts.
+- **Topic threads.** The instance row opens its own conversation at `/i/<name>/chat`.
+  It has the instance's name and retains its cycle messages, notes, and live replies. `/i/<name>/from` redirects there.
+  The wire identity remains `from`, including seen marks, drafts, and push destinations.
+  Main cannot be renamed, closed, or cleared. An untargeted feed, send, stream, document action, or watcher uses Main.
+  Optional topic threads appear below each instance in saved order, indented on one line with a full-title tooltip.
+  A thread opens `/i/<name>/chat?id=<id>` and keeps its own composer, documents, and draft.
+  Only the selected conversation has a filled row. When a thread is selected, its instance name is semibold without a fill.
+  A disclosure button appears when there are open topics. Navigation into an instance expands it once.
+  A manual collapse survives polls and is remembered in localStorage until the next navigation into that instance.
+  Idle conversations have no state mark. Replying has a pulsing dot, static with reduced motion. Waiting has a clock
+  and its waiting text. A failed last assistant turn has a warning mark and the accessible text **reply failed**.
+  Stopped and retried replies do not count as failed. Unread titles are bold with a trailing brand dot.
+  The instance's dot represents Main only. Collapsed instances show a neutral count of unread topics.
+  Aggregate unread counts affect the app badge and document title only.
+  Documents stay closed until requested. Cycle-message actions appear below the message body.
+  Cycle cards have a solid border; only next-cycle notes have a dashed border. Failed replies omit rating controls.
+  Close thread lives in the actions menu. Keyboard hints appear while the composer has focus on a wide screen.
+  The compose icon in every conversation header and beside each instance starts a thread without ending another.
+  The instance's compose icon is always visible when selected, and appears on hover or focus elsewhere.
+  `Cmd-Shift-O`, or `Ctrl-Shift-O`, starts a thread with the current instance and focuses its composer.
+  The rail has no nested New thread row. Manage is collapsed by default on instance pages.
+  The compact header title opens the conversation drawer; model and spend appear only in its actions menu.
+  Grips reorder both instances and topics. Pointer movement of at least four pixels starts a drag with an insertion
+  marker and edge autoscroll. Escape cancels. A keyboard grip uses Space to lift, arrows to move, Space to drop,
+  and Escape to cancel, with a polite position announcement. Option-Command arrows move the selected topic;
+  Ctrl-Alt arrows do the same off macOS. A row's actions menu, right-click, or long press offers Move to top, up,
+  and down. Topics also offer Rename and Close thread. Edit in the phone drawer exposes 44-pixel grips.
+  A move applies optimistically and posts to `/chat/<name>/move` or `/instances/move`.
+  A refusal restores the previous order and shows a notice. An ambiguous network failure refetches the order.
+  The rail does not refresh during a lift, drag, menu, or move request. An interaction generation discards responses
+  started before the last move. Controls use `data-focus` keys to keep focus through rail swaps.
+  Option arrows navigate visible conversations. Option-Shift arrows navigate instances' Main conversations.
+  Plain Option arrows keep their normal caret behavior inside a nonempty composer.
+  Legacy instance draft, quote, and pending-send keys migrate together once to `<name>/from` without overwriting existing values.
+  On a collision the whole older draft remains at its old keys, with a notice. Known pending-send destinations and message ids are retained.
+  A legacy pending send without a recorded destination remains separate with a notice, because its destination cannot be recovered.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
   the jump (the draft in the composer, the documents sheet, an image, the keyboard closing after Send) grows the feed
@@ -359,7 +376,11 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   reply too (it read its inbox when it started). Only a note written in a composer that did nothing when sent can be
   taken back: one that answered a quoted question, a comment's or a rating's, and the supervisor's own (a calendar or
   voice decision) offer no Cancel, since taking the note back would undo none of that.
-  The thread and From feeds show Cancel while the note's item has `cancellable=true`.
+  The conversation feeds show Cancel while the note's item has `cancellable=true`.
+  Main's header and the instance subline show **☾ n for next cycle** for pending notes across the instance.
+  The header popover lists the notes with their shown text, conversation links, and Cancel or a reason it is unavailable.
+  `supervisor.web_chat.pending_notes` reads the full message history, excluding read and cancelled notes.
+  A note for an ended thread links to Main. Cancellation rechecks the run lock and inbox before changing anything.
   After cancellation, `cancelled` holds its ISO timestamp, the text is struck through, and attachments remain stored.
   Read-only views have no Cancel action. The app API documents these same item fields.
   `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
@@ -410,8 +431,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
   cards in an archive also open the file in the current chat.
 - **New thread** opens another thread and ends none. **Clear this thread** (⋯) ends its open conversation and clears
-  it from the page; your other threads stay open. The conversation stays in Earlier chats and Transcripts. **End the
-  conversation** leaves messages visible; the next message starts a new conversation.
+  it from the page; your other threads stay open. The conversation stays in Earlier chats and Transcripts. **Close thread** in the actions menu ends the topic. Its history remains in Earlier chats.
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain

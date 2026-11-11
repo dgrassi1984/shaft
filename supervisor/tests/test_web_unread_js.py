@@ -71,6 +71,8 @@ const row = k => rows.find(r => r.dataset.seenKey === k);
 const mark = (w, k) => typeof w === "string" ? w : [w[k] || "", w["*"] || ""].sort()[1];
 rail._tick = async () => {
   rows.forEach(r => {r.dataset.unread = r.dataset.last > mark(server.wisp, r.dataset.seenKey) ? "1" : "0";});
+  link.dataset.unreadMain = row("from")?.dataset.unread || "0";
+  link.dataset.unreadThreads = String(rows.filter(r => r.dataset.seenKey !== "from" && r.dataset.unread === "1").length);
   link.dataset.unread = rows.some(r => r.dataset.unread === "1") ? "1" : "0";
   emit("shaft:swapped", {target: rail});
 };
@@ -104,7 +106,7 @@ const context = {document, navigator: {setAppBadge: async n => {badge = n;}, cle
 };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), context);
 const check = unread => {
-  assert.equal(link.classList.contains("unread"), unread, "rail dot");
+  assert.equal(link.classList.contains("unread"), link.dataset.unreadMain === "1", "Main dot");
   assert.equal(button.classList.contains("news"), unread, "nav badge");
   assert.equal(badge, unread ? 1 : 0, "app badge");
   assert.equal(document.title, (unread ? "(1) " : "") + "Config · SHAFT", "title");
