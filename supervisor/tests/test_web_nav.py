@@ -57,9 +57,13 @@ class NavigationTest(test_web_chat.ChatRoutesCase):
         self.assertEqual(self.req('/i/wisp/from', cookie=self.cookie).headers['Location'], '/i/wisp/chat')
         header = self.html('/fragment/chat/wisp/header')
         self.assertNotIn('From wisp', header)
-        self.assertIn('Switch conversation">wisp</button>', header)
+        self.assertIn('Switch conversation"><span>wisp</span><svg', header)
         self.assertIn('aria-label="New thread with wisp"', header)
-        self.assertIn('Your conversation with wisp.', self.html('/fragment/chat/wisp'))
+        empty = self.html('/fragment/chat/wisp')
+        self.assertIn('Your conversation with wisp.', empty)
+        self.assertIn('data-post="/chat/wisp/new" data-after="open-thread"', empty)
+        self.assertIn('aria-label="New thread with wisp"', empty)
+        self.assertNotIn('✎', empty)
 
     def test_close_thread_header_uses_the_existing_action_route(self):
         """Close uses the existing chat-end action rather than inventing a chat route that returns 404."""
@@ -90,7 +94,7 @@ class NavigationTest(test_web_chat.ChatRoutesCase):
         self.assertEqual([n['cid'] for n in notes], ['from', chat['id'], 'from', 'from'])
         self.assertEqual([n['text'] for n in notes], ['shown'] * 4)
         self.assertFalse(notes[-1]['cancellable'])
-        self.assertIn('☾ 4 for next cycle', header)
+        self.assertIn('☾ 4<span class="pending-label"> for next cycle</span>', header)
         self.assertIn('/chat/wisp/uncycle', header)
         self.assertIn(f'/i/wisp/chat?id={chat["id"]}', header)
         with mock.patch.object(web_chat, '_cycle_alive', return_value=True):
@@ -143,17 +147,23 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
         with mock.patch.object(web_chat, 'threads', return_value=[second, first]):
             header = self.header(first['id'])
         self.assertIn('data-switch-conversation aria-haspopup="true" aria-expanded="false"', header)
-        self.assertIn('title="Switch conversation">First &lt;topic&gt;</button>', header)
+        self.assertIn('title="Switch conversation"><span>First &lt;topic&gt;</span><svg', header)
         self.assertIn('<a class="instance-main" href="/i/wisp/chat">wisp</a><span class="subsep"> · </span>', header)
         menu = header.split('class="conversation-switcher menubody" hidden>', 1)[1].split('</div>', 1)[0]
-        self.assertLess(menu.index('Main (wisp)'), menu.index('Second topic'))
+        self.assertLess(menu.index('>wisp</a>'), menu.index('Second topic'))
         self.assertLess(menu.index('Second topic'), menu.index('First &lt;topic&gt;'))
-        self.assertIn(' · idle</span>', menu)
+        self.assertIn('class="dim switch-state"> · idle</span>', menu)
+        self.assertNotIn('Main (', menu)
+        self.assertIn(f'href="/i/wisp/chat?id={first["id"]}" aria-current="page"', menu)
+        self.assertIn('data-post="/action/chat-end" data-confirm="Close this thread with wisp?', menu)
+        self.assertIn(f'name="cid" value="{first["id"]}"', menu)
         self.assertIn('data-switch-new>New thread</button>', menu)
         self.assertIn('data-switch-rename>Rename…</button>', menu)
         main = self.header()
         self.assertNotIn('class="instance-main"', main)
         self.assertNotIn('data-switch-rename', main)
+        self.assertNotIn('data-post="/action/chat-end"', main)
+        self.assertIn('href="/i/wisp/chat" aria-current="page">wisp</a>', main)
         for control in ('aria-label="Documents"', 'aria-label="New thread with wisp"', 'class="menu chatmenu"'):
             self.assertIn(control, main)
             self.assertIn(control, header)
@@ -171,7 +181,7 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
             self.assertIn('data-hard-reload', manage)
 
     def test_instance_lifecycle_dot_and_main_preview_are_independent_of_topics(self):
-        """An idle Main keeps its instance cycle dot and preview; a Main reply overrides the preview."""
+        """An idle Main keeps its hidden state slot and preview; a Main reply overrides the preview."""
         for state, cls in [('idle', 'idle'), ('in a cycle', 'cycle'), ('sleeping', 'sleep'), ('paused by you', 'paused')]:
             rail = str(web_pages.rail(['example'], 'i:example', {'instances': [{'name': 'example', 'state': state}]},
                                       {'example': {'line': 'Main last line', 'from_state': 'idle'}}))
@@ -179,6 +189,11 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
             self.assertIn('class="last" aria-hidden="true">Main last line</span>', rail)
         rail = str(web_pages.rail(['example'], chats={'example': {'line': 'old', 'from_state': 'replying'}}))
         self.assertIn('class="last" aria-hidden="true">replying…</span>', rail)
+        self.assertIn('class="tdot t-replying"', rail)
+        failed, _ = web_pages._rail_state('idle', failed=True)
+        self.assertIn('width="13" height="13"', failed)
+        self.assertIn('stroke="currentColor"', failed)
+        self.assertNotIn('>!</span>', failed)
 
     def test_pending_note_subline_is_a_disclosure_and_main_reply_takes_precedence(self):
         """Notes stay outside the Main link, and a reply replaces their preview with replying."""
@@ -187,10 +202,13 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
         with mock.patch.object(web_chat, 'pending_notes', return_value=[note]):
             rail = str(web_pages.rail(['example'], chats={'example': {'notes': [note], 'line': 'old'}}))
             header = str(web_views.pending_notes_html('example'))
+            chat_header = str(web_views.chat_header('example', {'state': 'in a cycle'}, None, []))
             replying = str(web_pages.rail(['example'], chats={'example': {'notes': [note], 'from_state': 'replying'}}))
         self.assertIn('class="railpending"><details class="menu pendingnotes"', rail)
-        self.assertIn('☾ 1 for next cycle</summary>', rail)
-        self.assertIn('☾ 1 for next cycle</summary>', header)
+        self.assertRegex(rail, r'<div class="railrow instrow">(?:(?!</section>).)*class="railpending".*</details></div></div>')
+        self.assertIn('☾ 1<span class="pending-label"> for next cycle</span></summary>', rail)
+        self.assertIn('☾ 1<span class="pending-label"> for next cycle</span></summary>', header)
+        self.assertIn('<span class="subsep"> · </span><details class="menu pendingnotes"', chat_header)
         self.assertNotIn('class="railpending"', replying)
         self.assertIn('class="last" aria-hidden="true">replying…</span>', replying)
 
@@ -235,5 +253,44 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
             self.assertIn(declaration, rule)
         self.assertNotIn('.rail details.manage > summary { display: none;', css)
         self.assertIn('nav .railrow a:focus-visible, .railrow button:focus-visible { outline: 2px solid var(--accent)', css)
-        self.assertIn('nav .railrow a:hover { background: var(--hover); }', css)
-        self.assertIn('nav .railrow a.on { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }', css)
+        self.assertIn('nav .railrow:hover { background: var(--hover); }', css)
+        self.assertIn('nav .railrow:has(> a.on) { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }', css)
+
+
+class VisualStateTest(unittest.TestCase):
+    def test_rail_state_outcomes_and_lifecycle_shapes(self):
+        for chat, expected in [({'from_state': 'replying'}, 'tdot t-replying'),
+                               ({'from_state': 'waiting'}, 'tdot t-waiting'),
+                               ({'from_failed': True}, 'tdot t-failed')]:
+            rail = str(web_pages.rail(['example'], chats={'example': chat}))
+            self.assertIn(f'class="{expected}"', rail)
+        for state, glyph in [('sleeping', 'sleep'), ('paused by you', 'pause'),
+                             ('in a conversation (waiting for you)', 'clock')]:
+            rail = str(web_pages.rail(['example'], snap={'instances': [{'name': 'example', 'state': state}]}))
+            self.assertIn(str(web_pages.icon(glyph, 12 if glyph == 'clock' else 13)), rail)
+
+    def test_compact_header_and_secondary_retry_rules(self):
+        from pathlib import Path
+        css = (Path(web_views.__file__).parent / 'web_static/web.css').read_text()
+        for declaration in ['.railrow .st-idle { visibility: hidden; }',
+                            '@media (prefers-reduced-motion: no-preference)',
+                            '.chathead .pending-label { display: none; }',
+                            '.chathead .sub details.busystate { flex-shrink: 0; }',
+                            '.conversation-switcher .switch-state { display: inline-block; white-space: nowrap; }',
+                            '.reply-failure button.retry::after { content: ""; position: absolute; inset: -6px; }']:
+            self.assertIn(declaration, css)
+        retry = re.search(r'\.reply-failure button.retry \{([^}]+)', css)[1]
+        for declaration in ['width: auto', 'height: 32px', 'min-height: 32px',
+                            'border: 1px solid var(--line)', 'background: var(--panel)', 'color: var(--text)']:
+            self.assertIn(declaration, retry)
+
+    def test_cycle_message_heading_has_plain_label_and_linked_topic_chip(self):
+        item = {'type': 'message', 'kind': 'note', 'key': 'sent-m1', 'file': 'm1', 'text': 'Done',
+                'attachments': [], 'rating': None, 'read': False, 'ts': '2026-11-10T10:00:00',
+                're': {'cid': 'web-ended', 'title': 'A <topic>'}}
+        card = str(web_views._message_item('example', item, False))
+        self.assertIn('example sent you a message <a class="laterchip reply-chip"', card)
+        self.assertIn('href="/i/example/chat?id=web-ended"', card)
+        self.assertIn('re: «A &lt;topic&gt;»</a>', card)
+        self.assertNotIn('href="/messages/', card)
+        self.assertIn('data-reply-message="m1"', card)

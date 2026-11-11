@@ -124,7 +124,7 @@ class ThreadsWebTest(ChatRoutesCase):
     def test_header_names_the_thread_renames_it_and_new_thread_ends_nothing(self):
         a = self.thread("Landlord mail", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}])
         header = self.get(f"/fragment/chat/wisp/header?id={a['id']}")
-        self.assertIn('Switch conversation">Landlord mail</button>', header)
+        self.assertIn('Switch conversation"><span>Landlord mail</span><svg', header)
         rename = re.search(r'<form class="act renameform" data-post="/chat/wisp/rename".*?</form>', header)[0]
         self.assertIn(f'name="cid" value="{a["id"]}"', rename)
         self.assertIn('<label>Thread title<input name="title" value="Landlord mail"', rename)
@@ -134,7 +134,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('data-post="/chat/wisp/clear"', header)
         r = self.post("/chat/wisp/rename", f"cid={a['id']}&title=Rent")
         self.assertEqual(r.status, 200, r.body)
-        self.assertIn('Switch conversation">Rent</button>', self.get(f"/fragment/chat/wisp/header?id={a['id']}"))
+        self.assertIn('Switch conversation"><span>Rent</span><svg', self.get(f"/fragment/chat/wisp/header?id={a['id']}"))
         r = self.post("/chat/wisp/new", "")
         self.assertEqual(r.status, 200, r.body)
         new = re.search(r'data-cid="(web-[0-9a-f]+)"><a href="/i/wisp/chat\?id=\1"', r.body.decode())[1]
@@ -143,7 +143,7 @@ class ThreadsWebTest(ChatRoutesCase):
     def test_an_ended_threads_header_shows_its_title_without_rename(self):
         a = self.thread("Done topic", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}], "ended")
         header = self.get(f"/fragment/chat/wisp/header?id={a['id']}")
-        self.assertIn('Switch conversation">Done topic</button>', header)
+        self.assertIn('Switch conversation"><span>Done topic</span><svg', header)
         self.assertNotIn("/chat/wisp/rename", header)
         self.assertNotIn("/chat/wisp/clear", header)
         self.assertIn('data-post="/chat/wisp/new"', header)              # a new thread is always one tap away
@@ -173,7 +173,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('data-draft="wisp/from"', composer)
         self.assertIn('<input type="hidden" name="cid" value="from">', composer)
         self.assertIn('name="queue"', composer)
-        self.assertIn('Switch conversation">wisp</button>', page)
+        self.assertIn('Switch conversation"><span>wisp</span><svg', page)
         self.assertIn("data-show-docs", page)                            # Main has the documents panel (From had none)
         self.assertNotIn("/chat/wisp/clear", page)
         with mock.patch.object(web_chat, "background", return_value=("", "kept for its next cycle")) as bg, \
@@ -201,7 +201,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.get("/fragment/from/wisp", headers={"x-shaft-at": "3000", "x-shaft-watching": "0"})   # covered: not watching
         self.assertEqual(web_chat.watchers("wisp", "from"), set())
         header = self.get("/fragment/from/wisp/header")
-        self.assertIn('Switch conversation">wisp</button>', header)
+        self.assertIn('Switch conversation"><span>wisp</span><svg', header)
         self.assertEqual(self.req("/fragment/from/nobody", cookie=self.cookie).status, 404)
         self.assertEqual(self.req("/i/nobody/from", cookie=self.cookie).status, 404)
 

@@ -25,7 +25,7 @@ INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("driv
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Cycles"), ("journal", "Journal"), ("activity", "Activity")]
 BUSY_ICONS = {"in a cycle": "busy", "working": "busy", "sleeping": "sleep", "paused by you": "pause",
-              "in a conversation (waiting for you)": "waiting"}
+              "in a conversation (waiting for you)": "clock"}
 
 
 def q(value: str) -> str:
@@ -216,8 +216,8 @@ def pending_notes_html(name: str) -> Html:
                     a=post_attrs("the pending notes")) if note["cancellable"] else h('<p class="dim">{why}</p>', why=note["reason"]))
         items.append(h('<li><a href="/i/{n}/chat{query}">{title}</a><p>{text}</p>{cancel}</li>', n=q(name),
                        query="" if note["cid"] == "from" else f"?id={q(note['cid'])}", title=note["title"], text=note["text"], cancel=cancel))
-    return h('<details class="menu pendingnotes" data-key="pending-{n}"><summary data-focus="pending-{n}">'
-             '☾ {count} for next cycle</summary><div class="menubody"><ul>{items}</ul></div></details>', n=name, count=len(notes), items=join(items))
+    return h('<details class="menu pendingnotes" data-key="pending-{n}"><summary data-focus="pending-{n}" aria-label="{count} for next cycle">'
+             '☾ {count}<span class="pending-label"> for next cycle</span></summary><div class="menubody"><ul>{items}</ul></div></details>', n=name, count=len(notes), items=join(items))
 
 
 def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read_only: bool = False,
@@ -234,6 +234,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
         chat = web_chat.from_chat(name)
     state = live.get("state", "?")
     replying = bool(chat and chat.get("state") == "replying")
+    state_dot = Html('<span class="statepulse" aria-hidden="true"></span>')
     facts = [live.get("model") or "", state + (f" since {live['since']}" if live.get("since") else "")]
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
@@ -243,27 +244,32 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     if (what := busy_note(name, state)) and not replying:
         sub = h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '
                 'aria-label="{n} is {s}">{icon}<span>{s}</span></summary><div class="menubody">{w}</div></details>',
-                n=name, s=state, w=what, icon=icon(BUSY_ICONS.get(state, "busy"), 14))
+                n=name, s=state, w=what, icon=state_dot if state in ("in a cycle", "working") else icon(BUSY_ICONS.get(state, "busy"), 14))
     else:
-        sub = h('<span class="state">{s}</span>', s="replying…" if replying else state if state != "?" else "")
+        sub = h('<span class="state">{dot}{s}</span>', dot=state_dot if replying else Html(""),
+                s="replying…" if replying else state if state != "?" else "")
     instance_link = (h('<a class="instance-main" href="/i/{n}/chat">{name}</a><span class="subsep"> · </span>',
                        n=q(name), name=name) if chat and not from_feed else Html(""))
     threads = web_chat.threads(name)
     from . import web_seen
     unread = web_seen.unread_conversations("", name)
-    switch_rows = [h('<a href="/i/{n}/chat"{current}>Main ({name}){unread}</a>', n=q(name), name=name,
+    switch_rows = [h('<a href="/i/{n}/chat"{current}>{name}{unread}</a>', n=q(name), name=name,
                      current=Html(' aria-current="page"') if from_feed else "",
                      unread=h('<span class="switch-unread"> unread</span>') if unread.get("from") else Html(""))]
     for thread in threads:
         waiting = (thread.get("reply") or {}).get("waiting")
         status = waiting or ("replying" if thread.get("state") == "replying" else
                              "reply failed" if web_chat.failed(thread) else "idle")
-        switch_rows.append(h('<a href="/i/{n}/chat?id={id}"{current}>{title}<span class="dim"> · {state}</span>{unread}</a>',
+        switch_rows.append(h('<a href="/i/{n}/chat?id={id}"{current}>{title}<span class="dim switch-state"> · {state}</span>{unread}</a>',
                              n=q(name), id=q(thread["id"]), title=web_chat.title(thread), state=status,
                              current=Html(' aria-current="page"') if chat and chat["id"] == thread["id"] else "",
                              unread=h('<span class="switch-unread"> unread</span>') if unread.get(thread["id"]) else Html("")))
-    switcher = join(switch_rows) + h('<hr><button type="button" data-switch-new>New thread</button>{rename}',
-                                   rename=h('<button type="button" data-switch-rename{disabled}>Rename…</button>',
+    close = (button("chat-end", "Close thread", f"close this thread with {name}? Its messages stay in Earlier chats. "
+                    "Your next message starts a new conversation. A journal write-up is requested.",
+                    {"cid": chat["id"]}, after="thread-ended")
+             if chat and not from_feed and not read_only else Html(""))
+    switcher = join(switch_rows) + h('<hr><button type="button" data-switch-new>New thread</button>{rename}{close}',
+                                   close=close, rename=h('<button type="button" data-switch-rename{disabled}>Rename…</button>',
                                             disabled=Html(" disabled") if read_only else "") if chat and not from_feed else Html(""))
     # Clear: this thread out of view (ended first). It sat in the header as New chat; New thread there now ends
     # nothing, so Clear moved into ⋯. Its confirm says what is kept.
@@ -274,9 +280,12 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
                '<input type="hidden" name="cid" value="{cid}"><button type="submit" data-focus="clear">'
                'Clear this thread</button></form></div>', n=q(name), cid=chat["id"], a=post_attrs("this chat"))
              if chat and not read_only and not from_feed else Html(""))
+    notes = pending_notes_html(name)
+    if notes:
+        sub = join([sub, h('<span class="subsep"> · </span>{notes}', notes=notes)])
     return h('<header class="chathead"><button type="button" class="navbtn iconbtn" data-toggle-nav '
              'aria-label="Chats and pages" aria-expanded="false" data-focus="nav">{side}</button>'
-             '<div class="titleblock"><div class="titleline"><h1 class="conversation-title"><button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation">{heading}</button></h1><div class="conversation-switcher menubody" hidden>{switcher}</div></div>'
+             '<div class="titleblock"><div class="titleline"><h1 class="conversation-title"><button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation"><span>{heading}</span>{chevron}</button></h1><div class="conversation-switcher menubody" hidden>{switcher}</div></div>'
              '<div class="sub">{instance_link}{sub}<span class="dim facts">{brief}</span>'
              '</div></div><div class="headtools">'
              '{docs}{new}'
@@ -291,14 +300,11 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '<button type="button" class="small" data-hard-reload data-focus="hard-reload" '
              'title="Clear the app cache and load the current version">Reload / update</button></div>{danger}'
              '</div></details></div></header>',
-             switcher=switcher, instance_link=instance_link, name=name, heading=name if from_feed or not chat else web_chat.title(chat), sub=sub + pending_notes_html(name), facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
+             switcher=switcher, instance_link=instance_link, name=name, heading=name if from_feed or not chat else web_chat.title(chat), sub=sub, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              new=new_thread_form(name), clear=clear, danger=danger,
              rename=_thread_title(name, chat, read_only, from_feed) if chat and not from_feed and not read_only else Html(""),
              # End moved here from the feed: it keeps its confirm, which says what is kept (#11)
-             close=(button("chat-end", "Close thread", f"close this thread with {name}? Its messages stay in Earlier chats. "
-                           "Your next message starts a new conversation. A journal write-up is requested.",
-                           {"cid": chat["id"]}, after="thread-ended")
-                    if chat and not from_feed and not read_only else Html("")),
+             close=close, chevron=icon("back", 12),
              brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
              earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"),
              docs=h('<button type="button" class="iconbtn docsbtn" data-show-docs '
@@ -1560,12 +1566,12 @@ def _message_item(name: str, it: dict, archived: bool, key: str | None = None) -
     # An answer from its cycle to what was left in this thread; in From, the ended thread it answers
     origin = (h(' <span class="laterchip" title="Written later, in its cycle, for what was left in this thread">'
                 '⏾ from its cycle</span>') if it.get("from_cycle") else
-              h(' <a class="laterchip" href="/i/{n}/chat?id={c}" title="It answers this ended thread">re: «{t}»</a>',
+              h(' <a class="laterchip reply-chip" href="/i/{n}/chat?id={c}" title="It answers this ended thread">re: «{t}»</a>',
                 n=q(name), c=it["re"]["cid"], t=it["re"]["title"]) if it.get("re") else Html(""))
     return h('<div class="turn sent" data-k="{key}" data-raw="{raw}"{at}><div class="who">{n} sent you '
-             '<a href="/messages/{f}">{what}</a>{origin} <span class="dim">{ts}</span></div>{t}<div class="atts">{a}</div><div class="sentactions"><button type="button" '
+             '{what}{origin} <span class="dim">{ts}</span></div>{t}<div class="atts">{a}</div><div class="sentactions"><button type="button" '
              'class="reply small icon" data-reply-message="{identity}" title="Reply to the message" '
-             'aria-label="Reply to the message">{reply}</button>{feedback}</div></div>', key=it["key"], n=name, f=q(it["file"]), raw=it["text"], what=what,
+             'aria-label="Reply to the message">{reply}</button>{feedback}</div></div>', key=it["key"], n=name, raw=it["text"], what=what,
              ts=_turn_time(it["ts"]), identity=it["file"], reply=ICONS["reply"], t=markdown(it["text"]), a=atts,
              origin=origin,
              feedback=_thumbs(name, {"kind": "message", "file": it["file"]}, it["rating"]),
@@ -1779,8 +1785,8 @@ def _from_html(model: dict) -> Html:
         day_separator(it["ts"])
         feed.append(_message_item(name, it, False, "from"))
     if not model["items"]:
-        feed.append(h('<div class="emptychat" data-k="empty"><p class="big">Your conversation with {n}.</p><p class="dim">What it sends '
-                      'from its cycles lands here too. For a separate topic, start a thread ✎.</p></div>', n=name))
+        feed.append(h('<div class="emptychat" data-k="empty"><p class="big">Your conversation with {n}.</p><div class="dim">What it sends '
+                      'from its cycles lands here too. For a separate topic, start a thread {new}.</div></div>', n=name, new=new_thread_form(name)))
     return join(feed)
 
 
@@ -1830,7 +1836,7 @@ def _composer(name: str, *, cid: str, draft: str, replying: bool, mids: list[str
         # One send arrow; the other two ways to send behind it (the operator's call, 2026-10-27: "One arrow + menu").
         '<div class="sendgroup">'
         '<details class="menu sendmenu" data-key="send-menu"><summary class="iconbtn" title="More ways to send" '
-        'aria-label="More ways to send">{up}</summary><div class="menubody">'
+        'aria-label="More ways to send">{more}</summary><div class="menubody">'
         # Queue after reply only while a reply runs (web.js syncQueue keeps it in step with the feed's live turn).
         '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle"{qh}>'
         'Queue after reply<span class="dim">sent when the current reply ends</span></button>'
@@ -1842,7 +1848,7 @@ def _composer(name: str, *, cid: str, draft: str, replying: bool, mids: list[str
         cid=h('<input type="hidden" name="cid" value="{c}">', c=cid) if cid else Html(""),
         thread=Html('<input type="hidden" name="thread" value="current">') if not cid else Html(""),
         draft=draft,
-        attach=icon("attach"), send=icon("send"), up=icon("up"),
+        attach=icon("attach"), send=icon("send"), more=icon("more"),
         qh="" if replying else Html(" hidden"), later=later or "for its next cycle",
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(mids))

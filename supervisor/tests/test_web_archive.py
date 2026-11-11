@@ -3,10 +3,10 @@ import re
 from unittest import mock
 
 from supervisor import web_chat
-from supervisor.tests.test_web import WebTest
+from supervisor.tests.test_web_chat import ChatRoutesCase
 
 
-class ArchiveTest(WebTest):
+class ArchiveTest(ChatRoutesCase):
     def setUp(self):
         super().setUp()
         self.records = [{"id": f"web-{i:016x}", "instance": "wisp", "state": "ended",
@@ -19,10 +19,10 @@ class ArchiveTest(WebTest):
         self.current = {**self.records[0], "id": "web-ffffffffffffffff", "state": "idle"}
         for patch in [mock.patch("supervisor.web._names", return_value=["wisp"]),
                       mock.patch.object(web_chat, "chats", side_effect=lambda n: [self.current] + self.records),
-                      mock.patch.object(web_chat, "shown", return_value=self.current),
                       mock.patch.object(web_chat, "load", side_effect=lambda cid: next(
-                          (c for c in self.records if c["id"] == cid), None)),
+                          (c for c in [self.current] + self.records if c["id"] == cid), None)),
                       mock.patch("supervisor.web._sent_during", return_value=[]),
+                      mock.patch("supervisor.messages.history", return_value=[]),
                       mock.patch("supervisor.docs.listing", return_value=[{"path": "a b.md", "bytes": 10, "mtime": 1761400000.0,
                                                                          "sha": "ab"}]),
                       mock.patch("supervisor.docs.read", return_value=("Current replacement text", "sha")),
@@ -34,7 +34,7 @@ class ArchiveTest(WebTest):
 
     def get(self, path):
         response = self.req(path, cookie=self.cookie)
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 200, response.body)
         return response.body.decode()
 
     def test_issue_8_quick_and_full_lists(self):
@@ -45,7 +45,11 @@ class ArchiveTest(WebTest):
                                    r'</summary>')
             self.assertIn("latest 20 of 25", body)
             self.assertIn('href="/i/wisp/chats"', body)
-            self.assertEqual(len(re.findall(r'href="/i/wisp/chat\?id=', body)), 20)
+            quick = re.search(r'<details class="earliermenu"[^>]*>.*?</details>', body, re.S)
+            self.assertIsNotNone(quick)
+            self.assertEqual(len(re.findall(r'href="/i/wisp/chat\?id=', quick.group())), 20)
+            self.assertNotIn(f'href="/i/wisp/chat?id={self.current["id"]}"', quick.group())
+            self.assertIn(f'href="/i/wisp/chat?id={self.current["id"]}"', body)
         body = self.get("/i/wisp/chats")
         ids = re.findall(r'href="/i/wisp/chat\?id=([^"]+)', body)
         self.assertEqual(ids, [c["id"] for c in self.records])
