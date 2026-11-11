@@ -232,7 +232,8 @@ def _instances(req: Request) -> Response:
     history = messages.history()
     names = web._names()
     summaries = {n: web_chat.summary(n, history) for n in names}
-    unread = web_seen.unread(req.device, summaries)
+    conversations = {n: web_seen.unread_conversations(req.device, n) for n in names}
+    unread = {n: any(marks.values()) for n, marks in conversations.items()}
     rows = []
     for n in names:
         live, s = web._live(n), summaries[n]
@@ -243,8 +244,10 @@ def _instances(req: Request) -> Response:
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
                      "line": s.get("line") or "", "last": stamp(s.get("last")), "replying": replying,
-                     "threads": len(threads), "threads_rev": _threads_rev(n, threads),
-                     "unread": unread.get(n, False), "next_cycle": web._next_cycle(n),
+                     "threads": len(threads), "threads_rev": _threads_rev(n, threads), "unread": unread.get(n, False),
+                     "unread_main": conversations[n].get("from", False),
+                     "unread_threads": sum(v for cid, v in conversations[n].items() if cid != "from"),
+                     "next_cycle": web._next_cycle(n),
                      "voice_mode": opconfig.voice_mode(core.instance_config(n))})
     return _etagged(req, {"instances": rows, "instances_rev": order.instance_rev(), "badge": sum(unread.values())})
 

@@ -578,6 +578,17 @@ def feedback_action(name: str, login: str, form: dict) -> tuple[str, dict | None
 
 
 def _post(req: Request, dev: str) -> Response:
+    if req.path == "/seen":
+        from . import web_seen
+        form = req.form()
+        name, key, last = (form.get(k, "") for k in ("inst", "key", "last"))
+        if name not in _names():
+            return _not_found(req.path)
+        if not key or not last:
+            return _html(400, web_pages.h("<p>inst, key and last are required.</p>"))
+        if not web_seen.seen_until(dev, name, key, last):
+            return _not_found(req.path)
+        return _html(200, web_pages.h("<p>Seen.</p>"))
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))

@@ -1694,26 +1694,70 @@
     quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
-  // The rail: a thread (or From) whose last answer or message this browser has not seen is marked unread, and so is its
-  // instance. What was seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more):
-  // shaft.seen is {instance: {thread id | "from": time}}. A time alone (before threads) is that instance's mark for
-  // every thread ("*"), until each is seen again.
-  function seenAt(seen, inst, key) {
-    const v = seen[inst];
-    if (typeof v === "string") return v;
-    if (!v || typeof v !== "object") return "";
-    const own = v[key] || "", all = v["*"] || "";
-    return own > all ? own : all;
+  // Read marks belong to the operator. Browser storage is read only to migrate old marks.
+  const seenSent = new Map(), seenPending = new Map(), seenInFlight = new Map();
+  let seenPostTimer = null, seenMigrating = false;
+  function queueSeen(inst, key, last, signature = last) {
+    const id = JSON.stringify([inst, key]);
+    if (seenSent.get(id) === signature || seenInFlight.get(id) === signature) return;
+    seenPending.set(id, {inst, key, last, signature});
+    clearTimeout(seenPostTimer);
+    seenPostTimer = setTimeout(flushSeen, 150);
   }
-  function seenMark(seen, inst, key, last) {
-    if (typeof seen[inst] !== "object" || !seen[inst]) seen[inst] = typeof seen[inst] === "string" ? { "*": seen[inst] } : {};
-    seen[inst][key] = last;
+  async function sendSeen(mark) {
+    const ctl = new AbortController(), limit = setTimeout(() => ctl.abort(), POLL_LIMIT_MS);
+    try {
+      const r = await fetch("/seen", {method: "POST", credentials: "same-origin", signal: ctl.signal,
+        headers: {"X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded"},
+        body: new URLSearchParams({inst: mark.inst, key: mark.key, last: mark.last})});
+      if (r.status === 404 && mark.migration) return true;  // an old instance or cleared thread
+      if (pairAgain(r) || !r.ok) return false;
+      const rail = document.querySelector("nav .rail");
+      if (rail && rail._tick) rail._tick();
+      return true;
+    } catch (e) { return false; }
+    finally { clearTimeout(limit); }
   }
-  function seenGet() {
-    try { return JSON.parse(localStorage.getItem("shaft.seen") || "{}"); } catch (e) { return {}; }
+  async function flushSeen() {
+    const pending = [...seenPending.entries()];
+    seenPending.clear();
+    await Promise.all(pending.map(async ([id, mark]) => {
+      seenInFlight.set(id, mark.signature);
+      try { if (await sendSeen(mark)) seenSent.set(id, mark.signature); }
+      finally { seenInFlight.delete(id); }
+    }));
   }
-  function seenSet(v) {
-    try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
+  async function migrateSeen(rail) {
+    if (seenMigrating) return;
+    let stored;
+    try { stored = localStorage.getItem("shaft.seen"); } catch (e) { return; }
+    if (!stored) return;
+    let marks;
+    try { marks = JSON.parse(stored); } catch (e) { return; }
+    const known = {};
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      try { if (a.dataset.lasts) known[a.dataset.inst] = Object.keys(JSON.parse(a.dataset.lasts)); } catch (e) { /* wait for rail */ }
+    });
+    const pending = new Map();
+    for (const [inst, value] of Object.entries(marks)) {
+      const entries = typeof value === "string" ? {"*": value} : value;
+      for (const [key, last] of Object.entries(entries || {})) {
+        if (!last) continue;
+        if (key === "*" && !known[inst]) {
+          if (!Object.keys(known).length) return;  // first render: wait for the existing rail poll
+          continue;                             // an instance that no longer exists
+        }
+        for (const cid of key === "*" ? known[inst] : [key]) {
+          const id = JSON.stringify([inst, cid]);
+          if (!pending.has(id) || pending.get(id).last < last) pending.set(id, {inst, key: cid, last, migration: true});
+        }
+      }
+    }
+    seenMigrating = true;
+    try {
+      const results = await Promise.all([...pending.values()].map(sendSeen));
+      if (results.every(Boolean)) localStorage.removeItem("shaft.seen");
+    } finally { seenMigrating = false; }
   }
   // Seen: a reply, or a message it sent you (data-sent-at), whose start is inside the feed's visible box — or that
   // fills the box, longer than the screen. Rendered was
@@ -1727,30 +1771,23 @@
   }
   function seenFeed() {
     if (sheet || document.visibilityState !== "visible") return;  // a covering sheet hides the feed
-    const seen = seenGet();
-    let changed = false;
+    const visible = new Map();
     document.querySelectorAll(".feed [data-seen-reply], .feed [data-sent-at]").forEach(item => {
       const inst = item.dataset.seenInst, key = item.dataset.seenKey, last = item.dataset.seenReply || item.dataset.sentAt;
-      // no key: a page with no thread shown (cleared): its old messages light no thread
-      if (inst && key && last && seenAt(seen, inst, key) < last && onScreen(item)) {
-        seenMark(seen, inst, key, last);
-        changed = true;
-      }
+      if (!inst || !key || !last || !onScreen(item)) return;
+      const id = JSON.stringify([inst, key]), mark = visible.get(id);
+      if (!mark || last > mark.last) visible.set(id, {inst, key, last, count: 1});
+      else if (last === mark.last) mark.count++;
     });
-    if (changed) seenSet(seen);
+    visible.forEach(m => queueSeen(m.inst, m.key, m.last, `${m.last}:${m.count}`));
   }
   function markRail(rail) {
-    const seen = seenGet();
+    migrateSeen(rail);
     rail.querySelectorAll("a[data-seen-key]").forEach(a => {
-      const last = a.dataset.last || "";
-      a.classList.toggle("unread", !!last && seenAt(seen, a.dataset.threadOf, a.dataset.seenKey) < last);
+      a.classList.toggle("unread", a.dataset.unread === "1");
     });
     rail.querySelectorAll("a[data-inst]").forEach(a => {
-      let lasts = null;
-      try { lasts = a.dataset.lasts ? JSON.parse(a.dataset.lasts) : null; } catch (e) { /* none: the first render */ }
-      const inst = a.dataset.inst;
-      a.classList.toggle("unread", lasts ? Object.entries(lasts).some(([k, last]) => !!last && seenAt(seen, inst, k) < last)
-        : !!a.dataset.last && seenAt(seen, inst, "*") < a.dataset.last);
+      a.classList.toggle("unread", a.dataset.unread === "1");
     });
     const unread = rail.querySelectorAll("a[data-inst].unread").length;   // instances: the app badge counts them
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
@@ -1923,7 +1960,10 @@
     seenTimer = setTimeout(unreadState, 250);
   }, true);
   window.addEventListener("storage", (ev) => {
-    if (ev.key === "shaft.seen" || ev.key === null) unreadState();
+    if (ev.key === "shaft.seen" || ev.key === null) {
+      const rail = document.querySelector("nav .rail");
+      if (rail && rail._tick) rail._tick();
+    }
   });
 
   // The documents panel: a card in a reply or a name in its list opens that document in the

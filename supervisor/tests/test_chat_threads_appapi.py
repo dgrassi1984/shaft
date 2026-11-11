@@ -65,7 +65,7 @@ class ThreadsAppTest(AppTest):
         self.from_model["last_count"] += 1
         self.assertEqual(web_seen.badge(self.device), 1)
 
-    def test_legacy_marks_migrate_without_losing_other_devices_or_threads(self):
+    def test_legacy_marks_merge_other_devices_into_shared_threads(self):
         mark = {"version": "old", "last": "2026-11-03T14:02:00", "last_count": 1}
         other = {"wisp": {"web-a": {"version": "other", "last": "2026-11-03T13:00:00"}}}
         web._write(web_seen.STORE, {self.device: {"wisp": mark}, "other-device": other})
@@ -73,10 +73,10 @@ class ThreadsAppTest(AppTest):
         self.assertEqual([c["unread"] for c in got["threads"]], [False, True])
         self.assertFalse(got["from"]["unread"])
         self.assertEqual(web._read(web_seen.STORE), {
-            self.device: {"wisp": {"web-b": mark, "from": mark}}, "other-device": other})
+            "operator": {"wisp": {"web-b": mark, "from": mark, **other["wisp"]}}})
         self.seen("web-a")
-        self.assertEqual(set(web._read(web_seen.STORE)[self.device]["wisp"]), {"web-a", "web-b", "from"})
-        self.assertEqual(web._read(web_seen.STORE)["other-device"], other)
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "web-b", "from"})
+        self.assertNotIn("other-device", web._read(web_seen.STORE))
 
     def test_away_and_late_polls_are_scoped_to_the_thread(self):
         for cid in ("web-a", "web-b"):
@@ -150,4 +150,4 @@ class ThreadsAppTest(AppTest):
     def test_omitted_cid_marks_only_the_shown_chat(self):
         feed = self.get("/app/v1/chat/wisp")
         self.get("/app/v1/chat/wisp/seen", method="POST", data={"version": feed["version"]})
-        self.assertEqual(set(web._read(web_seen.STORE)[self.device]["wisp"]), {"web-b"})
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-b"})

@@ -13,6 +13,8 @@
       "threads": 2,
       "threads_rev": "afdff99da9ea3675",
       "unread": true,
+      "unread_main": true,
+      "unread_threads": 2,
       "next_cycle": "for wisp's next cycle, which this starts now",
       "voice_mode": "off"
     }

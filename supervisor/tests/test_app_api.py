@@ -405,12 +405,14 @@ class PairingTest(AppTest):
             self.error(self.api("/app/v1/pair", "POST", {"link": link, "platform": "ios"}, bearer=False), 403,
                        "pair_expired")
 
-    def test_unpair_from_the_app_drops_its_token_marks_and_bearer(self):
+    def test_unpair_from_the_app_keeps_shared_marks_and_drops_token_and_bearer(self):
         self.apns.register(self.device, "ab" * 16, "sandbox", "io.github.dgrassi1984.shaft", "ios")
         web._write(web_seen.STORE, {self.device: {"wisp": {"version": "x", "last": None, "at": "2026-11-03T14:00:00"}}})
         self.assertEqual(self.get("/app/v1/unpair", method="POST", data={})["said"], "This device is unpaired.")
         self.assertNotIn(self.device, self.apns.tokens)
         self.assertNotIn(self.device, web._read(web_seen.STORE))
+        self.assertEqual(web._read(web_seen.STORE)["operator"]["wisp"]["from"]["at"],
+                         "2026-11-03T14:00:00")
         self.error(self.api("/app/v1/instances"), 401, "unpaired")
 
     def test_web_status_lists_the_apps_with_their_push(self):

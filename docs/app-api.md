@@ -151,8 +151,8 @@ Universal Clipboard carries it to the phone or iPad.
 
 ### `POST /app/v1/unpair`
 
-This device unpairs itself (the PWA's "Unpair this browser"). Its APNs token, web subscription and seen marks go with
-it. Request `{}`. Response 200 `{"said": "This device is unpaired."}`. The bearer stops working at once.
+This device unpairs itself (the PWA's "Unpair this browser"). Its APNs token and web subscription go with
+it. Shared read marks remain. Request `{}`. Response 200 `{"said": "This device is unpaired."}`. The bearer stops working at once.
 
 ## 3. The chat list
 
@@ -169,7 +169,7 @@ The rail has one row per instance in the operator's saved order (`supervisor.ord
   |---|---|---|
   | `instances` | list | the rows below |
   | `instances_rev` | int | saved instance order revision |
-  | `badge` | int | instances with something this device has not seen (`web_seen.badge`, §12) |
+  | `badge` | int | instances with something the operator has not seen (`web_seen.badge`, §12) |
 
   Each row:
 
@@ -186,7 +186,9 @@ The rail has one row per instance in the operator's saved order (`supervisor.ord
   | `threads` | int | number of open threads |
   | `threads_rev` | str | short hash of ordered thread ids, titles, lifecycle states and the saved order revision |
   | `replying` | bool | a reply is running in any open thread |
-  | `unread` | bool | any thread or the From feed has something this device has not seen (§12) |
+  | `unread` | bool | any thread or Main has something the operator has not seen (§12) |
+  | `unread_main` | bool | Main only, the `from` conversation |
+  | `unread_threads` | int | number of unread threads |
   | `next_cycle` | str | what Next cycle does now (`autonomy.next_cycle`): the composer's Next cycle hint; `""` when it cannot be read |
   | `voice_mode` | str | `"on"`: offer voice for this instance (the chat's Talk button, §6.1); `"off"` otherwise, also when its `config.env` has no `VOICE_MODE` or anything but `on` (`opconfig.voice_mode`) |
 
@@ -226,7 +228,7 @@ order. Open threads missing from storage go first, newest creation first. Each r
 | `line` | str | First line of the newest text item, at most 80 characters |
 | `state` | str | `idle` or `replying` |
 | `waiting` | str or null | The running reply's waiting text |
-| `unread` | bool | This device has unseen instance items in this feed |
+| `unread` | bool | The operator has unseen instance items in this feed |
 
 The From row uses the same preview and unread rules. Unknown instances return `404 not_found`.
 
@@ -1067,14 +1069,18 @@ reaches it, so no other page can spend them.
 
 ## 12. Unread and the badge
 
-- The PWA keeps its unread marks in the browser; the apps need the server to know, for the badge. The PWA keeps its own.
-- `.supervisor/web/seen.json` holds `{device: {instance: {cid: mark}}}`. `"from"` is a feed key.
-  Each mark contains `version`, `last`, `last_count` and `at`.
+- Native apps and web browsers share one read state for the operator.
+- `.supervisor/web/seen.json` holds `{"operator": {instance: {cid: mark}}}`. `"from"` is Main's feed key.
+  New marks contain `last`, `last_count` and `at`; native writes also retain `version`.
+  Legacy marks may omit `last_count`.
 - Each thread compares its own `web_chat.feed` last stamp and count with its mark. From compares
   `web_chat.from_feed` last stamp and count. A newer stamp, or more instance items at the same stamp, is unread.
   Marks without a count keep timestamp-only comparison. The operator's own messages do not make a feed unread.
-- A legacy per-instance mark is migrated on read to the shown chat and From. Other devices' marks stay intact.
-  New seen writes affect only the requested feed. An unmarked feed counts from the device's pairing time.
+- On first read, per-device marks merge into the operator marks. The newest timestamp wins per conversation;
+  equal timestamps use the higher count. A legacy per-instance mark applies to the shown chat and Main.
+  New seen writes affect only the requested feed and never move its timestamp or count backward.
+  An unmarked feed counts from the earliest paired device's pairing time.
+- `/instances` reports `unread_main` for Main, `unread_threads` as the count of unread threads, and `unread` for any.
 - An instance is unread when any open thread or From is unread. With no open threads, the shown ended chat
   still counts until cleared, preserving the older single-chat behavior.
 - The badge is the number of unread instances (`web_seen.badge(device)`), sent with `/instances`, `seen`,
@@ -1082,7 +1088,7 @@ reaches it, so no other page can spend them.
 - The native apps mark a chat seen when the newest item's end is on screen in a window that shows the chat (on the Mac
   also one beside another app's window in front, not hidden, minimized or fully covered), retry failures
   (§7.5), and discard list answers from polls that began before a successful seen request.
-- A device that unpairs loses its marks.
+- Unpairing retains shared read marks. Push suppression still uses conversation watchers, not read marks.
 
 ## 14. The HTML feed, piece by piece
 
@@ -1440,12 +1446,13 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 ### A.4 `supervisor/web_seen.py`
 
 - `seen(device: str, name: str, version: str, cid: str | None = None) -> bool`: True when `version` is the selected feed's (`web_chat.feed` or `web_chat.from_feed`);
-  then it records `{version, last, last_count, at}` for the device, instance and feed. False otherwise, recording nothing (the route
+  then it records `{version, last, last_count, at}` for the operator, instance and feed. False otherwise, recording nothing (the route
   answers `409 stale_version`).
 - `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` supplies the instance names when the caller already has them (`/app/v1/instances`);
   unread always reads each feed's own last stamp and count.
 - `badge(device: str) -> int`: how many are unread. The APNs lane calls it for each push.
-- `forget(device: str) -> None`: drops the device's marks.
+- `forget(device: str) -> None`: migrates old marks and retains shared marks.
+- The `device` argument remains for caller compatibility; storage and unread comparisons are shared.
 - The store `.supervisor/web/seen.json`, written atomically (mode 600) under a lock, as `web._write` does.
 
 ### A.5 Tests and fixtures

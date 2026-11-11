@@ -291,8 +291,11 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   there, is on screen in its feed in a visible tab (scrolled into view, not only rendered: one below the fold stays
   unread until you scroll to it). The rail marks the thread, and its instance while any of its threads or From is
   unread; the app badge counts instances. Config, Journal, earlier chats, another thread and a failed feed refresh do
-  not consume a new reply. Marks are kept in this browser (`shaft.seen`: per instance, per thread id or `from`) and
-  shared across its tabs; a mark kept from before threads counts for every thread until each is seen again.
+  not consume a new reply. Marks live on the server and sync across every paired device. `POST /seen` accepts form fields
+  `inst`, `key` (thread id or `from` for Main), and `last` (the visible item's time), with the page's CSRF token.
+  It advances only that conversation, bounded to actual instance items at or before `last`; at the feed's newest
+  timestamp it records the feed's count. Existing `shaft.seen` browser marks migrate once and are then removed.
+  The rail reads server unread attributes and refreshes through its existing poll after a seen write.
 - **Topic threads.** Under the instance being viewed, the rail lists its open threads in the operator's saved order:
   the title (the first line of its first message until renamed), a dot (hollow idle, pulsing replying, amber while
   it waits for the instance because another thread's reply holds it) and the unread mark; then **From <instance>**,
@@ -677,7 +680,7 @@ set by `SHAFT_APP_API_FIXTURES`.
   it to `POST /app/v1/pair` and keeps the device's secret in its Keychain. The link still works once, for 10 minutes.
   A paired app is a paired device: `shaft web status` lists it under **native apps**, with its platform and whether
   native push reaches it (and the server's `native push: ready` or what is missing). `shaft web unpair` revokes it,
-  as does **Unpair** in the app (`POST /app/v1/unpair`). Unpairing also drops its push token and its seen marks.
+  as does **Unpair** in the app (`POST /app/v1/unpair`). Unpairing drops its push token and retains the operator's shared read marks.
 - **One chat model.** The JSON feed and the web page's feed are drawn from one function (`web_chat.build`), so the app
   shows what the PWA shows: the same items with the same keys, the 80-message window, the reply running now, what is
   queued, feedback waiting for your next message.
@@ -697,9 +700,12 @@ set by `SHAFT_APP_API_FIXTURES`.
   chat file (written every second) or a poll. Holding it counts as watching the chat. `/app/v1/instances` says
   `voice_mode` per instance; Settings has `voice_mode` and `voice_effort`; `/app/v1/voices/…` holds each instance's
   voice per language. See [the contract](app-api.md#61-get-appv1chatnstream--the-reply-as-it-streams).
-- **Unread and the badge.** The PWA keeps its unread marks in the browser. The apps need the server to know, for the
-  icon's badge: `.supervisor/web/seen.json` holds, per app and instance, what the app last showed. An instance is
-  unread when its own newest answer or message is newer than that; your own messages never make a chat unread.
+- **Unread and the badge.** Native apps and the PWA share the operator's marks in
+  `.supervisor/web/seen.json`. A conversation is unread when its newest instance timestamp is later than its mark,
+  or when more instance items share the marked timestamp. The operator's own messages do not make it unread.
+  Old device marks merge by newest timestamp and then highest count. Unmarked conversations count from the
+  earliest paired device's pairing time. Main's unread state and the count of unread threads are separate;
+  the badge counts instances with either. Push suppression uses watchers, not seen marks.
 - **Settings and restarts.** `GET` and `POST /app/v1/settings/<name>` read or save one setting with `expect`;
   `/pause` and `/resume` share the web action. `GET /app/v1/services` shows API and scheduler status and the server's version.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
@@ -750,6 +756,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/google/login`, `/google/callback` | Re-login for existing Google accounts |
 | GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
 | POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
+| POST | `/seen` | Advance the operator's shared conversation read mark (`inst`, `key`, `last`; CSRF required) |
 | POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear chat |
 | POST | `/chat/<n>/move`, `/instances/move` | Save thread or instance order |
 | POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
