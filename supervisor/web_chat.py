@@ -791,9 +791,9 @@ def spoken(chat: dict) -> bool:
     return last.get("via") == "voice"
 
 
-FROM_NOTE = ("This conversation is From {name}: the operator's page of what you sent from your cycles outside any "
-             "thread, and of what they left for your next cycle; they now write to you here too. Its earliest part "
-             "may be cut: read_thread reads more of it.")
+FROM_NOTE = ("This is your main conversation with the operator. It also holds what you sent them from your cycles "
+             "outside any thread, and what they left for your next cycle. Its earliest part may be cut: read_thread "
+             "reads more of it.")
 FROM_ITEM_CHARS = 3000      # one From message in a From reply's request: a cycle's report can be long
 FROM_CHARS = 60000          # a From reply's request: From never ends, and every cycle message is in it
 
@@ -826,8 +826,9 @@ def _api_messages(chat: dict) -> list[dict]:
                + "\nread_thread reads any of them."}] if digest else []
     items = _dialogue(chat)
     if is_from(chat):
-        prefix += [{"role": "system", "content": FROM_NOTE.format(name=chat["instance"])}]
         items = _from_window(items)
+        if any(it[3] for it in items):        # said only when something from outside its replies is in it
+            prefix += [{"role": "system", "content": FROM_NOTE}]
     own = [k for k, it in enumerate(items) if not it[3]]          # the thread's own turns, not routed in
     if own and items[own[-1]][1] == "user":
         # The reply answers the operator's last message: what a cycle routed here at or after it (the same second, or
@@ -1342,7 +1343,9 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
         asked = messages.quoted_questions(name, text)
         body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
         chat = target(name, cid, login) if not cid or cid in (FROM, "current") else load(cid)
-        thread = ((chat["id"], title(chat)) if chat and chat.get("instance") == name and chat.get("state") != "ended"
+        # Main is named for the instance reading the note: its main conversation with the operator
+        thread = ((chat["id"], "main conversation" if is_from(chat) else title(chat))
+                  if chat and chat.get("instance") == name and chat.get("state") != "ended"
                   else None)
         try:
             path = messages.deliver_background(name, body, shown=text, attachments=atts, mid=mid, comments=comments,
@@ -1640,6 +1643,8 @@ def _clear(name: str, cid: str) -> str:
     chat = thread_of(name, cid, writing=False)
     if chat.get("cleared"):
         raise Refused("there is nothing to clear")
+    if chat.get("state") == "ended":         # no page shows it but Earlier chats: there is nothing on screen to clear
+        raise Refused("that thread has ended: it is in Earlier chats")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
     said = end(chat["id"]) if chat.get("state") != "ended" else ""

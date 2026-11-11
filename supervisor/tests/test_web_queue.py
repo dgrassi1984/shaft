@@ -30,13 +30,14 @@ class QueueTest(unittest.TestCase):
         web_chat._relays[cid] = relay
         self.started.append(relay)
 
-    def queue(self, text, mid):
+    def queue(self, text, mid, cid):
+        """Queue in the thread `cid`, as its page does: a message that names no thread goes to Main."""
         body = ''.join(f'--B\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
-                       for k, v in {"text": text, "mid": mid, "queue": "1"}.items()) + '--B--\r\n'
+                       for k, v in {"text": text, "mid": mid, "queue": "1", "cid": cid}.items()) + '--B--\r\n'
         response = web._post(web.Request("POST", "/chat/wisp/send",
                              {"content-type": "multipart/form-data; boundary=B"}, body.encode()), "device")
         self.assertEqual(response.status, 200)
-        return web_chat.current("wisp")
+        return web_chat.load(cid)
 
     def test_issue_70_queue_combines_once_and_dedupes(self):
         """Reverting #70 interjects queued text instead of persisting and sending one next turn."""
@@ -44,16 +45,16 @@ class QueueTest(unittest.TestCase):
                                            (None, True, False), (None, False, True)):
             with self.subTest(error=error, stopped=stopped, interject=interject):
                 chat = web_chat.new_thread("wisp", "")
-                web_chat.send("wisp", "", "start", [])
+                web_chat.send("wisp", "", "start", [], cid=chat["id"])
                 relay = self.started[-1]
                 relay.stopped = stopped
                 if interject:
                     with mock.patch.object(web_chat, "_post", return_value=(202, {})):
-                        web_chat.send("wisp", "", "late interjection", [])
+                        web_chat.send("wisp", "", "late interjection", [], cid=chat["id"])
                 with mock.patch.object(web_chat, "_post", return_value=(202, {})) as post:
-                    self.queue("> quote\nfirst", "q1")
-                    c = self.queue("second", "q2")
-                    self.queue("second", "q2")
+                    self.queue("> quote\nfirst", "q1", chat["id"])
+                    c = self.queue("second", "q2", chat["id"])
+                    self.queue("second", "q2", chat["id"])
                 self.assertEqual([t["shown"] for t in c["queued"]], ["> quote\nfirst", "second"])
                 self.assertEqual(len(c["turns"]), 2 if interject else 1)
                 post.assert_not_called()
@@ -68,7 +69,7 @@ class QueueTest(unittest.TestCase):
                 self.assertEqual(c["turns"][-1]["shown"], "> quote\nfirst\n\nsecond")
                 self.assertEqual(c["queued"], [])
                 before = len(c["turns"])
-                self.assertEqual(len(self.queue("second", "q2")["turns"]), before)
+                self.assertEqual(len(self.queue("second", "q2", chat["id"])["turns"]), before)
                 c["state"] = "ended"
                 web_chat.save(c)
 
@@ -76,8 +77,8 @@ class QueueTest(unittest.TestCase):
         """Found in review: reap() ended a reply cut by a web-service restart and left its queued messages waiting
         for a reply end that would never come."""
         chat = web_chat.new_thread("wisp", "")
-        web_chat.send("wisp", "", "start", [])
-        self.queue("after the restart", "q9")
+        web_chat.send("wisp", "", "start", [], cid=chat["id"])
+        self.queue("after the restart", "q9", chat["id"])
         web_chat._relays.clear()                     # the old web process is gone
         starts = len(self.started)
         web_chat.reap()
@@ -92,9 +93,9 @@ class QueueTest(unittest.TestCase):
         """Found in review: queuing took the pending document notices into the queued message, so cancelling it
         meant the instance never heard of them. They are taken when the queue is sent."""
         chat = web_chat.new_thread("wisp", "")
-        web_chat.send("wisp", "", "start", [])
+        web_chat.send("wisp", "", "start", [], cid=chat["id"])
         with mock.patch("supervisor.doc_comments.take_notices", return_value=["[a comment notice]"]) as take:
-            self.queue("queued", "q8")
+            self.queue("queued", "q8", chat["id"])
             take.assert_not_called()
             with web_chat._inst_lock("wisp"):
                 web_chat._finish(self.started[-1], "answer", [], None, 0)
@@ -102,10 +103,11 @@ class QueueTest(unittest.TestCase):
 
     def test_issue_70_idle_cancel_and_feed(self):
         """Reverting #70 loses queued cancellation, feed status and reload reconciliation."""
-        c = self.queue("idle", "idle")
+        chat = web_chat.new_thread("wisp", "")
+        c = self.queue("idle", "idle", chat["id"])
         self.assertEqual(c["turns"][0]["shown"], "idle")
         with mock.patch.object(web_chat, "_post", return_value=(202, {})):
-            c = self.queue("<next>", "q1")
+            c = self.queue("<next>", "q1", chat["id"])
         feed = str(web_views.chat_feed("wisp", c, []))
         self.assertLess(feed.index('data-k="live"'), feed.index('data-k="queue-q1"'))
         self.assertIn("queued — sent when this reply ends", feed)
@@ -113,17 +115,19 @@ class QueueTest(unittest.TestCase):
         self.assertIn('data-post="/chat/wisp/unqueue"', feed)
         page = str(web_views.chat_page("wisp", c, [], [], {}, ["wisp"], "csrf"))
         self.assertIn('&quot;q1&quot;', page)
-        response = web._post(web.Request("POST", "/chat/wisp/unqueue", {}, b"mid=q1"), "device")
+        response = web._post(web.Request("POST", "/chat/wisp/unqueue", {}, f"mid=q1&cid={chat['id']}".encode()),
+                             "device")
         self.assertEqual(response.status, 200)
         self.assertEqual(web_chat.load(c["id"])["queued"], [])
 
     def test_issue_70_attachments_and_closed_chats(self):
         """Reverting #70 loses combined attachments or starts queued work after a chat was closed."""
-        c, _ = web_chat.send("wisp", "", "start", [])
+        chat = web_chat.new_thread("wisp", "")
+        c, _ = web_chat.send("wisp", "", "start", [], cid=chat["id"])
         attachment = {"name": "a.txt", "path": "attachments/a.txt", "bytes": 1}
         with mock.patch("supervisor.messages.from_operator", return_value=([attachment], "\nfile a.txt")):
-            web_chat.queue("wisp", "", "one", [("a.txt", b"a")], mid="a")
-            web_chat.queue("wisp", "", "two", [("a.txt", b"a")], mid="b")
+            web_chat.queue("wisp", "", "one", [("a.txt", b"a")], mid="a", cid=chat["id"])
+            web_chat.queue("wisp", "", "two", [("a.txt", b"a")], mid="b", cid=chat["id"])
         web_chat._finish(self.started[-1], "", [], "failed", 0)
         c = web_chat.load(c["id"])
         self.assertEqual(c["turns"][-1]["attachments"], [attachment, attachment])

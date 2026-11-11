@@ -70,12 +70,13 @@ class ThreadsAppTest(AppTest):
         other = {"wisp": {"web-a": {"version": "other", "last": "2026-11-03T13:00:00"}}}
         web._write(web_seen.STORE, {self.device: {"wisp": mark}, "other-device": other})
         got = self.get("/app/v1/threads/wisp")
-        self.assertEqual([c["unread"] for c in got["threads"]], [False, True])
+        # a mark from before threads stood for the chat the page showed: since 2026-11-11 that is Main, not the newest
+        # thread, so it counts for Main alone
+        self.assertEqual([c["unread"] for c in got["threads"]], [True, True])
         self.assertFalse(got["from"]["unread"])
-        self.assertEqual(web._read(web_seen.STORE), {
-            "operator": {"wisp": {"web-b": mark, "from": mark, **other["wisp"]}}})
+        self.assertEqual(web._read(web_seen.STORE), {"operator": {"wisp": {"from": mark, **other["wisp"]}}})
         self.seen("web-a")
-        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "web-b", "from"})
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-a", "from"})
         self.assertNotIn("other-device", web._read(web_seen.STORE))
 
     def test_away_and_late_polls_are_scoped_to_the_thread(self):
@@ -107,7 +108,7 @@ class ThreadsAppTest(AppTest):
                 mock.patch.object(webpush, "subscriptions", return_value={}):
             web_alerts.forward_new()
         event = webpush.notify.call_args.args[0]
-        self.assertEqual((event["url"], event["cid"]), ("/i/wisp/from", "from"))
+        self.assertEqual((event["url"], event["cid"]), ("/i/wisp/chat", "from"))
         self.assertEqual(webpush.notify.call_args.kwargs["skip"], {"other"})
 
     def test_latest_filters_both_url_forms_and_retains_cid_and_other_instances(self):
@@ -147,7 +148,8 @@ class ThreadsAppTest(AppTest):
         self.req("/fragment/chat/wisp?id=web-a&away=1&at=2000", cookie=cookie)
         self.assertEqual(web_chat.watchers("wisp", "web-a"), set())
 
-    def test_omitted_cid_marks_only_the_shown_chat(self):
+    def test_omitted_cid_marks_only_main(self):
+        """An app that names no conversation reads and marks Main (the instance's own conversation), not a thread."""
         feed = self.get("/app/v1/chat/wisp")
         self.get("/app/v1/chat/wisp/seen", method="POST", data={"version": feed["version"]})
-        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"web-b"})
+        self.assertEqual(set(web._read(web_seen.STORE)["operator"]["wisp"]), {"from"})

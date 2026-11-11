@@ -820,13 +820,13 @@ class SendTest(AppTest):
         headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)}
         response = self.req("/chat/wisp/new", "POST", body=b"title=Ledger", headers=headers, cookie=cookie)
         self.assertEqual(response.status, 200, response.body)
-        a = web_chat.current("wisp")["id"]
+        a = web_chat.target("wisp", "", writing=False)["id"]
         self.assertIn(f'data-cid="{a}"'.encode(), response.body)
         self.assertNotIn("HX-Redirect", response.headers)
         b = web_chat.new_thread("wisp", "operator")
         b["created"] = "2099-01-01T00:00:00"
         web_chat.save(b)
-        self.assertEqual(web_chat.current("wisp")["id"], b["id"])
+        self.assertEqual(web_chat.target("wisp", "", writing=False)["id"], b["id"])
         page = self.req(f"/i/wisp/chat?id={a}", cookie=cookie).body.decode()
         composer = page.split('<form class="composer"', 1)[1].split("</form>", 1)[0]
         self.assertIn(f'name="cid" value="{a}"', composer)

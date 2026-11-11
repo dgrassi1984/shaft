@@ -254,7 +254,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              new=new_thread_form(name), clear=clear, danger=danger, title=_thread_title(name, chat, read_only, from_feed),
              brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
              earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"),
-             docs=Html("") if from_feed else h('<button type="button" class="iconbtn docsbtn" data-show-docs '
+             docs=h('<button type="button" class="iconbtn docsbtn" data-show-docs '
                                                'title="Documents (notes/docs/)" aria-label="Documents" '
                                                'data-focus="docs">{i}</button>', i=icon("docs")),
              more=icon("more"), hist=icon("history", 16))
@@ -1752,7 +1752,8 @@ def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[
     outside any thread, refreshed like a thread's — with a thread's composer and the documents panel beside it.
     Clicking the instance opens it (2026-11-11: it was "From <instance>", a row of its own)."""
     from . import messages
-    feed_url = f"/fragment/from/{q(name)}" + ("?all=1" if whole else "")    # all of it asked for: its refreshes too
+    # The instance's own page: its fragments name no conversation (no id: Main), as a thread's name its id
+    feed_url = f"/fragment/chat/{q(name)}" + ("?all=1" if whole else "")    # all of it asked for: its refreshes too
     feed = feed_html(model, from_feed=True)
     composer = _composer(name, cid="from", draft=f"{name}/from", replying=model.get("reply") is not None,
                          mids=model["mids"], later=later)
@@ -1764,7 +1765,7 @@ def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[
     aside = _docs_aside(name, panel, doc=doc, att=att, folder=folder, listing_only=listing_only, sort=sort)
     return chat_frame(name, chat_header(name, live, None, past, from_feed=True),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
-                      names, csrf, f"/fragment/from/{q(name)}/header", thread="from")
+                      names, csrf, f"/fragment/chat/{q(name)}/header", thread="from")
 
 
 def _composer(name: str, *, cid: str, draft: str, replying: bool, mids: list[str], later: str) -> Html:

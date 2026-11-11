@@ -47,7 +47,7 @@ class ThreadsTest(ChatTest):
         self.assertEqual([t["role"] for t in web_chat.load(b["id"])["turns"]], ["user", "assistant"])
 
     def test_new_thread_ends_no_other_and_end_ends_only_its_own(self):
-        a, _ = web_chat.send("wisp", ME, "first", [])
+        a, _ = web_chat.send("wisp", ME, "first", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(a["id"])
         b = web_chat.new_thread("wisp", ME)
         self.assertNotEqual(web_chat.load(a["id"])["state"], "ended")
@@ -59,15 +59,17 @@ class ThreadsTest(ChatTest):
             web_chat.send("wisp", ME, "to a closed thread", [], cid=a["id"])
         self.assertEqual(len(web_chat.load(a["id"])["turns"]), 2)        # nothing was added to it
 
-    def test_legacy_current_follows_manual_order_even_after_a_reply(self):
+    def test_a_message_naming_no_thread_goes_to_main_whatever_the_threads_order(self):
+        """2026-11-11: it went to the most recently active thread (current()), a target that moved with every reply;
+        the instance's own conversation, Main, takes it — not the thread on top of the operator's order either."""
         a = web_chat.new_thread("wisp", ME)
         b = web_chat.new_thread("wisp", ME)
         web_chat.send("wisp", ME, "in a", [], cid=a["id"])
         self.wait_idle(a["id"])
-        self.assertEqual(web_chat.current("wisp")["id"], b["id"])
-        chat, _ = web_chat.send("wisp", ME, "no thread named", [])       # legacy routing until current() is retired
-        self.assertEqual(chat["id"], b["id"])
-        self.wait_idle(b["id"])
+        chat, _ = web_chat.send("wisp", ME, "no thread named", [])
+        self.assertTrue(web_chat.is_from(chat))
+        self.assertNotIn(chat["id"], (a["id"], b["id"]))
+        self.wait_idle(chat["id"])
 
     def test_a_thread_of_another_instance_is_refused(self):
         (self.dir / "instances" / "kiln").mkdir()
@@ -143,14 +145,14 @@ class ThreadsTest(ChatTest):
         self.assertFalse(web_chat.summary("wisp").get("replying"))
 
     def test_clearing_one_thread_leaves_the_others(self):
-        a, _ = web_chat.send("wisp", ME, "first", [])
+        a, _ = web_chat.send("wisp", ME, "first", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(a["id"])
         b, _ = web_chat.send("wisp", ME, "second", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(b["id"])
         web_chat.clear("wisp", a["id"])
         self.assertEqual(web_chat.load(a["id"])["state"], "ended")
         self.assertNotEqual(web_chat.load(b["id"])["state"], "ended")
-        self.assertEqual(web_chat.shown("wisp")["id"], b["id"])
+        self.assertEqual([c["id"] for c in web_chat.threads("wisp")], [b["id"]])
 
     def test_feedback_on_a_chat_that_is_gone_is_delivered_not_a_crash(self):
         """Review of the threads lane: send_feedback looked its target up with thread_of, which raises Refused — the
@@ -165,11 +167,11 @@ class ThreadsTest(ChatTest):
     def test_the_rail_reads_the_chat_the_page_shows(self):
         """Review of the threads lane: the rail took the newest chat not cleared — an older ended one after the newest
         was cleared — while the page (shown) showed none, so the apps' unread mark compared two different chats."""
-        old, _ = web_chat.send("wisp", ME, "old topic", [])
+        old, _ = web_chat.send("wisp", ME, "old topic", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(old["id"])
         web_chat.end(old["id"])
         time.sleep(1.1)
-        new, _ = web_chat.send("wisp", ME, "new topic", [])
+        new, _ = web_chat.send("wisp", ME, "new topic", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(new["id"])
         web_chat.clear("wisp", new["id"])
         self.assertIsNone(web_chat.shown("wisp"))

@@ -232,7 +232,7 @@ class VoiceFlagTest(VoiceTest):
                      headers={"content-type": "multipart/form-data; boundary=B", "sec-fetch-site": "same-origin",
                               "x-csrf-token": self.csrf(cookie)})
         self.assertEqual(r.status, 200, r.body)
-        c = self.wait_idle(web_chat.current("wisp")["id"])
+        c = self.wait_idle(web_chat.target("wisp", "", writing=False)["id"])
         self.assertEqual(c["turns"][0]["via"], "voice")
         self.assertIs(self.fake.bodies()[0]["voice"], True)
 

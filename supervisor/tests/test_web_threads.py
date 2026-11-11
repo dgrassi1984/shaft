@@ -81,14 +81,16 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn("data-lasts=", rail)                             # the instance is still marked unread from them
         self.assertNotIn("railthreads", rail)
 
-    def test_rail_on_the_plain_chat_page_lights_the_thread_it_shows(self):
+    def test_rail_on_the_instance_page_lights_main_not_the_newest_thread(self):
+        """2026-11-11: the instance's own page is Main. An older page polling the rail with t=current lit the most
+        recently active thread, a row that moved with every reply; it lights Main."""
         old = self.thread("Old", [{"role": "user", "content": "q", "ts": "2026-11-10T09:00:00"}])
         new = self.thread("New", [{"role": "user", "content": "q", "ts": "2026-11-10T10:00:00"}])
-        self.assertEqual(web_chat.current("wisp")["id"], new["id"])
         rail = self.get("/fragment/rail?c=i:wisp&t=current")
-        on = [r for r in self.rows(rail) if 'class="thread on"' in r]
+        on = [r for r in self.rows(rail) if 'class="thread from on"' in r or 'class="thread on"' in r]
         self.assertEqual(len(on), 1)
-        self.assertIn(new["id"], on[0])
+        self.assertIn('data-seen-key="from"', on[0])
+        self.assertNotIn(new["id"], on[0])
         self.assertNotIn(old["id"], on[0])
         config = self.get("/fragment/rail?c=i:wisp")                 # its Config page: listed, none lit
         self.assertEqual(len(self.rows(config)), 3)
@@ -113,9 +115,9 @@ class ThreadsWebTest(ChatRoutesCase):
         page = self.get(f"/i/wisp/chat?id={a['id']}")
         self.assertIn(f'data-poll="/fragment/rail?c=i:wisp&amp;t={a["id"]}"', page)
         self.assertIn(f'data-draft="wisp/{a["id"]}"', page)            # its own draft: not another thread's
-        plain = self.get("/i/wisp/chat")
-        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=current"', plain)
-        self.assertIn('data-draft="wisp"', plain)
+        plain = self.get("/i/wisp/chat")                               # the instance's own page: Main
+        self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=from"', plain)
+        self.assertIn('data-draft="wisp/from"', plain)
 
     # -- the thread header -------------------------------------------------------------------------------------------
     def test_header_names_the_thread_renames_it_and_new_thread_ends_nothing(self):
@@ -154,7 +156,8 @@ class ThreadsWebTest(ChatRoutesCase):
         self.log(ts="2026-11-10T10:01:00", **{"from": "wisp"}, to="operator", file="m2.md", text="In A", talk="talk-a")
         self.log(ts="2026-11-10T10:02:00", **{"from": "operator"}, to="wisp", file="m3.md", text="for later",
                  via=messages.BACKGROUND)
-        page = self.get("/i/wisp/from")
+        self.assertEqual(self.req("/i/wisp/from", cookie=self.cookie).status, 302)   # From is Main now
+        page = self.get("/i/wisp/chat")
         self.assertIn('data-poll="/fragment/from/wisp"', page)
         self.assertIn('data-poll="/fragment/from/wisp/header"', page)
         self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=from"', page)
