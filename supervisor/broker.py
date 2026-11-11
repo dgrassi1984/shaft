@@ -319,6 +319,15 @@ SPECS = {
                                       "conversation with him. On refusal, the answer lists recent message files; "
                                       "record(kind='runs') shows conversation ids in start talk/api lines"}},
                           ["text"]),
+    "gauges": _spec("gauges", "Your gauges: a few readings the supervisor computes from its own record of you "
+                    "(promises open, claims the tool log did not support, failures that came back, value, capability "
+                    "against a control...). Called with no argument it lists the menu with each reading now and what is "
+                    "chosen. choose=[...] picks up to 4 by name: they become the first lines of self/stats.md, which "
+                    "you see in every run, largest gap first. Readings only: nothing is asked of you and nothing is "
+                    "refused; you cannot change a reading, and you can change the choice whenever you like (the "
+                    "operator can too). choose=[] shows none.",
+                    {"choose": {"type": "array", "items": {"type": "string"},
+                                "description": "gauge names from the menu; omit it to see the menu"}}, []),
     "withdraw_held": _spec("withdraw_held", "Withdraw one of your own held code changes so it is never re-gated. "
                            "record(kind='gate') lists your held ids. Give the reason you no longer want it.",
                            {"id": S, "reason": S}, ["id", "reason"]),
@@ -1830,6 +1839,28 @@ class Broker:
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
             ": you are shown it in every run and conversation, your messages to the operator are checked against "
             "it, and only he can drop it")
+
+    def _gauges(self, choose=None) -> str:
+        """The gauge menu with its readings, or the instance's choice of gauges recorded (gauges.py). The readings
+        are the supervisor's; only the choice is the instance's."""
+        from . import gauges
+        if choose is None:
+            return gauges.menu_text(self.name, as_of=self.as_of, extra=self._sim_gauges())
+        row = self._gauges_chosen(gauges.checked(choose))
+        if not row["chosen"]:
+            return "no gauge is chosen now: self/stats.md shows none from your next cycle"
+        return (f"chosen: {', '.join(row['chosen'])}. They are the first lines of self/stats.md from your next cycle, "
+                "largest gap first; gauges() shows the readings now")
+
+    def _sim_gauges(self) -> list[dict]:
+        return []
+
+    def _gauges_chosen(self, names: list[str]) -> dict:
+        from . import gauges
+        from .core import log
+        row = gauges.choose(self.name, names, "instance")
+        log(f"{self.name}: gauges chosen by the instance: {', '.join(names) or '(none)'}")
+        return row
 
     def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
         from . import gate_held
@@ -3604,6 +3635,7 @@ class ReplayBroker(Broker):
         self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self.sim_withdrawn: set[str] = set()
+        self.sim_gauges: list[dict] = []     # a choice of gauges made in this replay: seen by it, never written
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -4018,6 +4050,16 @@ class ReplayBroker(Broker):
         self.sim_withdrawn.add(id)
         self._tag("simulated: not withdrawn")
         return answer
+
+    def _sim_gauges(self) -> list[dict]:
+        return self.sim_gauges
+
+    def _gauges_chosen(self, names: list[str]) -> dict:
+        from . import gauges   # answered as the real call, kept for the rest of this replay, nothing written
+        row = gauges.row(names, "instance", self.as_of)
+        self.sim_gauges.append(row)
+        self._tag("simulated: not recorded")
+        return row
 
     def _record_order(self, text: str, source: str = "") -> str:
         from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written

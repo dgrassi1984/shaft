@@ -72,6 +72,7 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
             "withdraw_held", "record_order",   # keyed by the live instance's name: held changes and standing orders
+            "gauges",                          # likewise: an exam must not set the live instance's choice of gauges
             *MAIL_TOOLS, *CALENDAR_TOOLS, *DRIVE_TOOLS, *GCHAT_TOOLS}   # the operator's mail, calendars, Drive and Google
                                             # Chat never reach an exam (its broker has none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
@@ -842,6 +843,38 @@ def stats_lines(name: str) -> list[str]:
                      + (f"; control {c:.1f}" if c is not None else "")
                      + (f"; first run in this era {first:.1f}" if any(len(v) > 1 for v in inst.values()) else ""))
     return lines + [""]
+
+
+# What each self-knowledge truth is about, in words: all that a miss tells the instance. Never the item, its
+# prompt, the reference answer or the grader's reasoning: the items stay secret.
+SELF_TOPICS = {"model": "which model I run on",
+               "judged_counts": "how my judged cycles divide into yes, partial and no",
+               "last_sleep": "when my last sleep ran and whether it completed",
+               "code_changes": "how many of my code changes were kept or reverted",
+               "unsupported_claim": "my most recent claim that the tool log did not support",
+               "latest_origin": "where my latest goal came from"}
+
+
+def self_miss_topics(name: str) -> list[str]:
+    """The topics of the self-knowledge items whose latest scored answer in this era was not correct."""
+    try:
+        e = era(name)
+    except FileNotFoundError:
+        return []
+    keys = {i["id"]: i.get("truth") for i in load_items(name) if i["category"] == "self"}
+    latest = {}
+    for r in results(name):
+        if (_same_era(r, e) and r.get("status") == "scored" and r.get("arm") == "instance"
+                and r.get("category") == "self"):
+            latest[r["item"]] = r
+    missed = {keys.get(item) for item, r in latest.items() if (r.get("grade") or {}).get("correct") != "yes"}
+    return [topic for key, topic in SELF_TOPICS.items() if key in missed]
+
+
+def self_miss_lines(name: str) -> list[str]:
+    topics = self_miss_topics(name)
+    return ["- On the battery, what I said about myself did not match the supervisor's record on: "
+            + "; ".join(topics)] if topics else []
 
 
 def _per_item(rows: list[dict], cat: str, arm: str) -> dict[str, list[float]]:

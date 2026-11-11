@@ -1730,13 +1730,27 @@ def _base_rate_lines(rows: list[dict]) -> list[str]:
     return out
 
 
-def stats_text(name: str) -> str:
-    """self/stats.md's text. Its sections share one parse of the episode logs (review C3), kept only while it runs."""
+TITLE = "# My measured performance"
+
+
+def stats_text(name: str, save: bool = False) -> str:
+    """self/stats.md's text: its title, the head (stats_head.py: what the instance reads on every run), then the
+    tables. Its sections share one parse of the episode logs (review C3), kept only while it runs. `save`: the build
+    that writes the page also keeps the head's verdicts for the panel."""
     outer = getattr(_REBUILD, "episodes", None)
     if outer is None:
         _REBUILD.episodes = {}
     try:
-        return _stats_text(name)
+        text = _stats_text(name)
+        from . import stats_head
+        try:
+            head = stats_head.head(name, save=save)
+        except Exception as e:   # the head must never cost the instance its page
+            log(f"{name}: stats head failed: {type(e).__name__}: {e}")
+            head = []
+        if head and text.startswith(TITLE + "\n\n"):
+            text = TITLE + "\n\n" + "\n".join(head) + "\n" + text[len(TITLE) + 2:]
+        return text
     finally:
         if outer is None:
             _REBUILD.episodes = None
@@ -1974,7 +1988,7 @@ def write_stats(name: str) -> None:
     battery's record) is skipped."""
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
-    for rel, content in (("self/stats.md", stats_text(name)),
+    for rel, content in (("self/stats.md", stats_text(name, save=True)),
                          (CALIBRATION_FILE, json.dumps(base_rates(judgments_for_stats(name)), indent=2) + "\n")):
         try:
             safe_write(INSTANCES / name, rel, content)
@@ -2000,6 +2014,103 @@ SUPERVISOR_GIT = ("-c", "user.name=SHAFT supervisor", "-c", "user.email=supervis
 
 def _probation_path(name: str) -> Path:
     return SUP_DIR / "probation" / f"{name}.json"
+
+
+def _probation_history_path(name: str) -> Path:
+    return SUP_DIR / "probation" / f"{name}.jsonl"
+
+
+def _probation_event(name: str, entry: dict, outcome: str) -> None:
+    """One row per probation opened or closed, kept after the window is gone: the open-windows file forgets a change
+    the moment it passes, so nothing could later say whether a kept change survived, or was tested by a trial first.
+    {at, commit, since, files, outcome: started | not on probation | passed | kept, not judged | reverted, trial}."""
+    row = {"at": datetime.now().isoformat(timespec="seconds"), "commit": entry["commit"], "since": entry["since"],
+           "files": entry["files"], "outcome": outcome, "trial": (entry.get("trial") or {}).get("verdict")}
+    try:
+        p = _probation_history_path(name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:   # the record of a probation must never stop the probation itself
+        log(f"{name}: probation history not written: {type(e).__name__}: {e}")
+
+
+CHANGE_MATCH_S = 300   # a kept change's probation opens right after its row is written, in the same settlement
+_PROBATION_LOG = re.compile(r"^\[([^\]]+)\] ([a-z0-9_-]+): (?:change ([0-9a-f]{8}) (on probation|not on probation)"
+                            r"|probation ([0-9a-f]{8})(?:: (used in|no baseline)| (passed|failed) )"
+                            r"|kept change is trial \S+ \((\w+)\))")
+
+
+def _probation_from_log(name: str) -> list[dict]:
+    """The same rows read from the supervisor's log, for changes kept before the history file existed."""
+    path = SUP_DIR / "supervisor.log"
+    rows, by_commit = [], {}
+    try:
+        lines = [l for l in path.read_text(errors="replace").splitlines() if "probation" in l or "kept change is trial" in l]
+    except OSError:
+        return []
+    for line in lines:
+        m = _PROBATION_LOG.match(line)
+        if not m or m[2] != name:
+            continue
+        at = m[1].replace(" ", "T")
+        if m[3]:
+            row = {"at": at, "commit": m[3], "since": at, "files": None, "trial": None,
+                   "outcome": "started" if m[4] == "on probation" else "not on probation"}
+            by_commit[m[3]] = row
+            rows.append(row)
+        elif m[5] and m[5] in by_commit:
+            if "restore could not be done" in line:
+                continue
+            outcome = "kept, not judged" if m[6] else "passed" if m[7] == "passed" else "reverted"
+            rows.append({**by_commit[m[5]], "at": at, "outcome": outcome})
+        elif m[8] and rows:        # logged right after the probation it belongs to opens
+            last = next((r for r in reversed(rows) if r["outcome"] == "started"), None)
+            if last and last["since"][:16] == at[:16]:
+                last["trial"] = m[8]
+    return rows
+
+
+def change_outcomes(name: str, as_of: datetime | None = None) -> list[dict]:
+    """Every kept code change with what became of it: {ts, files, commit, outcome, tested}. outcome: on probation,
+    passed, kept, not judged (too little use, or no baseline), reverted, not on probation (no cycle runs the files),
+    or unknown (no probation recorded for it). tested: whether a finished trial of the same change preceded it (None
+    when unknown). `as_of`: the record as it stood then."""
+    cut = as_of.isoformat(timespec="seconds") if as_of else None
+    path = SUP_DIR / "code_changes" / f"{name}.jsonl"
+    changes = []
+    for line in jsonl_lines(path.read_text()) if path.exists() else []:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("ts"), str) and (cut is None or row["ts"] < cut):
+            changes.append(row)
+    hist = _probation_history_path(name)
+    events = []
+    for line in jsonl_lines(hist.read_text()) if hist.exists() else []:
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    first = min((e["since"] for e in events), default=None)
+    events = [e for e in _probation_from_log(name) if first is None or e["since"] < first] + events
+    events = [e for e in events if cut is None or e["at"] < cut]
+    starts = [e for e in events if e["outcome"] in ("started", "not on probation")]
+    out = []
+    for row in changes:
+        at = _ts(row["ts"])
+        start = next((e for e in starts if at and (s := _ts(e["since"])) is not None
+                      and -5 <= (s - at).total_seconds() <= CHANGE_MATCH_S), None)
+        if start is None:
+            out.append({"ts": row["ts"], "files": row.get("files") or [], "commit": None, "outcome": "unknown",
+                        "tested": None})
+            continue
+        last = [e for e in events if e["commit"][:8] == start["commit"][:8]][-1]
+        outcome = "on probation" if last["outcome"] == "started" else last["outcome"]
+        out.append({"ts": row["ts"], "files": row.get("files") or [], "commit": start["commit"][:8],
+                    "outcome": outcome, "tested": start.get("trial") is not None})
+    return out
 
 
 def _values(rows: list[dict]) -> list[float]:
@@ -2056,6 +2167,8 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
     evidence against it. A change no cycle runs (tests only) is not put on probation."""
     if not any(map(_runtime, files)):
         log(f"{name}: change {commit[:8]} not on probation: no cycle runs {', '.join(files)}")
+        _probation_event(name, {"commit": commit, "files": files,
+                                "since": datetime.now().isoformat(timespec="seconds"), "trial": trial}, "not on probation")
         return
     js = judgments_for_stats(name)
     recent = _values([j for j in js if by_current_judge(j)])[-PROBATION_CYCLES:]
@@ -2070,6 +2183,7 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
     open_ = json.loads(p.read_text()) if p.exists() else []
     open_.append(entry)
     p.write_text(json.dumps(open_, indent=1))
+    _probation_event(name, entry, "started")
     log(f"{name}: change {commit[:8]} on probation (baseline {entry['baseline']}, n={len(recent)})")
 
 
@@ -2224,6 +2338,7 @@ def check_probation(name: str) -> None:
             still.append(entry)
             continue
         if v["keep"]:
+            _probation_event(name, entry, "passed" if "rate" in v else "kept, not judged")
             continue
         entry["failed"] = v
         why = restore_change(name, entry)
@@ -2243,6 +2358,7 @@ def check_probation(name: str) -> None:
                         if (entry.get("trial") or {}).get("verdict") == "worse" else
                         f"chance alone gives a drop that large {v['p']:.0%} of the time. ")
                      + "Only these files were restored: my memory, journal and self files are as they were.")
+        _probation_event(name, entry, "reverted")
         log(f"{name}: probation {c} failed ({v['rate']:.2f} < {v['base']:.2f}): reverted — restored "
             f"{', '.join(files)} to {c}^")
     p.write_text(json.dumps(still, indent=1))
@@ -2253,8 +2369,11 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    from . import judge_probe, tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    from . import claimlint, judge_probe, tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    # claim_lint: model-free checks of what the cycle claimed against its tool log, on every cycle, before the page
+    # is written, so a finding stands at its head for the next cycle (not in a sampled verdict after the next sleep)
     for label, step in (("judge_pending", judge_pending), ("judge_catch", judge_probe.run), ("score_expectations", tom.score),
+                        ("claim_lint", claimlint.run),
                         ("write_stats", write_stats), ("check_probation", check_probation)):
         try:
             done[label] = step(name)
