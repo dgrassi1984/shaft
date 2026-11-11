@@ -844,7 +844,34 @@ def stats_lines(name: str) -> list[str]:
         lines.append(f"- {cat}: **{now:.1f}** (mean of the last 3 runs, {len(inst)} items)"
                      + (f"; control {c:.1f}" if c is not None else "")
                      + (f"; first run in this era {first:.1f}" if any(len(v) > 1 for v in inst.values()) else ""))
+        if cat == "recall" and (by_age := recall_by_age(name, mine)):
+            lines.append("  - " + by_age)
     return lines + [""]
+
+
+RECALL_OLD_DAYS = 14   # where "old" starts when recall is read by the age of what was asked about
+
+
+def recall_by_age(name: str, rows: list[dict]) -> str:
+    """Recall read apart for journal entries under and over RECALL_OLD_DAYS old when they were asked about: whether
+    old knowledge is lost, or only the recent is kept. The age is the exam's time minus the entry's; nothing of the
+    question is shown. '' when the entries' dates are not known."""
+    entries = {i["id"]: i.get("entry") for i in load_items(name) if i["category"] == "recall"}
+    groups: dict[str, list[float]] = {"under": [], "over": []}
+    for r in rows:
+        if r.get("category") != "recall" or r.get("arm") != "instance" or r.get("score") is None:
+            continue
+        try:
+            age = datetime.fromisoformat(r["at"]) - datetime.fromisoformat(str(entries.get(r["item"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        groups["over" if age >= timedelta(days=RECALL_OLD_DAYS) else "under"].append(r["score"])
+    if not groups["under"] and not groups["over"]:
+        return ""
+    part = lambda key, label: (f"{label} {sum(groups[key]) / len(groups[key]):.1f} (n={len(groups[key])})"   # noqa: E731
+                               if groups[key] else f"{label} no answer yet")
+    return (f"recall by the age of what was asked: {part('under', f'under {RECALL_OLD_DAYS} days old')}; "
+            f"{part('over', f'{RECALL_OLD_DAYS} days or older')}")
 
 
 # What each self-knowledge truth is about, in words: all that a miss tells the instance. Never the item, its
