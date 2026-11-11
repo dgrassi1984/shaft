@@ -178,7 +178,7 @@ def setup(base: Path, port: int):
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_wake",
-                                side_effect=lambda n, now=None: _state(base).get(n, {}).get("next_check", "never")),
+                                side_effect=lambda n, now=None, interval=None: _state(base).get(n, {}).get("next_check", "never")),
               mock.patch.object(autonomy, "event_wake", lambda *a, **k: None),
               mock.patch.object(core, "INSTANCES", inst), mock.patch.object(messages, "INSTANCES", inst),
               mock.patch.object(commitments, "INSTANCES", inst), mock.patch.object(metrics, "INSTANCES", inst),
