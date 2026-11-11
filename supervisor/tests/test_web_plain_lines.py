@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import panel, web_alerts, web_chat, web_md, web_pages, web_views
+from supervisor import messages, panel, web_alerts, web_chat, web_md, web_pages, web_views
 
 CSS = re.sub(r"/\*.*?\*/", "", (Path(__file__).resolve().parents[1] / "web_static" / "web.css").read_text(), flags=re.S)
 REPLY = "```python\nx = 1\n```\n\n## The **plan**: `make` it\nmore"
@@ -29,12 +29,17 @@ class SummariesTest(unittest.TestCase):
     def setUp(self):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-lines-"))
         self.addCleanup(shutil.rmtree, self.sup, True)
+        self.rows = []
+        history = mock.patch.object(messages, "history", side_effect=lambda: self.rows)
+        history.start()
+        self.addCleanup(history.stop)
         p = mock.patch.object(web_chat, "SUP_DIR", self.sup)
         p.start()
         self.addCleanup(p.stop)
 
     def chat(self, content: str) -> dict:
-        chat = {"id": "web-0123456789abcdef", "instance": "wisp", "created": "2026-10-25T10:00:00", "state": "idle",
+        """Since 2026-11-11 the instance row summarizes Main, so seed its own conversation."""
+        chat = {"id": "web-0123456789abcdef", "instance": "wisp", "kind": "from", "created": "2026-10-25T10:00:00", "state": "idle",
                 "turns": [{"role": "user", "content": "q", "ts": "2026-10-25T10:00:00"},
                           {"role": "assistant", "content": content, "ts": "2026-10-25T10:00:05"}], "reply": None}
         web_chat.save(chat)
@@ -47,11 +52,13 @@ class SummariesTest(unittest.TestCase):
         self.assertIn("Finished the smoke reply, see the plan &lt;b&gt;", rail)        # escaped once, as text
         sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "read": False,
                 "text": "## Question: **which** one?"}
+        self.rows = [dict(sent, talk=None)]
         self.assertEqual(web_chat.summary("wisp", [sent])["line"], "Question: which one?")
 
     def test_rail_lines_cut_at_80_characters_end_in_an_ellipsis(self):
         for count in (79, 80, 81):
             with self.subTest(count=count):
+                self.rows = []
                 text = "x" * count
                 expected = "x" * min(count, 80) + ("…" if count > 80 else "")
                 chat = self.chat(text)
@@ -60,12 +67,13 @@ class SummariesTest(unittest.TestCase):
                 web_chat.save(chat)
                 self.assertEqual(web_chat.summary("wisp")["line"], ("you: " + text)[:80] + "…")
                 self.assertEqual(web_chat.excerpt({"turns": [{"role": "user", "content": text}]}), (expected, 1))
-                sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "read": False, "text": text}
+                sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "read": False, "text": text}
+                self.rows = [dict(sent, talk=None)]
                 self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
-                chat["cleared"] = "2026-10-25T10:30:00"
-                web_chat.save(chat)
+                with self.assertRaisesRegex(web_chat.Refused, "From is not cleared"):
+                    web_chat.clear("wisp", "from")
                 self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
-                with mock.patch.object(web_chat, "chats", return_value=[]):
+                with mock.patch.object(web_chat, "from_chat", return_value=None):
                     self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
 
     def test_a_push_says_it_as_text(self):

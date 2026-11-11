@@ -47,21 +47,21 @@ class LiveActivityTest(ChatRoutesTest):
         """W12: the reply's activity was saved every second inside the feed, so its ETag changed on every 1.5 s poll —
         the whole conversation rendered and sent again each time (~8 MB for a 2-minute reply in a 50-turn chat)."""
         self.replying(["read notes/a.md"])
-        first = self.get("/fragment/chat/wisp")
+        first = self.get("/fragment/chat/wisp?id=web-0123456789abcdef")
         self.assertEqual(first.status, 200)
         self.assertNotIn(b"read notes/a.md", first.body)                         # not in the feed
         self.assertIn(b'data-poll="/fragment/chat/wisp/live?id=web-0123456789abcdef"', first.body)
-        live = self.get("/fragment/chat/wisp/live")
+        live = self.get("/fragment/chat/wisp/live?id=web-0123456789abcdef")
         self.assertIn(b"read notes/a.md", live.body)
         chat = web_chat.load("web-0123456789abcdef")
         chat["reply"]["activity"].append("wrote notes/docs/plan.md")
         web_chat.save(chat)
-        again = self.get("/fragment/chat/wisp", headers={"if-none-match": first.headers["ETag"]})
+        again = self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"if-none-match": first.headers["ETag"]})
         self.assertEqual(again.status, 304)                                      # was 200 with the whole feed
-        self.assertIn(b"wrote notes/docs/plan.md", self.get("/fragment/chat/wisp/live").body)
+        self.assertIn(b"wrote notes/docs/plan.md", self.get("/fragment/chat/wisp/live?id=web-0123456789abcdef").body)
         chat["state"], chat["reply"] = "idle", None                              # the reply ended
         web_chat.save(chat)
-        self.assertEqual(self.get("/fragment/chat/wisp/live").body, b"")
+        self.assertEqual(self.get("/fragment/chat/wisp/live?id=web-0123456789abcdef").body, b"")
 
     def test_w12_an_earlier_chat_keeps_its_activity_inline(self):
         chat = self.replying(["x"])
@@ -141,17 +141,22 @@ class RailTest(ChatRoutesTest):
     def test_w8_a_message_it_sent_lights_the_rail(self):
         """W8: summary()'s `last` was the last reply only, so a send_message card in the chat never marked it unread."""
         chat = self.replying([])
-        chat.update(state="idle", reply=None)
+        chat.update(state="idle", reply=None, kind="from")
         chat["turns"].append({"role": "assistant", "content": "done", "ts": "2026-10-24T10:01:00"})
         web_chat.save(chat)
         sent = {"ts": "2026-10-24T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "text": "A question?\nmore",
                 "read": False}
         older = {**sent, "ts": "2026-10-24T09:00:00", "file": "o.md", "text": "before the chat"}
+        history = mock.patch.object(messages, "history", return_value=[dict(older, talk=None), dict(sent, talk=None)])
+        reader = history.start()
+        self.addCleanup(history.stop)
         s = web_chat.summary("wisp", [older, sent])
         self.assertEqual((s["last"], s["line"]), ("2026-10-24T11:00:00", "A question?"))
-        self.assertEqual(web_chat.summary("wisp", [older])["last"], "2026-10-24T10:01:00")   # before it: not counted
-        chat["cleared"] = "2026-10-24T10:30:00"
-        web_chat.save(chat)
+        reader.return_value = [dict(older, talk=None)]
+        self.assertEqual(web_chat.summary("wisp", [older])["last"], "2026-10-24T10:01:00")   # the newer Main reply wins
+        reader.return_value = [dict(older, talk=None), dict(sent, talk=None)]
+        with self.assertRaisesRegex(web_chat.Refused, "From is not cleared"):
+            web_chat.clear("wisp", "from")
         self.assertEqual(web_chat.summary("wisp", [older, sent]),
                          {"line": "A question?", "last": "2026-10-24T11:00:00", "last_count": 1})
         rail = self.get("/fragment/rail?c=i:wisp")
@@ -162,31 +167,31 @@ class WatchingTest(ChatRoutesTest):
     def test_m10_covered_feed_does_not_watch_but_still_renders(self):
         """M10: a feed poll behind a covering sheet renewed push suppression."""
         self.replying([])
-        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1000"})
-        self.assertTrue(web_chat.watchers("wisp"))
-        covered = self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2000", "x-shaft-watching": "0"})
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "1000"})
+        self.assertTrue(web_chat.watchers("wisp", cid="web-0123456789abcdef"))
+        covered = self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "2000", "x-shaft-watching": "0"})
         self.assertEqual(covered.status, 200)
         self.assertIn(b"hi", covered.body)
-        self.assertEqual(web_chat.watchers("wisp"), set())
-        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1500"})  # an older poll arriving late
-        self.assertEqual(web_chat.watchers("wisp"), set())
-        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2500"})  # sheet closed
-        self.assertTrue(web_chat.watchers("wisp"))
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), set())
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "1500"})  # an older poll arriving late
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), set())
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "2500"})  # sheet closed
+        self.assertTrue(web_chat.watchers("wisp", cid="web-0123456789abcdef"))
 
     def test_w9_each_device_watches_for_itself_and_says_when_it_goes(self):
         """W9: one desktop tab on wisp's chat silenced every push to the phone; a phone that locked stayed watching
         for 6 s more. The feed's poll marks only the device asking, and ?away=1 ends it."""
         self.replying([])
         laptop, phone = self.cookie, self.paired()
-        self.assertEqual(self.get("/fragment/chat/wisp", cookie=laptop).status, 200)
-        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
-        self.get("/fragment/chat/wisp", cookie=phone)
-        self.assertEqual(len(web_chat.watchers("wisp")), 2)
-        away = self.get("/fragment/chat/wisp?away=1", cookie=phone)
+        self.assertEqual(self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=laptop).status, 200)
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), {web.device_from_cookie(laptop)[0]})
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=phone)
+        self.assertEqual(len(web_chat.watchers("wisp", cid="web-0123456789abcdef")), 2)
+        away = self.get("/fragment/chat/wisp?id=web-0123456789abcdef&away=1", cookie=phone)
         self.assertEqual((away.status, away.body), (204, b""))
-        self.assertEqual(web_chat.watchers("wisp"), {web.device_from_cookie(laptop)[0]})
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), {web.device_from_cookie(laptop)[0]})
         self.get("/fragment/chat/wisp?id=web-0123456789abcdef", cookie=phone)    # the selected open thread
-        self.assertEqual(len(web_chat.watchers("wisp")), 2)
+        self.assertEqual(len(web_chat.watchers("wisp", cid="web-0123456789abcdef")), 2)
 
 
 class AwayOrderTest(ChatRoutesTest):
@@ -196,13 +201,13 @@ class AwayOrderTest(ChatRoutesTest):
         the away say when the page sent them (X-Shaft-At, &at=); a poll sent before the latest away is not watching."""
         self.replying([])
         dev = web.device_from_cookie(self.cookie)[0]
-        self.assertEqual(self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1000"}).status, 200)
-        self.assertEqual(web_chat.watchers("wisp"), {dev})
-        self.assertEqual(self.get("/fragment/chat/wisp?away=1&at=2000").status, 204)
-        self.assertEqual(self.get("/fragment/chat/wisp", headers={"x-shaft-at": "1500"}).status, 200)   # late
-        self.assertEqual(web_chat.watchers("wisp"), set())
-        self.get("/fragment/chat/wisp", headers={"x-shaft-at": "2500"})                               # back
-        self.assertEqual(web_chat.watchers("wisp"), {dev})
+        self.assertEqual(self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "1000"}).status, 200)
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), {dev})
+        self.assertEqual(self.get("/fragment/chat/wisp?id=web-0123456789abcdef&away=1&at=2000").status, 204)
+        self.assertEqual(self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "1500"}).status, 200)   # late
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), set())
+        self.get("/fragment/chat/wisp?id=web-0123456789abcdef", headers={"x-shaft-at": "2500"})                               # back
+        self.assertEqual(web_chat.watchers("wisp", cid="web-0123456789abcdef"), {dev})
 
 
 class PushRoutesTest(ChatRoutesTest):

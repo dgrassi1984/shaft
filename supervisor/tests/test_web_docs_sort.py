@@ -154,8 +154,8 @@ class DocsSortRouteTest(test_web.WebTest):
                            {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
                             "docs": [{"path": "mid.md", "created": True}]}], state="idle")
         web_chat.save(chat)
-        self.assertIn('data-doc="mid.md"', self.req("/i/wisp/chat", cookie=self.cookie).body.decode())  # as before
-        page = self.req("/i/wisp/chat?list=1&sort=name", cookie=self.cookie).body.decode()
+        self.assertIn('data-doc="mid.md"', self.req(f"/i/wisp/chat?id={chat['id']}", cookie=self.cookie).body.decode())
+        page = self.req(f"/i/wisp/chat?id={chat['id']}&list=1&sort=name", cookie=self.cookie).body.decode()
         self.assertNotIn('class="docview"', page)
         panel = page.split('id="docs"')[1]                                         # past the reply's own mid.md card
         self.assertEqual(order(panel, ("zeta.md", "alpha.md", "mid.md")), ["alpha.md", "mid.md", "zeta.md"])
