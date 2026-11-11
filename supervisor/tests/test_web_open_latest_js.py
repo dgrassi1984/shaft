@@ -63,22 +63,20 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wi
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
 const observers = [];
 class ResizeObserver { constructor(f) { this.f = f; this.seen = []; observers.push(this); } observe(n) { this.seen.push(n); } }
+const queued = [];
 let clock = 1e12;                                    // Date.now, moved on by hand: a gesture counts for 1.5 s
 class FakeDate extends Date { static now() { return clock; } }
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver, Date: FakeDate,
   window: { addEventListener() {}, innerHeight: 0, scrollY: 0, scrollTo() {}, getSelection: () => ({ isCollapsed: true }) },
   localStorage: { getItem: k => k === "shaft.seen" ? stored : null, setItem(k, v) { if (k === "shaft.seen") stored = v; } },
-  setTimeout: () => 1, clearTimeout() {}, setInterval() {}, AbortController,
+  setTimeout: (f, ms) => {if (ms === 150) queued.push(f); return 1;}, clearTimeout() {}, setInterval() {}, AbortController, URLSearchParams,
   CustomEvent: class { constructor(type) { this.type = type; } }, fetch: () => new Promise(() => {}) });
 for (const f of handlers.DOMContentLoaded || []) f();
 const end = () => box.scrollHeight - box.clientHeight;
 assert.equal(box.scrollTop, end(), "opened at the last message");
 assert.equal(newbelow.hidden, true, "nothing new below the last message");
-// marks are per thread now; a mark from before threads ("*") still counts for the thread until it is seen again
-if (input.seen !== null && !input.archived) {
-  const w = JSON.parse(stored).wisp, mark = typeof w === "string" ? w : [w.current || "", w["*"] || ""].sort()[1];
-  assert.equal(mark, input.after, "what is on screen is seen");
-}
+// Visible replies queue a server write; opening never changes legacy browser storage.
+assert.equal(queued.length > 0, !input.archived && input.after === input.latest);
 // Pinned: the feed's box and the feed itself are watched; growth after the jump goes back to the end ...
 const pin = observers.find(o => o.seen.includes(box) && o.seen.includes(feed));
 assert.ok(pin, "the feed and its box are watched for size changes");
@@ -123,7 +121,7 @@ assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");
 class OpenAtLastMessageTest(unittest.TestCase):
     def opens(self, seen, archived=False, after=LATEST, height=250):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
-            "html": feed(archived), "seen": seen, "archived": archived, "after": after, "height": height})],
+            "html": feed(archived), "seen": seen, "latest": LATEST, "archived": archived, "after": after, "height": height})],
             capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -160,21 +160,25 @@ THREAD_STATES = {"idle": "idle", "replying": "replying", "waiting": "waiting for
 def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "", from_state: str = "idle",
                 from_waiting: str | None = None) -> Html:
     """Under the instance being viewed: its open threads (title, a dot for idle / replying / waiting, the unread mark
-    web.js sets from data-last), then From <instance>, then + New thread. `on`: the thread on screen (an id, "from")."""
+    web.js sets from server unread attributes), then From <instance>, then + New thread. `on`: the thread on screen (an id, "from")."""
     from .web_actions import post_attrs
+    from . import web_seen
+    unread = web_seen.unread_conversations("", n)
     rows = []
     for t in threads:
         label = t.get("waiting") or THREAD_STATES[t["state"]]
         rows.append(h('<a href="/i/{n}/chat?id={id}" class="thread{on}" data-thread-of="{n}" data-seen-key="{id}" '
-                      'data-last="{last}"{cur}><span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}">'
+                      'data-last="{last}" data-unread="{unread}"{cur}><span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}">'
                       '</span><span class="ttl">{title}</span></a>', n=n, id=t["id"], last=t.get("last") or "",
+                      unread=int(unread.get(t["id"], False)),
                       on=" on" if on == t["id"] else "", cur=Html(' aria-current="page"') if on == t["id"] else "",
                       s=t["state"], label=label, title=t["title"]))
     dot = (h('<span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}"></span>', s=from_state,
              label=from_waiting or THREAD_STATES[from_state])
            if from_state != "idle" else Html('<span class="tdot t-from" aria-hidden="true"></span>'))
     rows.append(h('<a href="/i/{n}/from" class="thread from{on}" data-thread-of="{n}" data-seen-key="from" '
-                  'data-last="{last}"{cur}>{dot}<span class="ttl">From {n}</span></a>', n=n, last=from_last or "",
+                  'data-last="{last}" data-unread="{unread}"{cur}>{dot}<span class="ttl">From {n}</span></a>', n=n, last=from_last or "",
+                  unread=int(unread.get("from", False)),
                   on=" on" if on == "from" else "", cur=Html(' aria-current="page"') if on == "from" else "", dot=dot))
     rows.append(h('<form class="act newthread railnew" data-post="/chat/{n}/new" data-after="open-thread"{a}>'
                   '<button type="submit" class="small" aria-label="New thread with {n}" data-focus="rail-new">'
@@ -186,14 +190,16 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
          thread: str = "") -> Html:
     """The left rail: a chat per instance first, then the pages used now and then. Without `snap`
     (a page's first render) it lists the names; web.js refreshes it from /fragment/rail at once, with each instance's
-    state, its last line and when it last answered (data-last: the browser marks a reply it has not seen).
+    state, its last line, and server unread attributes.
     With threads (`chats[n]["threads"]`, web._rail_chats): the instance's data-lasts holds when the instance last wrote
-    in each open thread and in From (its unread mark is any of them), and the instance being viewed lists them
+    in each open thread and in From (used only to migrate browser marks), and the instance being viewed lists them
     (thread_rows; `thread`: the one on screen)."""
+    from . import web_seen
     live = {i["name"]: i for i in (snap or {}).get("instances", [])}
     items = []
     for n in names:
         i, c = live.get(n), (chats or {}).get(n) or {}
+        unread = web_seen.unread_conversations("", n) if c.get("threads") is not None else {}
         dot = h('<span class="dot st-{s}" title="{t}" role="img" aria-label="{t}"></span>', s=state_class(i["state"]),
                 t=i["state"]) if i else \
             Html('<span class="dot"></span>')
@@ -202,9 +208,11 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
         threads = c.get("threads")
         lasts = ({**{t["id"]: t.get("last") or "" for t in threads}, "from": c.get("from_last") or ""}
                  if threads is not None else None)
-        items.append(h('<a href="/i/{n}/chat" class="inst {on}" data-inst="{n}" data-last="{last}"{lasts}>{dot}'
+        items.append(h('<a href="/i/{n}/chat" class="inst {on}" data-inst="{n}" data-last="{last}" '
+                       'data-unread="{unread}" data-unread-main="{main}" data-unread-threads="{count}"{lasts}>{dot}'
                        '<span class="who">{n}</span>{line}</a>', n=n, on="on" if current == f"i:{n}" else "",
-                       last=c.get("last", ""), dot=dot, line=line,
+                       last=c.get("last", ""), dot=dot, line=line, unread=int(any(unread.values())),
+                       main=int(unread.get("from", False)), count=sum(v for k, v in unread.items() if k != "from"),
                        lasts=h(' data-lasts="{j}"', j=json.dumps(lasts, separators=(",", ":"))) if lasts is not None
                        else ""))
         if threads is not None and current == f"i:{n}":

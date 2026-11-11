@@ -12,6 +12,8 @@
       "replying": false,
       "threads": 2,
       "unread": true,
+      "unread_main": true,
+      "unread_threads": 2,
       "next_cycle": "for wisp's next cycle, which this starts now",
       "voice_mode": "off"
     }
