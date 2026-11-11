@@ -61,7 +61,7 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
     /// Spoken in voice mode and transcribed on the device: sent as `voice=1` (§6). False for a typed message.
     public var voice: Bool
     /// The conversation it was written in (`ChatRef.draftKey`): a thread's id, sent as `cid` in every mode; `"from"`
-    /// for the From feed (a Next-cycle message, sent without one); nil for the current chat (a server before threads, or
+    /// for the From conversation; nil for the current chat (a server before threads, or
     /// a send that lets the server pick the most recently active thread).
     public var cid: String?
 
@@ -81,12 +81,9 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
         case mid, text, mode, quotes, retryOf, files, voice, cid
     }
 
-    /// The `cid` the send carries (§6): the thread it was written in. With `now` and `queue` the reply comes there;
-    /// with `background` the Next-cycle note shows there and its answer, written later in a cycle, comes there (a
-    /// thread that has ended by then sends it to From). The From feed is no thread: none, and the note stays in From.
-    /// A server before thread replies ignores `cid` with `background`.
+    /// The conversation id in every send mode, including `"from"`.
     public var sentCid: String? {
-        guard let cid, !cid.isEmpty, cid != ChatRef.fromID else { return nil }
+        guard let cid, !cid.isEmpty else { return nil }
         return cid
     }
 
@@ -248,6 +245,14 @@ public final class APIClient: Sendable {
         var body = ["mid": mid]
         if let cid { body["cid"] = cid }
         return try await post("/app/v1/chat/\(instance)/unqueue", json: body)
+    }
+
+    /// Cancel a next-cycle note by its message id, or its file on older notes.
+    public func uncycle(_ instance: String, mid: String? = nil, file: String? = nil) async throws -> SaidResponse {
+        var body: [String: String] = [:]
+        if let mid { body["mid"] = mid }
+        else if let file { body["file"] = file }
+        return try await post("/app/v1/chat/\(instance)/uncycle", json: body)
     }
 
     public func stop(_ instance: String, cid: String) async throws -> SaidResponse {

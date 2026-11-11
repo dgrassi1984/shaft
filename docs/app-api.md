@@ -207,7 +207,9 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
 
 ### 3.1 `GET /app/v1/threads/<n>`
 
-Returns `{"threads": [...], "from": {"line": str, "last": timestamp or null, "unread": bool}}`.
+Returns `{"threads": [...], "from": {"line": str, "last": timestamp or null, "unread": bool, "state": str,
+"waiting": str or null}}` — From's `state` and `waiting` are the From conversation's, as a thread's (`idle` before its
+first message).
 Threads are open conversations, most recently active first. Each row has:
 
 | Field | Type | Meaning |
@@ -398,7 +400,9 @@ turn of it (key `b<file>`).
 | `ts` | timestamp | |
 | `text` | str | what the operator wrote (as `user.text`) |
 | `mid` | str or null | |
-| `read` | bool | false: waiting in its inbox ("⏾ next cycle · waiting"); true: a cycle has read it |
+| `read` | bool | false: waiting in its inbox; true: no longer in its inbox (check `cancelled` before showing "read") |
+| `cancelled` | timestamp or null | the operator cancelled this note before a run read it |
+| `cancellable` | bool | not cancelled, its inbox file still exists, and it is a composer note that did nothing when sent (not an answer to a quoted question, a comment's, a rating's or the supervisor's own); a running or paused cycle, or a reply, can still refuse cancellation |
 | `attachments` | list | `{name, bytes, image, text, url}` |
 | `comments` | list | `{id, doc}`: comments it carried |
 
@@ -552,11 +556,16 @@ A second later, only the streamed answer moved (`?since=41d07be2c95a8f13&live=c0
 
 ### 4.10 `GET /app/v1/from/<n>`
 
-Returns the From feed from `web_chat.from_feed`, serialized as the full feed in §4.2, with `chat: null`.
+Returns the From feed from `web_chat.from_feed`, serialized as the full feed in §4.2: From's messages and the turns of
+the From conversation, its running `reply`, `queued` and `can_stop` as a thread's. `chat` is null until the first
+message written in From, then the From conversation (`title` "From <n>"); `can_end` and `can_clear` are always false.
 Times and attachment URLs use the same serializer as thread feeds. This route returns a full snapshot;
-it does not long-poll. `watch=0` and `at` have the same meaning as for a thread feed, scoped to `cid: "from"`.
+it does not long-poll. `watch=0` and `at` have the same meaning as for a thread feed, scoped to `cid: "from"`;
+`all=1` returns every item (its last 80 otherwise, `earlier` counting the rest).
 Unknown instances return `404 not_found`.
-Send to this feed through `/app/v1/chat/<n>/send` with `mode=background` (§6).
+Write in From through `/app/v1/chat/<n>/send` with `cid: "from"` and any mode (§6): `now` and `queue` are answered in
+From now, `background` leaves a note for the next cycle that names the From conversation. Its answer `chat` is
+`"from"`. Stream, stop and unqueue take `cid: "from"` too; rename, end and clear refuse it (`409 refused`).
 Use `cid: "from"` for seen and away (§7.5, §7.6).
 
 ## 5. Earlier chats
@@ -590,7 +599,7 @@ The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multip
 
   | Field | Type | |
   |---|---|---|
-  | `cid` | str | optional open thread of `<n>` for `now` and `queue`; omitted or empty selects the most recently active open thread, or starts one. An unknown, foreign or ended thread answers `409 refused`. With `background`: the thread the note was written in — while open, the note shows there and its answer comes there; omitted, `"from"` or an ended thread: From |
+  | `cid` | str | optional open thread of `<n>` for `now` and `queue`; omitted or empty selects the most recently active open thread, or starts one. An unknown, foreign or ended thread answers `409 refused`. `"from"`: the From conversation (made on its first message). With `background`: the thread the note was written in — while open, the note shows there and its answer comes there; `"from"`: From, naming the From conversation; omitted or an ended thread: From |
   | `text` | str | what the operator wrote below the quotes; may be `""` |
   | `mid` | str | required: the message's id (§1.3). The same `mid` again answers as the first send did, without sending twice — also across `now`, `queue` and `background` |
   | `mode` | str | `now` (default): a new reply, or an interjection while one runs ("Send now"). `queue`: after the running reply (sent now when idle). `background`: to the inbox for its next cycle, no reply now |
@@ -733,6 +742,14 @@ All take JSON and answer `{"said": str}` unless said otherwise; a refused one an
 ### 7.1 `POST /app/v1/chat/<n>/unqueue`
 
 `{"mid": str, "cid"?: str}`: cancel a queued message in that open thread. Without `cid`, uses the most recently active open thread. `{"said": "queued message cancelled"}` (also when it had already gone).
+
+### 7.1.1 `POST /app/v1/chat/<n>/uncycle`
+
+`{"mid"?: str, "file"?: str}`: cancel a Next-cycle note by its page message ID or inbox file name.
+When both are present, `mid` selects the note. Returns `{"said": "next-cycle note cancelled"}` or
+`{"said": "already cancelled"}`. A running cycle or reply refuses cancellation with `409 refused`.
+A note whose inbox file is gone is also refused: "already read in a cycle: it can't be cancelled".
+The operator feeds keep the cancelled note; instance dialogue excludes it. Attachments remain stored.
 
 ### 7.2 `POST /app/v1/chat/<n>/stop`
 
@@ -1023,8 +1040,9 @@ The notification extension fetches by instance, preserves each fetched event's `
 or the From feed. If fetching fails, the payload still identifies the destination. Older builds ignore `cid`
 and open the shown chat. Legacy queued events without `cid` return null.
 A reply skips only devices watching that reply's thread. From messages skip only devices watching From.
-`web_alerts._cid_of_message` is the single mapping point for message talk ids. Until talk routing is integrated,
-every instance message uses `cid: "from"`, including a row with a non-null talk id.
+`web_alerts._cid_of_message` is the single mapping point for message talk ids: a row routed to a thread, or sent
+during one of its replies, opens that thread; everything else, including the From conversation's own, uses
+`cid: "from"`. A From reply's push uses `cid: "from"` and `/i/<n>/from`.
 
 It does not mark the device as watching, and it is a `GET` with an effect (it takes the events): only the bearer
 reaches it, so no other page can spend them.

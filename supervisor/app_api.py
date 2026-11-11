@@ -104,6 +104,8 @@ def to_json(model: dict) -> dict:
         out["chat"].update(created=stamp(out["chat"]["created"]), ended=stamp(out["chat"]["ended"]))
     for it in out["items"]:
         it["ts"] = stamp(it["ts"])
+        if it.get("cancelled"):             # a next-cycle note taken back: a time like any other (§1.6)
+            it["cancelled"] = stamp(it["cancelled"])
         for a in it.get("attachments", []):
             a["url"] = file_url(a.pop("path"))
         if (r := it.get("rating")) and r["sent"]:
@@ -191,7 +193,8 @@ def _login(req: Request) -> str:
 
 def _chat_of(name: str, cid: str) -> dict:
     from . import web_chat
-    chat = web_chat.load(cid) if isinstance(cid, str) else None
+    # "from": the From conversation (none until its first message)
+    chat = (web_chat.from_chat(name) if cid == web_chat.FROM else web_chat.load(cid)) if isinstance(cid, str) else None
     if not chat or chat.get("instance") != name:
         raise Refusal(404, "not_found", f"{name} has no chat {cid}.")
     return chat
@@ -235,7 +238,7 @@ def _instances(req: Request) -> Response:
         live, s = web._live(n), summaries[n]
         state = live.get("state") or "?"
         threads = web_chat.threads(n)
-        replying = any(c.get("state") == "replying" for c in threads)
+        replying = any(c.get("state") == "replying" for c in web_chat.open_chats(n))
         rows.append({"name": n, "state": state, "since": live.get("since") or "",
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
@@ -377,12 +380,14 @@ def _threads(req: Request, n: str) -> Response:
     return _json(200, {"threads": [
         {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
          "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
-         **preview(c["id"])} for c in chats], "from": preview("from")})
+         **preview(c["id"])} for c in chats],
+        "from": {**preview("from"), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
+                 "waiting": ((web_chat.from_chat(n) or {}).get("reply") or {}).get("waiting") or None}})
 
 
 def _from(req: Request, n: str) -> Response:
     from . import web_chat
-    model = web_chat.from_feed(n)
+    model = web_chat.from_feed(n, whole=req.query.get("all") == "1")       # all of From, as a thread's ?all=1
     at = web._page_ms(req.query.get("at"))
     (web_chat.unwatch if req.query.get("watch") == "0" else web_chat.watching)(
         n, req.device, at, cid="from")
@@ -466,7 +471,7 @@ def _send(req: Request, n: str) -> Response:
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
     reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
-    return _said(said, chat=(chat or {}).get("id"), file=None)
+    return _said(said, chat=web_chat.public_id(n, (chat or {}).get("id")), file=None)
 
 
 def _action(req: Request, n: str, act: str) -> Response:
@@ -476,6 +481,8 @@ def _action(req: Request, n: str, act: str) -> Response:
         if act == "new":
             chat = web_chat.new_thread(n, _login(req), title=_str(data, "title", ""))
             return _said("thread created", chat={"id": chat["id"], "title": web_chat.title(chat)})
+        if act == "uncycle":
+            return _said(web_chat.uncycle(n, _login(req), mid=_str(data, "mid", ""), file=_str(data, "file", "")))
         if act == "unqueue":
             cid = _str(data, "cid", "")
             if cid:
@@ -499,13 +506,13 @@ def _action(req: Request, n: str, act: str) -> Response:
             web_chat.unwatch(n, req.device, at, cid=cid)
             return _json(200, {"ok": True})
         cid = _str(data, "cid")
-        _chat_of(n, cid)
+        chat = _chat_of(n, cid)
         if act == "rename":
             return _said(web_chat.rename(n, cid, _str(data, "title")))
-        if act == "stop":
-            return _said(web_chat.stop(cid))
+        if act == "stop":                 # its relay is under the chat's id: "from" names the From conversation's
+            return _said(web_chat.stop(chat["id"]))
         if act == "end":
-            return _said(web_chat.end(cid))
+            return _said(web_chat.end(chat["id"]))
         return _said(web_chat.clear(n, cid))
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
@@ -1030,7 +1037,7 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}", {"GET": _feed}),
     (rf"/chat/{N}/send", {"POST": _send}),
     (rf"/chat/{N}/stream", {"GET": _stream}),
-    (rf"/chat/{N}/(?P<act>new|rename|unqueue|stop|end|clear|seen|away)", {"POST": _action}),
+    (rf"/chat/{N}/(?P<act>new|rename|unqueue|uncycle|stop|end|clear|seen|away)", {"POST": _action}),
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
     (rf"/threads/{N}", {"GET": _threads}),

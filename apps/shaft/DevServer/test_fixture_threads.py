@@ -51,12 +51,15 @@ class FixtureThreadRepliesTest(unittest.TestCase):
         return [i["text"] for i in self.request(path)["items"] if i["type"] == "later"]
 
     def background(self, text, cid=None):
-        fields = {"text": text, "mid": "test-" + str(time.monotonic_ns()), "mode": "background"}
+        return self.send(text, cid, "background")
+
+    def send(self, text, cid=None, mode="now", name="tundra"):
+        fields = {"text": text, "mid": "test-" + str(time.monotonic_ns()), "mode": mode}
         if cid is not None:
             fields["cid"] = cid
         body = "".join(f'--fixture\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
                        for k, v in fields.items()) + "--fixture--\r\n"
-        return self.request("/app/v1/chat/tundra/send", body=body.encode(),
+        return self.request(f"/app/v1/chat/{name}/send", body=body.encode(),
                             content_type="multipart/form-data; boundary=fixture")
 
     def test_the_cycle_answer_shows_in_its_thread_and_not_in_from(self):
@@ -80,6 +83,63 @@ class FixtureThreadRepliesTest(unittest.TestCase):
         self.assertNotIn("In the thread, for its next cycle", self.later("/app/v1/from/tundra"))
         self.assertIn("From From, for its next cycle", self.later("/app/v1/from/tundra"))
         self.assertNotIn("From From, for its next cycle", self.later(f"/app/v1/chat/tundra/{THREAD}"))
+
+    def test_from_answers_queues_and_stops_in_its_own_conversation(self):
+        path = "/app/v1/from/wisp"
+        sent = self.send("slow From conversation", cid="from", name="wisp")
+        self.assertEqual(sent["chat"], "from")
+        feed = self.request(path)
+        self.assertEqual(feed["chat"]["title"], "From wisp")
+        # Always finish the fixture worker before its temporary directory is removed, even on a failed assertion.
+        internal_id = feed["chat"]["id"]
+        def finish_reply():
+            relay = self.chat._relays.get(internal_id)
+            if relay:
+                relay.stop()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and self.chat.load(internal_id)["state"] == "replying":
+                time.sleep(0.05)
+        self.addCleanup(finish_reply)
+        self.assertIsNotNone(feed["reply"])
+        self.assertTrue(feed["can_stop"])
+        self.assertFalse(feed["can_end"])
+        self.assertFalse(feed["can_clear"])
+        self.assertTrue(any(i["type"] == "user" for i in feed["items"]))
+        row = self.request("/app/v1/threads/wisp")["from"]
+        self.assertIn(row["state"], ("replying", "waiting"))
+        self.assertIn("waiting", row)
+        queued = self.send("After this reply", cid="from", mode="queue", name="wisp")
+        self.assertEqual(queued["chat"], "from")
+        queued_item = self.request(path)["queued"][0]
+        self.request("/app/v1/chat/wisp/unqueue", json.dumps({"cid": "from", "mid": queued_item["mid"]}).encode())
+        self.assertEqual(self.request(path)["queued"], [])
+        self.request("/app/v1/chat/wisp/stop", b'{"cid":"from"}')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            feed = self.request(path)
+            if feed["reply"] is None:
+                break
+            time.sleep(0.05)
+        self.assertIsNone(feed["reply"])
+        self.assertTrue(any(i["type"] == "assistant" for i in feed["items"]))
+        self.assertFalse(any(t["title"] == "From wisp" for t in self.request("/app/v1/threads/wisp")["threads"]))
+
+    def test_next_cycle_notes_can_be_cancelled_in_thread_and_from(self):
+        thread_path = f"/app/v1/chat/tundra/{THREAD}"
+        legacy = next(i for i in self.request(thread_path)["items"] if i.get("file") == "seed-next-cycle-cancel.md")
+        self.assertIsNone(legacy["mid"])
+        self.request("/app/v1/chat/tundra/uncycle", json.dumps({"file": legacy["file"]}).encode())
+        cancelled = next(i for i in self.request(thread_path)["items"] if i.get("file") == legacy["file"])
+        self.assertIsNotNone(cancelled["cancelled"])
+        for cid, path in ((THREAD, f"/app/v1/chat/tundra/{THREAD}"), ("from", "/app/v1/from/tundra")):
+            sent = self.background("Cancel this next-cycle note " + cid, cid=cid)
+            note = next(i for i in self.request(path)["items"] if i.get("file") == sent["file"])
+            self.assertTrue(note["cancellable"])
+            self.assertIsNone(note["cancelled"])
+            self.request("/app/v1/chat/tundra/uncycle", json.dumps({"mid": note["mid"]}).encode())
+            cancelled = next(i for i in self.request(path)["items"] if i.get("file") == sent["file"])
+            self.assertFalse(cancelled["cancellable"])
+            self.assertIsNotNone(cancelled["cancelled"])
 
 
 if __name__ == "__main__":

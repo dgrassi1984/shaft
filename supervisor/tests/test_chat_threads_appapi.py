@@ -39,7 +39,9 @@ class ThreadsAppTest(AppTest):
             {"id": "web-a", "title": "Topic A", "created": app_api.stamp(self.a["created"]),
              "last": app_api.stamp("2026-11-03T14:00:00"), "line": "Answer A", "state": "idle",
              "waiting": None, "unread": True}],
-            "from": {"line": "From a cycle", "last": app_api.stamp("2026-11-03T14:02:00"), "unread": True}})
+            # From's state is its conversation's: idle before its first message (2026-11-11)
+            "from": {"line": "From a cycle", "last": app_api.stamp("2026-11-03T14:02:00"), "unread": True,
+                     "state": "idle", "waiting": None}})
         rail = self.get("/app/v1/instances")
         self.assertEqual((rail["instances"][0]["threads"], rail["instances"][0]["replying"], rail["badge"]), (2, True, 1))
 

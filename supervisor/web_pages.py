@@ -157,7 +157,8 @@ MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/prop
 THREAD_STATES = {"idle": "idle", "replying": "replying", "waiting": "waiting for its turn"}
 
 
-def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "") -> Html:
+def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "", from_state: str = "idle",
+                from_waiting: str | None = None) -> Html:
     """Under the instance being viewed: its open threads (title, a dot for idle / replying / waiting, the unread mark
     web.js sets from data-last), then From <instance>, then + New thread. `on`: the thread on screen (an id, "from")."""
     from .web_actions import post_attrs
@@ -169,10 +170,12 @@ def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "") -> Ht
                       '</span><span class="ttl">{title}</span></a>', n=n, id=t["id"], last=t.get("last") or "",
                       on=" on" if on == t["id"] else "", cur=Html(' aria-current="page"') if on == t["id"] else "",
                       s=t["state"], label=label, title=t["title"]))
+    dot = (h('<span class="tdot t-{s}" title="{label}" role="img" aria-label="{label}"></span>', s=from_state,
+             label=from_waiting or THREAD_STATES[from_state])
+           if from_state != "idle" else Html('<span class="tdot t-from" aria-hidden="true"></span>'))
     rows.append(h('<a href="/i/{n}/from" class="thread from{on}" data-thread-of="{n}" data-seen-key="from" '
-                  'data-last="{last}"{cur}><span class="tdot t-from" aria-hidden="true"></span>'
-                  '<span class="ttl">From {n}</span></a>', n=n, last=from_last or "", on=" on" if on == "from" else "",
-                  cur=Html(' aria-current="page"') if on == "from" else ""))
+                  'data-last="{last}"{cur}>{dot}<span class="ttl">From {n}</span></a>', n=n, last=from_last or "",
+                  on=" on" if on == "from" else "", cur=Html(' aria-current="page"') if on == "from" else "", dot=dot))
     rows.append(h('<form class="act newthread railnew" data-post="/chat/{n}/new" data-after="open-thread"{a}>'
                   '<button type="submit" class="small" aria-label="New thread with {n}" data-focus="rail-new">'
                   '+ New thread</button></form>', n=n, a=post_attrs("the chats")))
@@ -205,7 +208,8 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
                        lasts=h(' data-lasts="{j}"', j=json.dumps(lasts, separators=(",", ":"))) if lasts is not None
                        else ""))
         if threads is not None and current == f"i:{n}":
-            items.append(thread_rows(n, threads, c.get("from_last") or "", thread))
+            items.append(thread_rows(n, threads, c.get("from_last") or "", thread, c.get("from_state") or "idle",
+                                     c.get("from_waiting")))
     alerts = len((snap or {}).get("alerts") or [])
     manage = [h('<a href="{href}" class="{on}">{label}{badge}</a>', href=href, label=label,
                 on="on" if current in (href, href.strip("/")) else "",

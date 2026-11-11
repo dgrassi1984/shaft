@@ -718,11 +718,11 @@ class OperatorSetTest(unittest.TestCase):
                      {"role": "assistant", "ts": "2026-11-05T10:42:00", "content": "Lo faccio nel prossimo ciclo"},
                      {"role": "user", "ts": "2026-11-05T13:00:00", "content": "after the cycle began"}]},
                  {"instance": "tundra", "turns": [{"role": "user", "ts": "2026-11-03T09:00:00", "content": "too old"}]}]
-        with mock.patch("supervisor.web_chat.chats", return_value=chats):
+        with mock.patch("supervisor.web_chat._all_chats", return_value=chats):
             got = bakeoff._asked("tundra", "2026-11-05T12:33:26", lambda t: t)
         self.assertEqual([(t["role"], t["text"]) for t in got],
                          [("you", "Prepara la risposta a Concordia"), ("the instance", "Lo faccio nel prossimo ciclo")])
-        with mock.patch("supervisor.web_chat.chats", return_value=chats[1:]):
+        with mock.patch("supervisor.web_chat._all_chats", return_value=chats[1:]):
             self.assertEqual(bakeoff._asked("tundra", "2026-11-05T12:33:26", lambda t: t), [])
 
 

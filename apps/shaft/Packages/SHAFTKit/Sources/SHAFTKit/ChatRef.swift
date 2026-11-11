@@ -11,7 +11,7 @@ public enum ChatRef: Hashable, Sendable {
     case current
     /// An open thread (`GET /app/v1/chat/<n>/<cid>`).
     case thread(String)
-    /// The From *instance* feed (`GET /app/v1/from/<n>`): writing there is for its next cycle.
+    /// The From *instance* feed (`GET /app/v1/from/<n>`): its own conversation and messages from cycles.
     case from
     /// An ended chat, read-only (§5).
     case earlier(String)

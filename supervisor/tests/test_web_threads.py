@@ -146,7 +146,9 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('data-post="/chat/wisp/new"', header)              # a new thread is always one tap away
 
     # -- From <instance> ---------------------------------------------------------------------------------------------
-    def test_from_page_shows_the_feed_and_sends_only_for_the_next_cycle(self):
+    def test_from_page_shows_the_feed_and_sends_now_or_for_the_next_cycle(self):
+        """From's composer is a thread's (2026-11-11): Send is answered now in the From conversation, Next cycle
+        stays behind the arrow; both name From (cid=from). It used to force every message to the next cycle."""
         self.thread("A", [], talks=["talk-a"])
         self.log(ts="2026-11-10T10:00:00", **{"from": "wisp"}, to="operator", file="m1.md", text="From a <cycle>")
         self.log(ts="2026-11-10T10:01:00", **{"from": "wisp"}, to="operator", file="m2.md", text="In A", talk="talk-a")
@@ -160,24 +162,28 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn("for later", page)
         self.assertNotIn("In A", page)                                   # sent in thread A: shown there only
         self.assertIn('data-seen-key="from" data-sent-at="2026-11-10T10:00:00"', page)
-        composer = re.search(r'<form class="composer fromcomposer".*?</form>', page, re.S)[0]
+        composer = re.search(r'<form class="composer".*?</form>', page, re.S)[0]
         self.assertIn('data-post="/chat/wisp/send"', composer)
-        self.assertIn('<input type="hidden" name="background" value="1" data-always="1">', composer)
+        self.assertIn('<input type="hidden" name="background" value="">', composer)
+        self.assertNotIn('data-always="1"', composer)
         self.assertIn('data-draft="wisp/from"', composer)
-        self.assertNotIn('name="cid"', composer)
-        self.assertNotIn('name="queue"', composer)
+        self.assertIn('<input type="hidden" name="cid" value="from">', composer)
+        self.assertIn('name="queue"', composer)
         self.assertIn('<span class="threadtitle">From wisp</span>', page)
         self.assertNotIn("data-show-docs", page)                         # no documents panel on From
         self.assertNotIn("/chat/wisp/clear", page)
         with mock.patch.object(web_chat, "background", return_value=("", "kept for its next cycle")) as bg, \
-                mock.patch.object(web_chat, "send") as send:
-            body = (b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nnote\r\n'
-                    b'--B\r\nContent-Disposition: form-data; name="background"\r\n\r\n1\r\n--B--\r\n')
-            r = self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body,
-                         headers={**self.headers, "content-type": "multipart/form-data; boundary=B"})
-        self.assertEqual(r.status, 200, r.body)
-        bg.assert_called_once_with("wisp", ME, "note", [], mid="", cid="")   # From names no thread: it stays in From
-        send.assert_not_called()
+                mock.patch.object(web_chat, "send", return_value=({}, "sent")) as send:
+            for background in ("1", ""):
+                body = (b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nnote\r\n'
+                        b'--B\r\nContent-Disposition: form-data; name="cid"\r\n\r\nfrom\r\n'
+                        b'--B\r\nContent-Disposition: form-data; name="background"\r\n\r\n'
+                        + background.encode() + b'\r\n--B--\r\n')
+                r = self.req("/chat/wisp/send", "POST", cookie=self.cookie, body=body,
+                             headers={**self.headers, "content-type": "multipart/form-data; boundary=B"})
+                self.assertEqual(r.status, 200, r.body)
+        bg.assert_called_once_with("wisp", ME, "note", [], mid="", cid="from")
+        send.assert_called_once_with("wisp", ME, "note", [], mid="", retry_of="", voice=False, cid="from")
 
     def test_from_fragment_refreshes_and_watches_from(self):
         self.log(ts="2026-11-10T10:00:00", **{"from": "wisp"}, to="operator", file="m1.md", text="cycle news")

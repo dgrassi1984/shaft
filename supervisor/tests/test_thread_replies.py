@@ -238,11 +238,16 @@ class ThreadRepliesTest(unittest.TestCase):
         self.assertEqual(messages.history()[0]["thread"], CID)
 
     def test_a_note_from_from_or_for_an_ended_thread_stays_in_from(self):
+        """None, an ended thread or no thread to follow: From, naming no conversation. Written in From itself, it names
+        the From conversation (2026-11-11: From answers like a thread), and still shows in From."""
         self.thread(state="ended")
-        for cid in ("", "from", CID, "current"):
+        for cid in ("", CID, "current"):
             file, _ = web_chat.background("wisp", ME, f"note {cid}", [], mid=f"m-{cid or 0}", cid=cid)
             self.assertNotIn("Conversation:", (self.f.root / "inbox" / file).read_text())
-        self.assertEqual([m.get("thread") for m in messages.history()], [None, None, None, None])
+        file, _ = web_chat.background("wisp", ME, "note from", [], mid="m-from", cid="from")
+        fc = web_chat.from_chat("wisp")
+        self.assertIn(f"Conversation: {fc['id']} («From wisp»)", (self.f.root / "inbox" / file).read_text())
+        self.assertEqual([m.get("thread") for m in messages.history()], [None, None, None, fc["id"]])
         self.assertEqual(len(web_chat.from_feed("wisp")["items"]), 4)
 
 

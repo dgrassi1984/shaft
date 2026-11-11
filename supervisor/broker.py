@@ -1700,7 +1700,7 @@ class Broker:
         ended = sorted((c for c in web_chat.chats(self.name) if c.get("state") == "ended"),
                        key=web_chat._activity, reverse=True)[:20]
         return "\n".join(f"{c['id']} «{web_chat.title(c)}» {c['state']} (last moved {web_chat._activity(c)[0]})"
-                         for c in [*web_chat.threads(self.name), *ended])
+                         for c in [*web_chat.open_chats(self.name), *ended])
 
     def _thread_id(self, ref: str) -> str:
         """A web thread id from a thread id (web-…) or the id of a conversation that ran in one (api-…); a conversation

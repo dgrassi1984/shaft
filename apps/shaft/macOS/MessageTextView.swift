@@ -129,6 +129,9 @@ struct MessageTextView: NSViewRepresentable {
                     })
                 }
             }
+            if let cancel = self.menu?.cancel {
+                bottom.append(MenuAction.item(String(localized: "Cancel"), symbol: "xmark", cancel))
+            }
             if let context = self.menu, context.rateable {
                 let rating = context.rating
                 bottom.append(.separator())

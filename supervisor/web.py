@@ -630,6 +630,17 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/uncycle", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        form = req.form()
+        try:
+            said = web_chat.uncycle(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
+                                    mid=form.get("mid", ""), file=form.get("file", ""))
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
     if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/unqueue", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -792,7 +803,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         at = _page_ms(req.headers.get("x-shaft-at"))   # as a thread's feed: watched while on screen, not when covered
         (web_chat.unwatch if req.headers.get("x-shaft-watching") == "0" else web_chat.watching)(
             m[1], req.device, at, cid="from")
-        return _html(200, v.feed_html(web_chat.from_feed(m[1]), from_feed=True))
+        return _html(200, v.feed_html(web_chat.from_feed(m[1], whole=qs.get("all") == "1"), from_feed=True))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
         if m[1] not in names:
             return None
@@ -1232,8 +1243,9 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
     if tab == "from":
         from . import web_chat
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
-        return _html(200, v.from_page(name, web_chat.from_feed(name), past, _live(name), names, csrf,
-                                      later=_next_cycle(name)))
+        whole = qs.get("all") == "1"
+        return _html(200, v.from_page(name, web_chat.from_feed(name, whole=whole), past, _live(name), names, csrf,
+                                      later=_next_cycle(name), whole=whole))
     if tab == "chat":
         from . import web_chat
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
@@ -1309,7 +1321,11 @@ def _rail_chats(names: list[str]) -> dict[str, dict]:
             threads.append({"id": c["id"], "title": web_chat.title(c), "waiting": waiting,
                             "state": "waiting" if waiting else "replying" if c.get("state") == "replying" else "idle",
                             "last": web_chat.last_from(c, web_chat.sent_during(n, c)) or ""})
-        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or ""}
+        fc = web_chat.from_chat(n)               # a reply in From pulses its dot, as a thread's does
+        waiting = (fc.get("reply") or {}).get("waiting") if fc and fc.get("state") == "replying" else None
+        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or "",
+                  "from_state": ("waiting" if waiting else "replying" if fc and fc.get("state") == "replying"
+                                 else "idle"), "from_waiting": waiting}
     return out
 
 

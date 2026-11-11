@@ -32,13 +32,14 @@ struct MessageMenu: ViewModifier {
     var k: Int?
     var file: String?
     var rateable = false
+    var cancel: (() -> Void)? = nil
     @Environment(ChatScreenModel.self) private var screen
 
     func body(content: Content) -> some View {
         content
             // The Mac's text view draws its own right-click menu from this (it selects in place: no Select text).
             .environment(\.messageMenu, MessageMenuContext(source: source, rating: rating, k: k, file: file,
-                                                           rateable: rateable))
+                                                           rateable: rateable, cancel: cancel))
             .contextMenu {
                 if !source.isEmpty {
                     Button { Clipboard.copy(source) } label: { Label("Copy", systemImage: "doc.on.doc") }
@@ -50,6 +51,9 @@ struct MessageMenu: ViewModifier {
                         Label("Select text", systemImage: "selection.pin.in.out")
                     }
                     #endif
+                }
+                if let cancel {
+                    Button("Cancel", action: cancel)
                 }
                 if rateable {
                     Divider()
@@ -80,8 +84,8 @@ extension View {
     }
 
     func messageMenu(_ source: String, rating: Rating? = nil, k: Int? = nil, file: String? = nil,
-                     rateable: Bool = false) -> some View {
-        modifier(MessageMenu(source: source, rating: rating, k: k, file: file, rateable: rateable))
+                     rateable: Bool = false, cancel: (() -> Void)? = nil) -> some View {
+        modifier(MessageMenu(source: source, rating: rating, k: k, file: file, rateable: rateable, cancel: cancel))
     }
 }
 
@@ -698,20 +702,64 @@ struct SentItemView: View {
 
 struct LaterItemView: View {
     let message: LaterItem
+    @Environment(ChatScreenModel.self) private var screen
+
+    private var canCancel: Bool {
+        message.cancellable == true && message.cancelled == nil && !screen.archived
+    }
+
+    private func cancel() {
+        Task { await screen.chat.uncycle(message) }
+    }
+
+    /// Where the note stands: taken back, read in a cycle, or still in its inbox.
+    private var status: String {
+        if message.cancelled != nil { return String(localized: "cancelled") }
+        return message.read ? String(localized: "read") : String(localized: "waiting")
+    }
+
+    /// Cancel's action while the note can still be taken back; none once it cannot.
+    private var cancelAction: (() -> Void)? {
+        guard canCancel else { return nil }
+        return { cancel() }
+    }
+
+    @ViewBuilder private var noteText: some View {
+        if message.text.isEmpty {
+            EmptyView()
+        } else if message.cancelled != nil {
+            Text(message.text).strikethrough().foregroundStyle(Color.textSecondary)
+        } else {
+            MessageOperatorText(text: message.text)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: Design.Space.s12) {
+            Label("next cycle · \(status) · \(Stamp.time(message.ts))", systemImage: "moon")
+                .font(Design.Text.metadata)
+                .foregroundStyle(Color.textSecondary)
+            if canCancel {
+                Button { cancel() } label: {
+                    Text("Cancel").font(Design.Text.pill).foregroundStyle(Color.brand).quietHitArea()
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel the next-cycle note")
+            }
+        }
+    }
 
     var body: some View {
         ChipColumn {
             VStack(alignment: .trailing, spacing: Design.Space.s4) {
                 VStack(alignment: .leading, spacing: Design.Space.inTurn) {
-                    if !message.text.isEmpty { MessageOperatorText(text: message.text) }
+                    noteText
                     AttachmentsView(attachments: message.attachments)
                     ChipRow(comments: message.comments)
                 }
                 .waitingChip()
-                .messageMenu(message.text)
-                Label("next cycle · \(message.read ? "read" : "waiting") · \(Stamp.time(message.ts))", systemImage: "moon")
-                    .font(Design.Text.metadata)
-                    .foregroundStyle(Color.textSecondary)
+                .messageMenu(message.text, cancel: cancelAction)
+                footer
             }
         }
         .accessibilityElement(children: .contain)

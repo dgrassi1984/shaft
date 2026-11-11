@@ -493,6 +493,7 @@ def _run(web_chat, relay) -> None:
         answer += f"\n\n### {c}\nDone: I reworded that passage."
     words = answer.split(" ")
     activity, said = [], ""
+    heard = chat["reply"].get("interjections", 0)
     ticks = 60 if slow else 10
     for i in range(ticks):
         time.sleep(1.0)
@@ -668,8 +669,11 @@ def seed(base: Path, web, web_chat, messages) -> None:
     msg(ts(14), "seed from tundra m.md", "The totals, as a file:", "tundra", "operator", True,
         attachments=[{"name": "totals.csv", "path": "instances/tundra/attachments/totals.csv", "bytes": 51},
                      {"name": "report.md", "path": "instances/tundra/attachments/report.md", "bytes": len(report)}])
+    # The real feed derives cancellable/cancelled from the inbox file and cancellation ledger.
     msg(ts(12), "seed-from-operator-b.md", "Look at the March reconciliation when you have time.", "operator",
         "tundra", False, via=messages.BACKGROUND, mid="seed-b")
+    msg(ts(11), "seed-next-cycle-cancel.md", "Recheck the summary next cycle.", "operator",
+        "tundra", False, via=messages.BACKGROUND, thread=cid)
     # Its cycle's answer to work left in this thread, as the broker records one (`thread`, no talk): "⏾ from its cycle"
     msg(ts(8), "seed-from-tundra-cycle.md", "March reconciles: 3 lines moved.", "tundra", "operator", True,
         talk=None, thread=cid)

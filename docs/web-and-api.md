@@ -291,7 +291,14 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   `/i/<name>/chat` follows the most recently active thread. **From <instance>** (`/i/<name>/from`) shows what it sent
   you outside any thread (a cycle, a terminal or Telegram talk, an answer for a thread that had ended) and what you left
   for its next cycle outside a thread, refreshed like a
-  chat (`/fragment/from/<name>`); its composer only sends for the next cycle. A reply waiting for its turn says so on
+  chat (`/fragment/from/<name>`). Its composer is a thread's: a message written there is answered now, in the From
+  conversation (`web_chat.from_chat`, made on its first message), and Next cycle stays behind the arrow — a note left
+  there names the From conversation, so its cycle answers in From after reading it. The From conversation is no
+  thread: it never ends, no thread list or Earlier chats shows it, End, Clear and Rename refuse it, and pages, apps,
+  pushes and seen marks name it `from`. Its replies read what From shows (the cycles' messages, the notes) as part of
+  the conversation, each message cut at 3,000 characters and the request at its newest 60,000 (it never ends) — the
+  operator's message being answered is always whole, so a long queued batch can go past that — with a line saying it
+  is From. "Show the N earlier messages" (`?all=1`) shows all of From, its turns too. A reply waiting for its turn says so on
   its own line, `waiting: answering in «<title>»`, until it starts.
   A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
@@ -333,6 +340,14 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   written in (in From when sent from From), marked **⏾ next cycle · waiting**, then **read** once a cycle has read it.
   Its answer, if it sends one, comes in that thread (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.
+  `POST /chat/<name>/uncycle` accepts `mid` or `file` to cancel a next-cycle note still in the inbox.
+  A running cycle or reply refuses cancellation because it may already have read the note — a cycle paused for a
+  reply too (it read its inbox when it started). Only a note written in a composer that did nothing when sent can be
+  taken back: one that answered a quoted question, a comment's or a rating's, and the supervisor's own (a calendar or
+  voice decision) offer no Cancel, since taking the note back would undo none of that.
+  The thread and From feeds show Cancel while the note's item has `cancellable=true`.
+  After cancellation, `cancelled` holds its ISO timestamp, the text is struck through, and attachments remain stored.
+  Read-only views have no Cancel action. The app API documents these same item fields.
   `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
   queued `mid`.
   Both require the same CSRF token as other web posts.
@@ -724,7 +739,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/google/login`, `/google/callback` | Re-login for existing Google accounts |
 | GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
 | POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
-| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/clear` | Send, remove queued message, or clear chat |
+| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear chat |
 | POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
 | POST | `/docs/<n>/save`, `/docs/<n>/delete`, `/docs/<n>/comment[/edit\|/delete\|/send\|/state]` | Document and comment changes |
 | POST | `/preview/drive/<n>`, `/action/<verb>` | Drive diff preview and management actions through `web_actions.run` |

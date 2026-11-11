@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "c8c10f0efe217b21",
+  "version": "5028cf49b068e83c",
   "live": "cc72a715f5f61774",
   "reply": {
     "started": "2026-11-03T14:07:02+01:00",
@@ -100,6 +100,8 @@
       "mid": "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54",
       "read": false,
       "attachments": [],
+      "cancelled": null,
+      "cancellable": true,
       "comments": []
     },
     {

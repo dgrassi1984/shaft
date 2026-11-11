@@ -24,7 +24,7 @@ LOG_NAME = "messages.jsonl"
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
            mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False,
-           talk: str | None = None, thread: str | None = None, re_: str | None = None) -> None:
+           talk: str | None = None, thread: str | None = None, re_: str | None = None, settled: bool = False) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
@@ -46,6 +46,8 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         row["thread"] = thread
     if re_:
         row["re"] = re_
+    if settled:                   # it reports something already decided (a calendar or voice decision): no Cancel
+        row["settled"] = True
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
     if alert:
@@ -137,6 +139,39 @@ def attachment_lines(atts: list[dict], key: str = "rel") -> str:
 _cache: dict = {"key": None, "rows": []}
 
 
+def logged_rows(path: Path) -> list[dict]:
+    """Fold cancellation updates without rewriting the log's forwarder byte offsets."""
+    rows, by_file = [], {}
+    for line in jsonl_lines(path.read_text(errors="replace")):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("from"), row.get("to"), row.get("file"))
+        if row.get("cancelled") and key in by_file:
+            rows[by_file[key]]["cancelled"] = row["cancelled"]
+        else:
+            by_file[key] = len(rows)
+            rows.append(row)
+    return rows
+
+
+def cancel(name: str, file: str) -> None:
+    """Append a row update under the delivery lock; readers fold it into its original row."""
+    path = SUP_DIR / LOG_NAME
+    with path.open("a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        row = next(m for m in logged_rows(path) if m.get("from") == "operator" and m.get("to") == name
+                   and m.get("via") == BACKGROUND and m.get("file") == file)
+        if not row.get("cancelled"):
+            row["cancelled"] = datetime.now().isoformat(timespec="seconds")
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+
 def _unread(to: str) -> set[str]:
     """File names still waiting in the recipient's inbox (it moves them out once it has read them)."""
     if to == "operator":
@@ -153,12 +188,7 @@ def history() -> list[dict]:
         return []
     key = (st.st_mtime_ns, st.st_size)
     if _cache["key"] != key:
-        rows = []
-        for line in jsonl_lines(path.read_text(errors="replace")):
-            try:
-                rows.append(json.loads(line))
-            except ValueError:
-                continue
+        rows = logged_rows(path)
         rows.sort(key=lambda m: (m["ts"], m["file"]))   # file names carry microseconds: ties keep their order
         _cache.update(key=key, rows=rows)
     waiting = {to: _unread(to) for to in {m["to"] for m in _cache["rows"]}}
@@ -188,7 +218,9 @@ def appended(offset: int | None) -> tuple[list[tuple[dict, int]], int]:
             break
         at += len(line)
         try:
-            rows.append((json.loads(line), at))
+            row = json.loads(line)
+            if not row.get("cancelled"):
+                rows.append((row, at))
         except ValueError:
             continue
     return rows, at
@@ -228,7 +260,7 @@ BACKGROUND_NOTE = ("the web UI, for your next cycle — nobody is waiting on an 
 
 def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *, attachments: list[dict] | None = None,
              via: str = "", mid: str = "", shown: str | None = None, comments: list[dict] | None = None,
-             thread: tuple[str, str] | None = None) -> Path:
+             thread: tuple[str, str] | None = None, settled: bool = False) -> Path:
     root = instance_root(name)
     stamp = datetime.now()
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
@@ -239,7 +271,7 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
                       f"From: operator\nTo: {name}\nKind: {kind}\n{ref}{how}{conv}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
                       f"{text.strip()}\n")
     record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
-           comments=comments, thread=thread[0] if thread else None)
+           comments=comments, thread=thread[0] if thread else None, settled=settled)
     from .autonomy import event_wake   # it wakes for this once idle, not at its next timed wake (review C15)
     event_wake(name, "message from the operator")
     return path
@@ -247,12 +279,13 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
 
 def deliver_background(name: str, text: str, *, shown: str, in_reply_to: str | None = None,
                        attachments: list[dict] | None = None, mid: str = "", comments: list[dict] | None = None,
-                       thread: tuple[str, str] | None = None) -> Path:
+                       thread: tuple[str, str] | None = None, settled: bool = False) -> Path:
     """A message from the web chat's Next cycle: into the instance's inbox now, logged as BACKGROUND, read in its next
     cycle. A reply when it answers one of its questions (`in_reply_to`), as `shaft reply` writes it. `thread`: (id,
-    title) of the open thread it was written in — it shows there, and its file names it for the answer."""
+    title) of the open thread it was written in — it shows there, and its file names it for the answer. `settled`: the
+    supervisor's own report of something already decided (a calendar or voice decision): Cancel would undo nothing."""
     return _deliver(name, text, "reply" if in_reply_to else "message", in_reply_to, attachments=attachments,
-                    via=BACKGROUND, mid=mid, shown=shown, comments=comments, thread=thread)
+                    via=BACKGROUND, mid=mid, shown=shown, comments=comments, thread=thread, settled=settled)
 
 
 def deliver_feedback(name: str, text: str, *, shown: str, mid: str = "") -> Path:

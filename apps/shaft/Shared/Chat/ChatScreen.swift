@@ -65,10 +65,9 @@ struct ChatScreen: View {
     #else
     private static let voiceCovers = false
     #endif
-    /// Talk: voice mode is on for the instance (its row's `voiceMode`), and this is a conversation it answers in (its
-    /// current chat or a thread; not an earlier chat, nor the From feed, which only writes for the next cycle).
+    /// Talk is available in an open conversation when voice mode is on for the instance.
     private var canTalk: Bool {
-        !chat.isEarlier && !chat.ref.isFrom && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
+        !chat.isEarlier && !screen.archived && store.row(chat.instance)?.voiceMode == "on"
     }
     /// The instance has threads (a server with them): New thread starts one beside the others, and ends nothing.
     private var hasThreads: Bool { store.threads(chat.instance) != nil }
@@ -117,7 +116,7 @@ struct ChatScreen: View {
                                     }
                             }
                             if screen.showVoice && !Self.voiceCovers {
-                                VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.cid,
+                                VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.seenID,
                                             style: .panel) {
                                     screen.showVoice = false
                                 }
@@ -160,7 +159,7 @@ struct ChatScreen: View {
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $screen.showVoice) {
-            VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.cid, style: .fullScreen) {
+            VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.seenID, style: .fullScreen) {
                 screen.showVoice = false
             }
         }

@@ -160,7 +160,7 @@ def decide(name: str, pid: str, accept: bool, reason: str = "") -> dict:
     # Match calendar_proposals._outcome: deliver after unlocking; failure cannot undo the decision.
     try:
         messages.deliver_background(name, f"Voice proposal {pid} {row['state']}: {row['name']} "
-                                    f"({row['identifier']}) for {row['language']}.\n{reason}", shown="voice approval")
+                                    f"({row['identifier']}) for {row['language']}.\n{reason}", shown="voice approval", settled=True)
     except Exception as e:
         core.log(f"voice proposal {pid}: outcome not delivered to {name}: {e}")
     return row
