@@ -142,7 +142,7 @@ def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, h
     """`thread`: the thread the page is on (its id, or "from"), lit in the rail; "current" on the plain chat page, which
     follows the current thread (the rail lights the one shown)."""
     head = h('<div data-poll="{u}" data-every="1500">{head}</div>', u=header_url, head=head)
-    return frame(f"{name} · " + ("from" if thread == "from" else "chat"), join([head, body]), names, csrf,
+    return frame(name if thread == "from" else f"{name} · chat", join([head, body]), names, csrf,
                  current=f"i:{name}", bar=False, thread=thread)
 
 

@@ -157,6 +157,13 @@ class FromConversationTest(unittest.TestCase):
         self.assertNotIn("Report 0:", "".join(m["content"] for m in body))
 
     # -- the page and the apps --------------------------------------------------------------------------------------
+    def test_main_tab_title_uses_only_the_instance_name(self):
+        """The Main tab still read '· from ·' after the rename."""
+        page = str(web_views.from_page("wisp", web_chat.from_feed("wisp"), [], {}, ["wisp"], "tok"))
+        title = page.split("<title>", 1)[1].split("</title>", 1)[0]
+        self.assertEqual(title, "wisp · SHAFT")
+        self.assertNotIn("from", title.lower())
+
     def test_the_from_page_composer_sends_now_with_next_cycle_behind_the_arrow(self):
         html = str(web_views.from_page("wisp", web_chat.from_feed("wisp"), [], {}, ["wisp"], "tok"))
         self.assertIn('<input type="hidden" name="cid" value="from">', html)
