@@ -504,13 +504,13 @@ def _action(req: Request, n: str, act: str) -> Response:
             web_chat.unwatch(n, req.device, at, cid=cid)
             return _json(200, {"ok": True})
         cid = _str(data, "cid")
-        _chat_of(n, cid)
+        chat = _chat_of(n, cid)
         if act == "rename":
             return _said(web_chat.rename(n, cid, _str(data, "title")))
-        if act == "stop":
-            return _said(web_chat.stop(cid))
+        if act == "stop":                 # its relay is under the chat's id: "from" names the From conversation's
+            return _said(web_chat.stop(chat["id"]))
         if act == "end":
-            return _said(web_chat.end(cid))
+            return _said(web_chat.end(chat["id"]))
         return _said(web_chat.clear(n, cid))
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None

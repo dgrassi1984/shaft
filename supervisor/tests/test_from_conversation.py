@@ -192,6 +192,18 @@ class FromConversationTest(unittest.TestCase):
                                                               rail["from_waiting"])))
         self.assertTrue(web_chat.summary("wisp", [])["replying"])
 
+    def test_stop_from_the_app_names_from_and_stops_the_from_reply(self):
+        """Found by the apps lane: Stop with cid "from" looked for a relay under "from", but relays are kept under the
+        chat's id — "no reply is running" while one ran in From."""
+        fc = web_chat.from_chat("wisp", ME, create=True)
+        relay = mock.Mock()
+        with mock.patch.dict(web_chat._relays, {fc["id"]: relay}):
+            req = mock.Mock(body=json.dumps({"cid": "from"}).encode(), headers={})
+            with mock.patch.object(app_api, "_body", return_value={"cid": "from"}), \
+                    mock.patch.object(app_api, "_login", return_value=ME):
+                app_api._action(req, "wisp", "stop")
+        relay.stop.assert_called_once_with()
+
     def test_the_app_api_finds_from_by_name_and_answers_with_from(self):
         with self.assertRaises(app_api.Refusal):
             app_api._chat_of("wisp", "from")                  # none until its first message
