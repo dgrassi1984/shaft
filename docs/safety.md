@@ -254,8 +254,9 @@ and retry. A judge error lets the call proceed with a NOT checked note. No rules
 means no judge call (`supervisor/broker.py`, `Broker._check_orders`).
 
 An instance may record an order heard from the operator or set its own rule with `record_order(own=true)`,
-citing an exact past episode timestamp or a unique minute prefix. Self rules bind it in the same way.
-At most 10 self rules and 40 total orders may be in force. The instance drops only its own rules with
+citing an exact past live-cycle timestamp or a unique minute prefix. Self rules bind it in the same way.
+At most 10 self rules may be in force. Operator additions count only non-self orders against the limit of 40;
+instance additions count every order. The instance drops only its own rules with
 `record_order(drop=ID)`. Only the operator drops his orders; he can also drop self rules.
 Refusals are counted per rule. Only passing messages to the operator advance a held correction's pass
 count, and only a refused operator message restarts it. Drafts, calendar changes and other messages do neither.
@@ -481,7 +482,8 @@ feed `self/stats.md`.
 written-up conversation, including agent and operator turns, plus that conversation's recorded commitment
 promises and due times and standing-order texts sourced to it. Open conversations are excluded.
 Returned quotes must match visible operator turns. The check runs in `metrics.after_cycle`, with
-`PER_RUN=3` judge calls at most; the first run skips write-ups older than `FIRST_RUN_HOURS=24` hours.
+`PER_RUN=3` judge calls at most. A start marker is written even when the judge is down or nothing is pending.
+Write-ups more than `FIRST_RUN_HOURS=24` hours before that marker are skipped.
 It records findings only, never commitments or standing orders.
 
 ## Git

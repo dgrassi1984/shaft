@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -98,7 +99,7 @@ class PredictionsTest(unittest.TestCase):
             self.report()
 
     def test_concurrent_adds_reports_and_scores_are_serialized(self):
-        """Concurrent writers cannot reuse ids, exceed the cap, double-report or buy duplicate judgments."""
+        """Concurrent writers cannot reuse ids, exceed the cap, double-report or append duplicate scores."""
         def attempt(function):
             try:
                 return function()
@@ -114,7 +115,53 @@ class PredictionsTest(unittest.TestCase):
             self.assertEqual(sum(event is not None for event in reports), 1)
             scores = list(pool.map(lambda _: predictions.score("ember", DUE + timedelta(hours=2)), range(8)))
             self.assertEqual(sum(scores), 1)
+        self.assertEqual(sum(r.get("event") == "scored" for r in self.rows()), 1)
+
+    def test_f1_judge_wait_does_not_lock_writers_and_scores_once(self):
+        """F1: blocked judges leave predict writes free and overlapping scorers append one verdict."""
+        self.add()
+        self.report()
+        entered = threading.Barrier(3)
+        release = threading.Event()
+
+        def ask(*args, **kwargs):
+            entered.wait(timeout=3)
+            if not release.wait(3):
+                raise AssertionError("judge was not released")
+            return {"result": "held", "reason": "42"}
+
+        self.ask.side_effect = ask
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            scores = [pool.submit(predictions.score, "ember", DUE + timedelta(hours=2)) for _ in range(2)]
+            try:
+                entered.wait(timeout=3)
+                made = pool.submit(predictions.add_built, "ember", lambda every, now: predictions.made(
+                    "ember", every, "Another reading will hold", DUE.isoformat(), "Read source", now=NOW))
+                self.assertEqual(made.result(timeout=1)["id"], "p2")
+            finally:
+                release.set()
+            self.assertEqual(sum(f.result(timeout=3) for f in scores), 1)
+        self.assertEqual(sum(r.get("event") == "scored" for r in self.rows()), 1)
+
+    def test_f2_only_external_supervisor_reads_can_be_evidence(self):
+        """F2: an authored run result cannot establish a prediction; check rules are judge data."""
+        from supervisor import broker
+        self.assertEqual(set(predictions.EVIDENCE_TOOLS) - broker.SPECS.keys(), set())
+        self.add()
+        self.report()
+        self.episodes.return_value[0]["tools"][0]["tool"] = "run"
+        self.assertEqual(predictions.score("ember", DUE + timedelta(hours=2)), 1)
+        scored = predictions.fold("ember")["p1"]["score"]
+        self.assertEqual(scored["result"], "not checked")
+        self.assertIn("supervisor tool reading an external outcome", scored["reason"])
+        self.ask.assert_not_called()
+        self.add()
+        self.report(id="p2")
+        self.episodes.return_value[0]["tools"][0]["tool"] = "fetch_page"
+        self.assertEqual(predictions.score("ember", DUE + timedelta(hours=2)), 1)
         self.ask.assert_called_once()
+        self.assertIn("how_to_check is the predictor's own description", self.ask.call_args.args[0])
+        self.assertIn("shown as data", self.ask.call_args.args[0])
 
     def test_unresolvable_evidence_never_calls_judge(self):
         """Missing, ambiguous, old, failed and bookkeeping evidence cannot establish an outcome."""

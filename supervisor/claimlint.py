@@ -10,7 +10,9 @@ from . import broker, commitments, core, metrics
 BUILTIN = frozenset({
     "read_file", "write_file", "append_file", "list_files", "rewrite_facts", "write_digest", "search_memory",
     "remember", "update_self_model", "update_personality", "view_image", "commit_to", "settle_commitment",
-    "declare_intent", "confirm_confidence", "finish_cycle", "close_surprise",
+    "declare_intent", "confirm_confidence", "finish_cycle", "close_surprise", "retire_fact",
+    "record_correction", "close_correction", "propose_drive_amendment", "open_project", "close_project",
+    "submit_answer", "queue_for_next_cycle", "plan_reply",
 })
 
 
@@ -99,9 +101,10 @@ def run(name: str) -> int:
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         rows = records(name)
-        last = max((r["episode_ts"] for r in rows), default=None)
-        episodes = sorted(metrics.live_episodes(name), key=lambda ep: ep["ts"])
-        episodes = [ep for ep in episodes if ep["ts"] > last] if last is not None else episodes[-20:]
+        last = max((at for r in rows if (at := metrics._ts(r.get("episode_ts"))) is not None), default=None)
+        episodes = sorted((ep for ep in metrics.live_episodes(name) if metrics._ts(ep.get("ts")) is not None),
+                          key=lambda ep: metrics._ts(ep["ts"]))
+        episodes = [ep for ep in episodes if metrics._ts(ep["ts"]) > last] if last is not None else episodes[-20:]
         count = 0
         with path.open("a") as out:
             for ep in episodes:
@@ -120,9 +123,10 @@ def head_lines(name: str, since: str | None = None) -> list[str]:
     findings = []
     for row in records(name):
         ts = row["episode_ts"]
-        at = commitments._at(ts)
-        if (since is not None and ts > since or since is None and at is not None
+        at = metrics._ts(ts)
+        after = metrics._ts(since)
+        if (after is not None and at is not None and at > after or since is None and at is not None
                 and now - timedelta(hours=24) <= at <= now):
             findings.extend(row["findings"])
-    findings.sort(key=lambda finding: finding["episode_ts"], reverse=True)
+    findings.sort(key=lambda finding: metrics._ts(finding["episode_ts"]) or datetime.min, reverse=True)
     return [f"- {f['episode_ts'][:16]}: {f['what']}" for f in findings[:5]]

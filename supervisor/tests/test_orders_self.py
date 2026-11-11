@@ -34,18 +34,18 @@ class SelfRulesTest(unittest.TestCase):
     def test_own_source_is_a_real_past_episode_with_unique_minute_prefix(self):
         """Missing, foreign, ambiguous and future sources cannot support a self rule."""
         for source in ('', 'made-up', '2027-01-01 12:00'):
-            with self.assertRaisesRegex(ValueError, 'past episodes'):
+            with self.assertRaisesRegex(ValueError, 'past live cycles'):
                 self.b._record_order('Keep notes short.', source, own=True)
         result = self.b.call('record_order', {'text': 'Keep notes short.',
                             'source': self.ts[:16].replace('T', ' '), 'own': True})
         self.assertTrue(result['ok'], result)
         self.assertEqual([(o['by'], o['source']) for o in orders.listing('ember')], [('self', self.ts)])
         self.b._record_order('Check evidence.', self.ts, own=True)
-        self.episodes.write_text(self.episodes.read_text() + json.dumps({'ts': self.ts[:-2] + '30'}) + '\n')
+        self.episodes.write_text(self.episodes.read_text() + json.dumps({'ts': self.ts[:-2] + '30', 'kind': 'live'}) + '\n')
         with self.assertRaisesRegex(ValueError, 'unique'):
             self.b._record_order('Ambiguous.', self.ts[:16], own=True)
         self.b.as_of = self.now - timedelta(hours=2)
-        with self.assertRaisesRegex(ValueError, 'past episodes'):
+        with self.assertRaisesRegex(ValueError, 'past live cycles'):
             self.b._record_order('Future.', self.ts, own=True)
 
     def test_only_self_rules_can_be_dropped_by_instance_operator_can_drop_any(self):
@@ -62,20 +62,30 @@ class SelfRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already dropped'):
             orders.drop_own('ember', 'o3')
 
-    def test_self_and_shared_caps_both_hold(self):
-        """Self rules cannot fill more than ten slots or bypass the forty-order shared limit."""
+    def test_self_and_operator_caps_both_hold(self):
+        """F11: self rules cannot crowd out operator additions; instance additions count all rows."""
         for n in range(orders.SELF_MAX):
             self.b._record_order(f'Own {n}', self.ts, own=True)
         with self.assertRaisesRegex(ValueError, '10 self rules.*drop'):
             self.b._record_order('Too many.', self.ts, own=True)
-        for n in range(orders.ACTIVE_MAX - orders.SELF_MAX):
+        for n in range(orders.ACTIVE_MAX):
             orders.add('ember', f'Operator {n}', 'operator', 'cli')
+        self.assertEqual(len(orders.listing('ember')), 50)
         with self.assertRaisesRegex(ValueError, '40 standing orders'):
             orders.add('ember', 'Full.', 'operator', 'cli')
         orders.drop('ember', 'o1')
-        orders.add('ember', 'Fill again.', 'operator', 'cli')
         with self.assertRaisesRegex(ValueError, '40 standing orders'):
             self.b._record_order('Also full.', self.ts, own=True)
+        with self.assertRaisesRegex(ValueError, '40 standing orders'):
+            orders.add('ember', 'Heard rule.', 'instance', 'conversation')
+
+    def test_f4_own_rule_requires_live_cycle(self):
+        """F4: conversation and sleep episodes are not a cycle source for a self rule."""
+        for kind in ('talk', 'talk_recovered', 'sleep'):
+            with self.subTest(kind=kind):
+                self.episodes.write_text(json.dumps({'ts': self.ts, 'kind': kind}) + '\n')
+                with self.assertRaisesRegex(ValueError, 'past live cycles'):
+                    self.b._order_source(self.ts, own=True)
 
     def test_self_violation_is_refused_quoted_counted_and_listed(self):
         """Self rules use the same judge and refusal path, and counts include all tools and cutoffs."""
@@ -155,8 +165,8 @@ class SelfRulesTest(unittest.TestCase):
 
 class OutwardToolsTest(unittest.TestCase):
     def exercise(self, fixture_type, tool, args_for, effects):
-        """Every newly checked tool refuses before writes and reports passed, unchecked and absent checks."""
-        for mode in ('violate', 'pass', 'error', 'none'):
+        """F5: successful draft/calendar writes survive failed check logging; refusals still precede writes."""
+        for mode in ('violate', 'pass', 'error', 'none', 'log_error'):
             with self.subTest(tool=tool, mode=mode):
                 f = fixture_type()
                 try:
@@ -172,7 +182,10 @@ class OutwardToolsTest(unittest.TestCase):
                             mock.patch.object(b, '_calendar_propose', wraps=b._calendar_propose) as propose, \
                             mock.patch.object(metrics, 'own_models', return_value=[]), \
                             mock.patch.object(orders, 'check', return_value=verdict,
-                                              side_effect=judge.JudgeError('unavailable') if mode == 'error' else None) as check:
+                                              side_effect=judge.JudgeError('unavailable') if mode == 'error' else None) as check, \
+                            mock.patch.object(b, '_log_check', wraps=b._log_check,
+                                              side_effect=OSError('disk error') if mode == 'log_error' else None), \
+                            mock.patch.object(core, 'log') as logged:
                         result = b.call(tool, args)
                     if mode == 'violate':
                         self.assertFalse(result['ok'], result)
@@ -183,7 +196,7 @@ class OutwardToolsTest(unittest.TestCase):
                         propose.assert_not_called()
                     else:
                         self.assertTrue(result['ok'], result)
-                        if mode == 'pass':
+                        if mode in ('pass', 'log_error'):
                             self.assertIn('; checked against your standing orders: it keeps to them', result['result'])
                         elif mode == 'error':
                             self.assertIn('NOT checked', result['result'])
@@ -195,7 +208,12 @@ class OutwardToolsTest(unittest.TestCase):
                         content = check.call_args.args[1]
                         self.assertTrue(content)
                         rows = orders._lines(orders.checks_path(b.name))
-                        self.assertEqual(rows[-1]['tool'], tool)
+                        if mode == 'log_error':
+                            self.assertEqual(rows, [])
+                            logged.assert_called_once()
+                            self.assertIn('action succeeded', logged.call_args.args[0])
+                        else:
+                            self.assertEqual(rows[-1]['tool'], tool)
                         if tool.startswith('mail_'):
                             self.assertIn('Subject:', content)
                             self.assertIn('To:', content)
@@ -300,7 +318,7 @@ class OutwardToolsTest(unittest.TestCase):
 
     def test_message_to_another_instance(self):
         """A refused peer message creates neither an inbox nor stored attachments."""
-        for mode in ('violate', 'pass', 'error', 'none'):
+        for mode in ('violate', 'pass', 'error', 'none', 'log_error'):
             with self.subTest(mode=mode):
                 f = existing.OrdersTest()
                 try:
@@ -323,7 +341,7 @@ class OutwardToolsTest(unittest.TestCase):
                         else:
                             result = b._send_message('ash', 'Long note.')
                             self.assertTrue(list((target / 'inbox').glob('*.md')))
-                            if mode == 'pass':
+                            if mode in ('pass', 'log_error'):
                                 self.assertIn('checked against your standing orders', result)
                             elif mode == 'error':
                                 self.assertIn('NOT checked', result)

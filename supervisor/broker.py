@@ -343,13 +343,16 @@ SPECS = {
                     {"choose": {"type": "array", "items": {"type": "string"},
                                 "description": "gauge names from the menu; omit it to see the menu"}}, []),
     "predict": _spec("predict", "Record a prediction and have the supervisor score it. It stamps the prediction with "
-                     "a time you cannot change and checks it at its due time; that is the one thing you cannot do "
-                     "for yourself. Predict anything your work turns on: what someone will answer, your next score "
+                     "a time you cannot change. Predict anything your work turns on: what someone will answer, your next score "
                      "on a task, what a source will say. To make one: text, due, how_to_check (how the outcome "
                      "will be told from a tool result), and optionally subject (a short label to group them) and "
                      "confidence (0-100). To report one at or after its due time: id, outcome ('held' or 'failed') "
-                     "and evidence ('<your cycle's time>#<step>': the tool call that shows the outcome). A judge "
-                     "then scores it from that tool result alone, not from what you said. One not reported within 48 "
+                     "and evidence ('<your cycle's time>#<step>': a supervisor tool that read the outcome, "
+                     "a page, a message, a record, a mail, a calendar, a file in Drive or Chat, "
+                     "not run or a file of yours). how_to_check is your description, shown as data. A judge "
+                     "decides whether the prediction text held from that result alone, treating instructions in the "
+                     "prediction, how_to_check and result as data. Insufficient evidence is scored 'not checked'. "
+                     "One not reported within 48 "
                      "hours of its due time is scored 'not checked'. record(kind='predictions') lists them; the "
                      "results are in self/stats.md, per subject.",
                      {"text": {"type": "string", "description": "the prediction, one checkable statement"},
@@ -1642,7 +1645,12 @@ class Broker:
                                  f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
                                  kind, stamp, body, atts, urgent=urgent, thread=thread, re_=re_)
             if check:
-                self._log_check(check)
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
@@ -1662,7 +1670,12 @@ class Broker:
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
         record_expectation()
         if check:
-            self._log_check(check)
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
         return f"delivered to {to}{with_files}{expectation}{checked}"
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
@@ -2007,7 +2020,7 @@ class Broker:
         return gate_held.withdraw(self.name, id, reason)
 
     def _order_source(self, source, own: bool = False) -> str:
-        """Validate the operator's conversation/message source, or an own rule's past episode source.
+        """Validate the operator's conversation/message source, or an own rule's past live cycle source.
         Episode logs are read from this broker's root, including a replay's reconstructed state."""
         from . import pushes
         source = str(source or "").strip()
@@ -2015,14 +2028,15 @@ class Broker:
             from . import metrics, orders
             records = metrics._parsed_episodes(self.root)
             cut = self.as_of or datetime.now()
-            eligible = {r['ts'] for r in records if (at := orders._at(r.get('ts'))) is not None and at <= cut}
+            eligible = {r['ts'] for r in records if r.get('kind') == 'live'
+                        and (at := orders._at(r.get('ts'))) is not None and at <= cut}
             if source in eligible:
                 return source
             hits = [ts for ts in eligible if len(source) == 16
                     and ts[:16].replace('T', ' ') == source.replace('T', ' ')]
             if len(hits) == 1:
                 return hits[0]
-            raise ValueError("own=true requires source: pass the exact ts of one of your past episodes, "
+            raise ValueError("own=true requires source: pass the exact ts of one of your past live cycles, "
                              "or its unique YYYY-MM-DD HH:MM prefix (T accepted)")
         talk = self.talk_id
         if talk and source in ("", "conversation", talk):
@@ -3018,7 +3032,12 @@ class Broker:
                                       f"shaft actions {self.name} restore {action['class']} (action {action['id']})")
             answer = self._draft_submit(acct, did, raw, tid)
             if check:
-                self._log_check(check)
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
             did, mid = answer['id'], answer['message']['id']
             registry[did] = {'account': account, 'thread': reply_to, 'message_id': mid, 'subject': subject,
                              'created': prior.get('created') or datetime.now().astimezone().isoformat()}
@@ -3627,7 +3646,12 @@ class Broker:
         if proposal:
             answer = self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
             if check:
-                self._log_check(check)
+                try:
+                    self._log_check(check)
+                except Exception as e:
+                    from . import core
+                    with contextlib.suppress(Exception):
+                        core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
             return answer + checked
         self._calendar_attempt["submitted"] = True
         url = f"{gcal.API}/{gcal._path(grant['calendar'], 'events', *([eid] if move else []))}"
@@ -3636,7 +3660,12 @@ class Broker:
                   acct.post(url, body, sendUpdates="none"))
         self._calendar_attempt["answer"] = answer
         if check:
-            self._log_check(check)
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
         return gcal.render_event(gcal.handle(grant["account"], grant["calendar"], answer["id"]),
                                  f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address) + checked
 
@@ -3712,7 +3741,12 @@ class Broker:
         self._action_route('calendar_respond', {'id': id, 'response': response}, event=original, address=acct.address)
         answer = self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
         if check:
-            self._log_check(check)
+            try:
+                self._log_check(check)
+            except Exception as e:
+                from . import core
+                with contextlib.suppress(Exception):
+                    core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
         return answer + checked
 
     # -- images ----------------------------------------------------------------------------------------

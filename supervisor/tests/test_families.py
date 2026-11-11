@@ -32,7 +32,7 @@ class FamiliesTest(unittest.TestCase):
     def chain(self, minutes, **fields):
         previous = None
         for minute in minutes:
-            previous = self.row(minute, previous[:16] if previous else None, **fields)
+            previous = self.row(minute, previous if previous else None, **fields)
 
     def log(self, directory, rows):
         path = self.sup / directory / "ember.jsonl"
@@ -111,16 +111,20 @@ class FamiliesTest(unittest.TestCase):
         self.assertFalse(families.families("ember")[0]["capability"])
 
     def test_regular_requires_five_evenly_spaced_cycles(self):
-        """Short runs, zero gaps and uneven recurrence do not suggest a scheduled job."""
+        """Short runs, zero gaps and uneven recurrence do not suggest a scheduled job; exact links retain seconds."""
         for minutes, expected, interval in [([0, 60, 120, 180, 240], True, 60),
                                              ([0, 60, 120, 180], False, None),
                                              ([0, 10, 20, 30, 100], False, 10),
-                                             ([0, 0, 0, 0, 0], False, 0)]:
+                                             ([0, 0.1, 0.2, 0.3, 0.4], True, 0.1)]:
             with self.subTest(minutes=minutes):
                 self.rows.clear()
                 self.chain(minutes)
                 group, = families.families("ember")
                 self.assertEqual((group["regular"], group["interval_minutes"]), (expected, interval))
+        self.rows.clear()
+        self.chain([0, 0, 0, 0, 0])
+        self.assertEqual([(g["cycles"], g["regular"], g["interval_minutes"]) for g in families.families("ember")],
+                         [(1, False, None)] * 5)
         self.rows.clear()
         self.chain([0, 60, 120, 180, 240])
         self.assertIn("recurs about every 1 h (5 cycles): a scheduled job could run this without a model",

@@ -23,13 +23,18 @@ def _changes(name: str, groups: list[dict], as_of: datetime | None) -> None:
     owners = {ts: group for group in groups for ts in group["members"]}
     windows = []
     previous = None
-    for ep in sorted(metrics.live_episodes(name), key=lambda ep: datetime.fromisoformat(ep["ts"])):
-        end = datetime.fromisoformat(ep["ts"])
-        start = datetime.fromisoformat(ep["run_started"]) if ep.get("run_started") else previous
+    episodes = [ep for ep in metrics.live_episodes(name) if metrics._ts(ep.get("ts")) is not None]
+    for ep in sorted(episodes, key=lambda ep: metrics._ts(ep["ts"])):
+        end = metrics._ts(ep["ts"])
+        start = metrics._ts(ep["run_started"]) if ep.get("run_started") else previous
+        if ep.get("run_started") and start is None:
+            continue
         windows.append((start, end + timedelta(minutes=2), owners.get(ep["ts"])))
         previous = end
     for change in changes:
-        when = datetime.fromisoformat(change["ts"])
+        when = metrics._ts(change.get("ts"))
+        if when is None:
+            continue
         for start, end, group in windows:
             if start is not None and start < when <= end:
                 if group is not None:
@@ -41,8 +46,10 @@ def _changes(name: str, groups: list[dict], as_of: datetime | None) -> None:
 def families(name: str, as_of: datetime | None = None) -> list[dict]:
     """Union judged resemblance links; keep singletons and exclude cycles at or after as_of."""
     rows = sorted((r for r in metrics.judgments(name)
-                   if as_of is None or datetime.fromisoformat(r["episode_ts"]) < as_of),
-                  key=lambda r: datetime.fromisoformat(r["episode_ts"]))
+                   if (at := metrics._ts(r.get("episode_ts"))) is not None
+                   and ("judged_at" not in r or metrics._ts(r["judged_at"]) is not None)
+                   and (as_of is None or at < as_of)),
+                  key=lambda r: metrics._ts(r["episode_ts"]))
     parents = list(range(len(rows)))
 
     def root(i: int) -> int:
@@ -51,12 +58,18 @@ def families(name: str, as_of: datetime | None = None) -> list[dict]:
             i = parents[i]
         return i
 
-    earlier = {}
+    earlier, minutes = {}, {}
     for i, row in enumerate(rows):
-        target = earlier.get(_minute(row.get("resembles") or ""))
-        if target is not None:
+        resembles = (row.get("resembles") or "").replace("T", " ")
+        if len(resembles) == 16:
+            candidates = minutes.get(resembles, [])
+            target = candidates[0] if len(candidates) == 1 else None
+        else:
+            target = earlier.get(resembles)
+        if target is not None and metrics._ts(rows[target]["episode_ts"]) < metrics._ts(row["episode_ts"]):
             parents[root(i)] = root(target)
-        earlier.setdefault(_minute(row["episode_ts"]), i)
+        earlier[row["episode_ts"].replace("T", " ")] = i
+        minutes.setdefault(_minute(row["episode_ts"]), []).append(i)
     chains = {}
     for i, row in enumerate(rows):
         chains.setdefault(root(i), []).append(row)
@@ -66,7 +79,7 @@ def families(name: str, as_of: datetime | None = None) -> list[dict]:
         valued = [r for r in members if type(r.get("value")) is int]
         deliveries = [r["episode_ts"] for r in members if r.get("delivery_supported") == "yes"]
         new = [r["episode_ts"] for r in members if (r.get("novelty") or 0) >= 3]
-        times = [datetime.fromisoformat(ts) for ts in stamps]
+        times = [metrics._ts(ts) for ts in stamps]
         gaps = [(b - a).total_seconds() / 60 for a, b in zip(times, times[1:])]
         interval = median(gaps) if len(members) >= REGULAR_MIN_CYCLES else None
         groups.append({
@@ -83,14 +96,14 @@ def families(name: str, as_of: datetime | None = None) -> list[dict]:
             "members": stamps,
         })
     _changes(name, groups, as_of)
-    return sorted(groups, key=lambda g: (g["cycles"], datetime.fromisoformat(g["latest"])), reverse=True)
+    return sorted(groups, key=lambda g: (g["cycles"], metrics._ts(g["latest"])), reverse=True)
 
 
 def no_yield_share(name: str, since: datetime, until: datetime | None = None) -> dict:
     """Count windowed judged cycles in repeating families with no yield on their own yardstick."""
     judged = no_yield = 0
     for group in families(name, as_of=until):
-        count = sum(since <= datetime.fromisoformat(ts) for ts in group["members"])
+        count = sum(since <= metrics._ts(ts) for ts in group["members"])
         judged += count
         empty = (group["changes_survived"] == 0 if group["capability"] else
                  group["deliveries"] == 0 and group["mean_value"] is not None and group["mean_value"] < 2)

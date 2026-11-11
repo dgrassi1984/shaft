@@ -520,10 +520,12 @@ def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli"
     root = instance_root(name)
     try:
         if action == "add":
+            previous = orders.in_force(orders.listing(name), " ".join(value).strip())
             order, new = orders.add(name, " ".join(value), "operator", via)
             if new:
                 log(f"{name}: standing order {order['id']} added by the operator ({via}): {order['text'][:200]}")
-            print(f"{'added' if new else 'already in force:'} {orders.line(order)}")
+            action_text = "took over" if new and previous else "added" if new else "already in force:"
+            print(f"{action_text} {orders.line(order)}")
             return 0
         if action == "drop":
             if len(value) != 1:

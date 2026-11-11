@@ -67,8 +67,9 @@ def plugins(name: str, as_of: datetime | None = None) -> list[dict]:
         calls = [(ep["ts"], c) for ep in episodes for c in ep.get("tools") or [] if c.get("tool") == tool]
         rows.append({"plugin": plugin, "tool": tool,
                      "first_seen": min(seen, key=commitments._at) if seen else None, "calls": len(calls),
-                     "failed": sum((c.get("result") or "").startswith(commitments.FAILED) for _, c in calls),
-                     "scheduled": "schedule" in spec, **_counts(calls, values, "last_call")})
+                     "failed": sum(not isinstance(c.get("result"), str) or c["result"].startswith(commitments.FAILED)
+                                   for _, c in calls),
+                     "scheduled": isinstance(spec.get("schedule"), dict), **_counts(calls, values, "last_call")})
     return sorted(rows, key=_sort)
 
 
@@ -100,7 +101,8 @@ def skills(name: str, as_of: datetime | None = None) -> list[dict]:
     reads = {}
     for ep in episodes:
         for call in ep.get("tools") or []:
-            if call.get("tool") != "read_file" or (call.get("result") or "").startswith(commitments.FAILED):
+            if (call.get("tool") != "read_file" or not isinstance(call.get("result"), str)
+                    or call["result"].startswith(commitments.FAILED)):
                 continue
             args = call.get("args", "")
             path = args.get("path", "") if isinstance(args, dict) else metrics._arg(args, "path")

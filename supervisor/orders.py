@@ -7,10 +7,10 @@ last row of an id is its state. Three authors (`by`):
   - operator: he adds and drops any order (`shaft orders`, the web UI's Config page);
   - instance: an order the instance heard from him (the broker's record_order, source: his conversation or message);
     it never drops one;
-  - self: a rule the instance set for itself (record_order own=true, source: the episode of its own that taught it).
+  - self: a rule the instance set for itself (record_order own=true, source: the live cycle of its own that taught it).
     A rule written in its own notes did not hold; one held here is shown and checked like the operator's. It may
-    drop its own rules (record_order drop=...), never his; at most SELF_MAX are in force, so they cannot crowd out
-    the operator's within ACTIVE_MAX.
+    drop its own rules (record_order drop=...), never his; at most SELF_MAX are in force. Operator additions count only non-self
+    orders against ACTIVE_MAX, so self rules cannot crowd them out.
 The orders in force are shown to the instance verbatim in every live cycle and conversation (broker.tool_specs), and
 what it is about to send or change through the broker is checked against them by the judge (check): a message to the
 operator or to another instance, a mail draft, a calendar change. One that goes against an order is refused with the
@@ -22,8 +22,9 @@ a correction is checked until the next SHAFT_CORRECTION_PASSES messages to the o
 against its text, whatever the instance's own ledger says about closing it. A message to the operator refused for
 going against it starts the count again; a message the judge could not check (no verdict, or one that does not fit
 CHECK_SCHEMA) does not count; a check of a draft, a calendar change or a message to an instance neither counts as a
-pass nor restarts the count. Every check is a row of SUP_DIR/orders/<name>-checks.jsonl, from which the passes are
-counted — as of a trial replay's cutoff, only the checks made by then. A trial replay writes nothing here: the orders
+pass nor restarts the count. Checks go in SUP_DIR/orders/<name>-checks.jsonl, from which the passes are
+counted, as of a trial replay's cutoff, only the checks made by then. Logging failures after successful outward
+writes do not change the action's answer. A trial replay writes nothing here: the orders
 it records or drops and the checks it makes are kept by its ReplayBroker and passed in as `extra` rows, so the rest
 of that replay sees them as a live cycle would.
 """
@@ -43,11 +44,11 @@ CORRECTION_PASSES, _ = core.knob(
     "correction before it stops being checked (0: corrections are not checked)",
     group="Runs and conversations", services=("runs", "api", "web"))
 TEXT_MAX = 1000          # one order, verbatim
-ACTIVE_MAX = 40          # orders in force for one instance: every one is shown and checked on each covered outward action
+ACTIVE_MAX = 40          # operator adds count non-self orders; instance adds count all orders
 SOURCE_MAX = 200
 CHECK_TIMEOUT_S = 90     # the instance's broker client gives a tool call 120 s (template shaft/broker.py)
 ID = re.compile(r"o[1-9]\d*")
-SELF_MAX = 10            # rules an instance set for itself, of the ACTIVE_MAX: they must not crowd out the operator's
+SELF_MAX = 10            # rules an instance set for itself, separate from the operator's ACTIVE_MAX allowance
 BY = ("operator", "instance", "self")
 
 CHECK_SYSTEM = """\
@@ -137,7 +138,7 @@ def in_force(orders: list[dict], text: str) -> dict | None:
 
 
 def add(name: str, text: str, by: str, source: str, now: datetime | None = None) -> tuple[dict, bool]:
-    """Record an order: (the order, whether it is new). The same text already in force is not added twice."""
+    """Record an order: (the order, whether a row was appended). Operator takeovers keep the same id."""
     text = clean(text)
     if by not in BY:
         raise ValueError(f"by must be one of {BY}")
@@ -147,24 +148,29 @@ def add(name: str, text: str, by: str, source: str, now: datetime | None = None)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        rows = [json.loads(line) for line in f if line.strip()]
+        rows = _lines(p)
         row, new = added(name, _fold(rows), text, by, source, now)
         if new:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.seek(0)
+            text = f.read()
+            f.write(("\n" if text and not text.endswith("\n") else "") + json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
     return row, new
 
 
 def added(name: str, items: dict[str, dict], text: str, by: str, source: str, now: datetime) -> tuple[dict, bool]:
     """The row recording `text` given the orders `items` (id -> order, as _fold): (the order already in force with
-    that text, False) or (the new row, True). Refused over ACTIVE_MAX. Written by add; kept in memory by a replay."""
+    that text, False) or (a new or operator takeover row, True). Operator adds exclude self rules from ACTIVE_MAX.
+    Written by add; kept in memory by a replay."""
     active = [o for o in items.values() if not o.get("dropped_at")]
     if same := in_force(active, text):
+        if by == "operator" and same.get("by") != "operator":
+            return {**same, "by": "operator", "source": source,
+                    "added_at": now.isoformat(timespec="seconds")}, True
         return same, False
     if by == "self" and sum(o.get("by") == "self" for o in active) >= SELF_MAX:
         raise ValueError(f"at most {SELF_MAX} self rules in force; use record_order(drop='o7') to drop one first")
-    if len(active) >= ACTIVE_MAX:
+    if sum(by != "operator" or o.get("by") != "self" for o in active) >= ACTIVE_MAX:
         raise ValueError(f"{name} already has {ACTIVE_MAX} standing orders: drop one first (shaft orders {name})")
     number = max((int(oid[1:]) for oid in items), default=0) + 1
     return {"id": f"o{number}", "text": text, "added_at": now.isoformat(timespec="seconds"), "by": by,
@@ -186,8 +192,7 @@ def _drop(name: str, oid: str, now: datetime | None, own: bool) -> dict:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        items = _fold([json.loads(line) for line in f if line.strip()])
+        items = _fold(_lines(p))
         order = items.get(str(oid).strip())
         if order is None:
             raise ValueError(f"{name} has no order {oid!r}" + (f"; orders: {', '.join(items)}" if items else ""))
@@ -196,7 +201,9 @@ def _drop(name: str, oid: str, now: datetime | None, own: bool) -> dict:
         if order.get("dropped_at"):
             raise ValueError(f"order {oid} of {name} was already dropped at {order['dropped_at']}")
         row = {**order, "dropped_at": (now or datetime.now()).isoformat(timespec="seconds")}
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.seek(0)
+        text = f.read()
+        f.write(("\n" if text and not text.endswith("\n") else "") + json.dumps(row, ensure_ascii=False) + "\n")
         f.flush()
     return row
 

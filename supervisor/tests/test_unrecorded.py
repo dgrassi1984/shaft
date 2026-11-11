@@ -85,7 +85,8 @@ class UnrecordedTest(unittest.TestCase):
             self.assertEqual(unrecorded.run("ember", NOW), 0)
         transcript.assert_not_called()
         self.ask.assert_not_called()
-        self.assertFalse(unrecorded.path("ember").exists())
+        self.assertTrue(unrecorded.path("ember").exists())
+        self.assertEqual(unrecorded.rows("ember"), [])
 
     def test_once_per_write_up_and_again_after_resuming(self):
         """Repeated runs and duplicate markers cost nothing; a later write-up permits one new judgment."""
@@ -150,16 +151,18 @@ class UnrecordedTest(unittest.TestCase):
             {"talk_id": "talk-1", "at": NOW.isoformat(), "words": WORDS}])
 
     def test_judge_failures_remain_pending(self):
-        """An unavailable or failed judge must not create a ledger file or consume a conversation."""
+        """An unavailable or failed judge must keep the start marker without consuming a conversation."""
         self.talk()
         self.available.return_value = False
         self.assertEqual(unrecorded.run("ember", NOW), 0)
         self.ask.assert_not_called()
-        self.assertFalse(unrecorded.path("ember").exists())
+        self.assertTrue(unrecorded.path("ember").exists())
+        self.assertEqual(unrecorded.rows("ember"), [])
         self.available.return_value = True
         self.ask.side_effect = judge.JudgeError("example failure")
         self.assertEqual(unrecorded.run("ember", NOW), 0)
-        self.assertFalse(unrecorded.path("ember").exists())
+        self.assertTrue(unrecorded.path("ember").exists())
+        self.assertEqual(unrecorded.rows("ember"), [])
         self.assertEqual(unrecorded.pending("ember", NOW), ["talk-1"])
         self.assertEqual(self.log.call_count, 2)
 
@@ -189,7 +192,8 @@ class UnrecordedTest(unittest.TestCase):
         self.assertNotIn("old-", unrecorded.record_text("ember"))
         self.talk(tid="late-arriving", at=NOW - timedelta(days=3))
         self.assertEqual(unrecorded.run("ember", NOW), 1)
-        self.assertEqual(self.ask.call_count, 2)
+        self.assertEqual(self.ask.call_count, 1)
+        self.assertEqual(len([r for r in unrecorded.rows("ember") if "skipped" in r]), 6)
 
     def test_prompt_contains_records_and_tail_with_operator_labels(self):
         """The judge sees promises, due dates and orders alongside only the capped transcript tail."""

@@ -28,7 +28,7 @@ def path(name) -> Path:
     return core.SUP_DIR / "unrecorded_orders" / f"{name}.jsonl"
 
 
-def rows(name, as_of=None) -> list[dict]:
+def _events(name, as_of=None) -> list[dict]:
     """Read complete ledger rows, optionally limited to what was known at the cutoff."""
     try:
         text = path(name).read_text()
@@ -47,6 +47,11 @@ def rows(name, as_of=None) -> list[dict]:
         if at is not None and (cutoff is None or at <= cutoff):
             out.append(row)
     return out
+
+
+def rows(name, as_of=None) -> list[dict]:
+    """Read comparisons, excluding the ledger's start marker."""
+    return [row for row in _events(name, as_of) if row.get("started") is not True]
 
 
 def _written_up(name: str, now: datetime) -> dict[str, str]:
@@ -119,16 +124,21 @@ def _validated(verdict: dict, operator_turns: list[str]) -> list[dict]:
 
 def run(name: str, now=None) -> int:
     """Record comparisons under one lock; failures leave conversations pending for the next run."""
-    if not judge.available():
-        core.log(f"{name}: unrecorded skipped: judge unavailable")
-        return 0
     now = now or datetime.now()
     local_now = commitments._local(now)
     target = path(name)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        first = not target.exists()
+        events = _events(name)
+        started = next((commitments._at(row["at"]) for row in events if row.get("started") is True), None)
+        if started is None:
+            started = local_now
+            with target.open("a") as file:
+                file.write("\n" + json.dumps({"at": now.isoformat(), "started": True}) + "\n")
+        if not judge.available():
+            core.log(f"{name}: unrecorded skipped: judge unavailable")
+            return 0
         written = _written_up(name, local_now)
         count = judged = 0
         for tid in _pending(written, rows(name)):
@@ -137,7 +147,7 @@ def run(name: str, now=None) -> int:
                 continue
             stamp = written[tid]
             row = {"at": now.isoformat(), "talk_id": tid, "written_up": stamp, "orders": [], "judge": None}
-            if first and commitments._at(stamp) < local_now - timedelta(hours=FIRST_RUN_HOURS):
+            if commitments._at(stamp) < started - timedelta(hours=FIRST_RUN_HOURS):
                 row["skipped"] = "before this check existed"
             else:
                 if judged >= PER_RUN:

@@ -156,11 +156,17 @@ class ClaimlintTest(unittest.TestCase):
         self.assertEqual(claimlint.head_lines("missing"), [])
 
     def test_builtin_names_cover_template_specs_without_importing_agent_code(self):
-        tree = ast.parse((core.PROJECT / "template" / "shaft" / "tools.py").read_text())
-        builtins = next(node.value for node in tree.body if isinstance(node, ast.Assign)
-                        and any(isinstance(target, ast.Name) and target.id == "BUILTINS" for target in node.targets))
-        names = {node.args[0].value for node in ast.walk(builtins) if isinstance(node, ast.Call)
-                 and isinstance(node.func, ast.Name) and node.func.id == "_spec"}
+        names = set()
+        for file in (core.PROJECT / "template" / "shaft").glob("*.py"):
+            tree = ast.parse(file.read_text())
+            names.update(node.args[0].value for node in ast.walk(tree) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Name) and node.func.id == "_spec" and node.args
+                         and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str))
+            # Literal function specs may be declared without _spec.
+            names.update(value.value for node in ast.walk(tree) if isinstance(node, ast.Dict)
+                         for key, value in zip(node.keys, node.values)
+                         if isinstance(key, ast.Constant) and key.value == "name"
+                         and isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value)
         self.assertTrue(names)
         self.assertEqual(names - claimlint.BUILTIN, set())
         self.assertTrue(set(commitments.BOOKKEEPING) | {"view_image", "commit_to"} <= claimlint.BUILTIN)

@@ -118,7 +118,8 @@ class FactLedgerTest(unittest.TestCase):
         """Totals cover all current facts; page ranges cover the filtered result and limit never exceeds 200."""
         pairs = [(self.fact(f"Invented orchard observation number {i} has enough words."),
                   "unmatched" if i < 204 else "matched") for i in range(205)]
-        with mock.patch.object(provenance, "checked", return_value=pairs):
+        with mock.patch.object(provenance, "facts", return_value=[f for f, _ in pairs]), \
+                mock.patch.object(provenance._Evidence, "check", side_effect=[s for _, s in pairs] * 4):
             page = factledger.record_text("ember", limit=2, offset=2, status="unmatched")
             self.assertIn("self-generated: 0; unmatched: 204; n/a: 0; matched: 1", page)
             self.assertIn("204 facts; showing 3–4", page)
@@ -175,16 +176,15 @@ class FactLedgerTest(unittest.TestCase):
                  self.fact(TEXT + " Extra detailed report about the southern valley survey.", date="2026-10-04 10:00")]
         pairs = [(facts[0], "unmatched"), (facts[1], "n/a"), (facts[2], "matched")]
         cutoff = datetime(2026, 10, 4)
-        with mock.patch.object(provenance, "checked", return_value=pairs):
-            result = factledger.match_claim("ember", facts[2]["text"], as_of=cutoff)
+        rows = [{**f, "status": status} for f, status in pairs]
+        with mock.patch.object(factledger, "rows", side_effect=AssertionError("unexpected rebuild")):
+            result = factledger.match_claim("ember", facts[2]["text"], as_of=cutoff, rows=rows)
             self.assertEqual((result["date"], result["text"], result["status"]),
                              (facts[1]["date"], TEXT, "n/a"))
-            self.assertIsNone(factledger.match_claim("ember", "No common words in this invented quotation."))
-        with mock.patch.object(provenance, "checked", return_value=[(facts[2], "matched")]):
-            self.assertIsNone(factledger.match_claim("ember", facts[2]["text"]))
-        with mock.patch.object(provenance, "checked", return_value=[
-                (facts[0], "unmatched"), (self.fact("orchard survey found", date="2026-10-05"), "n/a")]):
-            self.assertEqual(factledger.match_claim("ember", TEXT)["text"], TEXT)
+            self.assertIsNone(factledger.match_claim("ember", "No common words in this invented quotation.", rows=rows))
+            self.assertIsNone(factledger.match_claim("ember", facts[2]["text"], rows=[rows[2]]))
+            self.assertEqual(factledger.match_claim("ember", TEXT, rows=[
+                rows[0], {**self.fact("orchard survey found", date="2026-10-05"), "status": "n/a"}])["text"], TEXT)
 
     def test_malformed_episode_fields_do_not_stop_valid_cycles(self):
         """Malformed record fields do not hide a later valid restatement."""
@@ -204,9 +204,11 @@ class FactLedgerTest(unittest.TestCase):
                                          finish={"learned": facts[hour * 60 + minute]["text"]})
                              for hour in range(5) for minute in range(60)])
         started = time.perf_counter()
-        with mock.patch.object(provenance, "checked", wraps=provenance.checked) as checked:
+        with mock.patch.object(provenance, "_Evidence", wraps=provenance._Evidence) as evidence, \
+                mock.patch.object(provenance, "_episodes", wraps=provenance._episodes) as episodes:
             result = factledger.rows("ember")
-            checked.assert_called_once_with("ember")
+            self.assertEqual(evidence.call_count, 1)
+            episodes.assert_called_once_with("ember")
         elapsed = time.perf_counter() - started
         self.assertEqual(len(result), 300)
         self.assertTrue(all(row["uses"] == 1 for row in result))
@@ -217,7 +219,7 @@ class FactLedgerTest(unittest.TestCase):
         pairs = [(self.fact(f"Fact {i} describes orchard trees beside the eastern gate."), "n/a")
                  for i in range(20)]
         self.write_episodes([self.episode("2026-10-03T10:00:00", finish={"learned": TEXT})])
-        with mock.patch.object(provenance, "checked", return_value=pairs), \
+        with mock.patch.object(provenance, "facts", return_value=[f for f, _ in pairs]), \
                 mock.patch.object(provenance, "_shingles", wraps=provenance._shingles) as shingles:
             factledger.rows("ember")
         prose_calls = [call for call in shingles.call_args_list if call.args[0] == TEXT]

@@ -20,6 +20,7 @@ NOW = fixtures.NOW
 class OrdersTest(unittest.TestCase):
     def setUp(self):
         fixtures.PushTest.setUp(self)
+        self.b.idle_declared = False
         self.enterContext(mock.patch.object(orders, "CORRECTION_PASSES", 3))
         self.enterContext(mock.patch.object(metrics, "own_models", return_value=["openrouter/own/model"]))
         self.pick = self.enterContext(mock.patch.object(judge, "pick", return_value="openrouter/judge/x"))

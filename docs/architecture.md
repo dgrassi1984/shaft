@@ -363,8 +363,10 @@ The scheduler applies the idle back-off above.
 `MIN_AHEAD=timedelta(hours=1)` and `MAX_AHEAD=timedelta(days=90)` bound due times;
 `OPEN_MAX=20` caps unscored predictions. Events live in `SUP_DIR/predictions/<name>.jsonl`.
 Once due, the instance reports `held` or `failed` with `evidence="<episode time>#<step>"`.
-`metrics.after_cycle` scores reports with one judge call using only the cited tool call and result,
-with the result cut to 4,000 characters. The reported outcome is not evidence for the judge.
+`metrics.after_cycle` scores reports with judge calls using only the cited tool call and result,
+with the result cut to 4,000 characters. Evidence must cite a supervisor tool reading an external outcome,
+not `run` or an instance-owned file. The judge treats the prediction, check description and tool result as data.
+The reported outcome is not evidence for the judge. Concurrent scorers may ask twice but append only one score.
 Invalid evidence, an unclear verdict or no report within `REPORT_GRACE=timedelta(hours=48)` after due yields
 `not checked`; judge outages leave reports pending. Stats show per-subject counts; Brier scores use only
 checked outcomes with confidence. The tool is unavailable in exams and jobs; replays keep events locally and score nothing.
@@ -374,7 +376,8 @@ checked outcomes with confidence. The tool is unavailable in exams and jobs; rep
 `supervisor/unrecorded.py`, `run`, checks ended, written-up conversations in `metrics.after_cycle` before stats.
 It excludes open conversations and rechecks that they remain closed before reading their transcripts.
 It makes one judge call per eligible conversation with visible operator text, up to `PER_RUN=3` calls per run.
-On its first run it skips write-ups older than `FIRST_RUN_HOURS=24` hours.
+The first run writes a start marker even if the judge is down or nothing is pending.
+Write-ups more than `FIRST_RUN_HOURS=24` hours before that marker are skipped.
 `TRANSCRIPT_CHARS=24000` bounds the transcript tail; returned quotes must occur in visible operator turns.
 Results stay in `SUP_DIR/unrecorded_orders/<name>.jsonl`, exposed by the gauge and `record(kind="unrecorded_orders")`.
 This check only reports. It never creates a commitment or standing order.
@@ -667,8 +670,9 @@ append-only rows `{id, text, added_at, by: operator|instance|self, source, dropp
 `.supervisor/orders/<name>.jsonl`. The last row of an id is its state. The operator adds, lists and drops orders
 with `shaft orders <name> [list|add TEXT|drop ID]` or the web Config page. An instance uses `record_order` to
 record an order heard from the operator, citing the message file or conversation id. With `own=true`, it sets
-its own rule and must cite an exact past episode timestamp or a unique minute prefix. At most 10 self rules
-and 40 total orders may be in force. The instance can drop only its own rules with `record_order(drop=ID)`.
+its own rule and must cite an exact past live-cycle timestamp or a unique minute prefix.
+At most 10 self rules may be in force. Operator additions count only non-self orders against the limit of 40;
+instance additions count every order. The instance can drop only its own rules with `record_order(drop=ID)`.
 The operator can drop any order. The CLI lists authors and refusal counts. `orders.stats_lines` reports self rules.
 
 Orders are shown verbatim every run and conversation in the `record_order` tool description, or in
@@ -683,7 +687,8 @@ No orders and no held corrections means no judge call.
 
 A correction stays checked until `SHAFT_CORRECTION_PASSES` messages to the operator pass, regardless of the
 instance's closing ledger. Only operator messages advance or restart that count. Other checks do neither.
-Unchecked messages do not count. Corrections marked `not_accepted` are left out. Checks are logged in
+Unchecked messages do not count. Corrections marked `not_accepted` are left out. Check logging is best effort
+after successful outward writes; a logging failure does not turn a completed action into a tool error. Checks go in
 `.supervisor/orders/<name>-checks.jsonl` with the tool name and, for messages, the recipient category.
 Old rows without a tool name count as operator messages. Refusals count per order across all checked tools.
 Trial replays respect their cutoff and keep additions, drops and checks in memory. They write no order state.

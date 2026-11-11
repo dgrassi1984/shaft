@@ -5,7 +5,9 @@ import json
 from collections import Counter, defaultdict
 from datetime import datetime
 
-from . import provenance
+from . import core, provenance
+
+MATCH_MIN_SHARE = 0.3  # One shared window can be chance; require a share of the fact's shingles.
 
 SOURCES = {
     "self-generated": "first appears in my own prose, not in a tool result",
@@ -39,13 +41,17 @@ def _prose(episode: dict) -> list[str]:
 
 def rows(name: str, as_of: datetime | None = None) -> list[dict]:
     """Current facts with source checks and distinct later live cycles that restated them."""
-    pairs = [(fact, status) for fact, status in provenance.checked(name) if fact["file"] == "memory/facts.md"]
+    facts = [fact for fact in provenance.facts(name) if fact["file"] == "memory/facts.md"]
+    episodes = provenance._episodes(name)
+    journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
+    evidence = provenance._Evidence(episodes, journal)
+    pairs = [(fact, evidence.check(fact)) for fact in facts]
     sizes = {provenance._size(fact["text"]) for fact, _ in pairs} - set(range(provenance.MIN_WORDS))
     cutoff = provenance._date(as_of.isoformat()) if as_of is not None else None
     # Index once per required size: short facts use their whole text, as in provenance.
     index = {size: defaultdict(set) for size in sizes}
     stamps = {}
-    for episode in provenance._episodes(name):
+    for episode in episodes:
         at = provenance._date(episode.get("ts"))
         if episode.get("kind") != "live" or at is None or (cutoff is not None and at >= cutoff):
             continue
@@ -59,10 +65,11 @@ def rows(name: str, as_of: datetime | None = None) -> list[dict]:
     for fact, status in pairs:
         size, at = provenance._size(fact["text"]), provenance._date(fact["date"])
         uses, last_use = None, None
-        if size >= provenance.MIN_WORDS:
+        if size >= provenance.MIN_WORDS and at is not None:
             candidates = set().union(*(index[size].get(shingle, set())
                                        for shingle in provenance._shingles(fact["text"], size)))
-            later = {stamp for stamp in candidates if at is not None and stamp > at}
+            later = {stamp for stamp in candidates
+                     if (stamp.date() > at.date() if len(fact["date"]) == 10 else stamp > at)}
             uses = len(later)
             last_use = stamps[max(later)] if later else None
         out.append({"date": fact["date"], "text": fact["text"], "src": fact["src"], "status": status,
@@ -86,7 +93,8 @@ def record_text(name: str, limit: int = 40, offset: int = 0, status: str = "", a
              f"{len(facts)} facts; showing {start}–{end}"]
     for fact in page:
         if fact["uses"] is None:
-            use = "restatements not counted (fact too short)"
+            use = ("restatements not counted (invalid fact date)" if provenance._date(fact["date"]) is None
+                   else "restatements not counted (fact too short)")
         elif fact["uses"]:
             unit = "cycle" if fact["uses"] == 1 else "cycles"
             use = f"restated in {fact['uses']} later {unit}, last {fact['last_use'][:16]}"
@@ -99,18 +107,19 @@ def record_text(name: str, limit: int = 40, offset: int = 0, status: str = "", a
     return "\n".join(lines)
 
 
-def match_claim(name: str, quote: str, as_of: datetime | None = None) -> dict | None:
-    """Find the current fact without a checked source sharing the most shingles with a claim."""
+def match_claim(name: str, quote: str, as_of: datetime | None = None, rows=None) -> dict | None:
+    """Find an unchecked fact with enough shared shingles; supplied rows reuse an existing rebuild."""
     quotes = {}
     best, best_key = None, (0, datetime.min)
-    for fact in rows(name, as_of):
+    for fact in globals()["rows"](name, as_of) if rows is None else rows:
         size = provenance._size(fact["text"])
         if fact["status"] == "matched" or size < provenance.MIN_WORDS:
             continue
         if size not in quotes:
             quotes[size] = provenance._shingles(quote, size)
-        overlap = len(provenance._shingles(fact["text"], size) & quotes[size])
+        shingles = provenance._shingles(fact["text"], size)
+        overlap = len(shingles & quotes[size])
         key = overlap, provenance._date(fact["date"]) or datetime.min
-        if overlap and key > best_key:
+        if shingles and overlap / len(shingles) >= MATCH_MIN_SHARE and key > best_key:
             best, best_key = fact, key
     return best
