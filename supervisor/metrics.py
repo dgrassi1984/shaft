@@ -229,7 +229,10 @@ SURPRISE_PROPS = {
     "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
 }
 SURPRISES = tuple(SURPRISE_PROPS)
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS, **LINK_PROPS})
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
+# The main judge's schema: the same grades plus the two link strings. Only it is asked for them: the second judge,
+# the controls and the baselines grade the same case on JUDGE_SCHEMA, unchanged, so their comparisons stay like for like.
+MAIN_SCHEMA = _schema({**JUDGE_SCHEMA["properties"], **LINK_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
@@ -835,7 +838,12 @@ def judge_pending(name: str) -> int:
         log(f"{name}: commitment citations could not be read: {type(e).__name__}: {e}")
     left = unsampled(name)
     from . import idle   # a cycle the instance ended as nothing worth one is its own class: never a failure and
-    done = {j["episode_ts"] for j in js} | (left - cited) | idle.exits(name, episodes)   # never judged, goal or not
+    changed = []                       # never judged, goal or not; one a kept commitment cites is judged all the same
+    try:
+        changed = [c["ts"] for c in change_outcomes(name)]
+    except Exception as e:
+        log(f"{name}: kept changes could not be read for the idle exits: {type(e).__name__}: {e}")
+    done = {j["episode_ts"] for j in js} | (left - cited) | (idle.exits(name, episodes, changed) - cited)
     new = 0
     for ep in episodes:
         if ep["ts"] in done:
@@ -857,7 +865,7 @@ def judge_pending(name: str) -> int:
                              followed=_followed_surprise(name, ep))
                 second = selected and second_sampled(name, ep["ts"])
                 by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
-                verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
+                verdict = judge.ask(JUDGE_SYSTEM, case, MAIN_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
                 _links(verdict, js, ep["ts"])
                 if verdict["unsupported_claim"]:   # the fact with no checked source the failed claim rested on, if any
@@ -1784,7 +1792,7 @@ def stats_text(name: str, save: bool = False) -> str:
         from . import stats_head
         try:
             head = stats_head.head(name, save=save)
-        except Exception as e:   # the head must never cost the instance its page
+        except (Exception, SystemExit) as e:   # the head must never cost the instance its page
             log(f"{name}: stats head failed: {type(e).__name__}: {e}")
             head = []
         if head and text.startswith(TITLE + "\n\n"):
@@ -1837,8 +1845,7 @@ def _stats_text(name: str) -> str:
                "are given per judge, each read against that judge's own earlier figure. Value counts every cycle: the "
                "judges agree on it.*", ""]
     lines += push_lines + project_lines
-    from . import idle
-    lines += idle.stats_lines(name)
+    lines += _part_lines(name, "idle", "stats_lines")
     lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
 
     # Order is priority: the prompt keeps only the head, below SECTIONS' 5500 when CONTEXT_CHARS shrinks it.
@@ -1917,7 +1924,7 @@ def _part_lines(name: str, module: str, function: str, *args) -> list[str]:
     import importlib
     try:
         return getattr(importlib.import_module(f".{module}", __package__), function)(name, *args)
-    except Exception as e:
+    except (Exception, SystemExit) as e:   # SystemExit: an instance whose folder is gone (core.instance_root)
         log(f"{name}: stats part {module}.{function} failed: {type(e).__name__}: {e}")
         return []
 
@@ -2121,9 +2128,9 @@ def _probation_from_log(name: str) -> list[dict]:
                 continue
             outcome = "kept, not judged" if m[6] else "passed" if m[7] == "passed" else "reverted"
             rows.append({**by_commit[m[5]], "at": at, "outcome": outcome})
-        elif m[8] and rows:        # logged right after the probation it belongs to opens
-            last = next((r for r in reversed(rows) if r["outcome"] == "started"), None)
-            if last and last["since"][:16] == at[:16]:
+        elif m[8] and rows:        # logged right after the change it belongs to, on probation or not
+            last = rows[-1]
+            if last["outcome"] in ("started", "not on probation") and abs((_ts(at) - _ts(last["since"])).total_seconds()) <= 60:
                 last["trial"] = m[8]
     return rows
 
@@ -2152,9 +2159,12 @@ def change_outcomes(name: str, as_of: datetime | None = None) -> list[dict]:
             continue
         if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("at", "commit", "since", "outcome")):
             events.append(e)   # a row without its fields is skipped, never indexed
-    first = min((e["since"] for e in events), default=None)
-    events = [e for e in _probation_from_log(name) if first is None or e["since"] < first] + events
-    events = [e for e in events if cut is None or e["at"] < cut]
+    # The log covers what the history file does not: changes kept before it existed, and the start of a probation
+    # that was already open when it began (its close is in the history, its start only in the log). One row per
+    # (commit, outcome), the history's when both have it.
+    merged = {(e["commit"][:8], e["outcome"]): e for e in _probation_from_log(name)}
+    merged.update({(e["commit"][:8], e["outcome"]): e for e in events})
+    events = sorted((e for e in merged.values() if cut is None or e["at"] < cut), key=lambda e: e["at"])
     starts = [e for e in events if e["outcome"] in ("started", "not on probation")]
     out, taken = [], set()
     for row in changes:

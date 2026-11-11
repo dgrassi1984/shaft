@@ -232,6 +232,8 @@ def record(event: str, name: str = "", why: str = "") -> None:
                 st.get("idle_exits", {}).pop(name, None)   # any new cycle puts the idle wait back to normal
             elif event == "skip":
                 st.setdefault("skipped", {})[name] = {"at": now, "why": why}
+        elif event == "idle_revoke":
+            st.get("idle_exits", {}).pop(name, None)
         elif event == "idle_exit":   # the instance ended its cycle as nothing worth one (idle.py): its next idle
             st.setdefault("idle_exits", {})[name] = now   # wake waits IDLE_BACKOFF times as long; no interval restarts
         else:

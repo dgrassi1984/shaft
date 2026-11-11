@@ -20,7 +20,8 @@ def _arg(call: dict, key: str) -> str:
     if isinstance(args, dict):
         value = args.get(key)
         return value if isinstance(value, str) else ""
-    return metrics._arg(args, key) or ""
+    value = metrics._arg(args, key) if isinstance(args, str) else ""
+    return value if isinstance(value, str) else ""
 
 
 def signature(call: dict) -> str:
@@ -65,7 +66,8 @@ def _cycles(name: str, days: int, as_of: datetime | None):
         if at is None or not start <= at < end:
             continue
         sigs = []
-        for call in ep.get("tools") or []:
+        tools = ep.get("tools")
+        for call in tools if isinstance(tools, list) else []:
             if not isinstance(call, dict):
                 continue
             tool = call.get("tool")

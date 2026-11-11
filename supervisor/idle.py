@@ -6,8 +6,16 @@ class: never a failure, not in the success rate, not sent to a judge. The schedu
 twice as long (autonomy.decide_wakes), back to normal from the next cycle of any other kind: the instance sets its own
 pace and the supervisor follows. Any event (a message, a due commitment, a job result) wakes it as ever.
 
-One row per exit in SUP_DIR/idle_exits/<name>.jsonl {at, reason}. Honoured only in an autonomous cycle that has sent
-or drafted nothing: an exit declared after work went out would hide that cycle from the judge.
+Rows of SUP_DIR/idle_exits/<name>.jsonl: an exit {at, run, reason}, or its withdrawal {at, run, revoked}. `run` is
+the run's start time as the supervisor stamped it (runner: SHAFT_RUN_STARTED), which the episode carries: an exit
+belongs to one run, never to whatever episode claims a time window around it.
+
+It must not become a way to hide work from the judge, so it counts only for a cycle that did nothing outward:
+  - before it: no message, draft, calendar change, delegation, config or key change, trial, order or prediction
+    (PRIOR); reading and looking around (`run`, `http_request`, file tools) is how one finds there is nothing to do;
+  - after it: any further supervisor tool call other than a read of its own record (QUIET) withdraws the exit, and
+    the cycle is an ordinary one again (never a refusal: the call goes through);
+  - a cycle that kept a code change, or one a kept commitment cites as its evidence, is judged like any other.
 """
 from __future__ import annotations
 
@@ -21,6 +29,8 @@ from .core import jsonl_lines
 
 REASON_MAX = 300
 OUTWARD = ("send_message", "mail_draft", "mail_draft_update", "calendar_create", "calendar_move", "calendar_respond")
+PRIOR = OUTWARD + ("delegate_coding", "set_config", "secret_set", "secret_delete", "trial", "record_order", "predict")
+QUIET = ("nothing_to_do", "record", "gauges")   # what may still be called after the exit without withdrawing it
 WINDOW_DAYS = 14
 
 
@@ -44,8 +54,7 @@ def rows(name: str, as_of: datetime | None = None) -> list[dict]:
     return out
 
 
-def record(name: str, reason: str, now: datetime | None = None) -> dict:
-    row = {"at": (now or datetime.now()).isoformat(timespec="seconds"), "reason": " ".join(str(reason).split())[:REASON_MAX]}
+def _append(name: str, row: dict) -> dict:
     p = path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as f:
@@ -54,25 +63,67 @@ def record(name: str, reason: str, now: datetime | None = None) -> dict:
     return row
 
 
-def exits(name: str, episodes: list[dict]) -> set[str]:
-    """The ts of the live episodes that were idle exits: one whose run window (run_started, ts] holds an exit row.
-    An episode with no run_started is matched from the previous episode's end."""
-    stamps = sorted(r["at"] for r in rows(name))
-    if not stamps:
+def record(name: str, run: str, reason: str, now: datetime | None = None) -> dict:
+    return _append(name, {"at": (now or datetime.now()).isoformat(timespec="seconds"), "run": str(run),
+                          "reason": " ".join(str(reason).split())[:REASON_MAX]})
+
+
+def revoke(name: str, run: str, why: str, now: datetime | None = None) -> dict:
+    return _append(name, {"at": (now or datetime.now()).isoformat(timespec="seconds"), "run": str(run),
+                          "revoked": str(why)[:REASON_MAX]})
+
+
+def standing(name: str, as_of: datetime | None = None) -> dict[str, dict]:
+    """run -> its exit row, for the exits not withdrawn."""
+    out: dict[str, dict] = {}
+    for row in rows(name, as_of):
+        run = row.get("run")
+        if not isinstance(run, str) or not run:
+            continue
+        if "revoked" in row:
+            out.pop(run, None)
+        elif "reason" in row:
+            out.setdefault(run, row)
+    return out
+
+
+def _at(value) -> datetime | None:
+    try:
+        at = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return at.astimezone().replace(tzinfo=None) if at.tzinfo else at
+
+
+def exits(name: str, episodes: list[dict], changed: list[str] = ()) -> set[str]:
+    """The ts of the live episodes that were idle exits: the episode carrying the run id of a standing exit (the
+    earliest one, if several claim it: the episode file is the instance's), ended at or after the exit was recorded,
+    and with no code change kept in its run (`changed`: the kept changes' times)."""
+    open_ = standing(name)
+    if not open_:
         return set()
-    out, previous = set(), None
-    for ep in sorted(episodes, key=lambda e: e["ts"]):
-        start = ep.get("run_started") or previous
-        if isinstance(start, str) and any(start < at <= ep["ts"] for at in stamps):
-            out.add(ep["ts"])
-        previous = ep["ts"]
+    kept = sorted(at for ts in changed if (at := _at(ts)) is not None)
+    out, used = set(), set()
+    for ep in sorted((e for e in episodes if isinstance(e, dict) and isinstance(e.get("ts"), str)),
+                     key=lambda e: e["ts"]):
+        run = ep.get("run_started")
+        row = open_.get(run) if isinstance(run, str) else None
+        if row is None or run in used:
+            continue
+        used.add(run)
+        start, end, said = _at(run), _at(ep["ts"]), _at(row["at"])
+        if None in (start, end, said) or not start <= said <= end:
+            continue
+        if any(start <= at <= end + timedelta(minutes=2) for at in kept):
+            continue
+        out.add(ep["ts"])
     return out
 
 
 def stats_lines(name: str, now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
     since = (now - timedelta(days=WINDOW_DAYS)).isoformat(timespec="seconds")
-    recent = [r for r in rows(name) if since <= r["at"] <= now.isoformat(timespec="seconds")]
+    recent = [r for r in standing(name).values() if since <= r["at"] <= now.isoformat(timespec="seconds")]
     if not recent:
         return []
     return [f"- Cycles I ended as nothing worth a cycle (last {WINDOW_DAYS} days): {len(recent)}. They are not judged "

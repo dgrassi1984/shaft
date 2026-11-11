@@ -51,8 +51,9 @@ def reasons(name: str, now: datetime) -> list[tuple[str, str]]:
         made = commitments._at(item.get("made_at"))
         if (item["made_to"] == "operator" and item["status"] == "open" and made is not None
                 and (item.get("talk_id") or item.get("message_file")) and now - made >= STALE):
-            hours = int((now - made).total_seconds() // 3600)
-            out.append((f"order:{item['id']}", f"the operator's order {item['id']} has had no result for {hours} h"))
+            # no elapsed time in the text: the scheduler marks the wake by this text a moment after reading it
+            out.append((f"order:{item['id']}", f"the operator's order {item['id']} of "
+                                               f"{made:%Y-%m-%d %H:%M} has had no result for over a day"))
     return out
 
 

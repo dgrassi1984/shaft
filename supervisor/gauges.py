@@ -7,7 +7,10 @@ MENU (the broker's `gauges` tool), or the operator does (`shaft gauges`); the ch
 page, largest gap first. They are readings only: nothing here instructs, refuses or gates, and nothing is shown until a
 choice is made.
 
-No gauge can be written by the instance: each is recomputed from the supervisor's records whenever the page is built.
+No gauge can be set by the instance: each is recomputed whenever the page is built. Most read the supervisor's own
+record (judgments, tool logs, battery, checks). Three read a ledger the instance keeps in its folder, as the
+supervisor folds and re-checks it (promises: commitments.py; corrections; plan: projects.py): those are as true as
+that ledger, and the menu says which they are.
 The choice is a row of SUP_DIR/gauges/<name>.jsonl, append-only {ts, by, chosen}; the last row is the choice in force
 and the earlier rows are the history of how it changed. A trial replay writes nothing here: its ReplayBroker keeps the
 choice it made and passes it in as `extra`.
@@ -102,7 +105,8 @@ def _corrections(name: str, now: datetime) -> Reading:
 
 def _value(name: str, now: datetime) -> Reading:
     from . import metrics
-    rows = metrics.valued(metrics.judgments_for_stats(name))[-LAST_VALUED:]
+    rows = metrics.valued([j for j in metrics.judgments_for_stats(name)
+                           if (at := metrics._ts(j["episode_ts"])) and at <= now])[-LAST_VALUED:]
     if not rows:
         return Reading("Judged value of my cycles: none graded yet")
     mean = sum(j["value"] for j in rows) / len(rows)
@@ -113,7 +117,8 @@ def _value(name: str, now: datetime) -> Reading:
 
 def _recurrence(name: str, now: datetime) -> Reading:
     from . import surprise
-    rec = surprise._p2(surprise.events(name))
+    from . import metrics
+    rec = surprise._p2([e for e in surprise.events(name) if (at := metrics._ts(str(e.get("episode")))) and at <= now])
     if not rec["classes"]:
         return Reading("Kinds of failed result that came back in a later cycle: no failed result recorded")
     return Reading(f"Kinds of failed result that came back in a later cycle: {rec['recurred']} of {rec['classes']}",
@@ -126,7 +131,8 @@ def _battery(name: str, now: datetime) -> Reading:
         e = battery.era(name)
     except FileNotFoundError:
         return Reading("Capability on fixed tasks: no battery items for me")
-    rows = [r for r in battery.results(name) if battery._same_era(r, e) and r.get("status") == "scored"]
+    rows = [r for r in battery.results(name) if battery._same_era(r, e) and r.get("status") == "scored"
+            and str(r.get("at", "")) <= now.isoformat(timespec="seconds")]
     parts, gaps = [], []
     for cat in battery.CATEGORIES:
         mine = battery._per_item(rows, cat, "instance")
@@ -186,7 +192,7 @@ def reading(name: str, key: str, now: datetime | None = None) -> Reading:
     """One gauge's reading. A record that cannot be read is said, never hidden and never a reason to drop the line."""
     try:
         return MENU[key][1](name, now or datetime.now())
-    except Exception as e:   # one unreadable record must not cost the instance its other gauges
+    except (Exception, SystemExit) as e:   # one unreadable record must not cost the instance its other gauges
         return Reading(f"{MENU[key][0]}: could not be read ({type(e).__name__}: {e})"[:200])
 
 
@@ -257,6 +263,7 @@ def head_lines(name: str, now: datetime | None = None, as_of: datetime | None = 
     if not c:
         return []
     known = [k for k in c["chosen"] if k in MENU]   # a gauge since removed from the menu is no longer shown
+    now = as_of or now          # a replay reads the gauges as they stood at its cycle's start
     readings = sorted(((reading(name, k, now), i) for i, k in enumerate(known)),
                       key=lambda ri: (-(ri[0].gap if ri[0].gap is not None else -1.0), ri[1]))
     who = "me" if c["by"] == "instance" else "the operator"
@@ -267,11 +274,14 @@ def head_lines(name: str, now: datetime | None = None, as_of: datetime | None = 
 def menu_text(name: str, now: datetime | None = None, as_of: datetime | None = None, extra=()) -> str:
     """What the `gauges` tool returns with no argument: every gauge with its reading now, and the choice in force."""
     c = choice(name, as_of, extra)
+    now = as_of or now          # a replay reads the gauges as they stood at its cycle's start
     chosen = c["chosen"] if c else []
-    lines = ["Gauges: readings the supervisor computes from its own record of you. Choose up to "
-             f"{MAX_CHOSEN} with gauges(choose=[...]) and they become the first lines of self/stats.md, largest gap "
-             "first. They are readings only: nothing is asked of you and nothing is refused. Neither you nor a file "
-             "of yours can change a reading; you can change the choice at any time.", ""]
+    lines = ["Gauges: readings the supervisor computes about you each time it writes self/stats.md. Choose up to "
+             f"{MAX_CHOSEN} with gauges(choose=[...]) and they become the first lines of that page, largest gap "
+             "first. They are readings only: nothing is asked of you and nothing is refused. You cannot set a "
+             "reading: each is recomputed from the record (promises, corrections and plan from your own ledgers as "
+             "the supervisor re-checks them, the others from the supervisor's own record). You can change the "
+             "choice at any time.", ""]
     for key, (what, _) in MENU.items():
         lines.append(f"- {key}{' [chosen]' if key in chosen else ''}: {reading(name, key, now).text}")
     lines += ["", (f"Chosen now: {', '.join(chosen)} (by {'you' if c['by'] == 'instance' else 'the operator'}, "

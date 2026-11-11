@@ -367,8 +367,10 @@ SPECS = {
                            "cycle: it is not judged and never counts as a failure, and you need not invent a goal. "
                            "Your next idle wake then waits twice as long; a message, a commitment coming due or a job "
                            "result wakes you as usual, and your next cycle of any other kind puts the wait back. It "
-                           "counts only in an autonomous cycle that has sent or drafted nothing; after calling it, "
-                           "finish the cycle.",
+                           "counts only in an autonomous cycle that has sent, drafted, delegated or changed nothing "
+                           "(looking around is fine), and only if it is the last thing you do: after it, finish the "
+                           "cycle; any further supervisor tool call other than record or gauges makes the cycle an "
+                           "ordinary one again, as does keeping a code change.",
                            {"reason": {"type": "string", "description": "one sentence: what you checked and found "
                                                                         "nothing in"}}, ["reason"]),
     "withdraw_held": _spec("withdraw_held", "Withdraw one of your own held code changes so it is never re-gated. "
@@ -1006,6 +1008,7 @@ class Broker:
         self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
         self.run_kind = None
         self.run_started = None
+        self.idle_declared = False             # nothing_to_do was honoured in this run (idle.py)
         self.talk_id: str | None = None         # the conversation this run replies in (runner._conversation)
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script)
         self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
@@ -1397,6 +1400,14 @@ class Broker:
         self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
+        if self.idle_declared:
+            from . import idle
+            if tool not in idle.QUIET:
+                self.idle_declared = False
+                try:
+                    self._idle_withdrawn(tool)
+                except Exception as e:      # the exit's bookkeeping never costs the call
+                    self._log(f"{self.name}: idle exit not withdrawn: {type(e).__name__}: {e}")
         thread = str(args.get("id") or "").strip()
         # a continuation page of a thread opened this run (#134): it still checks the label and counts as a call, but
         # not against the mail cap — at 6,000 characters a page, a 160,000-character thread needs ~28 pages. Only a read
@@ -1956,22 +1967,33 @@ class Broker:
         if self.run_kind != "live":
             return ("not counted: only an autonomous cycle can end as nothing worth a cycle (this is a "
                     f"{self.run_kind or 'different kind of run'})")
-        sent = [t for t in idle.OUTWARD if self.counts.get(t)]
+        sent = [t for t in idle.PRIOR if self.counts.get(t)]
         if sent:
             return (f"not counted: this cycle already called {', '.join(sent)}, so it is judged as the work it did. "
                     "Finish it as a normal cycle")
         self._idle_exit(reason)
+        self.idle_declared = True
         from .autonomy import IDLE_BACKOFF, IDLE_WAKE_MIN
         return ("recorded: this cycle counts as nothing worth a cycle. It is not judged and is not a failure. Your "
                 f"next idle wake waits {IDLE_WAKE_MIN * IDLE_BACKOFF} min instead of {IDLE_WAKE_MIN}; a message, a due "
-                "commitment or a job result still wakes you at once. Finish the cycle now")
+                "commitment or a job result still wakes you at once. Finish the cycle now: any further supervisor "
+                "tool call other than record or gauges makes this an ordinary cycle again")
 
     def _idle_exit(self, reason: str) -> None:
         from . import autonomy, idle
         from .core import log
-        idle.record(self.name, reason)
+        idle.record(self.name, self.run_started, reason)
         autonomy.record("idle_exit", self.name)
         log(f"{self.name}: cycle ended as nothing worth a cycle: {' '.join(str(reason).split())[:200]}")
+
+    def _idle_withdrawn(self, tool: str) -> None:
+        """A supervisor tool called after nothing_to_do: the cycle did something after all, so the exit is withdrawn
+        (the call itself goes through: this refuses nothing) and the cycle is judged like any other."""
+        from . import autonomy, idle
+        from .core import log
+        idle.revoke(self.name, self.run_started, f"called {tool} after nothing_to_do")
+        autonomy.record("idle_revoke", self.name)
+        log(f"{self.name}: nothing-worth-a-cycle exit withdrawn: it called {tool} afterwards")
 
     def _gauges_chosen(self, names: list[str]) -> dict:
         from . import gauges
@@ -4220,6 +4242,9 @@ class ReplayBroker(Broker):
 
     def _idle_exit(self, reason: str) -> None:
         self._tag("simulated: not recorded")   # answered as in a live cycle; no row, no change to the schedule
+
+    def _idle_withdrawn(self, tool: str) -> None:
+        pass                                   # nothing was recorded, so there is nothing to withdraw
 
     def _sim_predictions(self) -> list[dict]:
         return self.sim_predictions

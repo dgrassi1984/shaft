@@ -26,8 +26,18 @@ BODY_MARK = "*Below: the full tables (read_file self/stats.md shows all of them)
 
 
 def _last_sleep(name: str) -> str | None:
+    """The end of the last sleep that finished: one cut short writes no entry (`content`) and consolidated nothing,
+    so it must not start a new reporting window."""
     from . import metrics
-    return max((ep["ts"] for ep in metrics._episodes(name, "sleep") if isinstance(ep.get("ts"), str)), default=None)
+    return max((ep["ts"] for ep in metrics._episodes(name, "sleep")
+                if isinstance(ep.get("ts"), str) and isinstance(ep.get("content"), str)), default=None)
+
+
+def _after(ts, last: str) -> bool:
+    """`ts` is later than `last`, as times: the files mix 'T' and space separators, which strings compare wrongly."""
+    from . import metrics
+    a, b = metrics._ts(ts) if isinstance(ts, str) else None, metrics._ts(last)
+    return a is not None and b is not None and a > b
 
 
 def since_sleep(name: str) -> list[str]:
@@ -36,14 +46,14 @@ def since_sleep(name: str) -> list[str]:
     last = _last_sleep(name)
     if not last:
         return []
-    cycles = [ep for ep in metrics.live_episodes(name) if ep["ts"] > last]
-    judged = [j for j in metrics.judgments_for_stats(name) if j["episode_ts"] > last]
+    cycles = [ep for ep in metrics.live_episodes(name) if _after(ep.get("ts"), last)]
+    judged = [j for j in metrics.judgments_for_stats(name) if _after(j["episode_ts"], last)]
     met = {k: sum(j["criterion_met"] == k for j in judged) for k in ("yes", "partial", "no")}
     path = core.SUP_DIR / "code_changes" / f"{name}.jsonl"
     kept = 0
     for line in core.jsonl_lines(path.read_text()) if path.exists() else []:
         try:
-            kept += json.loads(line).get("ts", "") > last
+            kept += _after(json.loads(line).get("ts"), last)
         except (ValueError, AttributeError, TypeError):
             continue
     return [f"- Since my last sleep ({last[:16].replace('T', ' ')}): {len(cycles)} cycles, {len(judged)} judged "
@@ -128,7 +138,7 @@ def alerts(name: str) -> list[dict]:
 def _part(name: str, label: str, build) -> list[str]:
     try:
         return build()
-    except Exception as e:   # one unreadable record must never cost the instance the rest of its page
+    except (Exception, SystemExit) as e:   # one unreadable record must never cost the instance the rest of its page
         log(f"{name}: stats head part {label} failed: {type(e).__name__}: {e}")
         return []
 
