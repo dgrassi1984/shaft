@@ -71,11 +71,14 @@ struct MessageMenu: ViewModifier {
 }
 
 extension View {
-    /// Flowing text has no surface of its own: a long press lifts it on `canvas`, not as bare words over the dimmed feed.
-    func liftsOnCanvas() -> some View {
+    /// A long press lifts text on an opaque surface; cycle cards keep their tint in the preview too.
+    func liftsOnCanvas(tint: Color = .clear) -> some View {
         #if os(iOS)
         padding(Design.Space.s8)
-            .background(Color.canvas, in: .rect(cornerRadius: Design.Radius.card, style: .continuous))
+            .background {
+                Color.canvas.overlay(tint)
+                    .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
+            }
             .contentShape(.contextMenuPreview, .rect(cornerRadius: Design.Radius.card, style: .continuous))
             .padding(-Design.Space.s8)
         #else
@@ -234,7 +237,7 @@ struct AssistantItemView: View {
                 MessageMarkdown(source: answer.incomplete || answer.failure != nil
                                 ? PartialMarkdown.closed(answer.content) : answer.content)
                     .liftsOnCanvas()
-                    .messageMenu(answer.content, rating: answer.rating, k: answer.k, rateable: true)
+                    .messageMenu(answer.content, rating: answer.rating, k: answer.k, rateable: answer.failure == nil)
             } else if answer.failure == nil {
                 Text("(no answer)").foregroundStyle(Color.textSecondary).italic()
             }
@@ -266,7 +269,7 @@ struct AssistantItemView: View {
             }
             AnswerFooter(ts: answer.ts, source: answer.content, rating: answer.rating, k: answer.k, file: nil,
                          keepActions: answer.last, hovering: hovering, steps: answer.activity.count, stepsOpen: $steps,
-                         rateable: !answer.content.isEmpty)
+                         rateable: !answer.content.isEmpty && answer.failure == nil)
             if steps && !answer.activity.isEmpty {
                 ActivityList(activity: answer.activity).transition(.opacity)
             }
@@ -584,7 +587,7 @@ struct FailureView: View {
     }
 }
 
-/// A block on a 3 pt bar at its left: what needs the operator, what the instance sent, what failed (spec §3).
+/// A block on a 3 pt bar at its left: what needs the operator or what failed (spec §3).
 struct BarBlock<Content: View>: View {
     var colour: Color = .brand
     @ViewBuilder var content: () -> Content
@@ -679,20 +682,21 @@ struct SentItemView: View {
     }
 
     var body: some View {
-        BarBlock(colour: asking ? .brand : .hairline) {
-            VStack(alignment: .leading, spacing: Design.Space.inTurn) {
-                header
-                if !message.text.isEmpty {
-                    MessageMarkdown(source: message.text)
-                        .liftsOnCanvas()
-                        .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
-                }
-                AttachmentsView(attachments: message.attachments)
-                AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
-                             keepActions: asking, hovering: hovering, asksReply: asking)
-                    .padding(.bottom, -Design.Footer.slack)     // the bar stops at the time and icons, not their target
+        VStack(alignment: .leading, spacing: Design.Space.inTurn) {
+            header
+            if !message.text.isEmpty {
+                MessageMarkdown(source: message.text)
+                    .liftsOnCanvas(tint: Color.brand.opacity(0.06))
+                    .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
             }
+            AttachmentsView(attachments: message.attachments)
+            AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
+                         keepActions: asking, hovering: hovering, asksReply: asking)
+                .padding(.bottom, -Design.Footer.slack)     // keep the footer target within the card padding
         }
+        .padding(Design.Space.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.brand.opacity(0.06), in: RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous))
         .accessibilityElement(children: .contain)
         #if os(macOS)
         .onHover { hovering = $0 }
@@ -757,7 +761,15 @@ struct LaterItemView: View {
                     AttachmentsView(attachments: message.attachments)
                     ChipRow(comments: message.comments)
                 }
-                .waitingChip()
+                .padding(.horizontal, Design.Space.s12)
+                .padding(.vertical, 9)
+                .background(Color.canvas, in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous))
+                .overlay {
+                    if !message.read && message.cancelled == nil {
+                        RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous)
+                            .strokeBorder(Color.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
                 .messageMenu(message.text, cancel: cancelAction)
                 footer
             }
