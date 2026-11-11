@@ -191,7 +191,8 @@ def _login(req: Request) -> str:
 
 def _chat_of(name: str, cid: str) -> dict:
     from . import web_chat
-    chat = web_chat.load(cid) if isinstance(cid, str) else None
+    # "from": the From conversation (none until its first message)
+    chat = (web_chat.from_chat(name) if cid == web_chat.FROM else web_chat.load(cid)) if isinstance(cid, str) else None
     if not chat or chat.get("instance") != name:
         raise Refusal(404, "not_found", f"{name} has no chat {cid}.")
     return chat
@@ -235,7 +236,7 @@ def _instances(req: Request) -> Response:
         live, s = web._live(n), summaries[n]
         state = live.get("state") or "?"
         threads = web_chat.threads(n)
-        replying = any(c.get("state") == "replying" for c in threads)
+        replying = any(c.get("state") == "replying" for c in web_chat.open_chats(n))
         rows.append({"name": n, "state": state, "since": live.get("since") or "",
                      "busy_note": None if replying else web_views.busy_note(n, state),
                      "model": live.get("model") or "", "usd_today": live.get("usd_today") or 0,
@@ -377,7 +378,9 @@ def _threads(req: Request, n: str) -> Response:
     return _json(200, {"threads": [
         {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
          "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
-         **preview(c["id"])} for c in chats], "from": preview("from")})
+         **preview(c["id"])} for c in chats],
+        "from": {**preview("from"), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
+                 "waiting": ((web_chat.from_chat(n) or {}).get("reply") or {}).get("waiting") or None}})
 
 
 def _from(req: Request, n: str) -> Response:
@@ -466,7 +469,7 @@ def _send(req: Request, n: str) -> Response:
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
     reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
-    return _said(said, chat=(chat or {}).get("id"), file=None)
+    return _said(said, chat=web_chat.public_id(n, (chat or {}).get("id")), file=None)
 
 
 def _action(req: Request, n: str, act: str) -> Response:

@@ -1309,7 +1309,11 @@ def _rail_chats(names: list[str]) -> dict[str, dict]:
             threads.append({"id": c["id"], "title": web_chat.title(c), "waiting": waiting,
                             "state": "waiting" if waiting else "replying" if c.get("state") == "replying" else "idle",
                             "last": web_chat.last_from(c, web_chat.sent_during(n, c)) or ""})
-        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or ""}
+        fc = web_chat.from_chat(n)               # a reply in From pulses its dot, as a thread's does
+        waiting = (fc.get("reply") or {}).get("waiting") if fc and fc.get("state") == "replying" else None
+        out[n] = {**web_chat.summary(n, history), "threads": threads, "from_last": web_chat.from_feed(n)["last"] or "",
+                  "from_state": ("waiting" if waiting else "replying" if fc and fc.get("state") == "replying"
+                                 else "idle"), "from_waiting": waiting}
     return out
 
 

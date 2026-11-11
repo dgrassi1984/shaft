@@ -1594,7 +1594,8 @@ def _own_buttons() -> Html:
              'aria-label="Reply to the message">{reply}</button>', copy=ICONS["copy"], reply=ICONS["reply"])
 
 
-def _answer_item(name: str, cid: str, it: dict, archived: bool) -> Html:
+def _answer_item(name: str, cid: str, it: dict, archived: bool, seen: str | None = None) -> Html:
+    """`seen`: the feed it is marked seen under, when not its chat's id ("from": the From conversation)."""
     k = it["k"]
     # The last answer keeps its Copy in view (.turn[data-last]). A reply can be rated even when it failed with none
     # (its thumbs alone).
@@ -1607,7 +1608,7 @@ def _answer_item(name: str, cid: str, it: dict, archived: bool) -> Html:
         body = Html('<p class="dim">(no answer)</p>')
     cards = join([doc_cards(it["docs"], name if archived else ""), _comment_chips(it["answered"], "answered"),
                   _comment_chips(it["opened"], "opened")])
-    seen = _seen_attrs(name, cid, "seen-reply", it["ts"]) if not archived else Html("")
+    seen = _seen_attrs(name, seen or cid, "seen-reply", it["ts"]) if not archived else Html("")
     return h('<div class="turn it" data-k="{key}" data-raw="{raw}"{seen}{last}><div class="who">{n} '
              '<span class="dim">{ts}</span>{mark}</div>{act}{body}{cards}{recovery}{copy}</div>',
              key=it["key"], raw=it["content"], n=name, ts=_turn_time(it["ts"]), seen=seen,
@@ -1622,14 +1623,18 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
     seen under "from"."""
     from .web_actions import button, post_attrs
     name, chat, archived = model["instance"], model["chat"], model["archived"]
-    if from_feed:
+    if from_feed and not chat:                  # no From conversation yet: From's messages alone
         return _from_html(model)
+    seen = "from" if from_feed else (chat or {}).get("id")      # the feed its items are marked seen under
     if not chat:
         return join([*(_message_item(name, it, archived) for it in model["items"]),
                      h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
                        'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     feed = []
-    if model["earlier"]:
+    if model["earlier"] and from_feed:
+        feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="/messages">{n} earlier: what it '
+                      'sent is in Messages</a></p>', n=model["earlier"]))
+    elif model["earlier"]:
         more = f"?id={q(chat['id'])}&all=1" if archived else "?all=1"
         feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="{u}">Show the {n} earlier '
                       'messages</a></p>', u=more, n=model["earlier"]))
@@ -1640,7 +1645,7 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
         if kind == "user":
             feed.append(_user_item(name, it))
         elif kind == "assistant":
-            feed.append(_answer_item(name, chat["id"], it, archived))
+            feed.append(_answer_item(name, chat["id"], it, archived, seen))
         elif kind == "retried":
             feed.append(h('<p class="dim retried" data-k="{key}">The first try failed and was sent again '
                           '<span class="dim">({ts})</span>.</p>', key=it["key"], ts=_turn_time(it["ts"])))
@@ -1651,7 +1656,7 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
                         h('<p class="dim ended" data-k="ended">Ended {e}: journal write-up requested. Your next '
                           'message starts a new conversation.</p>', e=when))
         else:
-            feed.append(_message_item(name, it, archived, chat["id"]))
+            feed.append(_message_item(name, it, archived, seen))
     if (r := model["reply"]) is not None:
         day_separator(r["started"])
         # Its activity is polled on its own (/fragment/chat/<name>/live, live_activity): this shell stays the same
@@ -1732,27 +1737,14 @@ def _from_html(model: dict) -> Html:
 
 def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[str], csrf: str,
               later: str = "") -> Html:
-    """/i/<n>/from: the From <instance> feed, refreshed like a chat's, and a composer that sends only for its next
-    cycle (web_chat.background): nothing here is answered now."""
+    """/i/<n>/from: the From <instance> feed, refreshed like a chat's, and a thread's composer: what is written here is
+    answered now, in the From conversation (web_chat.from_chat), or left for its next cycle (2026-11-11: it was only
+    ever left for the next cycle)."""
     from . import messages
     feed_url = f"/fragment/from/{q(name)}"
     feed = feed_html(model, from_feed=True)
-    later = later or "for its next cycle"
-    composer = h(
-        '<form class="composer fromcomposer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files '
-        'data-draft="{n}/from" data-sent-mids="{mids}" data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}">'
-        '<input type="hidden" name="mid" value=""><input type="hidden" name="background" value="1" data-always="1">'
-        '<div class="chips" data-picked></div><div class="cbox">'
-        '<label class="pick iconbtn" title="Attach files">{attach}<span class="sr">Attach files</span>'
-        '<input type="file" name="files" multiple class="sr-file"></label>'
-        '<textarea name="text" rows="1" maxlength="20000" placeholder="For {n}&#x27;s next cycle" '
-        'aria-label="A message for {n}&#x27;s next cycle" autocapitalize="sentences" autocorrect="on" spellcheck="true">'
-        '</textarea><div class="sendgroup"><button type="submit" class="send iconbtn" data-background="1" '
-        'title="Send for its next cycle: not answered now, {later}" aria-label="Send for its next cycle">{send}</button>'
-        '</div></div><span class="dim keys">Not answered now — {later} · Enter sends · Shift-Enter new line'
-        '</span></form>',
-        n=name, attach=icon("attach"), send=icon("send"), later=later, mf=messages.ATTACH_MAX_BYTES,
-        mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES, mids=json.dumps(model["mids"]))
+    composer = _composer(name, cid="from", draft=f"{name}/from", replying=model.get("reply") is not None,
+                         mids=model["mids"], later=later)
     body = join([h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" '
                    'data-keyed="1" data-follow="1" data-etag="{t}" data-etag-url="{u}">{f}</div></section>'
                    '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',
@@ -1763,21 +1755,15 @@ def from_page(name: str, model: dict, past: list[dict], live: dict, names: list[
                       names, csrf, f"/fragment/from/{q(name)}/header", thread="from")
 
 
-def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
-              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False,
-              selected: bool = False) -> Html:
-    """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
-    `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
-    `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
-    from . import messages, web_chat
-    # An explicitly selected thread stays selected when another thread becomes current.
-    thread_query = f"?id={q(chat['id'])}" if (selected or read_only) and chat else ""
-    pinned = bool(selected and chat and chat.get("state") != "ended")
-    feed_url = f"/fragment/chat/{q(name)}" + thread_query
-    if whole:                                          # all of it asked for: its refreshes too
-        feed_url += ("&" if "?" in feed_url else "?") + "all=1"
-    composer = Html("") if read_only else h(
+def _composer(name: str, *, cid: str, draft: str, replying: bool, mids: list[str], later: str) -> Html:
+    """A conversation's composer: Send now, and behind the arrow Queue after reply and Next cycle. `cid`: the
+    conversation it writes to — a thread's id on a page opened on that thread (after End its plain page's next message
+    starts a new one, as before threads), "from" in From; none on the plain chat page, which follows the current
+    thread (its first message may open it after this page was drawn), as does a note for its next cycle written there
+    (thread=current), so the cycle answers in that thread. `draft`: its own draft's key — written in one thread, it is
+    not waiting in the composer of another."""
+    from . import messages
+    return h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{draft}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
@@ -1801,18 +1787,32 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         'Next cycle<span class="dim">not answered now — {later}</span></button></div></details></div></div>'
         '<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat'
         '</span></form>',
-        # Only a page opened on one thread (?id=) names it: the plain chat page follows the current thread, and after
-        # End its next message starts a new one, as before threads.
-        cid=h('<input type="hidden" name="cid" value="{c}">', c=chat["id"]) if pinned else Html(""),
-        # A note for its next cycle belongs to the thread it is written in, so the cycle answers there: the plain
-        # page follows the current thread (its first message may open it after this page was drawn), as a send does
-        thread=Html('<input type="hidden" name="thread" value="current">') if not pinned else Html(""),
-        # A thread's draft is its own: written in one thread, it is not waiting in the composer of another
-        draft=f"{name}/{chat['id']}" if pinned else name,
+        cid=h('<input type="hidden" name="cid" value="{c}">', c=cid) if cid else Html(""),
+        thread=Html('<input type="hidden" name="thread" value="current">') if not cid else Html(""),
+        draft=draft,
         attach=icon("attach"), send=icon("send"), up=icon("up"),
-        qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"), later=later or "for its next cycle",
+        qh="" if replying else Html(" hidden"), later=later or "for its next cycle",
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
-        mids=json.dumps(web_chat.sent_mids(chat, sent)))
+        mids=json.dumps(mids))
+
+
+def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
+              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
+              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False,
+              selected: bool = False) -> Html:
+    """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
+    `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
+    `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
+    from . import messages, web_chat
+    # An explicitly selected thread stays selected when another thread becomes current.
+    thread_query = f"?id={q(chat['id'])}" if (selected or read_only) and chat else ""
+    pinned = bool(selected and chat and chat.get("state") != "ended")
+    feed_url = f"/fragment/chat/{q(name)}" + thread_query
+    if whole:                                          # all of it asked for: its refreshes too
+        feed_url += ("&" if "?" in feed_url else "?") + "all=1"
+    composer = Html("") if read_only else _composer(
+        name, cid=chat["id"] if pinned else "", draft=f"{name}/{chat['id']}" if pinned else name,
+        replying=(chat or {}).get("state") == "replying", mids=web_chat.sent_mids(chat, sent), later=later)
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
     feed = chat_feed(name, chat, sent, archived=read_only, whole=whole)
