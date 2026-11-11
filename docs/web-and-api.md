@@ -341,7 +341,10 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   Its answer, if it sends one, comes in that thread (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.
   `POST /chat/<name>/uncycle` accepts `mid` or `file` to cancel a next-cycle note still in the inbox.
-  A running cycle or reply refuses cancellation because it may already have read the note.
+  A running cycle or reply refuses cancellation because it may already have read the note — a cycle paused for a
+  reply too (it read its inbox when it started). Only a note written in a composer that did nothing when sent can be
+  taken back: one that answered a quoted question, a comment's or a rating's, and the supervisor's own (a calendar or
+  voice decision) offer no Cancel, since taking the note back would undo none of that.
   The thread and From feeds show Cancel while the note's item has `cancellable=true`.
   After cancellation, `cancelled` holds its ISO timestamp, the text is struck through, and attachments remain stored.
   Read-only views have no Cancel action. The app API documents these same item fields.

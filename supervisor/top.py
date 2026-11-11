@@ -398,7 +398,8 @@ def render_message(snap: dict, ui: UI, width: int, height: int):
     ui.msg = min(ui.msg, len(ms) - 1)
     m = ms[ui.msg]
     to = clean(m["to"])
-    status = f"read by {to}" if m["read"] else f"pending in {to}'s inbox"
+    status = (f"cancelled before {to} read it" if m.get("cancelled") else
+              f"read by {to}" if m["read"] else f"pending in {to}'s inbox")
     head = Text(f" {_who(m)}", style="bold", no_wrap=True, overflow="ellipsis")
     head.append(f"   {m['ts'].replace('T', ' ')} · {m.get('kind') or 'note'} · {status} · {ui.msg + 1}/{len(ms)}",
                 style="dim")

@@ -500,7 +500,7 @@ def message_item(name: str, m: dict, ratings: dict, pending: set[str] = frozense
                 "mid": m.get("mid") or None, "read": bool(m.get("read")), "attachments": atts,
                 "cancelled": m.get("cancelled") or None,
                 # still in its inbox (history's `read`: no run has moved it out); uncycle checks again, under the run lock
-                "cancellable": not m.get("cancelled") and not m.get("read"),
+                "cancellable": not m.get("cancelled") and not m.get("read") and takes_back(m),
                 "comments": [{"id": c["id"], "doc": c["doc"]} for c in m.get("comments") or []]}
     re_chat = load(m["re"]) if m.get("re") else None
     return {"key": f"s{f}", "type": "sent", "file": m["file"], "ts": m["ts"],
@@ -1431,8 +1431,33 @@ def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid:
         return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True, voice=voice, cid=chat["id"])
 
 
+def takes_back(row: dict) -> bool:
+    """A next-cycle note Cancel can take back whole: one the operator wrote in a composer (it has the page's id), that
+    did nothing when it was sent. One that answered a quoted question (kind "reply") closed it, a comment's marked the
+    comment sent, a rating's is the feedback's delivery, and the supervisor's own (a calendar or voice decision, no id)
+    reports something already decided: taking the note back would undo none of that (Grok review)."""
+    return bool(row.get("mid")) and row.get("kind") == "message" and not row.get("comments")
+
+
+def _cycle_alive(name: str) -> bool:
+    """A cycle of `name` is running, paused or not: its pausable marker names a live process. A paused cycle has
+    given the run lock to a reply, but it read its inbox when it started (Grok review)."""
+    from .core import instance_root
+    for p in (instance_root(name) / ".tmp").glob("pausable-*"):
+        try:
+            os.kill(int(p.name.removeprefix("pausable-")), 0)
+        except (ValueError, ProcessLookupError):
+            continue
+        except PermissionError:
+            return True
+        return True
+    return False
+
+
 def uncycle(name: str, login: str, mid: str = "", file: str = "") -> str:
-    """Only an idle instance can safely lose a note it has not read yet."""
+    """Take back a next-cycle note no run has read: its inbox file goes, its logged row is marked cancelled. Refused
+    while a run of the instance holds its lock or a cycle is alive (a paused one read its inbox already), and for a
+    note that did something when it was sent (takes_back)."""
     from . import messages, runner
     from .core import instance_root, unlink_beneath
     if file and (Path(file).name != file or file in (".", "..")):
@@ -1447,6 +1472,12 @@ def uncycle(name: str, login: str, mid: str = "", file: str = "") -> str:
                     raise Refused("next-cycle note not found")
                 if row.get("cancelled"):
                     return "already cancelled"
+                if not takes_back(row):
+                    raise Refused("this note did something when it was sent (an answer, a comment, a rating or a "
+                                  "decision): it can't be taken back")
+                if _cycle_alive(name):
+                    raise Refused(f"a cycle of {name} is running (paused for a reply) and has read it: it can't be "
+                                  "cancelled now")
                 file = row["file"]
                 if Path(file).name != file or file in (".", ".."):
                     raise Refused("invalid inbox file")

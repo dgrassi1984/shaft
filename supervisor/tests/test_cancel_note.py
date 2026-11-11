@@ -143,3 +143,45 @@ class CancelAppTest(unittest.TestCase):
         self.assertFalse((root / "inbox" / file).exists())
         self.assertTrue(feed["items"][0]["cancelled"])
         self.assertFalse(feed["items"][0]["cancellable"])
+
+
+class CancelReviewTest(unittest.TestCase):
+    """Grok's review of the first cut (CancelNoteTest's fixture; its tests are not run twice)."""
+    setUp = CancelNoteTest.setUp
+    note = CancelNoteTest.note
+
+    def test_a_paused_cycle_read_the_note_so_it_cannot_be_cancelled(self):
+        """A cycle paused for a reply has given up the run lock, but it read its inbox when it started: the lock
+        alone said nobody had read the note."""
+        import os
+        file = self.note()
+        (self.f.root / ".tmp").mkdir(exist_ok=True)
+        (self.f.root / ".tmp" / f"pausable-{os.getpid()}").write_text(str(os.getpid()))
+        with self.assertRaisesRegex(web_chat.Refused, "a cycle of demo is running"):
+            web_chat.uncycle("demo", web_tests.ME, file=file)
+        self.assertTrue((self.f.root / "inbox" / file).exists())
+        (self.f.root / ".tmp" / f"pausable-{os.getpid()}").unlink()
+        (self.f.root / ".tmp" / "pausable-999999999").write_text("x")       # a run long gone does not block it
+        self.assertEqual(web_chat.uncycle("demo", web_tests.ME, file=file), "next-cycle note cancelled")
+
+    def test_a_note_that_did_something_when_sent_offers_no_cancel_and_is_refused(self):
+        """Taking it back would not undo what sending it did: a decision the supervisor reports (no page id), a
+        quoted question it answered (kind reply), a rating's delivery (feedback)."""
+        from supervisor import messages as m
+        decided = m.deliver_background("demo", "Calendar proposal p1 approved", shown="calendar approval")
+        feedback = m.deliver_feedback("demo", "too long", shown="👎", mid="rating-1")
+        for path in (decided, feedback):
+            row = next(r for r in m.history() if r["file"] == path.name)
+            self.assertFalse(web_chat.message_item("demo", row, {})["cancellable"])
+            with self.assertRaisesRegex(web_chat.Refused, "can't be taken back"):
+                web_chat.uncycle("demo", web_tests.ME, file=path.name)
+            self.assertTrue(path.exists())
+        plain = self.note()
+        row = next(r for r in m.history() if r["file"] == plain)
+        self.assertTrue(web_chat.message_item("demo", row, {})["cancellable"])
+
+    def test_the_message_page_says_cancelled_not_read(self):
+        file = self.note()
+        web_chat.uncycle("demo", web_tests.ME, file=file)
+        [row] = messages.history()
+        self.assertIn("cancelled before demo read it", str(web_views.message_page(row, {}, ["demo"], "t")))

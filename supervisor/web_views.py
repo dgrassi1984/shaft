@@ -898,7 +898,8 @@ def text_view(file_name: str, text: str) -> Html:
 
 def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:
     """One message in full. `texts`: attachment index -> its text, for attachments small enough and UTF-8."""
-    status = f"read by {m['to']}" if m["read"] else f"pending in {m['to']}'s inbox"
+    status = (f"cancelled before {m['to']} read it" if m.get("cancelled") else
+              f"read by {m['to']}" if m["read"] else f"pending in {m['to']}'s inbox")
     atts = []
     for k, a in enumerate(m.get("attachments") or []):
         url = f"/files/{q(m['file'])}/{k}"

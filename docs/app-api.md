@@ -402,7 +402,7 @@ turn of it (key `b<file>`).
 | `mid` | str or null | |
 | `read` | bool | false: waiting in its inbox; true: no longer in its inbox (check `cancelled` before showing "read") |
 | `cancelled` | timestamp or null | the operator cancelled this note before a run read it |
-| `cancellable` | bool | not cancelled and its inbox file still exists; a running cycle or reply can still refuse cancellation |
+| `cancellable` | bool | not cancelled, its inbox file still exists, and it is a composer note that did nothing when sent (not an answer to a quoted question, a comment's, a rating's or the supervisor's own); a running or paused cycle, or a reply, can still refuse cancellation |
 | `attachments` | list | `{name, bytes, image, text, url}` |
 | `comments` | list | `{id, doc}`: comments it carried |
 
