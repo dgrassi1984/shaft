@@ -180,6 +180,7 @@
   // sheet stopped the panel's refresh for the rest of the visit (no new-document badge, nothing opened on its own).
   let railGeneration = 0, railInteraction = null, railMoving = false;
   function busyIn(el) {
+    if (el.querySelectorAll(".conversation-switcher:not([hidden])").length) return true;
     if (el.classList.contains("rail") && (railInteraction || railMoving || railMenu)) return true;
     if (selectingIn(el) && !el.dataset.keyed) return true;
     if ([...el.querySelectorAll(".editing")].some(v => v.getClientRects().length || editDirty(v))) return true;
@@ -1855,6 +1856,65 @@
     });
     railNavigationExpanded = true;
   }
+  function manageState(root) {
+    root.querySelectorAll('details.manage').forEach(details => {
+      if (details._manageReady) return;
+      try {
+        const saved = localStorage.getItem("shaft.manage.open");
+        if (saved !== null) details.open = saved === "1";
+      } catch (e) { /* no storage */ }
+      details._manageReady = true;
+      details._manageOpen = details.open;
+    });
+  }
+  document.addEventListener("toggle", ev => {
+    const details = ev.target;
+    if (!details.matches || !details.matches("details.manage") || !details._manageReady) return;
+    if (details._manageOpen === details.open) return;
+    details._manageOpen = details.open;
+    try { localStorage.setItem("shaft.manage.open", details.open ? "1" : "0"); } catch (e) { /* no storage */ }
+  }, true);
+  document.addEventListener("shaft:swapped", ev => manageState(ev.target));
+
+  function switchConversation(button, on) {
+    const head = button.closest(".chathead"), menu = head.querySelector(".conversation-switcher");
+    menu.hidden = !on;
+    button.setAttribute("aria-expanded", String(on));
+    if (on) menu.querySelector('[aria-current="page"], a, button').focus();
+    else button.focus();
+  }
+  document.addEventListener("click", ev => {
+    const button = ev.target.closest && ev.target.closest("[data-switch-conversation]");
+    if (button) {
+      switchConversation(button, button.getAttribute("aria-expanded") !== "true");
+      return;
+    }
+    const menu = document.querySelector(".conversation-switcher:not([hidden])");
+    if (!menu) return;
+    const head = menu.closest(".chathead"), opener = head.querySelector("[data-switch-conversation]");
+    if (ev.target.closest("[data-switch-new]")) {
+      switchConversation(opener, false);
+      head.querySelector("form.newthread").requestSubmit();
+    } else if (ev.target.closest("[data-switch-rename]")) {
+      switchConversation(opener, false);
+      const rename = head.querySelector(".renamemenu"), more = head.querySelector(".chatmenu");
+      if (rename) { more.open = true; rename.open = true; rename.querySelector('input[name="title"]').focus(); }
+    } else if (!menu.contains(ev.target)) switchConversation(opener, false);
+  });
+  document.addEventListener("keydown", ev => {
+    const menu = document.querySelector(".conversation-switcher:not([hidden])");
+    if (!menu) return;
+    if (ev.key === "Escape" || ev.key === "Tab") {
+      if (ev.key === "Escape") ev.preventDefault();
+      switchConversation(menu.closest(".chathead").querySelector("[data-switch-conversation]"), false);
+    } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) {
+      ev.preventDefault();
+      const items = [...menu.querySelectorAll("a, button:not(:disabled)")];
+      const at = items.indexOf(document.activeElement);
+      items[ev.key === "Home" ? 0 : ev.key === "End" ? items.length - 1 :
+        (at + (ev.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
+    }
+  });
   function railItems(row) {
     return [...row.parentElement.children].filter(el => el.dataset.orderId !== undefined);
   }
@@ -2586,9 +2646,23 @@
     }
     grid.classList.toggle("showdocs", on);
     grid.classList.toggle("hidedocs", !on);
-    try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
+    try {
+      if (on) { localStorage.removeItem("shaft.docs.closed"); localStorage.setItem("shaft.docs.open", "1"); }
+      else { localStorage.setItem("shaft.docs.closed", "1"); localStorage.removeItem("shaft.docs.open"); }
+    }
     catch (e) { /* no storage: it opens again on the next page */ }
     syncSheets(opener);
+  }
+  function autoDocs(grid) {
+    let closed = grid.classList.contains("hidedocs"), opened = false;
+    try {
+      closed = closed || !!localStorage.getItem("shaft.docs.closed");
+      opened = !!localStorage.getItem("shaft.docs.open");
+    } catch (e) { /* use this page's state */ }
+    const touched = grid.dataset.conversationDocs === "1" || !!grid.querySelector(".feed [data-open-doc]");
+    if (closed) grid.classList.add("hidedocs");
+    else if (opened || (touched && window.matchMedia("(min-width: 721px)").matches
+      && grid.getBoundingClientRect().width >= 620)) grid.classList.add("showdocs");
   }
   function chatHeaderState(el) {
     if (!el.querySelector(".chathead")) return;
@@ -2603,6 +2677,10 @@
       ev.target.querySelectorAll(".docview").forEach(restoreDocDraft);
     }
     chatHeaderState(ev.target);
+    if (ev.target.matches && ev.target.matches(".feed")) {
+      const grid = ev.target.closest(".chatgrid");
+      if (grid) { autoDocs(grid); syncSheets(); }
+    }
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
     const button = ev.target.closest && ev.target.closest("[data-show-docs]");
@@ -2701,6 +2779,7 @@
   });
 
   function start() {
+    manageState(document);
     region("toast", "status");
     region("announce", "status");
     try {
@@ -2718,7 +2797,7 @@
       const asked = new URL(location.href).searchParams;
       if (asked.get("doc") || asked.get("att") || asked.get("dir")) showDocs(true);
       else {
-        try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
+        autoDocs(grid);
         syncSheets();
       }
       window.matchMedia("(max-width: 720px), (pointer: coarse) and (max-height: 520px)")

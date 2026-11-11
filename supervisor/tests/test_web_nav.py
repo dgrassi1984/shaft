@@ -126,3 +126,114 @@ class NavigationAppTest(test_app_api.AppTest):
         with mock.patch.object(web_chat, 'pending_notes', return_value=notes):
             got = self.get('/app/v1/notes/wisp')
         self.assertEqual(got, {'notes': [{**notes[0], 'ts': app_api.stamp(notes[0]['ts'])}]})
+
+
+class HeaderPolishTest(test_web_chat.ChatRoutesCase):
+    def header(self, cid=""):
+        response = self.req('/fragment/chat/wisp/header' + (f'?id={cid}' if cid else ''), cookie=self.cookie)
+        self.assertEqual(response.status, 200)
+        return response.body.decode()
+
+    def test_thread_subline_links_main_and_switcher_preserves_server_order(self):
+        """The title switches conversations, while line two identifies the parent Main destination."""
+        first, second = self.chat_with([]), self.chat_with([])
+        first['title'], second['title'] = 'First <topic>', 'Second topic'
+        web_chat.save(first)
+        web_chat.save(second)
+        with mock.patch.object(web_chat, 'threads', return_value=[second, first]):
+            header = self.header(first['id'])
+        self.assertIn('data-switch-conversation aria-haspopup="true" aria-expanded="false"', header)
+        self.assertIn('title="Switch conversation">First &lt;topic&gt;</button>', header)
+        self.assertIn('<a class="instance-main" href="/i/wisp/chat">wisp</a><span class="subsep"> · </span>', header)
+        menu = header.split('class="conversation-switcher menubody" hidden>', 1)[1].split('</div>', 1)[0]
+        self.assertLess(menu.index('Main (wisp)'), menu.index('Second topic'))
+        self.assertLess(menu.index('Second topic'), menu.index('First &lt;topic&gt;'))
+        self.assertIn(' · idle</span>', menu)
+        self.assertIn('data-switch-new>New thread</button>', menu)
+        self.assertIn('data-switch-rename>Rename…</button>', menu)
+        main = self.header()
+        self.assertNotIn('class="instance-main"', main)
+        self.assertNotIn('data-switch-rename', main)
+        for control in ('aria-label="Documents"', 'aria-label="New thread with wisp"', 'class="menu chatmenu"'):
+            self.assertIn(control, main)
+            self.assertIn(control, header)
+
+    def test_manage_contains_all_links_and_version_controls_with_page_defaults(self):
+        """Manage must expose its summary while collapsed and contain version and Reload in its body."""
+        for current, opened in [('i:wisp', ''), ('/settings', ' open')]:
+            rail = str(web_pages.rail([], current))
+            self.assertIn(f'<details class="manage" data-key="manage"{opened}><summary>Manage', rail)
+            manage = rail.split('<details class="manage"', 1)[1].split('</details>', 1)[0]
+            for href, label in web_pages.MANAGE:
+                self.assertIn(f'href="{href}"', manage)
+                self.assertIn(label, manage)
+            self.assertIn('class="nav-version dim"', manage)
+            self.assertIn('data-hard-reload', manage)
+
+    def test_instance_lifecycle_dot_and_main_preview_are_independent_of_topics(self):
+        """An idle Main keeps its instance cycle dot and preview; a Main reply overrides the preview."""
+        for state, cls in [('idle', 'idle'), ('in a cycle', 'cycle'), ('sleeping', 'sleep'), ('paused by you', 'paused')]:
+            rail = str(web_pages.rail(['example'], 'i:example', {'instances': [{'name': 'example', 'state': state}]},
+                                      {'example': {'line': 'Main last line', 'from_state': 'idle'}}))
+            self.assertIn(f'class="dot st-{cls}" title="{state}"', rail)
+            self.assertIn('class="last" aria-hidden="true">Main last line</span>', rail)
+        rail = str(web_pages.rail(['example'], chats={'example': {'line': 'old', 'from_state': 'replying'}}))
+        self.assertIn('class="last" aria-hidden="true">replying…</span>', rail)
+
+    def test_pending_note_subline_is_a_disclosure_and_main_reply_takes_precedence(self):
+        """Notes stay outside the Main link, and a reply replaces their preview with replying."""
+        note = {'file': 'note.md', 'mid': 'm1', 'text': 'Later', 'ts': '2026-11-10T10:00:00',
+                'cid': 'from', 'title': 'example', 'cancellable': True, 'reason': None}
+        with mock.patch.object(web_chat, 'pending_notes', return_value=[note]):
+            rail = str(web_pages.rail(['example'], chats={'example': {'notes': [note], 'line': 'old'}}))
+            header = str(web_views.pending_notes_html('example'))
+            replying = str(web_pages.rail(['example'], chats={'example': {'notes': [note], 'from_state': 'replying'}}))
+        self.assertIn('class="railpending"><details class="menu pendingnotes"', rail)
+        self.assertIn('☾ 1 for next cycle</summary>', rail)
+        self.assertIn('☾ 1 for next cycle</summary>', header)
+        self.assertNotIn('class="railpending"', replying)
+        self.assertIn('class="last" aria-hidden="true">replying…</span>', replying)
+
+    def test_failure_has_separate_why_action_retry_details_and_no_rating(self):
+        """A failed response offers recovery instead of asking the operator to rate a missing answer."""
+        chat = self.chat_with([{'role': 'user', 'content': 'Hello', 'ts': '2026-11-10T10:00:00'},
+                               {'role': 'assistant', 'content': '', 'ts': '2026-11-10T10:00:01',
+                                'note': 'error', 'note_kind': 'upstream'}])
+        feed = str(web_views.chat_feed('wisp', chat, []))
+        self.assertIn('class="reply-failure"><p class="failure-why"><strong>', feed)
+        self.assertIn('class="dim failure-action"', feed)
+        self.assertIn('class="small retry" data-retry=', feed)
+        self.assertIn('<summary>Technical details</summary>', feed)
+        self.assertNotIn('data-thumb=', feed)
+        self.assertNotIn('class="feedback"', feed)
+
+    def test_composer_places_send_last_and_shortcuts_in_tooltip(self):
+        """The primary arrow anchors the right edge without a permanent shortcut footer."""
+        composer = str(web_views._composer('example', cid='from', draft='example/from', replying=False, mids=[], later=''))
+        self.assertLess(composer.index('class="menu sendmenu"'), composer.index('class="send iconbtn"'))
+        self.assertIn('title="Enter sends · Shift-Enter new line · ⌘-Enter queues', composer)
+        self.assertNotIn('class="dim keys"', composer)
+        self.assertTrue(composer.endswith('</button></div></div></form>'))
+
+    def test_documents_marker_uses_this_conversation_not_the_instance_listing(self):
+        """A document elsewhere must not open the drawer in an untouched thread."""
+        chat = self.chat_with([])
+        panel = web_views.docs_panel('wisp', [{'path': 'elsewhere.md', 'sha': 'x', 'bytes': 1, 'mtime': 0}], '', None, '', set())
+        page = str(web_views.chat_page('wisp', chat, [], [], {}, ['wisp'], 't', panel=panel, selected=True))
+        self.assertIn('data-conversation-docs="0"', page)
+        chat['turns'] = [{'role': 'assistant', 'content': 'Done', 'ts': '2026-11-10T10:00:00',
+                          'docs': [{'path': 'this.md', 'created': True}]}]
+        page = str(web_views.chat_page('wisp', chat, [], [], {}, ['wisp'], 't', panel=panel, selected=True))
+        self.assertIn('data-conversation-docs="1"', page)
+
+    def test_compact_notes_manage_and_rail_focus_have_explicit_css(self):
+        """Generic menu sizing must not turn the pending-note fact back into a toolbar button."""
+        from pathlib import Path
+        css = (Path(web_views.__file__).parent / 'web_static' / 'web.css').read_text()
+        rule = re.search(r'details.pendingnotes > summary \{([^}]+)', css)[1]
+        for declaration in ('padding: 0', 'font-size: inherit', 'color: var(--dim)', 'min-height: 0', 'border: 0'):
+            self.assertIn(declaration, rule)
+        self.assertNotIn('.rail details.manage > summary { display: none;', css)
+        self.assertIn('nav .railrow a:focus-visible, .railrow button:focus-visible { outline: 2px solid var(--accent)', css)
+        self.assertIn('nav .railrow a:hover { background: var(--hover); }', css)
+        self.assertIn('nav .railrow a.on { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }', css)

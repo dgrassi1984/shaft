@@ -210,3 +210,76 @@ const box = { value: 'draft', closest: q => q === 'input, textarea, select, [con
   matches: () => true };
 assert.equal(fire({ target: box, key: 'ArrowDown', code: 'ArrowDown', altKey: true, metaKey: false, shiftKey: false }).defaultPrevented, undefined);
 ''', str(test_web_threads_js.WEB_JS), 'thread')
+
+
+@unittest.skipUnless(shutil.which('node'), 'node is not installed')
+class HeaderPolishJS(unittest.TestCase):
+    def test_manage_restores_saved_choice_and_toggle_persists_without_storage_dependency(self):
+        """Page defaults apply until a manual choice; initialization and polling do not overwrite it."""
+        code = JS[JS.index('  function manageState('):JS.index('  function switchConversation(')]
+        node(r'''
+const assert = require('node:assert/strict'), handlers = {};
+const document = { addEventListener: (type, fn) => handlers[type] = fn };
+let saved = null, writes = 0, broken = false;
+const localStorage = {getItem() {if (broken) throw Error('blocked'); return saved;},
+  setItem(k,v) {assert.equal(k,'shaft.manage.open'); if(broken) throw Error('blocked'); saved=v; writes++;}};
+const details = {open:false,matches:()=>true};
+const root = {querySelectorAll:()=>[details]};
+''' + code + r'''
+manageState(root); handlers.toggle({target:details}); assert.equal(writes,0);
+details.open=true; handlers.toggle({target:details}); assert.equal(saved,'1');
+const next={open:false,matches:()=>true}; manageState({querySelectorAll:()=>[next]});
+assert.equal(next.open,true); handlers.toggle({target:next}); assert.equal(writes,1);
+next.open=false; handlers.toggle({target:next}); assert.equal(saved,'0');
+broken=true; const fallback={open:true,matches:()=>true};
+manageState({querySelectorAll:()=>[fallback]}); assert.equal(fallback.open,true);
+fallback.open=false; assert.doesNotThrow(()=>handlers.toggle({target:fallback}));
+''')
+
+    def test_switcher_mouse_keyboard_compose_rename_and_focus_return(self):
+        """The title opens a focused picker, with keyboard movement and the existing compose and rename actions."""
+        code = JS[JS.index('  function switchConversation('):JS.index('  function railItems(')]
+        node(r'''
+const assert=require('node:assert/strict'), handlers={}; let submits=0, renamed=0;
+const document={activeElement:null,addEventListener:(type,fn)=>handlers[type]=fn,
+ querySelector:()=>menu.hidden?null:menu};
+function item() {return {focus(){document.activeElement=this;}};}
+const items=[item(),item(),item()]; const renameInput={focus(){renamed++;}};
+const more={open:false}, rename={open:false,querySelector:()=>renameInput};
+const opener={...item(),expanded:'false',setAttribute(k,v){this.expanded=v;},getAttribute(){return this.expanded;},closest:()=>head};
+const menu={hidden:true,closest:()=>head,querySelector:()=>items[1],querySelectorAll:()=>items,
+ contains:target=>items.includes(target)};
+const head={querySelector:q=>({'[data-switch-conversation]':opener,'.conversation-switcher':menu,
+ 'form.newthread':{requestSubmit(){submits++;}},'.renamemenu':rename,'.chatmenu':more})[q]};
+const click=kind=>handlers.click({target:{closest:q=>q===kind?(kind==='[data-switch-conversation]'?opener:{}):null}});
+const key=k=>handlers.keydown({key:k,preventDefault(){}});
+''' + code + r'''
+click('[data-switch-conversation]'); assert.equal(menu.hidden,false); assert.equal(opener.expanded,'true');
+assert.equal(document.activeElement,items[1]); key('ArrowDown'); assert.equal(document.activeElement,items[2]);
+key('ArrowDown'); assert.equal(document.activeElement,items[0]); key('End'); assert.equal(document.activeElement,items[2]);
+key('Home'); assert.equal(document.activeElement,items[0]); key('Escape');
+assert.equal(menu.hidden,true); assert.equal(document.activeElement,opener);
+click('[data-switch-conversation]'); click('[data-switch-new]'); assert.equal(submits,1); assert.equal(menu.hidden,true);
+click('[data-switch-conversation]'); click('[data-switch-rename]'); assert.equal(renamed,1);
+assert.equal(more.open,true); assert.equal(rename.open,true);
+click('[data-switch-conversation]'); click('outside'); assert.equal(menu.hidden,true);
+''')
+
+    def test_documents_autopen_requires_touched_conversation_or_explicit_open(self):
+        """A saved close wins even after a document arrives; a blocked storage API does not break opening."""
+        node(r'''
+const assert=require('node:assert/strict'); let closed=null, opened=null, broken=false, wide=true, touched=false;
+const localStorage={getItem(k){if(broken)throw Error('blocked');return k==='shaft.docs.closed'?closed:opened;}};
+const window={matchMedia:()=>({matches:wide})};
+const classes=new Set();
+const grid={dataset:{conversationDocs:'0'},classList:{contains:x=>classes.has(x),add:x=>classes.add(x)},
+ querySelector:()=>touched?{}:null,getBoundingClientRect:()=>({width:1000})};
+''' + function('autoDocs') + r'''
+autoDocs(grid); assert.equal(classes.has('showdocs'),false);
+grid.dataset.conversationDocs='1'; autoDocs(grid); assert.equal(classes.has('showdocs'),true);
+classes.clear(); closed='1'; autoDocs(grid); assert.deepEqual([...classes],['hidedocs']);
+classes.clear();closed=null;wide=false;autoDocs(grid);assert.equal(classes.has('showdocs'),false);
+opened='1'; autoDocs(grid); assert.equal(classes.has('showdocs'),true);
+classes.clear();opened=null;wide=true;grid.dataset.conversationDocs='0';touched=true;broken=true;
+autoDocs(grid);assert.equal(classes.has('showdocs'),true);
+''')

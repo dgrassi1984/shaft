@@ -203,6 +203,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
     from . import web_seen
     from .web_actions import post_attrs
     from .web_views import pending_notes_html
+    live = {i["name"]: i for i in (snap or {}).get("instances", [])}
     items = []
     for n in names:
         c = (chats or {}).get(n) or {}
@@ -211,13 +212,17 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
         selected = current == f"i:{n}"
         main = bool(unread.get("from"))
         count = sum(v for k, v in unread.items() if k != "from")
-        dot, state = _rail_state(c.get("from_state", "idle"), c.get("from_waiting"), c.get("from_failed", False))
+        _, state = _rail_state(c.get("from_state", "idle"), c.get("from_waiting"), c.get("from_failed", False))
+        instance_state = live.get(n, {}).get("state", "idle")
+        dot = h('<span class="dot st-{cls}" title="{state}" aria-hidden="true"></span>',
+                cls=state_class(instance_state), state=instance_state)
+        state = ", ".join(x for x in [instance_state, state] if x)
         lasts = {**{t["id"]: t.get("last") or "" for t in threads}, "from": c.get("from_last") or ""}
         disclosure = h('<button type="button" class="railchevron" data-disclose="{n}" data-focus="expand-{n}" '
                        'aria-label="Threads with {n}" aria-expanded="{expanded}" aria-controls="threads-{n}">'
                        '{chevron}</button>', n=n, expanded="true" if selected else "false", chevron=icon("back", 12)) if threads else Html("")
         line = "replying…" if c.get("from_state") == "replying" else "" if c.get("notes") else c.get("line") or ""
-        notes = h('<div class="railpending">{notes}</div>', notes=pending_notes_html(n)) if c.get("notes") else Html("")
+        notes = h('<div class="railpending">{notes}</div>', notes=pending_notes_html(n)) if c.get("notes") and c.get("from_state") != "replying" else Html("")
         items.append(h('<section class="railinstance{selected}" data-order-id="{n}" data-name="{n}" data-title="{n}">'
                        '<div class="railrow instrow"><a href="/i/{n}/chat" class="inst{on}" data-inst="{n}" '
                        'data-last="{last}" data-unread="{unread}" data-unread-main="{main}" '
@@ -242,16 +247,13 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
               for href, label in MANAGE]
     return h('<div class="railheading"><span class="group">Chats</span><button type="button" class="railedit" '
              'data-rail-edit aria-pressed="false">Edit</button></div>{items}'
-             '<details class="manage" data-key="manage"{opened}><summary class="group">Manage</summary>{manage}</details>',
-             items=join(items), manage=join(manage), opened="" if current.startswith("i:") else Html(" open"))
+             '<details class="manage" data-key="manage"{opened}><summary>Manage{chevron}</summary>{manage}{version}</details>',
+             items=join(items), manage=join(manage), version=_nav_version(current), chevron=icon("back", 12), opened="" if current.startswith("i:") else Html(" open"))
 
 
-def nav(names: list[str], current: str = "overview", thread: str = "") -> Html:
-    """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing. `thread`: the thread the page
-    is on (an id, "from", or "current" for the plain chat page), lit in the rail."""
+def _nav_version(current: str) -> Html:
+    """Version and reload controls inside the polled Manage disclosure."""
     from . import version
-    from .web_actions import post_attrs
-    cur = "/overview" if current == "overview" else current
     rec = version.service("web", stale=False)
     # Experiments is file-only, including its navigation's version label.
     saved_version = current == "/experiments"
@@ -263,14 +265,22 @@ def nav(names: list[str], current: str = "overview", thread: str = "") -> Html:
                 '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
                 'Reload / update</button></div>', v=((rec.get("describe") or rec["commit"]) if rec else "unknown")
                 if saved_version else version.service_version(rec), m=moved)
+    return running
+
+
+def nav(names: list[str], current: str = "overview", thread: str = "") -> Html:
+    """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing. `thread`: the thread the page
+    is on (an id, "from", or "current" for the plain chat page), lit in the rail."""
+    from .web_actions import post_attrs
+    cur = "/overview" if current == "overview" else current
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">{x}</button><div class="rail" data-poll="/fragment/rail?c={c}{t}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
-             '</button></form>{version}</nav>', c=cur, rail=rail(names, cur, thread=thread), a=post_attrs("this page"),
+             '</button></form></nav>', c=cur, rail=rail(names, cur, thread=thread), a=post_attrs("this page"),
              t=f"&t={quote(thread, safe='')}" if thread else "",
-             version=running, x=icon("close"))
+             x=icon("close"))
 
 
 def changelog_body(data: dict) -> Html:

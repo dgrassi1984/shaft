@@ -28,7 +28,7 @@ class BusyStateHeaderTest(unittest.TestCase):
             ("in a cycle", "busy", "Your message pauses its cycle; the cycle resumes after the reply."),
             ("working", "busy", None),
             ("sleeping", "sleep", "Your message pauses its sleep; the sleep resumes after the reply."),
-            ("paused by you", "pause", "No cycles run until you resume tundra. It still answers your messages."),
+            ("paused by you", "pause", "No cycles run until you resume example. It still answers your messages."),
             ("in a conversation (waiting for you)", "waiting", "A conversation with you is open, waiting for your "
                                                              "next message. A message is answered now."),
             ("reflecting", "busy", None),
@@ -40,13 +40,15 @@ class BusyStateHeaderTest(unittest.TestCase):
         fallback = "Your message is answered once it pauses or finishes what it is doing; the reply&#x27;s activity says which."
         for state, name, words in expected:
             with self.subTest(state=state):
-                body = str(web_views.chat_header("tundra", {"name": "tundra", "model": "m", "state": state},
-                                                 {"id": "c1", "state": "idle"}, []))
+                body = str(web_views.chat_header("example", {"name": "example", "model": "m", "state": state},
+                                                 {"id": "c1", "state": "idle", "title": "Topic"}, []))
                 self.assertNotIn('<p class="warn">', body)
-                self.assertIn('<h1>tundra</h1>', body)     # the thread's title beside it, then the state under them
+                # M2b puts the conversation title on line one and links Main on line two.
+                self.assertIn('title="Switch conversation">Topic</button></h1>', body)
+                self.assertIn('<a class="instance-main" href="/i/example/chat">example</a>', body)
                 self.assertIn(
-                    f'</div><div class="sub"><details class="menu busystate" data-key="busy-state">'
-                    f'<summary data-focus="busy" aria-label="tundra is {state}">{svg(name, 14)}<span>{state}</span>'
+                    f'<details class="menu busystate" data-key="busy-state">'
+                    f'<summary data-focus="busy" aria-label="example is {state}">{svg(name, 14)}<span>{state}</span>'
                     f'</summary><div class="menubody">', body)
                 self.assertIn(words or fallback, body)
                 self.assertNotRegex(body, "[⏳💤⏸💬🕘📄☰]")
@@ -56,7 +58,7 @@ class BusyStateHeaderTest(unittest.TestCase):
 
         for state, chat in (("idle", None), ("?", None), ("in a cycle", {"id": "c1", "state": "replying"})):
             with self.subTest(state=state, chat=chat):
-                body = str(web_views.chat_header("tundra", {"name": "tundra", "model": "m", "state": state}, chat, []))
+                body = str(web_views.chat_header("example", {"name": "example", "model": "m", "state": state}, chat, []))
                 self.assertNotIn('data-key="busy-state"', body)
                 self.assertNotIn("busystate", body)
                 self.assertNotIn('<p class="warn">', body)
@@ -86,8 +88,8 @@ function makeDetails() {
 }
 makeDetails();
 const header = {
-  dataset: { poll: "/fragment/chat/tundra/header" }, isConnected: true,
-  classList: { add() {}, remove() {} },
+  dataset: { poll: "/fragment/chat/example/header" }, isConnected: true,
+  classList: { add() {}, remove() {}, contains: () => false },
   get innerHTML() { return html; },
   set innerHTML(v) {
     if (document.activeElement === summary) document.activeElement = document.body;
@@ -119,7 +121,7 @@ const window = { addEventListener() {}, innerHeight: 800, scrollY: 0, getSelecti
   matchMedia: q => ({ matches: q === "(hover: none) and (pointer: coarse)" ? touch : false, addEventListener() {} }) };
 let nextBody = "v2";
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, window, URL, CustomEvent: class {}, AbortController,
-  location: { href: "https://shaft.test/i/tundra/chat" }, history: { replaceState() {} }, navigator: { onLine: true },
+  location: { href: "https://shaft.test/i/example/chat" }, history: { replaceState() {} }, navigator: { onLine: true },
   setInterval() {}, setTimeout: () => 1, clearTimeout() {},
   fetch: async () => ({ status: 200, ok: true, headers: { get: () => "" }, text: async () => nextBody }) });
 for (const fn of handlers.DOMContentLoaded || []) fn();

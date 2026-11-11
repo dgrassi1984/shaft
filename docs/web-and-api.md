@@ -255,6 +255,20 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   scheduler's *Force restart* is **Restart when idle** (`shaft autonomy restart`: nothing new starts, the runs end,
   then it restarts, cutting none); while that drain is pending the row says what it waits for and offers **Cancel
   restart**.
+- Manage is a footer disclosure. It holds Overview, Messages, Calendar approvals, Trials, Bake-offs,
+  Experiments, Costs, Services, Settings, the web version and Reload. It defaults to closed on chat pages and
+  open on management pages. The browser remembers the operator's choice on this device when localStorage is available.
+- The conversation header names the instance on Main and the topic in a thread. A thread's second line links to
+  Main and shows the instance state. Pending next-cycle notes open from a small count beside the state or under
+  the instance in the rail. Documents, New thread and the actions menu keep the same positions in both headers.
+  The title opens a conversation picker with Main, threads in their saved order, New thread and Rename for a
+  thread. Arrow keys, Home and End move within the picker. Escape closes it and returns focus to the title.
+- On a wide chat layout, Documents opens automatically only when this conversation has created or changed a
+  document. The operator can open it at any time. Explicit open and close choices persist on this device when
+  localStorage is available. A document or attachment URL still opens the requested panel.
+- Failed replies show the reason, a separate recovery instruction, Retry when available and Technical details.
+  Failed replies have no rating controls. The composer puts Send at the right edge, with its send menu on the
+  left. Its tooltip lists keyboard shortcuts, which continue to work.
 - **Experiments** (`/experiments`, next to Trials) shows saved results for each instance: Cards (both controls),
   Attention, Commitments, Forecast, Workspace, Monitors, Choice blindness, Resource shock, Privileged prediction,
   Recognition, and Battery perturbation. It defaults to the first instance with saved experiment records; the

@@ -58,7 +58,9 @@ class TouchTest(unittest.TestCase):
         self.assertRegex(JS, r'ev\.key === "Enter" && !ev\.isComposing && \(!touchOnly\(\) \|\| ev\.metaKey \|\| ev\.ctrlKey\)')   # modifiers: #70
         composer = str(web_views.chat_page("wisp", None, [], [], {}, ["wisp"], "t"))
         self.assertIn('placeholder="Message wisp"', composer)              # no "Enter sends" in the field itself
-        self.assertIn('<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues', composer)
+        # M2b moves shortcuts into the composer tooltip so they do not occupy feed space.
+        self.assertIn('title="Enter sends · Shift-Enter new line · ⌘-Enter queues', composer)
+        self.assertNotIn('class="dim keys"', composer)
 
 
 if __name__ == "__main__":
@@ -197,8 +199,9 @@ class AccessibilityTest(unittest.TestCase):
                      'aria-label="Message wisp"'):
             self.assertIn(name, page)
         rail = str(web_pages.rail(["wisp"], chats={"wisp": {"from_state": "replying", "threads": []}}))
-        self.assertIn('<span class="sr">wisp, replying</span>', rail)
-        self.assertIn('title="replying" aria-hidden="true"', rail)
+        # M2b restores the instance lifecycle dot independently of Main replying.
+        self.assertIn('<span class="sr">wisp, idle, replying</span>', rail)
+        self.assertIn('class="dot st-idle" title="idle" aria-hidden="true"', rail)
         self.assertIn('x.setAttribute("aria-label", `remove ${f.name}`);', JS)
 
     def test_the_keyboard_reaches_attach_and_reply(self):

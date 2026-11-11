@@ -33,11 +33,12 @@ nav { border-right: 1px solid var(--line); padding: 1rem .8rem; display: flex; f
       position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 nav .brand { font-weight: 700; letter-spacing: .08em; margin-bottom: .6rem; color: var(--text); padding: 0 .5rem; }
 nav a { padding: .3rem .5rem; border-radius: 6px; color: var(--text); }
-nav a.on, nav a:hover { background: var(--panel); }
-.rail { display: flex; flex-direction: column; gap: .15rem; }
+nav a:hover { background: var(--hover); }
+nav a.on { background: var(--panel); }
+.rail { display: flex; flex-direction: column; gap: .15rem; flex: 1; }
 .rail .group { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
                padding: .6rem .5rem .2rem; cursor: pointer; list-style: none; }
-.rail details.manage { display: flex; flex-direction: column; }
+.rail details.manage { display: block; margin-top: auto; }
 .rail details.manage > a { display: block; }
 .rail summary::-webkit-details-marker { display: none; }
 nav a.inst { display: grid; grid-template-columns: .9rem 1fr; column-gap: .2rem; align-items: baseline; }
@@ -132,7 +133,7 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
                padding: .2rem .55rem; }
   nav a.inst .last { display: none; }
   .rail details.manage { display: block; flex: 1 1 100%; font-size: .85rem; }
-  .rail details.manage > summary { display: none; }
+  .rail details.manage > summary { display: flex; }
   .rail details.manage > a { display: inline-block; padding: .15rem .4rem; }
   nav .unpair { margin: 0 0 0 auto; }
   nav .unpair button { width: auto; }
@@ -1073,7 +1074,7 @@ nav .railrow a.thread.unread .ttl { font-weight: 700; }
 .renameform input[name=title] { display: block; width: 100%; margin: .25rem 0 .5rem; font-size: 1rem; }
 .chathead form.newthread { display: inline-flex; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  .chathead .titleline h1 { flex: 0 0 auto; max-width: 45%; }
+  .chathead .titleline h1 { flex: 1 1 auto; max-width: 100%; }
 }
 
 /* A reply waiting for the instance while another thread's reply holds it */
@@ -1084,3 +1085,33 @@ nav .railrow a.thread.unread .ttl { font-weight: 700; }
 @media (min-width: 721px) { .composer:focus-within .keys { display: inline; } }
 .sentactions { display: flex; align-items: center; gap: 4px; margin-top: .4rem; }
 .sentactions button.icon { border: 0; background: none; }
+
+/* Compact disclosures and the conversation header share the dim fact size. */
+.rail details.manage > summary { display: flex; align-items: center; justify-content: space-between;
+  padding: .5rem; color: var(--dim); font-size: .8rem; cursor: pointer; list-style: none; }
+.rail details.manage > summary .i { transform: rotate(-90deg); }
+.rail details.manage[open] > summary .i { transform: rotate(90deg); }
+.rail details.manage > a { font-size: .8rem; }
+nav .manage summary:focus-visible, nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+nav .railrow a.on { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
+nav .railrow .last:empty { display: none; }
+nav a.inst .last { display: block; }
+.railpending { margin-left: 30px; }
+details.pendingnotes > summary { display: inline-flex; padding: 0; border: 0; background: none;
+  color: var(--dim); font-size: inherit; font-weight: 400; line-height: inherit; min-height: 0; min-width: 0; }
+.chathead .pendingnotes { font-size: inherit; }
+.chathead .instance-main { color: inherit; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
+.chathead .subsep { margin: 0 .3em; }
+.chathead .titleline { position: relative; }
+.conversation-switcher { position: absolute; z-index: 25; top: 100%; left: 0; padding: .4rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 18px #0002;
+  max-height: 70vh; overflow-y: auto; white-space: normal; }
+.conversation-switcher a, .conversation-switcher button { display: block; width: 100%; text-align: left;
+  padding: .6rem; border: 0; background: none; color: var(--text); overflow-wrap: anywhere; }
+.conversation-switcher a:hover, .conversation-switcher button:hover { background: var(--hover); }
+.conversation-switcher [aria-current=page] { font-weight: 600; }
+.switch-unread { color: var(--accent); font-weight: 600; }
+.reply-failure { border-left: 3px solid var(--bad); padding-left: .8rem; margin-top: .3rem; }
+.reply-failure .failure-why { color: var(--bad); margin: 0; }
+.reply-failure .failure-action { margin: .2rem 0 .4rem; }
+.reply-failure button.retry { background: var(--accent); color: var(--panel); border: 0; border-radius: 999px; }

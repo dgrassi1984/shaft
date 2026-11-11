@@ -484,7 +484,8 @@ class ChatCentricTest(ChatRoutesCase):
             body = self.req("/fragment/rail?c=i:wisp&t=from", cookie=self.cookie).body.decode()
         self.assertIn('class="inst on"', body)
         self.assertIn('data-last="2026-10-19T12:00:05"', body)
-        self.assertIn('<span class="tdot t-idle" title="" aria-hidden="true"></span>', body)
+        # M2b restores the instance lifecycle dot even while Main is idle.
+        self.assertIn('<span class="dot st-cycle" title="in a cycle" aria-hidden="true"></span>', body)
         self.assertIn("&lt;b&gt;first&lt;/b&gt; line", body)                  # escaped, and not the quoted line
         self.assertNotIn("quoted", body)
         self.assertIn('href="/overview"', body)
@@ -496,7 +497,8 @@ class ChatCentricTest(ChatRoutesCase):
         with mock.patch.object(web, "overview", return_value=s):
             body = self.req("/fragment/rail", cookie=self.cookie).body.decode()
         self.assertIn('<span class="last" aria-hidden="true">replying…</span>', body)
-        self.assertIn('<span class="tdot t-replying" title="replying" aria-hidden="true">', body)
+        # M2b uses the subline for Main replying and keeps the leading instance dot.
+        self.assertIn('<span class="dot st-idle" title="idle" aria-hidden="true">', body)
         self.assertIn('data-last=""', body)                                    # it has not answered yet
         self.assertIn('<span class="badge bad" title="alerts">2</span>', body)
 
@@ -504,7 +506,8 @@ class ChatCentricTest(ChatRoutesCase):
         body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()
         import re
         headings = re.findall(r"<h1\b[^>]*>(.*?)</h1>", body)
-        self.assertEqual(headings, ['<button type="button" data-toggle-nav title="Switch conversation">wisp</button>'])
+        # M2b opens a conversation picker here; the sidebar retains its own button.
+        self.assertEqual(headings, ['<button type="button" data-switch-conversation aria-haspopup="true" aria-expanded="false" title="Switch conversation">wisp</button>'])
         self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
         self.assertNotIn('class="tabs"', body)
         for page in ("/i/wisp", "/i/wisp/config", "/i/wisp/drive", "/i/wisp/access", "/i/wisp/judge",
