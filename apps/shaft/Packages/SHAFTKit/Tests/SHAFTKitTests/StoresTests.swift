@@ -195,8 +195,12 @@ struct StoresTests {
     @Test func aSendClearsTheDraftAndAFailureStaysInTheChatAsNotSent() async throws {
         let folder = try temporaryFolder("stores")
         defer { try? FileManager.default.removeItem(at: folder) }
-        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let server = StubServer { request in
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            throw StubServer.NetworkDown()
+        }
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         let file = try store.drafts.attach(data: Data("x".utf8), name: "note.txt", for: "tundra", cid: "from")
         chat.draft = Draft(text: "Rerun it", quotes: [Quote(quote: "Ship it?", answer: "Yes")], attachments: [file])

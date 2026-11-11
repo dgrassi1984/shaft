@@ -19,6 +19,8 @@ public final class InstancesStore {
     @ObservationIgnored private var instancesRev: OrderRevision?
     @ObservationIgnored private var listGeneration = 0
     @ObservationIgnored private var migrated: Set<String> = []
+    /// Created ids stay open until a successful list read checks them.
+    @ObservationIgnored private var createdThreads: [String: Set<String>] = [:]
 
     @ObservationIgnored public let client: APIClient
     @ObservationIgnored public let outbox: Outbox
@@ -65,14 +67,14 @@ public final class InstancesStore {
                 if badgeKnown { onBadge?(badge) }
             case .value(let answer, let etag):
                 guard generation == seenGeneration, listGeneration == self.listGeneration, !moving.contains("instances") else { return }
+                if let rev = answer.instancesRev?.counter {
+                    guard rev >= (orderRevisions["instances"] ?? 0) else { return }
+                    orderRevisions["instances"] = rev
+                }
                 self.etag = etag
                 if instancesRev != answer.instancesRev {
                     threadsReadAt.removeAll()
                     instancesRev = answer.instancesRev
-                }
-                if let rev = answer.instancesRev?.counter {
-                    guard rev >= (orderRevisions["instances"] ?? 0) else { return }
-                    orderRevisions["instances"] = rev
                 }
                 instances = answer.instances
                 reportBadge(answer.badge)
@@ -159,12 +161,15 @@ public final class InstancesStore {
     public func resolve(_ name: String, _ ref: ChatRef?) -> ChatRef {
         guard let ref else { return defaultRef(name) }
         switch (ref, threadsState(name)) {
+        case (.earlier(let cid), .loaded(let answer)):
+            return answer.threads.contains { $0.id == cid } ? .thread(cid) : ref
         case (.earlier, _): return ref
         case (.current, .unsupported): return .current
         case (.current, _): return .from
         case (.thread, .unsupported), (.from, .unsupported): return .current
         case (.thread(let cid), .loaded(let answer)):
-            return answer.threads.contains { $0.id == cid } ? ref : .earlier(cid)
+            let open = answer.threads.contains { $0.id == cid } || createdThreads[name]?.contains(cid) == true
+            return open ? ref : .earlier(cid)
         case (.thread, .unknown), (.from, _): return ref
         }
     }
@@ -179,12 +184,14 @@ public final class InstancesStore {
             let answer = try await client.threads(name)
             guard threadsGeneration[name] == generation else { return }
             migrateHistoricalCurrent(name, answer: answer)
+            createdThreads[name] = nil
             threadStates[name] = .loaded(answer)
             threadsError[name] = nil
             threadsReadAt[name] = row
         } catch {
             guard let apiError = APIError.from(error), threadsGeneration[name] == generation else { return }
-            if apiError.status == 404, apiError.code == "not_found", row != nil {
+            if apiError.status == 404, apiError.code == "not_found", row != nil, threads(name) == nil {
+                restoreLegacyCurrent(name)
                 threadStates[name] = .unsupported
                 threadsError[name] = nil
                 threadsReadAt[name] = row
@@ -214,12 +221,13 @@ public final class InstancesStore {
         Task { await refreshThreads(name) }
     }
 
-    /// Start a thread (§7.7): it ends no other. Returns the new thread once the list holds it; nil when refused (the
-    /// list's error says why).
+    /// Start a thread (§7.7): it ends no other. Returns its identity even if the list refresh fails; nil when refused.
     @discardableResult
     public func newThread(_ name: String, title: String? = nil) async -> ChatRef? {
         do {
             let answer = try await client.newThread(name, title: title)
+            createdThreads[name, default: []].insert(answer.chat.id)
+            threadsGeneration[name, default: 0] += 1
             await refreshThreads(name)
             return .thread(answer.chat.id)
         } catch {
@@ -235,8 +243,7 @@ public final class InstancesStore {
         // Historical sends without cid targeted the newest thread. Pin before moving any draft files.
         let destination = answer.newest?.id ?? ChatRef.fromID
         outbox.adoptCurrent(name, into: destination)
-        adoptCurrent(name, into: destination)
-        migrated.insert(name)
+        if adoptCurrent(name, into: destination) { migrated.insert(name) }
     }
 
     public func refreshNotes(_ name: String) async {
@@ -276,7 +283,9 @@ public final class InstancesStore {
             let response = try await client.moveThread(name, id: id, after: after)
             if let rev = response.rev?.counter, rev >= (orderRevisions[name] ?? 0), let ids = response.ids {
                 orderRevisions[name] = rev
-                answer.threads = ids.compactMap { id in answer.threads.first { $0.id == id } }
+                let ordered = ids.compactMap { id in answer.threads.first { $0.id == id } }
+                let listed = Set(ids)
+                answer.threads = ordered + answer.threads.filter { !listed.contains($0.id) }
                 threadStates[name] = .loaded(answer)
             }
             moving.remove(name)
@@ -317,14 +326,15 @@ public final class InstancesStore {
     /// The current chat's draft and not-sent messages move to the thread `cid`. The current chat's store lets go of
     /// the draft it held (its file is gone): the thread's store reads it from now on, and two stores never write one
     /// draft.
-    private func adoptCurrent(_ name: String, into cid: String) {
+    @discardableResult
+    private func adoptCurrent(_ name: String, into cid: String) -> Bool {
         let moved: Bool
         do {
             moved = try drafts.adoptCurrent(name, into: cid)
         } catch {
-            moved = false
             report(.transport(code: (error as NSError).code,
                               message: "Could not move \(name)'s draft to its thread: \(error.localizedDescription)"))
+            return false
         }
         if moved {
             if let store = chats[ChatKey(instance: name, ref: .current)] { store.draft = Draft() }
@@ -332,6 +342,25 @@ public final class InstancesStore {
             if let store = chats[ChatKey(instance: name, ref: destination)] {
                 store.draft = (try? drafts.load(name, cid: cid)) ?? Draft()
             }
+        }
+        return true
+    }
+
+    /// Main's data from before capability detection belongs to the legacy current chat.
+    private func restoreLegacyCurrent(_ name: String) {
+        outbox.restoreLegacyCurrent(name)
+        do {
+            let source = chats[ChatKey(instance: name, ref: .from)]
+            let moved = try drafts.moveDraft(name, from: ChatRef.fromID, into: nil, draft: source?.draft)
+            if moved {
+                source?.draft = Draft()
+                if let current = chats[ChatKey(instance: name, ref: .current)] {
+                    current.draft = try drafts.load(name)
+                }
+            }
+        } catch {
+            report(.transport(code: (error as NSError).code,
+                              message: "Could not move \(name)'s Main draft: \(error.localizedDescription)"))
         }
     }
 
@@ -830,7 +859,7 @@ public final class ChatStore {
         switch ref {
         case .earlier: false
         case .current: owner?.threadsState(instance) == .unsupported
-        case .thread, .from: true
+        case .thread, .from: owner?.threadsState(instance) != .unsupported
         }
     }
 

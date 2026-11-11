@@ -87,6 +87,16 @@ public final class Outbox {
         if moved { savePersisting() }
     }
 
+    /// Entries written in Main before detecting a legacy server stay visible in its current chat.
+    func restoreLegacyCurrent(_ instance: String) {
+        var moved = false
+        for index in entries.indices where entries[index].instance == instance && entries[index].cid == ChatRef.fromID {
+            entries[index].cid = nil
+            moved = true
+        }
+        if moved { savePersisting() }
+    }
+
     public func fileURL(of file: DraftAttachment, in entry: OutboxEntry) -> URL {
         filesURL(entry.mid).appending(path: file.id).appending(path: file.name)
     }
