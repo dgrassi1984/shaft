@@ -270,6 +270,7 @@ def _spec(name, description, properties, required=None):
 
 
 S = {"type": "string"}
+LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -384,13 +385,21 @@ SPECS = {
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
         "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
         "did they reply, did the gist match), 'commitment_source' (cycle: an operator message filename; "
-        "confirms it exists and was addressed by you to the operator). "
+        "confirms it exists and was addressed by you to the operator), 'families' (your goals grouped into the "
+        "chains the judge said resemble each other: cycles, value, deliveries, the last time something new came of "
+        "each; work on your own capability is read by what survived probation instead), 'habits' (the same script or "
+        "file you ran or touched in many cycles, sequences you repeated, kinds of failed call that came back), "
+        "'usage' (each of your plugins and skill files: when built, how often called or read in your cycles, when "
+        "last), 'facts' (each fact in memory/facts.md: whether the log or page it cites shows it, and how many "
+        "later cycles restated it; `before` is not used, page with `offset`). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar", "gate", "expectations"]},
+                                                    "consults", "calendar", "gate", "expectations", "families", "habits",
+                                                    "usage", "facts"]},
+         "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -2244,7 +2253,7 @@ class Broker:
         return datetime.now()
 
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
-                format: str = "text") -> str:
+                format: str = "text", offset: int = 0) -> str:
         from .core import SUP_DIR
         if kind == "commitment_source":   # review I10: did I deliver this message to the operator?
             from . import commitments
@@ -2369,9 +2378,17 @@ class Broker:
             # Its own rows only (gate-runs/<its name>.jsonl), never another instance's; a replay sees the runs before
             # its cycle began
             text = gate_held.describe(self.name, limit, as_of=self.as_of)
+        elif kind in LEDGER_KINDS:
+            # Ledgers computed from the supervisor's record of the instance (its judged cycles, its tool logs as
+            # committed, its kept changes): what repeats, what was built and whether it is used, what its facts rest
+            # on. Readings only. A replay sees them as they stood when its cycle began.
+            import importlib
+            module = importlib.import_module(f".{LEDGER_KINDS[kind]}", __package__)
+            more = {"offset": max(0, int(offset))} if kind == "facts" else {}
+            text = module.record_text(self.name, limit=limit, as_of=self.as_of, **more)
         else:
-            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
-                             "or gate")
+            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
+                             "gate, " + " or ".join([", ".join(list(LEDGER_KINDS)[:-1]), list(LEDGER_KINDS)[-1]]))
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
