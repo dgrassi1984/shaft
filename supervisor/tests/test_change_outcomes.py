@@ -230,6 +230,36 @@ class ChangeOutcomesTest(unittest.TestCase):
         self.assertEqual([(r["outcome"], r["tested"]) for r in metrics.change_outcomes("ember")],
                          [("on probation", False), ("not on probation", True)])
 
+    def test_history_null_trial_does_not_erase_log_trial(self):
+        self.write("code_changes", [self.change()])
+        self.log_lines([(NOW, "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)"),
+                        (NOW, "ember", "kept change is trial example-trial's (better)")])
+        self.write("probation", [self.event(trial=None)])
+        self.assertEqual(metrics.change_outcomes("ember"), [{"ts": NOW.isoformat(), "files": FILES,
+            "commit": "aaaaaaaa", "outcome": "on probation", "tested": True}])
+
+    def test_shared_eight_hex_prefix_does_not_collapse_history_outcomes(self):
+        later = NOW + timedelta(minutes=3)
+        first, second = "aaaaaaaa" + "1" * 32, "aaaaaaaa" + "2" * 32
+        self.write("code_changes", [self.change(), self.change(later)])
+        self.write("probation", [self.event(commit=first), self.event(since=later, commit=second),
+                                 self.event("passed", at=NOW + timedelta(minutes=10), commit=first),
+                                 self.event("reverted", since=later, at=NOW + timedelta(minutes=15), commit=second)])
+        self.assertEqual([r["outcome"] for r in metrics.change_outcomes("ember")], ["passed", "reverted"])
+        # An ambiguous log verdict cannot overwrite either full commit's outcome.
+        self.log_lines([(NOW + timedelta(hours=1), "ember", "change aaaaaaaa on probation (baseline 0.4, n=6)"),
+                        (NOW + timedelta(hours=2), "ember", "probation aaaaaaaa passed (0.5 vs baseline 0.4)")])
+        self.assertEqual([r["outcome"] for r in metrics.change_outcomes("ember")], ["passed", "reverted"])
+
+    def test_unparseable_log_times_do_not_attach_trial_or_raise(self):
+        for start, trial in [("bad", "bad"), (NOW.isoformat(), "bad"), ("bad", NOW.isoformat())]:
+            with self.subTest(start=start, trial=trial):
+                (self.sup / "supervisor.log").write_text(
+                    f"[{start}] ember: change aaaaaaaa on probation (baseline 0.4, n=6)\n"
+                    f"[{trial}] ember: kept change is trial example-trial's (better)\n")
+                row, = metrics._probation_from_log("ember")
+                self.assertIsNone(row["trial"])
+
 
 if __name__ == "__main__":
     unittest.main()

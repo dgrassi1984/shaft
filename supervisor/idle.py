@@ -32,6 +32,7 @@ OUTWARD = ("send_message", "mail_draft", "mail_draft_update", "calendar_create",
 PRIOR = OUTWARD + ("delegate_coding", "set_config", "secret_set", "secret_delete", "trial", "record_order", "predict")
 QUIET = ("nothing_to_do", "record", "gauges")   # what may still be called after the exit without withdrawing it
 WINDOW_DAYS = 14
+MAX_RUN = timedelta(hours=6)   # far longer than any cycle; a match further apart is not that run
 
 
 def path(name: str) -> Path:
@@ -113,6 +114,8 @@ def exits(name: str, episodes: list[dict], changed: list[str] = ()) -> set[str]:
         used.add(run)
         start, end, said = _at(run), _at(ep["ts"]), _at(row["at"])
         if None in (start, end, said) or not start <= said <= end:
+            continue
+        if end - start > MAX_RUN or any(said < at < end for at, other in dated if other is not ep):
             continue
         if any(start <= at <= end + timedelta(minutes=2) for at in kept):
             continue

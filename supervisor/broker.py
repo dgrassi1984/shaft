@@ -1406,9 +1406,9 @@ class Broker:
         if getattr(self, "idle_declared", False):   # a broker built without __init__ (tests) declared nothing
             from . import idle
             if tool not in idle.QUIET:
-                self.idle_declared = False
                 try:
                     self._idle_withdrawn(tool)
+                    self.idle_declared = False
                 except Exception as e:      # the exit's bookkeeping never costs the call
                     self._log(f"{self.name}: idle exit not withdrawn: {type(e).__name__}: {e}")
         thread = str(args.get("id") or "").strip()
@@ -1985,7 +1985,6 @@ class Broker:
             return (f"not counted: this cycle already called {', '.join(sent)}, so it is judged as the work it did. "
                     "Finish it as a normal cycle")
         self._idle_exit(reason)
-        self.idle_declared = True
         from .autonomy import IDLE_BACKOFF, IDLE_WAKE_MIN
         return ("recorded: this cycle counts as nothing worth a cycle. It is not judged and is not a failure. Your "
                 f"next idle wake waits {IDLE_WAKE_MIN * IDLE_BACKOFF} min instead of {IDLE_WAKE_MIN}; a message, a due "
@@ -1996,7 +1995,11 @@ class Broker:
         from . import autonomy, idle
         from .core import log
         idle.record(self.name, self.run_started, reason)
-        autonomy.record("idle_exit", self.name)
+        self.idle_declared = True
+        try:
+            autonomy.record("idle_exit", self.name)
+        except Exception as e:   # the exit exists and must remain withdrawable even without its backoff
+            log(f"{self.name}: idle exit backoff not recorded: {type(e).__name__}: {e}")
         log(f"{self.name}: cycle ended as nothing worth a cycle: {' '.join(str(reason).split())[:200]}")
 
     def _idle_withdrawn(self, tool: str) -> None:

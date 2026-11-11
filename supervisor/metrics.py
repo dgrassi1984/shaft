@@ -838,12 +838,14 @@ def judge_pending(name: str) -> int:
         log(f"{name}: commitment citations could not be read: {type(e).__name__}: {e}")
     left = unsampled(name)
     from . import idle   # a cycle the instance ended as nothing worth one is its own class: never a failure and
-    changed = []                       # never judged, goal or not; one a kept commitment cites is judged all the same
+    idle_done = set()                  # never judged, goal or not; one a kept commitment cites is judged all the same
     try:
         changed = [c["ts"] for c in change_outcomes(name)]
     except Exception as e:
-        log(f"{name}: kept changes could not be read for the idle exits: {type(e).__name__}: {e}")
-    done = {j["episode_ts"] for j in js} | (left - cited) | (idle.exits(name, episodes, changed) - cited)
+        log(f"{name}: kept changes could not be read; no idle exemption, cycles judged normally: {type(e).__name__}: {e}")
+    else:
+        idle_done = idle.exits(name, episodes, changed)
+    done = {j["episode_ts"] for j in js} | (left - cited) | (idle_done - cited)
     new = 0
     for ep in episodes:
         if ep["ts"] in done:
@@ -2130,7 +2132,9 @@ def _probation_from_log(name: str) -> list[dict]:
             rows.append({**by_commit[m[5]], "at": at, "outcome": outcome})
         elif m[8] and rows:        # logged right after the change it belongs to, on probation or not
             last = rows[-1]
-            if last["outcome"] in ("started", "not on probation") and abs((_ts(at) - _ts(last["since"])).total_seconds()) <= 60:
+            trial_at, since = _ts(at), _ts(last["since"])
+            if (last["outcome"] in ("started", "not on probation") and trial_at is not None and since is not None
+                    and abs((trial_at - since).total_seconds()) <= 60):
                 last["trial"] = m[8]
     return rows
 
@@ -2162,8 +2166,21 @@ def change_outcomes(name: str, as_of: datetime | None = None) -> list[dict]:
     # The log covers what the history file does not: changes kept before it existed, and the start of a probation
     # that was already open when it began (its close is in the history, its start only in the log). One row per
     # (commit, outcome), the history's when both have it.
-    merged = {(e["commit"][:8], e["outcome"]): e for e in _probation_from_log(name)}
-    merged.update({(e["commit"][:8], e["outcome"]): e for e in events})
+    history_commits = {e["commit"] for e in events}
+    prefixes = {}
+    for commit in history_commits:
+        prefixes.setdefault(commit[:8], set()).add(commit)
+
+    def identity(commit):
+        matches = prefixes.get(commit, set()) if len(commit) == 8 else set()
+        return next(iter(matches)) if len(matches) == 1 else commit
+
+    # Only an unambiguous log prefix identifies a history commit; full history hashes remain distinct.
+    merged = {(identity(e["commit"]), e["outcome"]): e for e in _probation_from_log(name)}
+    for e in events:
+        key = (e["commit"], e["outcome"])
+        previous = merged.get(key, {})
+        merged[key] = {**e, "trial": e.get("trial") if e.get("trial") is not None else previous.get("trial")}
     events = sorted((e for e in merged.values() if cut is None or e["at"] < cut), key=lambda e: e["at"])
     starts = [e for e in events if e["outcome"] in ("started", "not on probation")]
     out, taken = [], set()
@@ -2179,7 +2196,7 @@ def change_outcomes(name: str, as_of: datetime | None = None) -> list[dict]:
             out.append({"ts": row["ts"], "files": row.get("files") or [], "commit": None, "outcome": "unknown",
                         "tested": None})
             continue
-        last = [e for e in events if e["commit"][:8] == start["commit"][:8]][-1]
+        last = [e for e in events if identity(e["commit"]) == identity(start["commit"])][-1]
         outcome = "on probation" if last["outcome"] == "started" else last["outcome"]
         out.append({"ts": row["ts"], "files": row.get("files") or [], "commit": start["commit"][:8],
                     "outcome": outcome, "tested": start.get("trial") is not None})

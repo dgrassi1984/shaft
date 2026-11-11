@@ -138,6 +138,24 @@ class IdleExitTest(IsolatedCase):
                        {"ts": "2026-11-11T11:00:00", "run_started": run}]
                 self.assertEqual(idle.exits("ember", eps), {eps[1]["ts"]})
 
+    def test_unconsumed_exit_cannot_be_claimed_by_next_day_forged_episode(self):
+        run = (NOW - timedelta(minutes=10)).isoformat()
+        idle.record("ember", run, "empty", NOW)
+        ep = {"ts": (NOW + timedelta(days=1)).isoformat(), "run_started": run}
+        self.assertEqual(idle.exits("ember", [ep]), set())
+        ep["ts"] = (NOW + timedelta(minutes=1)).isoformat()
+        self.assertEqual(idle.exits("ember", [ep]), {ep["ts"]})
+
+    def test_intervening_episode_end_prevents_claiming_unconsumed_exit(self):
+        run = (NOW - timedelta(minutes=10)).isoformat()
+        idle.record("ember", run, "empty", NOW)
+        ep = {"ts": (NOW + timedelta(minutes=20)).isoformat(), "run_started": run}
+        other = {"ts": (NOW + timedelta(minutes=10)).isoformat()}
+        self.assertEqual(idle.exits("ember", [ep, other]), set())
+        for at in (NOW, NOW + timedelta(minutes=20)):
+            other["ts"] = at.isoformat()
+            self.assertEqual(idle.exits("ember", [ep, other]), {ep["ts"]})
+
     def test_exit_times_parse_both_separators_and_kept_code_prevents_exemption(self):
         """String ordering must not lose exits or hide a cycle that kept code."""
         for sep in ("T", " "):
@@ -235,10 +253,52 @@ class IdleExitTest(IsolatedCase):
         self.assertEqual(len(idle.rows("ember")), 1)
         self.assertIn("ember", json.loads(autonomy.STATE.read_text())["idle_exits"])
 
+    def test_failed_idle_withdrawal_retries_on_following_tool_call(self):
+        b = self.box()
+        self.assertTrue(b.call("nothing_to_do", {"reason": "empty"})["ok"])
+        withdraw = b._idle_withdrawn
+        with mock.patch.object(b, "_idle_withdrawn", side_effect=[OSError("disk error"), None]) as attempt, \
+             mock.patch.object(b, "_send_message", return_value="dispatched"):
+            self.assertEqual(b.call("send_message", {}), {"ok": True, "result": "dispatched"})
+            self.assertTrue(b.idle_declared)
+            self.assertEqual(len(idle.rows("ember")), 1)
+            attempt.side_effect = withdraw
+            self.assertEqual(b.call("send_message", {}), {"ok": True, "result": "dispatched"})
+            self.assertEqual(attempt.call_count, 2)
+        self.assertFalse(b.idle_declared)
+        self.assertIn("send_message", idle.rows("ember")[1]["revoked"])
+
+    def test_failed_idle_backoff_still_allows_later_message_to_revoke_exit(self):
+        b = self.box()
+        with mock.patch.object(autonomy, "record", side_effect=OSError("disk error")):
+            result = b.call("nothing_to_do", {"reason": "empty"})
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(b.idle_declared)
+        self.assertEqual(len(idle.rows("ember")), 1)
+        with mock.patch.object(b, "_send_message", return_value="dispatched"):
+            self.assertEqual(b.call("send_message", {}), {"ok": True, "result": "dispatched"})
+        self.assertFalse(b.idle_declared)
+        self.assertIn("send_message", idle.rows("ember")[1]["revoked"])
+
+    def test_unreadable_changes_disable_idle_exemption_for_judging(self):
+        ep = {"kind": "live", "ts": NOW.isoformat(), "run_started": (NOW - timedelta(minutes=5)).isoformat()}
+        self.write(self.root / "memory/episodes/day.jsonl", [ep])
+        self.write(self.sup / "code_changes/ember.jsonl", [{"ts": NOW.isoformat(), "files": ["shaft/example.py"]}])
+        idle.record("ember", ep["run_started"], "empty", NOW)
+        with mock.patch.object(metrics, "change_outcomes", side_effect=OSError("unreadable changes")), \
+             mock.patch.object(judge, "JUDGE_EVERY", 1), \
+             mock.patch.object(metrics, "cycle_model", return_value="example"):
+            self.assertEqual(metrics.judge_pending("ember"), 1)
+        row, = metrics.judgments("ember")
+        self.assertEqual((row["episode_ts"], row["failure_mode"]), (ep["ts"], "never declared an intent"))
+        self.assertTrue(any("no idle exemption, cycles judged normally" in call.args[0]
+                            for call in metrics.log.call_args_list))
+
     def test_replay_later_work_writes_neither_exit_revoke_nor_schedule(self):
         """Replay withdrawal must never create real exit or scheduling records."""
         b = self.box(replay=True)
         self.assertTrue(b.call("nothing_to_do", {"reason": "empty"})["ok"])
+        self.assertFalse(b.idle_declared)
         with mock.patch.object(b, "_web_search", return_value="simulated search"):
             self.assertTrue(b.call("web_search", {})["ok"])
         self.assertFalse(b.idle_declared)
