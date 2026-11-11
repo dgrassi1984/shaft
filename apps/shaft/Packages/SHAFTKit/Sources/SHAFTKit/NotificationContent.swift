@@ -160,5 +160,5 @@ public struct ChatTarget: Hashable, Sendable {
         self.cid = cid
     }
 
-    public var ref: ChatRef? { ChatRef(cid: cid) }
+    public var ref: ChatRef? { ChatRef(cid: cid) ?? .from }
 }

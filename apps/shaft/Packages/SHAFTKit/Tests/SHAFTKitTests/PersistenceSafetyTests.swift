@@ -59,14 +59,14 @@ struct PersistenceSafetyTests {
         let outbox = try Outbox(directory: blocked)
         let drafts = DraftStore(directory: folder.appending(path: "drafts"))
         let store = InstancesStore(client: server.client, outbox: outbox, drafts: drafts)
-        let chat = store.chat("same")
+        let chat = store.chat("same", .from)
         chat.draft = Draft(text: "Keep this text")
         let result = await chat.send()
         guard case .failure(let error) = result else { Issue.record("enqueue succeeded"); return }
         #expect(error.message.contains("Could not save the outbox"))
         #expect(chat.actionError == error)
         #expect(chat.draft.text == "Keep this text")
-        #expect(try drafts.load("same").text == "Keep this text")
+        #expect(try drafts.load("same", cid: "from").text == "Keep this text")
         #expect(outbox.entries.isEmpty)
         #expect(server.requests.isEmpty)
     }

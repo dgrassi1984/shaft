@@ -216,7 +216,7 @@ struct ChatStoreUITests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("tundra")
+        let chat = store.chat("tundra", .from)
         #expect(chat.attach(data: Data("x".utf8), name: "note.txt"))
         chat.draft.text = "Rerun it"
         chat.addQuote("Ship it?")
@@ -231,7 +231,7 @@ struct ChatStoreUITests {
         #expect(try Data(contentsOf: try #require(chat.fileURL(of: file))) == Data("x".utf8))
         chat.removeAttachment(file.id)
         chat.removeQuote(at: 0)
-        #expect(try store.drafts.load("tundra") == Draft(text: "also\n\nRerun it"))
+        #expect(try store.drafts.load("tundra", cid: "from") == Draft(text: "also\n\nRerun it"))
     }
 
     /// Bug: offline said the same thing three times: the not-sent row, the offline banner and a red status line.
@@ -240,7 +240,7 @@ struct ChatStoreUITests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("tundra")
+        let chat = store.chat("tundra", .from)
         chat.draft.text = "Rerun it"
         _ = await chat.send()
         #expect(chat.unsent.first?.reason?.isEmpty == false)
@@ -256,7 +256,7 @@ struct ChatStoreUITests {
                 : .json(200, #"{"said":"Feedback kept.","id":"f-1"}"#)
         }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("tundra")
+        let chat = store.chat("tundra", .from)
         await chat.unpend("f-1")                    // an earlier action's answer, which the send must not leave up
         #expect(chat.said == "Feedback kept.")
         chat.draft.text = "Rerun it"
@@ -274,7 +274,7 @@ struct ChatStoreUITests {
                 : .json(200, "{}")
         }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("tundra")
+        let chat = store.chat("tundra", .from)
         chat.draft.text = "After that"
         _ = await chat.send(mode: .queue)
         #expect(chat.said == nil)
@@ -312,14 +312,13 @@ struct NotificationPolicyTests {
         #expect(AppModel.presentation(for: nil, visibleChat: ChatTarget(instance: "tundra")).contains(.banner))
     }
 
-    /// Threads: a reply in thread B banners while thread A of the same instance is on screen; one in A does not. A push
-    /// that names no thread (a server before threads) is about whichever chat of the instance is shown.
+    /// A reply in another thread, or an untargeted Main notification, banners while a thread is on screen.
     @Test func anotherThreadOfTheInstanceOnScreenStillGetsABanner() {
         let onA = ChatTarget(instance: "tundra", cid: "web-a")
         #expect(AppModel.presentation(for: "tundra", cid: "web-a", visibleChat: onA) == [.badge])
         #expect(AppModel.presentation(for: "tundra", cid: "web-b", visibleChat: onA).contains(.banner))
         #expect(AppModel.presentation(for: "tundra", cid: "from", visibleChat: onA).contains(.banner))
-        #expect(AppModel.presentation(for: "tundra", cid: nil, visibleChat: onA) == [.badge])
+        #expect(AppModel.presentation(for: "tundra", cid: nil, visibleChat: onA).contains(.banner))
         #expect(AppModel.presentation(for: "tundra", cid: "from",
                                       visibleChat: ChatTarget(instance: "tundra", cid: "from")) == [.badge])
     }
@@ -352,7 +351,7 @@ struct AppLinksTests {
         #expect(AppLinks.target(in: link)?.ref == .thread("web-3f9a1c0d7e2b4a65"))
         #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra/from")!)?.ref == .from)
         #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra")!) == ChatTarget(instance: "tundra"))
-        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra")!)?.ref == nil)
+        #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra")!)?.ref == .from)
         #expect(AppLinks.target(in: URL(string: "shaft://chat/tundra/..")!) == nil)
     }
 }
@@ -366,7 +365,7 @@ struct ReconnectTests {
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "o")),
                                    drafts: DraftStore(directory: folder.appending(path: "d")))
-        let chat = store.chat("tundra")
+        let chat = store.chat("tundra", .from)
         chat.start()
         // Long enough into the backoff that the next try is seconds away.
         try await waitUntil(timeout: .seconds(20)) {

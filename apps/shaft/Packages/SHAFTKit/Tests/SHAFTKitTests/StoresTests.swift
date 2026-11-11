@@ -197,15 +197,15 @@ struct StoresTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = try makeStore(server, folder: folder)
-        let chat = store.chat("tundra")
-        let file = try store.drafts.attach(data: Data("x".utf8), name: "note.txt", for: "tundra")
+        let chat = store.chat("tundra", .from)
+        let file = try store.drafts.attach(data: Data("x".utf8), name: "note.txt", for: "tundra", cid: "from")
         chat.draft = Draft(text: "Rerun it", quotes: [Quote(quote: "Ship it?", answer: "Yes")], attachments: [file])
-        #expect(try store.drafts.load("tundra").text == "Rerun it")
+        #expect(try store.drafts.load("tundra", cid: "from").text == "Rerun it")
 
         let result = await chat.send(mode: .queue)
         guard case .failure = result else { Issue.record("the send did not fail"); return }
         #expect(chat.draft.isEmpty)
-        #expect(try store.drafts.load("tundra").isEmpty)
+        #expect(try store.drafts.load("tundra", cid: "from").isEmpty)
         let unsent = try #require(chat.unsent.first)
         #expect(unsent.text == "Rerun it")
         #expect(unsent.mode == .queue)

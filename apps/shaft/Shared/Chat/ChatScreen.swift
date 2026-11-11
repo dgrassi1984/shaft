@@ -36,6 +36,7 @@ struct ChatScreen: View {
     /// Rename… asks for the thread's new title.
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var showingNotes = false
     #if os(macOS)
     @State private var columnWidth: CGFloat = 700
     #endif
@@ -71,17 +72,16 @@ struct ChatScreen: View {
     }
     /// The instance has threads (a server with them): New thread starts one beside the others, and ends nothing.
     private var hasThreads: Bool { store.threads(chat.instance) != nil }
-    /// The header's second name: the thread's title, "From <instance>" for the From feed, nil for the one chat of a
-    /// server before threads.
+    /// Main uses the instance name; a thread uses its own title.
     private var threadTitle: String? {
-        if chat.ref.isFrom { return String(localized: "From \(chat.instance)") }
+        if chat.ref.isFrom { return nil }
         return chat.isEarlier ? nil : chat.title
     }
     /// On an iPhone's width, five header buttons left no room for the instance's name (M3, iPhone Simulator): with Talk
     /// shown, Cycles moves into ⋯.
     private var cyclesInMenu: Bool {
         #if os(iOS)
-        canTalk && sizeClass == .compact
+        sizeClass == .compact
         #else
         false
         #endif
@@ -346,15 +346,16 @@ struct ChatScreen: View {
             Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
                 .accessibilityLabel("Cycles")
         }
-        if hasThreads && !chat.isEarlier {
+        if hasThreads {
             // A thread more, beside this one: it ends nothing, so nothing to confirm.
             Button { newThread() } label: { Image(systemName: "square.and.pencil") }
-                .accessibilityLabel("New thread")
+                .accessibilityLabel("New thread with \(chat.instance)")
+                .keyboardShortcut("n", modifiers: [.command, .shift])
                 .accessibilityHint("Starts another conversation with \(chat.instance); this one stays open")
-        } else if !chat.isEarlier {
+        } else {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
-                .disabled(chat.content?.canClear != true)
-                .accessibilityLabel("New chat")
+                .disabled(chat.isEarlier || store.threadsState(chat.instance) == .unknown || chat.content?.canClear != true)
+                .accessibilityLabel(store.threadsState(chat.instance) == .unsupported ? "New chat" : "New thread with \(chat.instance)")
                 .confirmationDialog("Start a new chat with \(chat.instance)?",
                                     isPresented: Bindable(screen).confirmingNewChat, titleVisibility: .visible) {
                     Button("New chat") { Task { await chat.clear() } }
@@ -366,6 +367,11 @@ struct ChatScreen: View {
             if !screen.archived {
                 Button { screen.showInstanceSettings = true } label: {
                     Label("Settings for \(chat.instance)", systemImage: "gearshape")
+                }
+            }
+            if !screen.archived {
+                Button { showingNotes = true } label: {
+                    Label("For next cycle (\(store.pendingNotes[chat.instance]?.count ?? 0))", systemImage: "moon")
                 }
             }
             if cyclesInMenu {
@@ -387,13 +393,16 @@ struct ChatScreen: View {
             }
             if chat.content?.canEnd == true {
                 Button { screen.confirmingEnd = true } label: {
-                    Label("End conversation", systemImage: "flag.checkered")      // the menu hyphenated a longer one
+                    Label("Close thread", systemImage: "flag.checkered")      // the menu hyphenated a longer one
                 }
             }
         } label: {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("More")
+        .popover(isPresented: $showingNotes) {
+            PendingNotesView(instance: chat.instance).padding().frame(idealWidth: 320)
+        }
         .confirmationDialog("End the conversation with \(chat.instance)?",
                             isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
             Button("End it", role: .destructive) { Task { await chat.end() } }
@@ -467,21 +476,24 @@ struct ChatScreen: View {
 /// when it is busy, its model and its spend. Text stops growing at the largest size two lines fit in the capsule.
 struct ChatTitle: View {
     let instance: String
-    /// The thread's title (or "From <instance>"), after the name; nil for the one chat of a server before threads.
+    /// The thread title; nil for Main or a server before threads.
     var thread: String? = nil
     let archived: Bool
     @Environment(InstancesStore.self) private var store
     @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showNote = false
+    @Environment(\.openConversationSwitcher) private var switchConversations
 
     var body: some View {
         let row = store.row(instance)
-        Button { if row != nil { showNote = true } } label: {
+        Button {
+            if let switchConversations { switchConversations() }
+            else if row != nil { showNote = true }
+        } label: {
             VStack(spacing: 0) {
-                let name = Text(instance).foregroundStyle(Color.textPrimary)
-                let second = Text(thread.map { " · \($0)" } ?? "").foregroundStyle(Color.textSecondary)
-                Text("\(name)\(second)")
+                Text(thread ?? instance)
+                    .foregroundStyle(Color.textPrimary)
                     .font(.headline)
                     .lineLimit(1)
                 if let row, !archived {
@@ -504,7 +516,7 @@ struct ChatTitle: View {
         // A capsule of its own, as tall as the header's buttons: the name is never bare over the chat (2026-11-04).
         .glassSurface(in: Capsule())
         .accessibilityElement(children: .combine)
-        .accessibilityHint(row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
+        .accessibilityHint(switchConversations != nil ? "Choose a conversation" : row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
         .popover(isPresented: $showNote) {
             VStack(alignment: .leading, spacing: Design.Space.s8) {
                 if let note = row?.busyNote {
@@ -518,6 +530,7 @@ struct ChatTitle: View {
                 if let usd = row?.usdToday, usd > 0 {
                     Text("Cloud spend today: $\(usd, specifier: "%.2f")").font(.footnote).foregroundStyle(Color.textSecondary)
                 }
+                PendingNotesView(instance: instance)
                 if !screen.archived {
                     Button("Settings for \(instance)") {
                         showNote = false
@@ -543,6 +556,9 @@ struct ChatTitle: View {
                     .accessibilityHidden(true)
             }
             Text(parts.joined(separator: " · ")).lineLimit(1)
+            if let count = store.pendingNotes[instance]?.count, count > 0 {
+                Label("\(count) for next cycle", systemImage: "moon").lineLimit(1)
+            }
         }
     }
 }
@@ -562,5 +578,35 @@ enum StateIcon {
     /// The only pulse in the app (spec §2.4): replying, and in a cycle.
     static func pulses(_ state: String, replying: Bool) -> Bool {
         replying || state.hasPrefix("in a cycle")
+    }
+}
+
+/// Pending notes come from the instance-wide endpoint, including notes outside the feed window.
+private struct PendingNotesView: View {
+    let instance: String
+    @Environment(InstancesStore.self) private var store
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Design.Space.s12) {
+                Text("For next cycle").font(.headline)
+                if let error = store.notesError[instance] { Text(error.message).foregroundStyle(Color.warning) }
+                if (store.pendingNotes[instance] ?? []).isEmpty { Text("No pending notes.").foregroundStyle(Color.textSecondary) }
+                ForEach(store.pendingNotes[instance] ?? []) { note in
+                    VStack(alignment: .leading, spacing: Design.Space.s4) {
+                        Text(note.title ?? instance).font(.subheadline.weight(.semibold))
+                        Text(note.text ?? "")
+                        if note.cancellable == true {
+                            Button("Cancel") { Task { await store.cancelNote(instance, note: note) } }
+                        } else {
+                            Text("It may already have been read; it cannot be cancelled.")
+                                .font(.caption).foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 400)
+        .task { await store.refreshNotes(instance) }
     }
 }

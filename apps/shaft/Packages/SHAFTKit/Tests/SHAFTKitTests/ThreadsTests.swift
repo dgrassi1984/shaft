@@ -422,7 +422,7 @@ struct ThreadsTests {
         #expect(store.threadsError["gone"]?.code == "not_found")
     }
 
-    @Test func loadedThreadsPickTheNewestAndAnEndedThreadGivesWay() async throws {
+    @Test func loadedThreadsOpenMainAndAnEndedThreadKeepsItsHistory() async throws {
         let folder = try temporaryFolder("thread-load")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try threadsServer()
@@ -430,16 +430,16 @@ struct ThreadsTests {
         await store.refresh()
         await store.refreshMovedThreads()
         #expect(store.threads("wisp")?.threads.count == 2)
-        #expect(store.defaultRef("wisp") == .thread(Self.threadB))
-        #expect(store.resolve("wisp", nil) == .thread(Self.threadB))
+        #expect(store.defaultRef("wisp") == .from)
+        #expect(store.resolve("wisp", nil) == .from)
         #expect(store.resolve("wisp", .thread(Self.threadA)) == .thread(Self.threadA))
         #expect(store.resolve("wisp", .from) == .from)
-        #expect(store.resolve("wisp", .thread("web-ended")) == .thread(Self.threadB))
+        #expect(store.resolve("wisp", .thread("web-ended")) == .earlier("web-ended"))
 
         // Nothing moved: not asked again.
-        let asked = server.requests.count
+        let asked = server.requests.filter { $0.path.hasPrefix("/app/v1/threads/") }.count
         await store.refreshMovedThreads()
-        #expect(server.requests.count == asked)
+        #expect(server.requests.filter { $0.path.hasPrefix("/app/v1/threads/") }.count == asked)
 
         // A thread's feed reads `/chat/<n>/<cid>`.
         let chat = store.chat("wisp", .thread(Self.threadA))
@@ -571,6 +571,6 @@ struct ThreadsTests {
         #expect(model.openChat == ChatTarget(instance: "tundra", cid: "web-a"))
         #expect(model.openChat?.ref == .thread("web-a"))
         model.notificationTapped(instance: "tundra")
-        #expect(model.openChat?.ref == nil)
+        #expect(model.openChat?.ref == .from)
     }
 }
