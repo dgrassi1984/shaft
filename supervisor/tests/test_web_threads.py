@@ -173,7 +173,7 @@ class ThreadsWebTest(ChatRoutesCase):
         self.assertIn('<input type="hidden" name="cid" value="from">', composer)
         self.assertIn('name="queue"', composer)
         self.assertIn('<span class="threadtitle">From wisp</span>', page)
-        self.assertNotIn("data-show-docs", page)                         # no documents panel on From
+        self.assertIn("data-show-docs", page)                            # Main has the documents panel (From had none)
         self.assertNotIn("/chat/wisp/clear", page)
         with mock.patch.object(web_chat, "background", return_value=("", "kept for its next cycle")) as bg, \
                 mock.patch.object(web_chat, "send", return_value=({}, "sent")) as send:
