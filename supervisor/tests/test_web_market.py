@@ -55,7 +55,7 @@ class HeaderTest(unittest.TestCase):
         body = self.header()
         tools = re.search(r'<div class="headtools">(.*)</header>', body, re.S).group(1)
         self.assertEqual(re.findall(r'aria-label="([^"]+)"', tools.split('<div class="menubody">')[0]),
-                         ["Documents", "New thread", "wisp: pages and actions"])
+                         ["Documents", "New thread with wisp", "wisp: pages and actions"])   # names whose thread it starts
         menu = tools.split('<div class="menubody">', 1)[1]
         self.assertIn('data-key="earlier-chats"', menu)   # in ⋯
         self.assertIn('data-post="/chat/wisp/clear"', menu)

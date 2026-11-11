@@ -226,7 +226,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     title (Rename behind it), the state under them and three controls (Documents, New thread, ⋯); pages, earlier chats,
     Clear and the instance's actions are in ⋯, Kill last and apart. Seven bordered boxes read as a toolbar, and Clear
     sat one tap from the title (review I11). `from_feed`: the header of the From <instance> page."""
-    from .web_actions import instance_buttons, post_attrs
+    from .web_actions import button, instance_buttons, post_attrs
     from . import web_chat
     pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
                  for t, label in INSTANCE_TABS if t != "chat")
@@ -294,9 +294,11 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              switcher=switcher, instance_link=instance_link, name=name, heading=name if from_feed or not chat else web_chat.title(chat), sub=sub + pending_notes_html(name), facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              new=new_thread_form(name), clear=clear, danger=danger,
              rename=_thread_title(name, chat, read_only, from_feed) if chat and not from_feed and not read_only else Html(""),
-             close=(h('<form class="act" data-post="/action/chat-end" data-after="thread-ended"{a}>'
-                      '<input type="hidden" name="cid" value="{cid}"><button type="submit">Close thread</button></form>',
-                      n=q(name), cid=chat["id"], a=post_attrs("the chats")) if chat and not from_feed and not read_only else Html("")),
+             # End moved here from the feed: it keeps its confirm, which says what is kept (#11)
+             close=(button("chat-end", "Close thread", f"close this thread with {name}? Its messages stay in Earlier chats. "
+                           "Your next message starts a new conversation. A journal write-up is requested.",
+                           {"cid": chat["id"]}, after="thread-ended")
+                    if chat and not from_feed and not read_only else Html("")),
              brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
              earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"),
              docs=h('<button type="button" class="iconbtn docsbtn" data-show-docs '

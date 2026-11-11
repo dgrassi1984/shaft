@@ -198,15 +198,17 @@ class RecoveryTest(unittest.TestCase):
         chat = self.chat()
         header = str(web_views.chat_header("wisp", {}, chat, []))
         # New thread ends nothing; Clear, in ⋯, says what it does and its confirm says what is kept
-        self.assertIn('aria-label="New thread" data-focus="new-thread">', header)
+        self.assertIn('aria-label="New thread with wisp" data-focus="new-thread">', header)
         self.assertIn('<button type="submit" data-focus="clear">Clear this thread</button>', header)
         self.assertIn("Clear this thread? It is kept in Earlier chats and Transcripts", header)
         self.assertIn("Your other threads stay open.", header)
         self.assertIn("Only the reply stops. The conversation stays open.", str(web_views.chat_feed("wisp", chat, [])))
         chat["state"] = "idle"
-        rendered = str(web_views.chat_feed("wisp", chat, []))
-        self.assertIn("The messages stay on this page.", rendered)
-        self.assertIn("Your next message starts a new conversation.", rendered)
+        # End is Close thread in the header's ⋯ now (2026-11-11), with its confirm saying what is kept
+        header = str(web_views.chat_header("wisp", {}, chat, []))
+        self.assertIn("Its messages stay in Earlier chats.", header)
+        self.assertIn("Your next message starts a new conversation.", header)
+        self.assertNotIn("chat-end", str(web_views.chat_feed("wisp", chat, [])))
 
 
 class ApiFailureTest(unittest.TestCase):
