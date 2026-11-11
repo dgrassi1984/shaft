@@ -1261,6 +1261,7 @@ Live `doing`, tool arguments, tool results, and the web-only `where` field do no
 | `commitments` | list | Promises to others, sorted by due date: `{id, promise, due, status}`, described below |
 | `commitments_error` | str | Empty when read, otherwise why the ledger could not be read |
 | `queue` | object | Described below |
+| `projects` | object | The instance's projects (`memory/projects.jsonl`), described below |
 | `goals` | str | The instance's goals Markdown |
 | `goals_error` | str | Empty when read, `"no goals file"` when missing, otherwise why it could not be read |
 | `improvement` | object or null | Latest Sleep or Reflection improvement plan: `{at, text}`, described below |
@@ -1289,6 +1290,22 @@ Queue fields:
 | `rows[].due_at` | str or null | Offset timestamp, plain date, or null (§1.6) |
 | `rows[].due_at_text` | str, optional | Original nonempty text when due_at cannot be parsed; otherwise omitted |
 | `rows[].overdue` | bool | Whether the task is overdue |
+
+Projects fields (`supervisor.projects.panel`; an app may get no `projects` from an older server):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `open` | int | Open projects |
+| `error` | str | Empty when read or missing, otherwise `"could not read memory/projects.jsonl: <reason>"`, with no rows |
+| `rows` | list | Open projects first, soonest deadline first; then closed ones, newest close first |
+| `rows[].id`, `name`, `success` | str | Its id, its name, and what "done" means for it |
+| `rows[].status` | str | `"open"`, `"done"`, `"abandoned"` or `"failed"` |
+| `rows[].opened_at`, `deadline` | str | Offset timestamps (§1.6) |
+| `rows[].health` | str or null | Open: `"on track"`, `"at risk: <boundaries>"` or `"past boundary: <boundaries>"`, as in the stats head; closed: null |
+| `rows[].hours_left` | number or null | Open: hours to the deadline (negative once past); closed: null |
+| `rows[].calls`, `usd` | number or null | Open: measured use over its cycles; `usd` is null for a plan-billed model. Closed: null |
+| `rows[].budget_calls`, `budget_usd` | number or null | Its budgets; null is unbounded |
+| `rows[].evidence`, `closed_at` | str or null | Closed: the evidence it gave and the offset timestamp of the close; open: null |
 
 ### 16.2 `GET /app/v1/cycles/<n>?before=&filter=`
 

@@ -538,7 +538,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   **Judge**, **Changes**, **Benchmarks**, **Cycles**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
 - **Cycles** keeps `/i/<name>/transcripts`. Next shows the current state, next check, the instance's next action
-  and unfinished work, commitments, task queue, and collapsed goals and improvement plan. Next refreshes through
+  and unfinished work, commitments, task queue, and collapsed projects, goals and improvement plan. Next refreshes through
   `/fragment/i/<name>/cycles-next`. Done groups cycles by server date, newest first, three days at a time,
   with Earlier days paging.
   Filters are All, For you, Fell short, Delivered, and Conversations. The instance's claim is plain text;

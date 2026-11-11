@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, commitments, core, cycles, panel
+from supervisor import autonomy, commitments, core, cycles, metrics, panel
 
 
 class NoteLinesTest(unittest.TestCase):
@@ -500,6 +500,61 @@ class CyclesDaysTest(unittest.TestCase):
         self.assertEqual(p["goals_error"], "no goals file")
         self.assertIsNone(p["improvement"])
         self.assertEqual(p["now"], {"state": None, "since": None, "goal": None})
+        self.assertEqual(p["projects"], {"open": 0, "rows": [], "error": ""})
+
+    def project_events(self, *events: dict) -> None:
+        self.write("memory/projects.jsonl", "".join(json.dumps(e) + "\n" for e in events))
+
+    def test_projects_show_open_by_deadline_then_closed_newest_first(self):
+        """The Cycles panel showed no projects at all: the plan now carries them, open first, with their health."""
+        opened = lambda pid, deadline, name: {"event": "opened", "id": pid, "at": "2026-11-01T09:00:00",
+                                               "deadline": deadline, "name": name, "success": f"{name} done",
+                                               "budget_calls": 10, "budget_usd": None}
+        self.project_events(
+            opened("p1101-0900-1", "2026-11-09T09:00:00", "Later"),
+            opened("p1101-0900-2", "2026-11-04T09:00:00", "Sooner"),
+            opened("p1101-0900-3", "2026-11-05T09:00:00", "Closed first"),
+            opened("p1101-0900-4", "2026-11-06T09:00:00", "Closed second"),
+            {"event": "closed", "id": "p1101-0900-3", "at": "2026-11-02T10:00:00", "outcome": "abandoned",
+             "evidence": "No longer needed"},
+            {"event": "closed", "id": "p1101-0900-4", "at": "2026-11-02T11:00:00", "outcome": "done",
+             "evidence": "Sent"})
+        self.ep("2026-11-02", kind="live", ts="2026-11-02T12:00:00", intent={"project": "p1101-0900-2"},
+                project_usage={"calls": 9, "usd": 0.5})
+        with mock.patch.object(metrics, "INSTANCES", self.inst):   # metrics holds its own copy of the path
+            p = cycles.plan("wisp", {}, now=datetime(2026, 11, 3, 9, 0))["projects"]
+        self.assertEqual(p["error"], "")
+        self.assertEqual(p["open"], 2)
+        self.assertEqual([r["name"] for r in p["rows"]], ["Sooner", "Later", "Closed second", "Closed first"])
+        sooner = p["rows"][0]
+        self.assertEqual((sooner["calls"], sooner["usd"], sooner["hours_left"]), (9, 0.5, 24.0))
+        self.assertEqual(sooner["health"], "at risk: budget_calls")      # 9 of 10 calls: past 80%
+        self.assertEqual(p["rows"][1]["health"], "on track")
+        closed = p["rows"][2]
+        self.assertEqual((closed["status"], closed["evidence"], closed["health"]), ("done", "Sent", None))
+
+    def test_a_plan_billed_model_shows_no_project_dollars(self):
+        self.project_events({"event": "opened", "id": "p1101-0900-1", "at": "2026-11-01T09:00:00",
+                             "deadline": "2026-11-09T09:00:00", "name": "Report", "success": "Sent",
+                             "budget_calls": None, "budget_usd": None})
+        self.write("config.env", "LLM_BASE_URL=broker\nLLM_MODEL=codex/gpt-6.1-sol\n")
+        with mock.patch("supervisor.planchannel.prefix", return_value="codex"):
+            row = cycles.plan("wisp", {}, now=datetime(2026, 11, 3, 9, 0))["projects"]["rows"][0]
+        self.assertIsNone(row["usd"])
+        self.assertEqual(row["calls"], 0)
+
+    def test_an_unreadable_projects_record_is_an_error_not_no_projects(self):
+        self.write("memory/projects.jsonl", "[1]\n")
+        p = cycles.plan("wisp", {}, now=datetime(2026, 11, 3, 9, 0))["projects"]
+        self.assertEqual((p["open"], p["rows"]), (0, []))
+        self.assertIn("could not read memory/projects.jsonl", p["error"])
+
+    def test_restamping_the_plan_never_changes_the_cached_projects(self):
+        self.project_events({"event": "opened", "id": "p1101-0900-1", "at": "2026-11-01T09:00:00",
+                             "deadline": "2099-11-09T09:00:00", "name": "Report", "success": "Sent",
+                             "budget_calls": None, "budget_usd": None})
+        cycles.plan("wisp", {})["projects"]["rows"][0]["deadline"] = "changed"
+        self.assertEqual(cycles.plan("wisp", {})["projects"]["rows"][0]["deadline"], "2099-11-09T09:00:00")
 
 
 if __name__ == "__main__":

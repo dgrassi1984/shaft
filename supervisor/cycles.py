@@ -232,8 +232,8 @@ def _next_goal(name: str, date: str, line: int, lines: list[tuple[int, dict]]) -
 
 def plan(name: str, live: dict, now: datetime | None = None) -> dict:
     """The Next block: what the instance is doing now, when it is next checked, what it said it would do next, its
-    open commitments and task queue, its goals, and its latest improvement plan."""
-    from . import autonomy, commitments
+    open commitments and task queue, its projects, its goals, and its latest improvement plan."""
+    from . import autonomy, commitments, projects
 
     state = live.get("state")
     now_block = {"state": state, "since": live.get("since") or None,
@@ -262,6 +262,10 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
     items.sort(key=lambda it: it["due"])
 
     queue = _queue(root, now)
+    # Health depends on the clock and on judged episodes too, hence the ttl; a given `now` (tests) is never cached.
+    project_rows = (projects.panel(name, now) if now is not None else
+                    panel.cached(f"cycles-projects:{name}", [root / projects.FILE], lambda: projects.panel(name), ttl=60))
+    project_rows = {**project_rows, "rows": [dict(r) for r in project_rows["rows"]]}   # callers restamp the copies
     try:
         goals = core.safe_read(root, "self/goals.md", errors="replace")
         goals_error = ""
@@ -286,7 +290,8 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
         improvement_error = f"could not read memory/journal.md: {e}"
 
     return {"now": now_block, "check": check, "next_step": next_step, "unfinished": unfinished,
-            "commitments": items, "commitments_error": commitments_error, "queue": queue, "goals": goals,
+            "commitments": items, "commitments_error": commitments_error, "queue": queue, "projects": project_rows,
+            "goals": goals,
             "goals_error": goals_error, "improvement": improvement, "improvement_error": improvement_error}
 
 

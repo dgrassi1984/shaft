@@ -279,6 +279,10 @@ def _plan(req: Request, n: str) -> Response:
             out[key]["at"] = stamp(out[key].pop("ts"))
     for item in out["commitments"]:
         item["due"] = _due_stamp(item["due"])
+    for row in out["projects"]["rows"]:
+        for key in ("opened_at", "deadline", "closed_at"):
+            if row[key]:
+                row[key] = stamp(row[key])
     for row in out["queue"]["rows"]:
         due = row["due_at"]
         row["due_at"] = _due_stamp(due)

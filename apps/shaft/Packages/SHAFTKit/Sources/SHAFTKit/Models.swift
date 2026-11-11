@@ -844,6 +844,8 @@ public struct CyclePlan: Codable, Sendable, Equatable {
     public var commitments: [Commitment]
     public var commitmentsError: String
     public var queue: Queue
+    /// The instance's projects (`memory/projects.jsonl`); nil from a server before they were sent.
+    public var projects: Projects?
     public var goals: String
     public var goalsError: String
     public var improvement: Improvement?
@@ -917,6 +919,37 @@ public struct CyclePlan: Codable, Sendable, Equatable {
     public struct Improvement: Codable, Sendable, Equatable {
         public var at: Date?
         public var text: String
+    }
+
+    /// Open projects first (soonest deadline first) with how they stand against their boundaries, then closed ones
+    /// (newest first) with their outcome and evidence. `error` is set, with no rows, when the record is unreadable.
+    public struct Projects: Codable, Sendable, Equatable {
+        public var open: Int
+        public var rows: [Project]
+        public var error: String
+    }
+
+    public struct Project: Codable, Sendable, Equatable {
+        public var id: String
+        public var name: String
+        /// What "done" means for it, as the instance wrote when it opened it.
+        public var success: String
+        /// "open", "done", "abandoned" or "failed".
+        public var status: String
+        public var openedAt: Date?
+        public var deadline: Date?
+        /// Open only: "on track", "at risk: …" or "past boundary: …".
+        public var health: String?
+        public var hoursLeft: Double?
+        public var calls: Int?
+        public var budgetCalls: Int?
+        /// Nil for a closed project and for a plan-billed model (no per-call cost).
+        public var usd: Double?
+        public var budgetUsd: Double?
+        public var evidence: String?
+        public var closedAt: Date?
+
+        public var isOpen: Bool { status == "open" }
     }
 }
 

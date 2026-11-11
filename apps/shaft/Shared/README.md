@@ -90,5 +90,6 @@ Cycles is open. The Mac Documents command uses the same selection behavior.
 Cycles creates its store per instance. It refreshes when opened, when the app returns to the foreground, and on
 pull-to-refresh, without a timer. Days retain the server's date strings; timestamps use `Stamp`. Queue due text
 stays as written, and UTC-midnight due dates display as dates in UTC. Claims are plain text; verdicts use the design
-system's pill. Missing, unreadable and loading states have separate lines. Goals, improvement plans, and sleep or
+system's pill. Missing, unreadable and loading states have separate lines. Projects (open ones with their health
+against deadline and budgets, then closed ones with their evidence) sit collapsed above Goals. Goals, improvement plans, and sleep or
 reflection content use `MarkdownText`, the renderer in `Markdown/MarkdownView.swift`.

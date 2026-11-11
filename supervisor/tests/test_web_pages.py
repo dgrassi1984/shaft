@@ -347,6 +347,19 @@ class TranscriptsTest(PagesTest):
             {"id": 3, "task": "time", "due_at": "18:06"}]))
         self.has("/fragment/i/shaft/cycles-next", "dopo la revisione", "2026-11-05", "18:06")
 
+    def test_cycles_page_shows_the_projects_in_a_collapsed_section(self):
+        (self.root / "memory").mkdir(exist_ok=True)
+        (self.root / "memory" / "projects.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {"event": "opened", "id": "p1101-0900-1", "at": "2026-11-01T09:00:00", "deadline": "2099-11-04T09:00:00",
+             "name": "Monthly report", "success": "Report sent", "budget_calls": None, "budget_usd": None},
+            {"event": "opened", "id": "p1101-0900-2", "at": "2026-11-01T09:00:01", "deadline": "2099-11-05T09:00:00",
+             "name": "Reconcile March", "success": "Balances match", "budget_calls": None, "budget_usd": None},
+            {"event": "closed", "id": "p1101-0900-2", "at": "2026-11-02T17:00:00", "outcome": "done",
+             "evidence": "Matched on 2 November"}]))
+        body = self.has("/fragment/i/shaft/cycles-next", '<details data-key="cycles-projects"><summary>Projects · 1 open',
+                        "Monthly report", "done means: Report sent", "Reconcile March", "Matched on 2 November")
+        self.assertLess(body.index("cycles-projects"), body.index("cycles-goals"))
+
     def test_improvement_read_error_is_visible_instead_of_no_plan(self):
         from supervisor import cycles
         plan = cycles.plan("shaft", {})

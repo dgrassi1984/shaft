@@ -46,6 +46,44 @@
       }
     ]
   },
+  "projects": {
+    "open": 1,
+    "rows": [
+      {
+        "id": "p1101-0900-1",
+        "name": "Monthly report",
+        "success": "Report sent with checked totals",
+        "status": "open",
+        "opened_at": "2026-11-01T09:00:00+01:00",
+        "deadline": "2026-11-04T09:00:00+01:00",
+        "health": "on track",
+        "hours_left": 18.0,
+        "calls": 0,
+        "budget_calls": 40,
+        "usd": 0,
+        "budget_usd": null,
+        "evidence": null,
+        "closed_at": null
+      },
+      {
+        "id": "p1101-0900-2",
+        "name": "Reconcile March",
+        "success": "March balances match the bank",
+        "status": "done",
+        "opened_at": "2026-11-01T09:00:01+01:00",
+        "deadline": "2026-11-02T18:00:00+01:00",
+        "health": null,
+        "hours_left": null,
+        "calls": null,
+        "budget_calls": null,
+        "usd": null,
+        "budget_usd": 2.5,
+        "evidence": "Balances matched on 2 November",
+        "closed_at": "2026-11-02T17:00:00+01:00"
+      }
+    ],
+    "error": ""
+  },
   "goals": "",
   "goals_error": "no goals file",
   "improvement": null,

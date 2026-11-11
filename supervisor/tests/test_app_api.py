@@ -19,7 +19,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import apns, app_api, autonomy, commitments, core, docs, feedback, messages, panel, web
+from supervisor import apns, app_api, autonomy, commitments, core, docs, feedback, messages, panel, projects, web
 from supervisor import web_chat, web_seen, webpush, reply_links, outcomes
 from supervisor.tests.test_web import HOST, ME, WebTest, snap
 
@@ -27,6 +27,13 @@ FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
 CID = "web-3f9a1c0d7e2b4a65"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
 NEXT = "for wisp's next cycle, which this starts now"
+
+
+class _FixtureNow(datetime):
+    """projects.panel's clock in the fixture: the plan fixture must not change with the day the test runs."""
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2026, 11, 3, 15, 0)
 
 
 class StubApns:
@@ -197,6 +204,15 @@ class AppTest(WebTest):
         (self.sup / "judgments/wisp.jsonl").write_text(json.dumps(
             {"episode_ts": "2026-11-03T13:58:40", "criterion_met": "partial", "judge": "test",
              "first_error": "The totals were not checked before sending."}) + "\n")
+        (root / "memory/projects.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {"event": "opened", "id": "p1101-0900-1", "at": "2026-11-01T09:00:00", "deadline": "2026-11-04T09:00:00",
+             "name": "Monthly report", "success": "Report sent with checked totals", "budget_calls": 40,
+             "budget_usd": None},
+            {"event": "opened", "id": "p1101-0900-2", "at": "2026-11-01T09:00:01", "deadline": "2026-11-02T18:00:00",
+             "name": "Reconcile March", "success": "March balances match the bank", "budget_calls": None,
+             "budget_usd": 2.5},
+            {"event": "closed", "id": "p1101-0900-2", "at": "2026-11-02T17:00:00", "outcome": "done",
+             "evidence": "Balances matched on 2 November"}]))
         (root / "notes/queue.json").write_text(json.dumps([
             {"id": 1, "task": "Review report", "due_at": "2099-11-04T12:00:00"},
             {"id": 2, "task": "Ask operator", "due_at": "when ready"},
@@ -1350,7 +1366,8 @@ class FixturesTest(AppTest):
                    turn("user", "2026-11-03T14:07:02", "Again.", shown="Again.")])
         self.keep("retried", self.get(f"/app/v1/chat/wisp/{CID}"))
         self.cycles_scenario()
-        self.keep("plan", self.get("/app/v1/plan/wisp"))
+        with mock.patch.object(projects, "datetime", _FixtureNow):   # a project's hours left, as at a fixed moment
+            self.keep("plan", self.get("/app/v1/plan/wisp"))
         self.keep("cycles", self.get("/app/v1/cycles/wisp"))
         self.keep("cycle", self.get("/app/v1/cycles/wisp/2026-11-03T13:58:40"))
         self.keep("stream", self.stream_events())

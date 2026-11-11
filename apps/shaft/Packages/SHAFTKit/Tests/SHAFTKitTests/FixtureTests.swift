@@ -130,6 +130,35 @@ struct FixtureTests {
         #expect(detail.result?.doubts == ["step: 1; what: Check again"])
     }
 
+    /// The Cycles panel showed no projects: the plan now carries them, open first, then closed.
+    @Test func planProjectsDecodeOpenThenClosed() throws {
+        let plan = try SHAFTJSON.decoder().decode(CyclePlan.self, from: DecodingTests.fixture("plan"))
+        let projects = try #require(plan.projects)
+        #expect(projects.open == 1)
+        #expect(projects.error == "")
+        #expect(projects.rows.map(\.name) == ["Monthly report", "Reconcile March"])
+        let open = projects.rows[0]
+        #expect(open.isOpen)
+        #expect(open.health == "on track")
+        #expect(open.hoursLeft == 18)
+        #expect(open.budgetCalls == 40)
+        #expect(open.deadline == SHAFTJSON.parseStamp("2026-11-04T09:00:00+01:00"))
+        let closed = projects.rows[1]
+        #expect(!closed.isOpen)
+        #expect(closed.status == "done")
+        #expect(closed.evidence == "Balances matched on 2 November")
+        #expect(closed.closedAt == SHAFTJSON.parseStamp("2026-11-02T17:00:00+01:00"))
+        #expect(closed.health == nil)
+    }
+
+    @Test func aServerWithoutProjectsStillDecodesThePlan() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("plan")) as? [String: Any])
+        object.removeValue(forKey: "projects")
+        let plan = try SHAFTJSON.decoder().decode(
+            CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(plan.projects == nil)
+    }
+
     @Test func unreadableImprovementIsNotDecodedAsNoPlan() throws {
         var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("plan")) as? [String: Any])
         object["improvement"] = NSNull()

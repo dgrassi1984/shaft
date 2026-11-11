@@ -753,6 +753,25 @@ def _cycle_due(value: str | None) -> str:
     return value if len(value) == 10 else when(value)
 
 
+def _cycle_projects(projects: dict) -> Html:
+    """The instance's projects (cycles.plan → projects.panel): open ones with how they stand, then closed ones."""
+    if projects["error"]:
+        return h('<p class="warn">{e}</p>', e=projects["error"])
+    items = []
+    for it in projects["rows"]:
+        if it["status"] == "open":
+            usage = f"calls {it['calls']}/{it['budget_calls'] or 'unbounded'}" + (
+                "" if it["usd"] is None else f" · ${it['usd']:.2f}/{it['budget_usd'] or 'unbounded'}")
+            items.append(h('<p><b>{n}</b> · <span class="{c}">{health}</span><br>due {d} ({left} h left) · {u}'
+                           '<br><span class="dim">done means: {s}</span></p>',
+                           n=it["name"], health=it["health"], c="" if it["health"] == "on track" else "warn",
+                           d=when(it["deadline"]), left=it["hours_left"], u=usage, s=it["success"]))
+        else:
+            items.append(h('<p><b>{n}</b> · {o} {at}<br><span class="dim">{e}</span></p>',
+                           n=it["name"], o=it["status"], at=when(it["closed_at"]), e=it["evidence"]))
+    return join(items) if items else h('<p class="dim">no projects</p>')
+
+
 def cycles_next(plan: dict) -> Html:
     now, check, step = plan["now"], plan["check"], plan["next_step"]
     current = rows([("State", _cycle_value(now["state"]))] +
@@ -792,8 +811,10 @@ def cycles_next(plan: dict) -> Html:
                    now=current, check=checking, said=said,
                    left=lines(plan["unfinished"], "nothing recorded", cls="lines wrap"),
                    commitments=commitments, tasks=tasks),
-                 h('<details data-key="cycles-goals"><summary>Goals</summary>{goals}</details>'
+                 h('<details data-key="cycles-projects"><summary>{ptitle}</summary>{projects}</details>'
+                   '<details data-key="cycles-goals"><summary>Goals</summary>{goals}</details>'
                    '<details data-key="cycles-improvement"><summary>Improvement plan</summary>{improve}</details>',
+                   ptitle=f"Projects · {plan['projects']['open']} open", projects=_cycle_projects(plan["projects"]),
                    goals=goals, improve=improve)])
 
 

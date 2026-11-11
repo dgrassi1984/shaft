@@ -153,6 +153,13 @@ struct CyclesPanel: View {
             }
         }
         Section {
+            if let projects = plan.projects {
+                DisclosureGroup("Projects · \(projects.open) open") {
+                    if !projects.error.isEmpty { Text(projects.error).foregroundStyle(Color.danger) }
+                    else if projects.rows.isEmpty { Text("no projects") }
+                    else { ForEach(projects.rows, id: \.id) { ProjectRow(project: $0) } }
+                }
+            }
             DisclosureGroup("Goals") {
                 if !plan.goalsError.isEmpty { Text(plan.goalsError) }
                 else if plan.goals.isEmpty { Text("nothing recorded") }
@@ -198,6 +205,49 @@ struct CyclesPanel: View {
             }
             if row.delivered { Label("Delivered", systemImage: "paperplane") }
         }
+    }
+}
+
+/// One of the instance's projects: an open one with how it stands against its boundaries, a closed one with its
+/// outcome and evidence; both with what "done" means.
+struct ProjectRow: View {
+    let project: CyclePlan.Project
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Design.Space.s4) {
+            Text(project.name).fontWeight(.semibold)
+            if project.isOpen {
+                if let health = project.health {
+                    Text(health).foregroundStyle(healthColor(health))
+                }
+                CycleLine(label: "Due", value: due)
+                Text(usage).font(Design.Text.metadata)
+            } else {
+                Text(project.status.capitalized + (project.closedAt.map { " · \(Stamp.short($0))" } ?? ""))
+                if let evidence = project.evidence, !evidence.isEmpty { Text(evidence) }
+            }
+            Text("Done means: \(project.success)").font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+        }
+    }
+
+    private var due: String? {
+        guard let deadline = project.deadline else { return nil }
+        let left = project.hoursLeft.map { $0 > 0 ? " · \(String(format: "%.1f", $0)) h left" : " · past" } ?? ""
+        return Stamp.short(deadline) + left
+    }
+
+    private var usage: String {
+        var parts = ["calls \(project.calls ?? 0)/\(project.budgetCalls.map(String.init) ?? "unbounded")"]
+        if let usd = project.usd {
+            parts.append(String(format: "$%.2f", usd) + "/" + (project.budgetUsd.map { String(format: "$%.2f", $0) } ?? "unbounded"))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func healthColor(_ health: String) -> Color {
+        if health.hasPrefix("past boundary") { return Color.danger }
+        if health.hasPrefix("at risk") { return Color.warning }
+        return Color.textSecondary
     }
 }
 
