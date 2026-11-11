@@ -158,8 +158,8 @@ class ThreadsWebTest(ChatRoutesCase):
                  via=messages.BACKGROUND)
         self.assertEqual(self.req("/i/wisp/from", cookie=self.cookie).status, 302)   # From is Main now
         page = self.get("/i/wisp/chat")
-        self.assertIn('data-poll="/fragment/from/wisp"', page)
-        self.assertIn('data-poll="/fragment/from/wisp/header"', page)
+        self.assertIn('data-poll="/fragment/chat/wisp"', page)               # no id: Main, as a thread's names its id
+        self.assertIn('data-poll="/fragment/chat/wisp/header"', page)
         self.assertIn('data-poll="/fragment/rail?c=i:wisp&amp;t=from"', page)
         self.assertIn("From a &lt;cycle&gt;", page)
         self.assertIn("for later", page)

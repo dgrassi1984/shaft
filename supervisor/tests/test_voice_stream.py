@@ -151,8 +151,11 @@ class VoiceTest(AppTest):
             time.sleep(0.01)
 
     def sent(self, r) -> str:
+        """The chat id the send went to. A send naming no conversation goes to Main, which the answer names "from"
+        (its public id, 2026-11-11); the record behind it is the From conversation's."""
         self.assertEqual(r.status, 200, r.body)
-        return json.loads(r.body)["chat"]
+        cid = json.loads(r.body)["chat"]
+        return web_chat.from_chat("wisp")["id"] if cid == "from" else cid
 
     def user_items(self) -> list[dict]:
         return [i for i in self.get("/app/v1/chat/wisp")["items"] if i["type"] == "user"]

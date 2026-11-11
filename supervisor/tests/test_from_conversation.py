@@ -228,7 +228,7 @@ class FromConversationTest(unittest.TestCase):
         self.assertIn('href="?all=1"', str(web_views.feed_html(windowed, from_feed=True)))
         whole = web_chat.from_feed("wisp", whole=True)
         self.assertEqual(len(whole["items"]), web_chat.CHAT_WINDOW + 10)
-        self.assertIn("/fragment/from/wisp?all=1", str(web_views.from_page("wisp", whole, [], {}, ["wisp"], "t",
+        self.assertIn("/fragment/chat/wisp?all=1", str(web_views.from_page("wisp", whole, [], {}, ["wisp"], "t",
                                                                            whole=True)))
 
     def test_a_bakeoff_reads_the_operators_request_made_in_from(self):
