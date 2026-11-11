@@ -97,23 +97,34 @@ public struct DraftStore: Sendable {
         try save(Draft(), for: instance, cid: cid)
     }
 
-    /// The current chat's draft (kept by a build before threads, or typed before the threads were known) moves to the
-    /// thread `cid`, the one a send without `cid` would reach, files and all: on a server with threads the app shows
-    /// threads, so a draft left under the current chat would be out of sight. Nothing moves when there is no such draft
-    /// or the thread already has one of its own (it is never overwritten). True when it moved.
+    /// Move the historical draft into its thread. Keep both texts, quotes and files when the thread has a draft.
     @discardableResult
     public func adoptCurrent(_ instance: String, into cid: String) throws -> Bool {
-        let from = try Self.key(instance, nil)
-        let to = try Self.key(instance, cid)
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: draftURL(from).path), !fileManager.fileExists(atPath: draftURL(to).path)
-        else { return false }
-        if fileManager.fileExists(atPath: filesURL(from).path) {
-            if fileManager.fileExists(atPath: filesURL(to).path) { try fileManager.removeItem(at: filesURL(to)) }
-            try fileManager.createDirectory(at: filesURL(to).deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.moveItem(at: filesURL(from), to: filesURL(to))
+        try moveDraft(instance, from: nil, into: cid)
+    }
+
+    /// Copy files before saving the merged draft, then remove the source. An open composer may hold newer text.
+    @discardableResult
+    func moveDraft(_ instance: String, from source: String?, into destination: String?, draft: Draft? = nil) throws -> Bool {
+        let from = try Self.key(instance, source)
+        let to = try Self.key(instance, destination)
+        let original = try draft ?? load(instance, cid: source)
+        guard !original.isEmpty else { return false }
+        var merged = try load(instance, cid: destination)
+        merged.text = [merged.text, original.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        merged.quotes += original.quotes
+        let present = Set(merged.attachments.map(\.id))
+        for attachment in original.attachments where !present.contains(attachment.id) {
+            let sourceURL = filesURL(from).appending(path: attachment.id).appending(path: attachment.name)
+            let targetURL = filesURL(to).appending(path: attachment.id).appending(path: attachment.name)
+            try LocalFiles.write(Data(contentsOf: sourceURL), to: targetURL)
+            merged.attachments.append(attachment)
         }
-        try fileManager.moveItem(at: draftURL(from), to: draftURL(to))
+        try save(merged, for: instance, cid: destination)
+        if FileManager.default.fileExists(atPath: draftURL(from).path) {
+            try FileManager.default.removeItem(at: draftURL(from))
+        }
+        try prune(from, keeping: [])
         return true
     }
 

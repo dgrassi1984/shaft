@@ -55,10 +55,11 @@ struct PersistenceSafetyTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let blocked = folder.appending(path: "outbox")
         try Data().write(to: blocked)
-        let server = StubServer { _ in .json(200, "{}") }
+        let server = StubServer { _ in .json(200, ThreadsTests.threadsJSON) }
         let outbox = try Outbox(directory: blocked)
         let drafts = DraftStore(directory: folder.appending(path: "drafts"))
         let store = InstancesStore(client: server.client, outbox: outbox, drafts: drafts)
+        await store.refreshThreads("same")
         let chat = store.chat("same", .from)
         chat.draft = Draft(text: "Keep this text")
         let result = await chat.send()
@@ -68,7 +69,7 @@ struct PersistenceSafetyTests {
         #expect(chat.draft.text == "Keep this text")
         #expect(try drafts.load("same", cid: "from").text == "Keep this text")
         #expect(outbox.entries.isEmpty)
-        #expect(server.requests.isEmpty)
+        #expect(server.requests.allSatisfy { $0.path == "/app/v1/threads/same" })
     }
 
     @Test func rePairingDoesNotExposeAnotherServersDraftOrOutbox() async throws {

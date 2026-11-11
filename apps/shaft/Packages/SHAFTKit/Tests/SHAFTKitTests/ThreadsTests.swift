@@ -263,11 +263,12 @@ struct ThreadsTests {
 
     /// Regression: drafts were per instance, so with threads a draft typed in thread A showed in thread B, and B's save
     /// pruned A's attached files from the instance's one folder.
-    @Test func aDraftTypedInThreadAIsNotInThreadB() throws {
+    @Test func aDraftTypedInThreadAIsNotInThreadB() async throws {
         let folder = try temporaryFolder("thread-drafts")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try threadsServer()
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("wisp")
         let a = store.chat("wisp", .thread(Self.threadA))
         let b = store.chat("wisp", .thread(Self.threadB))
         #expect(a !== b)
@@ -305,6 +306,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-outbox")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let a = store.chat("wisp", .thread(Self.threadA))
@@ -340,6 +342,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-from")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let from = store.chat("wisp", .from)
@@ -364,6 +367,7 @@ struct ThreadsTests {
         let folder = try temporaryFolder("thread-later")
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try makeStore(try threadsServer(), folder: folder)
+        await store.refreshThreads("wisp")
         let sender = RecordingSender(down: true)
         store.outbox.sender = sender
         let a = store.chat("wisp", .thread(Self.threadA))

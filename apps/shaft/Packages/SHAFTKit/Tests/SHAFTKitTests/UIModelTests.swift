@@ -214,8 +214,12 @@ struct ChatStoreUITests {
     @Test func aNotSentMessageGoesBackToTheComposerWithItsFilesAndLeavesTheOutbox() async throws {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
-        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let server = StubServer { request in
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            throw StubServer.NetworkDown()
+        }
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         #expect(chat.attach(data: Data("x".utf8), name: "note.txt"))
         chat.draft.text = "Rerun it"
@@ -238,8 +242,12 @@ struct ChatStoreUITests {
     @Test func aSendThatFailsIsSaidByItsRowNotAgainByTheStatusLine() async throws {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
-        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let server = StubServer { request in
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            throw StubServer.NetworkDown()
+        }
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         chat.draft.text = "Rerun it"
         _ = await chat.send()
@@ -252,10 +260,12 @@ struct ChatStoreUITests {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { request in
-            request.path.hasSuffix("/send") ? .json(200, #"{"said":"sent to tundra","chat":"web-1","file":null}"#)
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            return request.path.hasSuffix("/send") ? .json(200, #"{"said":"sent to tundra","chat":"web-1","file":null}"#)
                 : .json(200, #"{"said":"Feedback kept.","id":"f-1"}"#)
         }
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         await chat.unpend("f-1")                    // an earlier action's answer, which the send must not leave up
         #expect(chat.said == "Feedback kept.")
@@ -270,10 +280,12 @@ struct ChatStoreUITests {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = StubServer { request in
-            request.path.hasSuffix("/send") ? .json(200, #"{"said": "queued — sent when this reply ends", "chat": "web-1", "file": null}"#)
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            return request.path.hasSuffix("/send") ? .json(200, #"{"said": "queued — sent when this reply ends", "chat": "web-1", "file": null}"#)
                 : .json(200, "{}")
         }
         let store = try makeStore(server, folder: folder)
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         chat.draft.text = "After that"
         _ = await chat.send(mode: .queue)
@@ -362,9 +374,13 @@ struct ReconnectTests {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
         let idle = fixtureText(try DecodingTests.fixture("idle"))
-        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let server = StubServer { request in
+            if request.path.hasPrefix("/app/v1/threads/") { return .json(200, ThreadsTests.threadsJSON) }
+            throw StubServer.NetworkDown()
+        }
         let store = InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "o")),
                                    drafts: DraftStore(directory: folder.appending(path: "d")))
+        await store.refreshThreads("tundra")
         let chat = store.chat("tundra", .from)
         chat.start()
         // Long enough into the backoff that the next try is seconds away.
