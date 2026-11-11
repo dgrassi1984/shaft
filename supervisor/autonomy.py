@@ -48,6 +48,7 @@ IDLE_WAKE_MIN, _ = knob(
     "SHAFT_IDLE_WAKE_MINUTES", "30", positive_int, "minutes an instance may go without a cycle before a timed wake "
     "starts one with nothing new for it (no unread message, commitment coming due or job result)",
     group="Runs and conversations", services=("runs", "web", "scheduler"))
+IDLE_BACKOFF = 2                        # how much longer the idle wake waits after a "nothing worth a cycle" exit
 NOTHING_TO_DO = "nothing to do"         # how a timed wake the gate skipped is said (log, schedule.json, status)
 
 
@@ -228,8 +229,11 @@ def record(event: str, name: str = "", why: str = "") -> None:
             if event == "cycle":
                 st.setdefault("cycles", {})[name] = now
                 st.get("skipped", {}).pop(name, None)
+                st.get("idle_exits", {}).pop(name, None)   # any new cycle puts the idle wait back to normal
             elif event == "skip":
                 st.setdefault("skipped", {})[name] = {"at": now, "why": why}
+        elif event == "idle_exit":   # the instance ended its cycle as nothing worth one (idle.py): its next idle
+            st.setdefault("idle_exits", {})[name] = now   # wake waits IDLE_BACKOFF times as long; no interval restarts
         else:
             st[event] = now
         tmp = STATE.with_name(f"schedule.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -338,7 +342,10 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
         cycle = (st.get("cycles") or {}).get(name)
         since = datetime.fromisoformat(cycle) if cycle else None
         until = now + interval
-        go, why = wake_gate(now, since, until, idle_after, lambda: facts_of(name, since, until))
+        # After a cycle the instance itself ended as nothing worth doing, the idle wake waits longer, once (not
+        # compounding); the entry is gone at its next cycle, and an unread message or a due commitment wakes it anyway.
+        idle = idle_after * IDLE_BACKOFF if (st.get("idle_exits") or {}).get(name) else idle_after
+        go, why = wake_gate(now, since, until, idle, lambda: facts_of(name, since, until))
         (start if go else skip)[name] = why
     return start, skip
 

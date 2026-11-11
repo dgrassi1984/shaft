@@ -75,7 +75,11 @@ Rate the work the goal required, whether or not it was achieved.
 
 Novelty, relative to this agent's earlier goals (listed): 1 = a repeat of a standing task; \
 2 = the next step of something it was already doing; 3 = a new task in a familiar area; \
-4 = a new area or a new kind of capability; 5 = the first of its kind for this agent.
+4 = a new area or a new kind of capability; 5 = the first of its kind for this agent. \
+resembles: the time, exactly as listed (YYYY-MM-DD HH:MM), of the ONE earlier goal in that list which this goal \
+most resembles: the same recurring task, or its next repetition or continuation; '' when none of the listed \
+goals is the same kind of task. unsupported_claim: when claim_supported is false, the claim the tool log did not \
+support, quoted in the agent's own words (at most 200 characters); otherwise ''.
 
 Value, last and separately (it changes neither the verdict nor the ratings above): what did this cycle \
 actually deliver — what would be lost if it had not run? Judge the output the tool log and the files show, \
@@ -198,6 +202,16 @@ ERROR_PROPS = {
     "first_error": {"type": "string", "description": "one sentence locating the error, or why none is at fault"},
 }
 ERRORS = tuple(ERROR_PROPS)
+# Two strings that add no call: which earlier goal this one repeats (the links form the goal families, families.py),
+# and the claim a failed claim_supported rests on (matched to the instance's unsourced facts, factledger.py). Both
+# are '' for none; neither changes a grade, and a judgment made before they existed simply has neither.
+LINK_PROPS = {
+    "resembles": {"type": "string", "description": "YYYY-MM-DD HH:MM of the earlier listed goal this one most "
+                                                   "resembles, or ''"},
+    "unsupported_claim": {"type": "string", "description": "if claim_supported is false: the unsupported claim, "
+                                                           "quoted, at most 200 characters; else ''"},
+}
+LINKS = tuple(LINK_PROPS)
 
 
 def _schema(props: dict) -> dict:
@@ -215,7 +229,7 @@ SURPRISE_PROPS = {
     "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
 }
 SURPRISES = tuple(SURPRISE_PROPS)
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **ANTICIPATED_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS, **LINK_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
@@ -686,9 +700,25 @@ def _episodes(name: str, kind: str) -> list[dict]:
     return [rec for rec in _episode_records(name) if rec.get("kind") == kind]
 
 
+def _prior_keys(js: list[dict], before: str) -> list[tuple[str, str]]:
+    """(key, goal) of the earlier judged goals the judge is shown, newest last: the key is the cycle's time to the
+    minute, as the judge names it in `resembles`. A cycle judged by rule has no goal and is not listed."""
+    goals = [(j["episode_ts"][:16].replace("T", " "), j.get("goal", "")[:150]) for j in js
+             if j["episode_ts"] < before and (j.get("goal") or "").strip()]
+    return goals[-PRIOR_GOALS:]
+
+
 def _prior_goals(js: list[dict], before: str) -> str:
-    goals = [f"- {j['episode_ts'][:16]}: {j.get('goal', '')[:150]}" for j in js if j["episode_ts"] < before]
-    return "\n".join(goals[-PRIOR_GOALS:]) or "(none: this is its first judged cycle)"
+    return "\n".join(f"- {key}: {goal}" for key, goal in _prior_keys(js, before)) or "(none: this is its first judged cycle)"
+
+
+def _links(verdict: dict, js: list[dict], before: str) -> None:
+    """Keep the judge's two link fields only as far as they can be used: `resembles` must name a goal it was shown
+    (anything else is dropped, never guessed at), and a quoted claim is cut and kept only for an unsupported claim."""
+    named = str(verdict.get("resembles") or "").strip()[:16].replace("T", " ")
+    verdict["resembles"] = named if named in {key for key, _ in _prior_keys(js, before)} else ""
+    quote = " ".join(str(verdict.get("unsupported_claim") or "").split())[:200]
+    verdict["unsupported_claim"] = quote if verdict.get("claim_supported") is False else ""
 
 
 def _logged(text: str) -> str:
@@ -804,7 +834,8 @@ def judge_pending(name: str) -> int:
         cited.clear()
         log(f"{name}: commitment citations could not be read: {type(e).__name__}: {e}")
     left = unsampled(name)
-    done = {j["episode_ts"] for j in js} | (left - cited)
+    from . import idle   # a cycle the instance ended as nothing worth one is its own class: never a failure and
+    done = {j["episode_ts"] for j in js} | (left - cited) | idle.exits(name, episodes)   # never judged, goal or not
     new = 0
     for ep in episodes:
         if ep["ts"] in done:
@@ -828,6 +859,14 @@ def judge_pending(name: str) -> int:
                 by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
                 verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
+                _links(verdict, js, ep["ts"])
+                if verdict["unsupported_claim"]:   # the fact with no checked source the failed claim rested on, if any
+                    try:
+                        from . import factledger
+                        fact = factledger.match_claim(name, verdict["unsupported_claim"])
+                        verdict["unsourced_fact"] = f"[{fact['date']}] {fact['text']}"[:300] if fact else ""
+                    except Exception as e:   # naming the fact never costs the verdict
+                        log(f"{name}: unsourced fact not matched for {ep['ts']}: {type(e).__name__}: {e}")
                 verdict["judge"] = by
                 if second and not judge.same_model(by, judge.JUDGE2_MODEL):   # never a model agreeing with itself
                     from .consultstats import vendor
@@ -1798,6 +1837,8 @@ def _stats_text(name: str) -> str:
                "are given per judge, each read against that judge's own earlier figure. Value counts every cycle: the "
                "judges agree on it.*", ""]
     lines += push_lines + project_lines
+    from . import idle
+    lines += idle.stats_lines(name)
     lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
 
     # Order is priority: the prompt keeps only the head, below SECTIONS' 5500 when CONTEXT_CHARS shrinks it.

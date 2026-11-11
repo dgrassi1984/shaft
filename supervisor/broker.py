@@ -329,6 +329,15 @@ SPECS = {
                     "operator can too). choose=[] shows none.",
                     {"choose": {"type": "array", "items": {"type": "string"},
                                 "description": "gauge names from the menu; omit it to see the menu"}}, []),
+    "nothing_to_do": _spec("nothing_to_do", "End this autonomous cycle as 'nothing worth a cycle': you looked and "
+                           "nothing you could do now is worth doing. The supervisor records it as its own kind of "
+                           "cycle: it is not judged and never counts as a failure, and you need not invent a goal. "
+                           "Your next idle wake then waits twice as long; a message, a commitment coming due or a job "
+                           "result wakes you as usual, and your next cycle of any other kind puts the wait back. It "
+                           "counts only in an autonomous cycle that has sent or drafted nothing; after calling it, "
+                           "finish the cycle.",
+                           {"reason": {"type": "string", "description": "one sentence: what you checked and found "
+                                                                        "nothing in"}}, ["reason"]),
     "withdraw_held": _spec("withdraw_held", "Withdraw one of your own held code changes so it is never re-gated. "
                            "record(kind='gate') lists your held ids. Give the reason you no longer want it.",
                            {"id": S, "reason": S}, ["id", "reason"]),
@@ -1863,6 +1872,32 @@ class Broker:
 
     def _sim_gauges(self) -> list[dict]:
         return []
+
+    def _nothing_to_do(self, reason: str) -> str:
+        """The instance ends its cycle as nothing worth one (idle.py): recorded as its own class, and the scheduler
+        lets its next idle wake wait longer. Not honoured where it would hide work from the judge."""
+        from . import idle
+        if not str(reason or "").strip():
+            raise ValueError("say in one sentence what you checked and found nothing in")
+        if self.run_kind != "live":
+            return ("not counted: only an autonomous cycle can end as nothing worth a cycle (this is a "
+                    f"{self.run_kind or 'different kind of run'})")
+        sent = [t for t in idle.OUTWARD if self.counts.get(t)]
+        if sent:
+            return (f"not counted: this cycle already called {', '.join(sent)}, so it is judged as the work it did. "
+                    "Finish it as a normal cycle")
+        self._idle_exit(reason)
+        from .autonomy import IDLE_BACKOFF, IDLE_WAKE_MIN
+        return ("recorded: this cycle counts as nothing worth a cycle. It is not judged and is not a failure. Your "
+                f"next idle wake waits {IDLE_WAKE_MIN * IDLE_BACKOFF} min instead of {IDLE_WAKE_MIN}; a message, a due "
+                "commitment or a job result still wakes you at once. Finish the cycle now")
+
+    def _idle_exit(self, reason: str) -> None:
+        from . import autonomy, idle
+        from .core import log
+        idle.record(self.name, reason)
+        autonomy.record("idle_exit", self.name)
+        log(f"{self.name}: cycle ended as nothing worth a cycle: {' '.join(str(reason).split())[:200]}")
 
     def _gauges_chosen(self, names: list[str]) -> dict:
         from . import gauges
@@ -4070,6 +4105,9 @@ class ReplayBroker(Broker):
 
     def _sim_gauges(self) -> list[dict]:
         return self.sim_gauges
+
+    def _idle_exit(self, reason: str) -> None:
+        self._tag("simulated: not recorded")   # answered as in a live cycle; no row, no change to the schedule
 
     def _gauges_chosen(self, names: list[str]) -> dict:
         from . import gauges   # answered as the real call, kept for the rest of this replay, nothing written
