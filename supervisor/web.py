@@ -630,6 +630,17 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/uncycle", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        form = req.form()
+        try:
+            said = web_chat.uncycle(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
+                                    mid=form.get("mid", ""), file=form.get("file", ""))
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
     if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/unqueue", req.path):
         from . import web_chat
         if m[1] not in _names():

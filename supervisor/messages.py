@@ -137,6 +137,39 @@ def attachment_lines(atts: list[dict], key: str = "rel") -> str:
 _cache: dict = {"key": None, "rows": []}
 
 
+def logged_rows(path: Path) -> list[dict]:
+    """Fold cancellation updates without rewriting the log's forwarder byte offsets."""
+    rows, by_file = [], {}
+    for line in jsonl_lines(path.read_text(errors="replace")):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("from"), row.get("to"), row.get("file"))
+        if row.get("cancelled") and key in by_file:
+            rows[by_file[key]]["cancelled"] = row["cancelled"]
+        else:
+            by_file[key] = len(rows)
+            rows.append(row)
+    return rows
+
+
+def cancel(name: str, file: str) -> None:
+    """Append a row update under the delivery lock; readers fold it into its original row."""
+    path = SUP_DIR / LOG_NAME
+    with path.open("a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        row = next(m for m in logged_rows(path) if m.get("from") == "operator" and m.get("to") == name
+                   and m.get("via") == BACKGROUND and m.get("file") == file)
+        if not row.get("cancelled"):
+            row["cancelled"] = datetime.now().isoformat(timespec="seconds")
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+
 def _unread(to: str) -> set[str]:
     """File names still waiting in the recipient's inbox (it moves them out once it has read them)."""
     if to == "operator":
@@ -153,12 +186,7 @@ def history() -> list[dict]:
         return []
     key = (st.st_mtime_ns, st.st_size)
     if _cache["key"] != key:
-        rows = []
-        for line in jsonl_lines(path.read_text(errors="replace")):
-            try:
-                rows.append(json.loads(line))
-            except ValueError:
-                continue
+        rows = logged_rows(path)
         rows.sort(key=lambda m: (m["ts"], m["file"]))   # file names carry microseconds: ties keep their order
         _cache.update(key=key, rows=rows)
     waiting = {to: _unread(to) for to in {m["to"] for m in _cache["rows"]}}
@@ -188,7 +216,9 @@ def appended(offset: int | None) -> tuple[list[tuple[dict, int]], int]:
             break
         at += len(line)
         try:
-            rows.append((json.loads(line), at))
+            row = json.loads(line)
+            if not row.get("cancelled"):
+                rows.append((row, at))
         except ValueError:
             continue
     return rows, at

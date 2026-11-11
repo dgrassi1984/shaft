@@ -333,6 +333,11 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   written in (in From when sent from From), marked **⏾ next cycle · waiting**, then **read** once a cycle has read it.
   Its answer, if it sends one, comes in that thread (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
   button does this: Enter and Cmd-Enter never do.
+  `POST /chat/<name>/uncycle` accepts `mid` or `file` to cancel a next-cycle note still in the inbox.
+  A running cycle or reply refuses cancellation because it may already have read the note.
+  The thread and From feeds show Cancel while the note's item has `cancellable=true`.
+  After cancellation, `cancelled` holds its ISO timestamp, the text is struck through, and attachments remain stored.
+  Read-only views have no Cancel action. The app API documents these same item fields.
   `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
   queued `mid`.
   Both require the same CSRF token as other web posts.
@@ -724,7 +729,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/google/login`, `/google/callback` | Re-login for existing Google accounts |
 | GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
 | POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
-| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/clear` | Send, remove queued message, or clear chat |
+| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear chat |
 | POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
 | POST | `/docs/<n>/save`, `/docs/<n>/delete`, `/docs/<n>/comment[/edit\|/delete\|/send\|/state]` | Document and comment changes |
 | POST | `/preview/drive/<n>`, `/action/<verb>` | Drive diff preview and management actions through `web_actions.run` |

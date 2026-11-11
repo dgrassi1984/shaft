@@ -123,7 +123,8 @@ def _broker(name: str, since: str, n: int = 40) -> list[str]:
 def _messages(name: str, since: str) -> list[str]:
     from . import messages
     return [f"{m['ts'][11:16]} {m['from']} → {m['to']}: {_one(m['text'], 240)}"
-            for m in messages.history() if m["ts"] >= since and name in (m["from"], m["to"])][-12:]
+            for m in messages.history() if not m.get("cancelled") and m["ts"] >= since
+            and name in (m["from"], m["to"])][-12:]
 
 
 def context(inst: dict, now: float | None = None) -> str:

@@ -476,6 +476,8 @@ def _action(req: Request, n: str, act: str) -> Response:
         if act == "new":
             chat = web_chat.new_thread(n, _login(req), title=_str(data, "title", ""))
             return _said("thread created", chat={"id": chat["id"], "title": web_chat.title(chat)})
+        if act == "uncycle":
+            return _said(web_chat.uncycle(n, _login(req), mid=_str(data, "mid", ""), file=_str(data, "file", "")))
         if act == "unqueue":
             cid = _str(data, "cid", "")
             if cid:
@@ -1030,7 +1032,7 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/chat/{N}", {"GET": _feed}),
     (rf"/chat/{N}/send", {"POST": _send}),
     (rf"/chat/{N}/stream", {"GET": _stream}),
-    (rf"/chat/{N}/(?P<act>new|rename|unqueue|stop|end|clear|seen|away)", {"POST": _action}),
+    (rf"/chat/{N}/(?P<act>new|rename|unqueue|uncycle|stop|end|clear|seen|away)", {"POST": _action}),
     (rf"/chat/{N}/{CID}", {"GET": _feed}),
     (rf"/chats/{N}", {"GET": _chats}),
     (rf"/threads/{N}", {"GET": _threads}),

@@ -97,7 +97,7 @@
       "error": {
         "code": "stale_version",
         "message": "The chat moved since it was drawn: mark it seen once the new version is on screen.",
-        "version": "56344980380d9e2f"
+        "version": "fb585d89acfef33c"
       }
     }
   },

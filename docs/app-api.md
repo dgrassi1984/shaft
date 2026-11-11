@@ -398,7 +398,9 @@ turn of it (key `b<file>`).
 | `ts` | timestamp | |
 | `text` | str | what the operator wrote (as `user.text`) |
 | `mid` | str or null | |
-| `read` | bool | false: waiting in its inbox ("⏾ next cycle · waiting"); true: a cycle has read it |
+| `read` | bool | false: waiting in its inbox; true: no longer in its inbox (check `cancelled` before showing "read") |
+| `cancelled` | timestamp or null | the operator cancelled this note before a run read it |
+| `cancellable` | bool | not cancelled and its inbox file still exists; a running cycle or reply can still refuse cancellation |
 | `attachments` | list | `{name, bytes, image, text, url}` |
 | `comments` | list | `{id, doc}`: comments it carried |
 
@@ -733,6 +735,14 @@ All take JSON and answer `{"said": str}` unless said otherwise; a refused one an
 ### 7.1 `POST /app/v1/chat/<n>/unqueue`
 
 `{"mid": str, "cid"?: str}`: cancel a queued message in that open thread. Without `cid`, uses the most recently active open thread. `{"said": "queued message cancelled"}` (also when it had already gone).
+
+### 7.1.1 `POST /app/v1/chat/<n>/uncycle`
+
+`{"mid"?: str, "file"?: str}`: cancel a Next-cycle note by its page message ID or inbox file name.
+When both are present, `mid` selects the note. Returns `{"said": "next-cycle note cancelled"}` or
+`{"said": "already cancelled"}`. A running cycle or reply refuses cancellation with `409 refused`.
+A note whose inbox file is gone is also refused: "already read in a cycle: it can't be cancelled".
+The operator feeds keep the cancelled note; instance dialogue excludes it. Attachments remain stored.
 
 ### 7.2 `POST /app/v1/chat/<n>/stop`
 

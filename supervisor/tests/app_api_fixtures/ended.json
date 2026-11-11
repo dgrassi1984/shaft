@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "def32681ef95f558",
+  "version": "c52807b94cd977b9",
   "live": "",
   "reply": null,
   "chat": {
@@ -103,6 +103,8 @@
       "mid": "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54",
       "read": false,
       "attachments": [],
+      "cancelled": null,
+      "cancellable": true,
       "comments": []
     },
     {

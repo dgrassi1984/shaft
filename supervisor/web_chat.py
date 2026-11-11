@@ -429,6 +429,9 @@ def message_item(name: str, m: dict, ratings: dict, pending: set[str] = frozense
     if m.get("from") == "operator":
         return {"key": f"b{f}", "type": "later", "file": m["file"], "ts": m["ts"], "text": m.get("shown", m["text"]),
                 "mid": m.get("mid") or None, "read": bool(m.get("read")), "attachments": atts,
+                "cancelled": m.get("cancelled") or None,
+                # still in its inbox (history's `read`: no run has moved it out); uncycle checks again, under the run lock
+                "cancellable": not m.get("cancelled") and not m.get("read"),
                 "comments": [{"id": c["id"], "doc": c["doc"]} for c in m.get("comments") or []]}
     re_chat = load(m["re"]) if m.get("re") else None
     return {"key": f"s{f}", "type": "sent", "file": m["file"], "ts": m["ts"],
@@ -752,7 +755,7 @@ def routed(name: str, cid: str | None, history: list[dict] | None = None) -> lis
     if not cid:
         return []
     return [m for m in (messages.history() if history is None else history)
-            if m.get("thread") == cid and name in (m["from"], m["to"])]
+            if not m.get("cancelled") and m.get("thread") == cid and name in (m["from"], m["to"])]
 
 
 def dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str]]:
@@ -1318,6 +1321,34 @@ def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid:
         if found := next((t for t in threads(name) if _in_chat(t, mid)), None):
             return found, f"already sent to {name}"
         return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True, voice=voice, cid=chat["id"])
+
+
+def uncycle(name: str, login: str, mid: str = "", file: str = "") -> str:
+    """Only an idle instance can safely lose a note it has not read yet."""
+    from . import messages, runner
+    from .core import instance_root, unlink_beneath
+    if file and (Path(file).name != file or file in (".", "..")):
+        raise Refused("invalid inbox file")
+    with _inst_lock(name):
+        try:
+            with runner.run_lock(name, wait=False):
+                row = next((m for m in messages.history() if m.get("from") == "operator" and m.get("to") == name
+                            and m.get("via") == messages.BACKGROUND
+                            and ((mid and m.get("mid") == mid) if mid else (file and m.get("file") == file))), None)
+                if not row:
+                    raise Refused("next-cycle note not found")
+                if row.get("cancelled"):
+                    return "already cancelled"
+                file = row["file"]
+                if Path(file).name != file or file in (".", ".."):
+                    raise Refused("invalid inbox file")
+                if not unlink_beneath(instance_root(name), f"inbox/{file}"):
+                    raise Refused("already read in a cycle: it can't be cancelled")
+                messages.cancel(name, file)
+        except runner.Busy:
+            raise Refused(f"a cycle or reply of {name} is running and may have read it: it can't be cancelled now") from None
+    log(f"web: {login or 'operator'} cancelled {name}'s next-cycle note ({file})")
+    return "next-cycle note cancelled"
 
 
 def unqueue(name: str, mid: str, cid: str = "") -> str:
