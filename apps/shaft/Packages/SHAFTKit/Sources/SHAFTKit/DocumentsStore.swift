@@ -59,7 +59,7 @@ public final class DocumentsStore {
         open = nil
     }
 
-    /// The document's bytes whatever its size (§10.3), for Share or a document too big to show.
+    /// The document's bytes whatever its size (§10.3), for Download: from its row, its page, or one too big to show.
     public func download(_ path: String) async -> DownloadedFile? {
         do {
             error = nil

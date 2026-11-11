@@ -192,6 +192,7 @@ targets:
       - path: Shared/Markdown/RenderedText.swift
       - path: Shared/Markdown/TableColumns.swift
       - path: Shared/Documents/CommentHighlight.swift
+      - path: Shared/Documents/DocumentSaver.swift
       - path: macOS/MarkdownAttributed.swift
       - path: macOS/SelectionReplyButton.swift
       - path: macOS/MenuAction.swift

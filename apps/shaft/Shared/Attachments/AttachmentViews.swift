@@ -88,7 +88,7 @@ final class AttachmentLoader {
         return local
     }
 
-    /// Bytes the app holds (a document's download) as a file named `name`.
+    /// Bytes the app holds as a file named `name`.
     static func write(_ bytes: Data, name: String, key: String) throws -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appending(path: "SHAFT-files", directoryHint: .isDirectory)
