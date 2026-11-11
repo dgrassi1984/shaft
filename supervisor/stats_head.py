@@ -156,9 +156,14 @@ def head(name: str, now: datetime | None = None, save: bool = False) -> list[str
     if notes:
         lines += ["## Where I stand now"] + notes + [""]
     lines = [l if len(l) <= LINE_CHARS else l[:LINE_CHARS - 1] + "…" for l in lines]
-    while lines and len("\n".join(lines)) > HEAD_CHARS:   # the last notes go first: the chosen gauges are kept
-        lines.pop()
+    tail = [BODY_MARK, ""]
+    while lines and len("\n".join(lines + tail)) > HEAD_CHARS:   # the last notes go first: the chosen gauges are kept
+        while lines and not lines[-1].startswith("- "):          # the blank line and any heading left bare
+            lines.pop()
+        if lines:
+            lines.pop()                                           # the last note itself
         while lines and not lines[-1].startswith("- "):
             lines.pop()
-        lines.append("")
-    return lines + [BODY_MARK, ""] if lines else []
+        if lines:
+            lines.append("")
+    return lines + tail if lines else []

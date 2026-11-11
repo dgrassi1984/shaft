@@ -2115,7 +2115,9 @@ def _probation_from_log(name: str) -> list[dict]:
             by_commit[m[3]] = row
             rows.append(row)
         elif m[5] and m[5] in by_commit:
-            if "restore could not be done" in line:
+            # "failed" alone is the verdict, logged before the restore is tried: the change is reverted only by the
+            # line that says so, and one whose restore could not be done stays on probation
+            if m[7] == "failed" and ": reverted" not in line:
                 continue
             outcome = "kept, not judged" if m[6] else "passed" if m[7] == "passed" else "reverted"
             rows.append({**by_commit[m[5]], "at": at, "outcome": outcome})
@@ -2145,18 +2147,24 @@ def change_outcomes(name: str, as_of: datetime | None = None) -> list[dict]:
     events = []
     for line in jsonl_lines(hist.read_text()) if hist.exists() else []:
         try:
-            events.append(json.loads(line))
+            e = json.loads(line)
         except ValueError:
             continue
+        if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("at", "commit", "since", "outcome")):
+            events.append(e)   # a row without its fields is skipped, never indexed
     first = min((e["since"] for e in events), default=None)
     events = [e for e in _probation_from_log(name) if first is None or e["since"] < first] + events
     events = [e for e in events if cut is None or e["at"] < cut]
     starts = [e for e in events if e["outcome"] in ("started", "not on probation")]
-    out = []
+    out, taken = [], set()
     for row in changes:
         at = _ts(row["ts"])
-        start = next((e for e in starts if at and (s := _ts(e["since"])) is not None
-                      and -5 <= (s - at).total_seconds() <= CHANGE_MATCH_S), None)
+        # the probation opened after this change's row was written (never one opened before it), each used once:
+        # two changes kept seconds apart must not both be read from the first one's probation
+        start = next((e for i, e in enumerate(starts) if i not in taken and at and (s := _ts(e["since"])) is not None
+                      and 0 <= (s - at).total_seconds() <= CHANGE_MATCH_S), None)
+        if start is not None:
+            taken.add(next(i for i, e in enumerate(starts) if e is start))
         if start is None:
             out.append({"ts": row["ts"], "files": row.get("files") or [], "commit": None, "outcome": "unknown",
                         "tested": None})
