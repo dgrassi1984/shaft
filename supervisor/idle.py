@@ -72,7 +72,7 @@ def exits(name: str, episodes: list[dict]) -> set[str]:
 def stats_lines(name: str, now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
     since = (now - timedelta(days=WINDOW_DAYS)).isoformat(timespec="seconds")
-    recent = [r for r in rows(name) if r["at"] >= since]
+    recent = [r for r in rows(name) if since <= r["at"] <= now.isoformat(timespec="seconds")]
     if not recent:
         return []
     return [f"- Cycles I ended as nothing worth a cycle (last {WINDOW_DAYS} days): {len(recent)}. They are not judged "
