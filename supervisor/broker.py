@@ -1400,7 +1400,7 @@ class Broker:
         self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
-        if self.idle_declared:
+        if getattr(self, "idle_declared", False):   # a broker built without __init__ (tests) declared nothing
             from . import idle
             if tool not in idle.QUIET:
                 self.idle_declared = False
