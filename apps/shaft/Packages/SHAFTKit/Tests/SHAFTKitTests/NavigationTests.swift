@@ -23,6 +23,34 @@ struct NavigationTests {
                        drafts: DraftStore(directory: folder.appending(path: "drafts")))
     }
 
+    @Test func mainSublineUsesItsReplyThenPendingNotesThenItsLastLine() throws {
+        var row = try SHAFTJSON.decoder().decode(InstancesResponse.self, from: Data(Self.instances.utf8)).instances[0]
+        row.line = "Legacy preview"
+        var main = FromRow(line: "you: Check the result", last: nil, unread: false)
+        main.state = "idle"
+        #expect(ConversationLabels.mainSubline(row, main: main, pendingNotes: 0) == "you: Check the result")
+        #expect(ConversationLabels.mainSubline(row, main: main, pendingNotes: 2) == "☾ 2 for next cycle")
+        main.state = "replying"
+        #expect(ConversationLabels.mainSubline(row, main: main, pendingNotes: 2) == "replying…")
+        row.replying = true
+        main.state = "idle" // A reply in a topic thread does not replace Main's line.
+        #expect(ConversationLabels.mainSubline(row, main: main, pendingNotes: 0) == "you: Check the result")
+        main.line = ""
+        #expect(ConversationLabels.mainSubline(row, main: main, pendingNotes: 0) == "")
+        #expect(ConversationLabels.mainSubline(row, main: nil, pendingNotes: 0) == "replying…")
+        row.replying = false
+        #expect(ConversationLabels.mainSubline(row, main: nil, pendingNotes: 0) == "Legacy preview")
+    }
+
+    @Test func headerSecondLineNamesTheInstanceOnlyInAThread() {
+        for state in ["idle", "in a cycle", "sleeping", "paused"] {
+            #expect(ConversationLabels.header(instance: "example", state: state, replying: false, inThread: false) == state)
+            #expect(ConversationLabels.header(instance: "example", state: state, replying: false, inThread: true) == "example · \(state)")
+        }
+        #expect(ConversationLabels.header(instance: "example", state: "idle", replying: true, inThread: true) == "example · replying")
+        #expect(ConversationLabels.header(instance: "example", state: "idle", replying: true, inThread: false) == "replying")
+    }
+
     @Test func navigationFieldsDecodeWithEitherRevisionTypeAndMayBeAbsent() throws {
         let decoder = SHAFTJSON.decoder()
         let list = try decoder.decode(InstancesResponse.self, from: Data(Self.instances.utf8))

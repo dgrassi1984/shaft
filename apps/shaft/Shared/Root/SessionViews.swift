@@ -312,17 +312,22 @@ struct InstanceRowView: View {
     var main: FromRow? = nil
     var collapsed = false
     var notes = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var unread: Bool { main?.unread ?? row.unreadMain ?? row.unread }
-    private var state: String { main?.state ?? (row.replying ? "replying" : "idle") }
-    private var stateLabel: String {
-        ConversationStateMark.label(state: state, waiting: main?.waiting, failed: main?.failed == true)
+    private var subline: String {
+        RenderedText.plain(PartialMarkdown.closed(ConversationLabels.mainSubline(row, main: main, pendingNotes: notes)))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: Design.Space.s4) {
-                ConversationStateMark(state: state, waiting: main?.waiting, failed: main?.failed == true)
+                Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
+                    .font(.caption)
+                    .foregroundStyle(row.replying ? Color.brand : Color.textSecondary)
+                    .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
+                    .frame(width: 16, height: 16)
+                    .accessibilityHidden(true)
                 Text(row.name)
                     .font(.headline)
                     .fontWeight(unread ? .bold : .semibold)
@@ -337,15 +342,17 @@ struct InstanceRowView: View {
                         .background(Color.rowSelected, in: Capsule())
                 }
             }
-            if notes > 0 {
-                Label("\(notes) for next cycle", systemImage: "moon")
-                    .font(.caption).foregroundStyle(Color.textSecondary)
+            if !subline.isEmpty {
+                Text(subline)
+                    .font(.subheadline).foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                    .padding(.leading, 16 + Design.Space.s4)
             }
         }
         .foregroundStyle(Color.textPrimary)
         .frame(minHeight: 44)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([row.name, stateLabel, unread ? "unread" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel([row.name, row.state, subline, unread ? "unread" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
     }
 }
 
@@ -451,9 +458,6 @@ struct InstancesList: View {
         }
         .navigationTitle(title)
         .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .primaryAction) { EditButton() }
-            #endif
             ToolbarItem(placement: .primaryAction) {
                 Button(action: settings) { Image(systemName: "gearshape") }.accessibilityLabel("Settings")
             }
