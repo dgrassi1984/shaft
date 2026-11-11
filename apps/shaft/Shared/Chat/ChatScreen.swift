@@ -566,7 +566,7 @@ struct ChatTitle: View {
     private var pendingNotesButton: some View {
         let count = store.pendingNotes[instance]?.count ?? 0
         return Button { showPendingNotes = true } label: {
-            Label("\(count)", systemImage: "moon").lineLimit(1)
+            Label("\(count)", systemImage: "moon").labelStyle(.titleAndIcon).lineLimit(1)
         }
         .buttonStyle(.plain)
         .fixedSize()
