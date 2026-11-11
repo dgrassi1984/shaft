@@ -293,7 +293,10 @@ questions, reference answers or grader reasoning.
 
 Each reading has a gap expressed as a share of its own total when measurable. `head_lines` sorts largest gaps first,
 with unmeasurable readings last. Recent judged rates use `WINDOW_DAYS=14`; value uses `LAST_VALUED=20` cycles.
-No gauge appears in the stats head until chosen; `MAX_CHOSEN=4`. The instance cannot write a reading.
+No gauge appears in the stats head until chosen; `MAX_CHOSEN=4`. The instance cannot set a reading: each is
+recomputed at every build. `promises`, `corrections` and `plan` read ledgers the instance keeps in its folder, as
+the supervisor folds and re-checks them; the others read the supervisor's own record. In a trial replay the
+readings are computed as of the replayed cycle's start.
 The broker's `gauges` tool lists readings or accepts `choose=[...]`; an empty list clears the choice.
 `shaft gauges <name> [list|set a,b,c|clear]` lets the operator choose too.
 `SUP_DIR/gauges/<name>.jsonl` keeps every choice with `by` set to `instance` or `operator`; the last row is in force.
@@ -316,7 +319,8 @@ current fact without a checked source. This is a text match, not proof that the 
 
 ### Goal families and kept changes
 
-The judge's `resembles` field names an earlier judged goal or is empty (`metrics.LINK_PROPS`).
+The judge's `resembles` field names an earlier judged goal or is empty (`metrics.LINK_PROPS`). Only the main
+judge is asked for the link fields (`MAIN_SCHEMA`); the second judge, controls and baselines use `JUDGE_SCHEMA`.
 `_prior_keys` supplies at most `PRIOR_GOALS=30` earlier goals; `_links` discards links outside that list.
 `supervisor/families.py`, `families`, joins these links into chains over judged cycles only.
 Each family has cycle counts and dates, mean value, delivery count, last delivery and last novelty of at least 3.
@@ -330,17 +334,27 @@ or no delivery and known mean value below 2 for other work. Nothing is removed f
 `metrics._probation_event` preserves starts and outcomes in `SUP_DIR/probation/<name>.jsonl` after windows close.
 `change_outcomes` reports `on probation`, `passed`, `kept, not judged`, `reverted`, `not on probation` or `unknown`.
 Its `tested` field records whether a finished trial of the same change preceded it, or is null when unknown.
-Older changes fall back to the supervisor log. `usage.kept_changes_line` summarizes the last 14 days' kept changes,
+The supervisor log supplies what the history file lacks (changes kept before it existed, and the start of a
+probation already open when it began); the two are merged by commit and outcome. `usage.kept_changes_line` summarizes the last 14 days' kept changes,
 trials and probation outcomes in stats.
 
 ### Ending an idle cycle
 
-The broker's `nothing_to_do` records a reason in `SUP_DIR/idle_exits/<name>.jsonl` only when `run_kind="live"`
-and no tool in `idle.OUTWARD` has been called. That tuple is `send_message`, `mail_draft`, `mail_draft_update`,
-`calendar_create`, `calendar_move` and `calendar_respond`; attempted calls count too.
-Other run kinds or a prior outward call return a not-counted answer.
-`metrics.judge_pending` excludes episodes matched by `idle.exits`, whether or not they declared a goal.
-This exit is its own class, never judged and never a failure. The scheduler applies the idle back-off above.
+The broker's `nothing_to_do` records an exit in `SUP_DIR/idle_exits/<name>.jsonl` as `{at, run, reason}`, where `run`
+is the run's start time as the supervisor stamped it (`SHAFT_RUN_STARTED`, which the episode carries as
+`run_started`). It counts only when `run_kind="live"` and no tool in `idle.PRIOR` has been called: `send_message`,
+`mail_draft`, `mail_draft_update`, `calendar_create`, `calendar_move`, `calendar_respond`, `delegate_coding`,
+`set_config`, `secret_set`, `secret_delete`, `trial`, `record_order` and `predict`; attempted calls count too.
+`run`, `http_request` and file tools before it do not prevent it. Other run kinds or a prior such call return a
+not-counted answer.
+
+After the exit, any supervisor tool call outside `idle.QUIET` (`nothing_to_do`, `record`, `gauges`) withdraws it:
+`Broker._idle_withdrawn` appends a `revoked` row and `autonomy.record("idle_revoke")` clears the schedule mark.
+The later call itself is not refused. `idle.exits` matches a standing exit to the earliest episode carrying its run
+id, ended at or after the exit was recorded, with no code change kept in that run.
+`metrics.judge_pending` excludes those episodes, whether or not they declared a goal, except one that a kept
+commitment cites as evidence. This exit is its own class, never judged and never a failure.
+The scheduler applies the idle back-off above.
 
 ### Predictions
 
