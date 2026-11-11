@@ -63,6 +63,7 @@ final class ChatShell {
 
 extension EnvironmentValues {
     @Entry var chatCovered = false
+    @Entry var openConversationSwitcher: (() -> Void)? = nil
 }
 
 extension View {

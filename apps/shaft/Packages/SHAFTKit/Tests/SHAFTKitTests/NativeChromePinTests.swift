@@ -203,10 +203,7 @@ struct NativeChromePinTests {
     @Test func aSelectedRowIsNotTheSystemsAccent() throws {
         let source = try shared("Shared/Root/SessionViews.swift")
         #expect(source.contains(".fill(selected ? Color.rowSelected : Color.clear)"))
-        #expect(source.contains(".listRowBackground(rowFill(selected: selection == ChatSelection(row.name)))"))
-        // A thread's row and the From row take the same quiet fill (threads, 2026-11-10).
         #expect(source.contains(".listRowBackground(rowFill(selected: selection == tag))"))
-        #expect(source.contains(".listRowBackground(rowFill(selected: selection == from))"))
         #expect(source.contains("table.selectionHighlightStyle = .none"))
     }
 

@@ -6,12 +6,11 @@ import Foundation
 /// its cycles; a server before threads keeps one, the current chat. Drafts and queued messages are keyed by the ref, so
 /// they never cross threads.
 public enum ChatRef: Hashable, Sendable {
-    /// The shown chat (`GET /app/v1/chat/<n>`): a server before threads has no other; on one with threads it is the most
-    /// recently active open thread.
+    /// The legacy chat (`GET /app/v1/chat/<n>`), used only after confirming the server predates threads.
     case current
     /// An open thread (`GET /app/v1/chat/<n>/<cid>`).
     case thread(String)
-    /// The From *instance* feed (`GET /app/v1/from/<n>`): its own conversation and messages from cycles.
+    /// Main (`GET /app/v1/from/<n>`): its own conversation and messages from cycles.
     case from
     /// An ended chat, read-only (§5).
     case earlier(String)

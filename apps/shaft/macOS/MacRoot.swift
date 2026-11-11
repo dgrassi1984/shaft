@@ -35,18 +35,42 @@ final class MacState {
     /// Show `chosen`: an instance's default conversation, or one thread of it.
     func open(_ chosen: ChatSelection) {
         if selection != chosen { path.removeAll() }
-        selection = chosen
+        SidebarDisclosure.set(chosen.instance, expanded: true)
+        selection = store.map { ChatSelection.settled(chosen.instance, $0.resolve(chosen)) } ?? chosen
         UserDefaults.standard.set(chosen.instance, forKey: "chat.last")
     }
 
-    /// Next (`by` 1) or previous (-1) chat in the list's order (Option-↓/↑): instances, each at its default.
+    /// Walk the same visible order the sidebar draws.
     func step(_ by: Int) {
-        guard let names = store?.instances.map(\.name), !names.isEmpty else { return }
-        guard let selection, let index = names.firstIndex(of: selection.instance) else {
-            open(names[0])
-            return
+        guard let store else { return }
+        var rows: [ChatSelection] = []
+        for row in store.instances {
+            rows.append(ChatSelection(row.name, store.defaultRef(row.name)))
+            if SidebarDisclosure.expanded(row.name) {
+                rows += (store.threads(row.name)?.threads ?? []).map { ChatSelection(row.name, .thread($0.id)) }
+            }
         }
+        guard !rows.isEmpty else { return }
+        let index = selection.flatMap { rows.firstIndex(of: $0) } ?? (by > 0 ? -1 : 0)
+        open(rows[(index + by + rows.count) % rows.count])
+    }
+
+    func stepInstance(_ by: Int) {
+        guard let store, !store.instances.isEmpty else { return }
+        let names = store.instances.map(\.name)
+        let index = selection.flatMap { chosen in names.firstIndex(of: chosen.instance) } ?? 0
         open(names[(index + by + names.count) % names.count])
+    }
+
+    func moveThread(_ offset: Int?) {
+        guard let store, let chosen = selection, case .thread(let id) = chosen.ref,
+              let ids = store.threads(chosen.instance)?.threads.map(\.id),
+              let index = ids.firstIndex(of: id) else { return }
+        let target = offset.map { index + $0 } ?? 0
+        guard ids.indices.contains(target), index != target else { return }
+        let remaining = ids.filter { $0 != id }
+        let after = target == 0 ? nil : remaining[target - 1]
+        Task { await store.moveThread(chosen.instance, id: id, after: after) }
     }
 
     /// New Thread (⇧⌘N on a server with threads): one more beside the instance's others, shown once started.

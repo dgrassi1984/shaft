@@ -12,6 +12,13 @@ public final class InstancesStore {
     /// The last failure to load the list; nil once it loads again.
     public private(set) var error: APIError?
     public private(set) var loaded = false
+    public private(set) var pendingNotes: [String: [PendingNote]] = [:]
+    public private(set) var notesError: [String: APIError] = [:]
+    public private(set) var moving: Set<String> = []
+    @ObservationIgnored private var orderRevisions: [String: Int] = [:]
+    @ObservationIgnored private var instancesRev: OrderRevision?
+    @ObservationIgnored private var listGeneration = 0
+    @ObservationIgnored private var migrated: Set<String> = []
 
     @ObservationIgnored public let client: APIClient
     @ObservationIgnored public let outbox: Outbox
@@ -51,13 +58,22 @@ public final class InstancesStore {
     /// Load the list once (`If-None-Match`: a `304` confirms the known badge too).
     public func refresh() async {
         let generation = seenGeneration
+        let listGeneration = self.listGeneration
         do {
             switch try await client.instances(etag: etag) {
             case .notModified:
                 if badgeKnown { onBadge?(badge) }
             case .value(let answer, let etag):
-                guard generation == seenGeneration else { return }
+                guard generation == seenGeneration, listGeneration == self.listGeneration, !moving.contains("instances") else { return }
                 self.etag = etag
+                if instancesRev != answer.instancesRev {
+                    threadsReadAt.removeAll()
+                    instancesRev = answer.instancesRev
+                }
+                if let rev = answer.instancesRev?.counter {
+                    guard rev >= (orderRevisions["instances"] ?? 0) else { return }
+                    orderRevisions["instances"] = rev
+                }
                 instances = answer.instances
                 reportBadge(answer.badge)
             }
@@ -134,39 +150,35 @@ public final class InstancesStore {
         return nil
     }
 
-    /// What an instance opens when no thread is named (its row, a notification without one, the first launch): its
-    /// most recently active open thread — where a send without `cid` goes (§6) — else its current chat (a server
-    /// before threads, threads not read yet, or no thread open: the first message starts one).
+    /// An untargeted navigation opens Main. Only a confirmed server before threads uses the legacy current chat.
     public func defaultRef(_ name: String) -> ChatRef {
-        threads(name)?.newest.map { .thread($0.id) } ?? .current
+        threadsState(name) == .unsupported ? .current : .from
     }
 
-    /// The conversation to show for `ref` (nil: the instance's default). A thread no longer open (ended, here or on
-    /// another device) gives way to the default; a server before threads has only the current chat.
+    /// A named thread that is no longer open retains its identity as a read-only earlier chat.
     public func resolve(_ name: String, _ ref: ChatRef?) -> ChatRef {
         guard let ref else { return defaultRef(name) }
         switch (ref, threadsState(name)) {
-        case (.earlier, _), (.current, _): return ref
+        case (.earlier, _): return ref
+        case (.current, .unsupported): return .current
+        case (.current, _): return .from
         case (.thread, .unsupported), (.from, .unsupported): return .current
         case (.thread(let cid), .loaded(let answer)):
-            return answer.threads.contains { $0.id == cid } ? ref : defaultRef(name)
+            return answer.threads.contains { $0.id == cid } ? ref : .earlier(cid)
         case (.thread, .unknown), (.from, _): return ref
         }
     }
 
-    /// Read `name`'s threads now. A `404` from a server that lists the instance means a server before threads: the app
-    /// falls back to one chat per instance for it. Once read, what the current chat held (a draft, messages not sent)
-    /// moves to the most recently active thread, where a send without `cid` would have gone (§6).
+    /// Detect support and refresh the ordered list. Historical data adoption runs separately, once per instance.
     public func refreshThreads(_ name: String) async {
+        guard !moving.contains(name) else { return }
         let generation = (threadsGeneration[name] ?? 0) + 1
         threadsGeneration[name] = generation
         let row = row(name)
         do {
             let answer = try await client.threads(name)
             guard threadsGeneration[name] == generation else { return }
-            if let newest = answer.newest {
-                adoptCurrent(name, into: newest.id)
-            }
+            migrateHistoricalCurrent(name, answer: answer)
             threadStates[name] = .loaded(answer)
             threadsError[name] = nil
             threadsReadAt[name] = row
@@ -188,6 +200,7 @@ public final class InstancesStore {
     /// threads is asked once per instance.
     public func refreshMovedThreads(all: Bool = false) async {
         for row in instances {
+            await refreshNotes(row.name)
             if threadsState(row.name) == .unsupported { continue }
             if !all, threadsReadAt[row.name] == row, threadsError[row.name] == nil { continue }
             await refreshThreads(row.name)
@@ -216,6 +229,91 @@ public final class InstancesStore {
         }
     }
 
+    /// Historical untargeted data is adopted once. New writes always have an explicit destination.
+    private func migrateHistoricalCurrent(_ name: String, answer: ThreadsResponse) {
+        guard !migrated.contains(name) else { return }
+        // Historical sends without cid targeted the newest thread. Pin before moving any draft files.
+        let destination = answer.newest?.id ?? ChatRef.fromID
+        outbox.adoptCurrent(name, into: destination)
+        adoptCurrent(name, into: destination)
+        migrated.insert(name)
+    }
+
+    public func refreshNotes(_ name: String) async {
+        do {
+            pendingNotes[name] = try await client.notes(name).notes ?? []
+            notesError[name] = nil
+        } catch {
+            guard let error = APIError.from(error) else { return }
+            if error.status == 404 { pendingNotes[name] = []; notesError[name] = nil }
+            else { notesError[name] = error; if error.isUnpaired { report(error) } }
+        }
+    }
+
+    public func cancelNote(_ name: String, note: PendingNote) async {
+        guard note.cancellable == true, note.mid != nil || note.file != nil else { return }
+        do {
+            _ = try await client.uncycle(name, mid: note.mid, file: note.file)
+            await refreshNotes(name)
+        } catch {
+            if let error = APIError.from(error) { notesError[name] = error }
+        }
+    }
+
+    /// One move per list at a time. In-flight polls cannot overwrite an optimistic order.
+    public func moveThread(_ name: String, id: String, after: String?) async {
+        guard case .loaded(var answer) = threadsState(name), id != ChatRef.fromID,
+              let index = answer.threads.firstIndex(where: { $0.id == id }), !moving.contains(name) else { return }
+        let previous = answer
+        let item = answer.threads.remove(at: index)
+        let target = after.flatMap { anchor in answer.threads.firstIndex { $0.id == anchor }.map { $0 + 1 } } ?? 0
+        if id == after { return }
+        answer.threads.insert(item, at: target)
+        moving.insert(name)
+        threadsGeneration[name, default: 0] += 1
+        threadStates[name] = .loaded(answer)
+        do {
+            let response = try await client.moveThread(name, id: id, after: after)
+            if let rev = response.rev?.counter, rev >= (orderRevisions[name] ?? 0), let ids = response.ids {
+                orderRevisions[name] = rev
+                answer.threads = ids.compactMap { id in answer.threads.first { $0.id == id } }
+                threadStates[name] = .loaded(answer)
+            }
+            moving.remove(name)
+            await refreshThreads(name)
+        } catch {
+            moving.remove(name)
+            threadStates[name] = .loaded(previous)
+            if let error = APIError.from(error) { report(error) }
+            await refreshThreads(name)
+        }
+    }
+
+    public func moveInstance(_ name: String, after: String?) async {
+        guard let index = instances.firstIndex(where: { $0.name == name }), name != after,
+              !moving.contains("instances") else { return }
+        let previous = instances
+        let item = instances.remove(at: index)
+        let target = after.flatMap { anchor in instances.firstIndex { $0.name == anchor }.map { $0 + 1 } } ?? 0
+        instances.insert(item, at: target)
+        moving.insert("instances")
+        listGeneration += 1
+        do {
+            let response = try await client.moveInstance(name, after: after)
+            if let rev = response.rev?.counter, rev >= (orderRevisions["instances"] ?? 0), let ids = response.ids {
+                orderRevisions["instances"] = rev
+                instances = ids.compactMap { id in instances.first { $0.name == id } }
+            }
+            moving.remove("instances")
+        } catch {
+            moving.remove("instances")
+            instances = previous
+            if let error = APIError.from(error) { report(error) }
+        }
+        etag = nil
+        await refresh()
+    }
+
     /// The current chat's draft and not-sent messages move to the thread `cid`. The current chat's store lets go of
     /// the draft it held (its file is gone): the thread's store reads it from now on, and two stores never write one
     /// draft.
@@ -228,8 +326,13 @@ public final class InstancesStore {
             report(.transport(code: (error as NSError).code,
                               message: "Could not move \(name)'s draft to its thread: \(error.localizedDescription)"))
         }
-        outbox.adoptCurrent(name, into: cid)
-        if moved, let store = chats[ChatKey(instance: name, ref: .current)] { store.draft = Draft() }
+        if moved {
+            if let store = chats[ChatKey(instance: name, ref: .current)] { store.draft = Draft() }
+            let destination: ChatRef = cid == ChatRef.fromID ? .from : .thread(cid)
+            if let store = chats[ChatKey(instance: name, ref: destination)] {
+                store.draft = (try? drafts.load(name, cid: cid)) ?? Draft()
+            }
+        }
     }
 
     /// Mark `name`'s conversation `cid` (a thread's id, `"from"`, nil for the current chat) seen up to `version`, the
@@ -254,6 +357,10 @@ public final class InstancesStore {
             }
             if let index = instances.firstIndex(where: { $0.name == name }) {
                 instances[index].unread = unread
+                if let threads = threads(name) {
+                    instances[index].unreadMain = threads.from.unread
+                    instances[index].unreadThreads = threads.threads.filter(\.unread).count
+                }
             }
             return true
         } catch {
@@ -441,7 +548,7 @@ public final class ChatStore {
     /// the message's row in the timeline already shows it was sent.
     @discardableResult
     public func send(mode: SendMode = .now) async -> Result<SendResponse, APIError> {
-        guard let owner, !isEarlier else { return .failure(.notPaired) }
+        guard let owner, !isEarlier, canWrite else { return .failure(.notPaired) }
         let message = OutgoingMessage(text: draft.text, mode: mode, quotes: draft.quotes,
                                       files: owner.drafts.outgoingFiles(draft, for: instance, cid: ref.draftKey),
                                       cid: ref.draftKey)
@@ -459,7 +566,7 @@ public final class ChatStore {
     /// Retry a failed reply (§4.4 `failure.retry`): its text, with `retry_of` when the server gave one.
     @discardableResult
     public func retryReply(_ retry: FailureRetry) async -> Result<SendResponse, APIError> {
-        guard let owner else { return .failure(.notPaired) }
+        guard let owner, canWrite else { return .failure(.notPaired) }
         let message = OutgoingMessage(text: retry.text, mode: .now, retryOf: retry.retryOf, cid: ref.draftKey)
         return finish(await owner.outbox.send(message, to: instance), inRow: true)
     }
@@ -467,6 +574,7 @@ public final class ChatStore {
     /// Send a not-sent message again with its `mid`.
     @discardableResult
     public func retry(_ mid: String) async -> Result<SendResponse, APIError>? {
+        guard canWrite else { return nil }
         guard let result = await owner?.outbox.retry(mid) else { return nil }
         return finish(result, inRow: true)
     }
@@ -474,7 +582,7 @@ public final class ChatStore {
     /// Put a not-sent message back in the composer to change it: it leaves the outbox, and sending it again makes a
     /// new message (a new `mid`, PLAN §2.3). Its files come back as the draft's.
     public func editUnsent(_ mid: String) {
-        guard let owner, let entry = owner.outbox.entries.first(where: { $0.mid == mid && $0.state == .notSent })
+        guard canWrite, let owner, let entry = owner.outbox.entries.first(where: { $0.mid == mid && $0.state == .notSent })
         else { return }
         var restored = draft
         restored.text = [restored.text, entry.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -499,7 +607,7 @@ public final class ChatStore {
     /// Copy a file into the draft (Files, a drop). Its copy is the app's, so the picker's loan can end.
     @discardableResult
     public func attach(fileAt url: URL, name: String? = nil) -> Bool {
-        guard let owner else { return false }
+        guard let owner, canWrite else { return false }
         do {
             let file = try owner.drafts.attach(url, name: name, for: instance, cid: ref.draftKey)
             draft.attachments.append(file)
@@ -514,7 +622,7 @@ public final class ChatStore {
     /// Attach bytes (a photo, a pasted image) as `name`.
     @discardableResult
     public func attach(data: Data, name: String) -> Bool {
-        guard let owner else { return false }
+        guard let owner, canWrite else { return false }
         do {
             draft.attachments.append(try owner.drafts.attach(data: data, name: name, for: instance, cid: ref.draftKey))
             return true
@@ -718,8 +826,16 @@ public final class ChatStore {
         return result
     }
 
+    private var canWrite: Bool {
+        switch ref {
+        case .earlier: false
+        case .current: owner?.threadsState(instance) == .unsupported
+        case .thread, .from: true
+        }
+    }
+
     private func saveDraft() {
-        guard !isEarlier, let owner else { return }
+        guard !isEarlier, canWrite, let owner else { return }
         do {
             try owner.drafts.save(draft, for: instance, cid: ref.draftKey)
         } catch {

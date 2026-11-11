@@ -196,6 +196,18 @@ public final class APIClient: Sendable {
         try await get("/app/v1/threads/\(instance)")
     }
 
+    public func moveThread(_ instance: String, id: String, after: String?) async throws -> OrderMoveResponse {
+        try await post("/app/v1/threads/\(instance)/move", json: ThreadMove(id: id, after: after))
+    }
+
+    public func moveInstance(_ name: String, after: String?) async throws -> OrderMoveResponse {
+        try await post("/app/v1/instances/move", json: InstanceMove(name: name, after: after))
+    }
+
+    public func notes(_ instance: String) async throws -> PendingNotesResponse {
+        try await get("/app/v1/notes/\(instance)")
+    }
+
     /// A new open thread (§7.7); it ends no other. A nil or blank title takes the first message's line once sent.
     public func newThread(_ instance: String, title: String? = nil) async throws -> NewThreadResponse {
         try await post("/app/v1/chat/\(instance)/new", json: title.map { ["title": $0] } ?? [:])
@@ -618,5 +630,28 @@ final class OriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
             return
         }
         completionHandler(request)
+    }
+}
+
+// A nil anchor must be JSON null, not an omitted key.
+private struct ThreadMove: Encodable {
+    let id: String
+    let after: String?
+    enum CodingKeys: String, CodingKey { case id, after }
+    func encode(to encoder: any Encoder) throws {
+        var box = encoder.container(keyedBy: CodingKeys.self)
+        try box.encode(id, forKey: .id)
+        try box.encode(after, forKey: .after)
+    }
+}
+
+private struct InstanceMove: Encodable {
+    let name: String
+    let after: String?
+    enum CodingKeys: String, CodingKey { case name, after }
+    func encode(to encoder: any Encoder) throws {
+        var box = encoder.container(keyedBy: CodingKeys.self)
+        try box.encode(name, forKey: .name)
+        try box.encode(after, forKey: .after)
     }
 }
