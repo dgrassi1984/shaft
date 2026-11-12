@@ -134,13 +134,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-      # The APNs environment the entitlement below names: a development build talks to the sandbox, a Release
-      # (Developer ID) build to production. Scripts/release-mac.sh checks the signed result.
-      configs:
-        Debug:
-          SHAFT_APS_ENVIRONMENT: development
-        Release:
-          SHAFT_APS_ENVIRONMENT: production
+        # The APNs environment the entitlement below names. Everyday builds, Release included, are signed with an
+        # Apple Development identity, which only fits a development profile; Scripts/release-mac.sh overrides it with
+        # SHAFT_APS_ENVIRONMENT=production for the Developer ID archive and checks the signed result.
+        SHAFT_APS_ENVIRONMENT: development
     info:
       path: Generated/macOS-Info.plist
       properties:

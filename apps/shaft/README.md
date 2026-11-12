@@ -371,9 +371,11 @@ One-time setup, with your paid Apple Developer team:
    team keychain group needs a provisioning profile that grants it, for the app *and* for the notification extension
    (`<prefix>.shaft` and `<prefix>.shaft.NotificationService`). In the developer portal, both App IDs need Push
    Notifications (the app) and Keychain Sharing capabilities; the script lets Xcode create and embed the Developer ID
-   profiles at export (`-allowProvisioningUpdates`, using the account signed in to Xcode). Release builds set
-   `aps-environment` to `production` (`SHAFT_APS_ENVIRONMENT` in `project.yml`; Debug stays `development`). The script
-   checks the exported bundles and fails if a profile is missing or the app's does not grant production push.
+   profiles at export (`-allowProvisioningUpdates`, using the account signed in to Xcode). The entitlement's
+   value is the build setting `SHAFT_APS_ENVIRONMENT` in `project.yml`: `development` for every everyday build (Release
+   included, signed with your Apple Development identity), and the release script passes
+   `SHAFT_APS_ENVIRONMENT=production` for its archive. It checks the exported bundles and fails if a profile is missing,
+   the app's does not grant production push, or the signed app's `aps-environment` is not `production`.
 
 Then, from a clean checkout on a release tag:
 
@@ -384,6 +386,7 @@ Scripts/release-mac.sh --notary-profile shaft-notary
 
 Options: `--team TEAMID` (default: `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
 `--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the preconditions and
-prints every command, signing and contacting Apple for nothing). It stops at the first failed step, and when Apple
+prints every command, signing and contacting Apple for nothing), `--self-test` (checks the script's entitlement readers
+on synthetic plists; signs nothing). It stops at the first failed step, and when Apple
 rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
 SHA-256.

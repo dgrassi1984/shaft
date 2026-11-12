@@ -3,6 +3,7 @@
 # It never uploads anything. apps/shaft/README.md ("Release a signed build") has the one-time setup.
 #
 #   Scripts/release-mac.sh --notary-profile NAME [--team TEAMID] [--out DIR] [--allow-untagged] [--dry-run]
+#   Scripts/release-mac.sh --self-test      (checks the entitlement helpers on synthetic plists; signs nothing)
 #
 # --dry-run checks every precondition and prints each command it would run; it signs, uploads and contacts Apple
 # for nothing, and exits 1 if a precondition fails.
@@ -17,9 +18,10 @@ notary_profile=""
 out="$app_dir/build/release"
 allow_untagged=0
 dry=0
+self_test_requested=0
 
 usage() {
-  sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -30,6 +32,7 @@ while [ $# -gt 0 ]; do
     --out) out=${2:?--out needs a value}; shift 2 ;;
     --allow-untagged) allow_untagged=1; shift ;;
     --dry-run) dry=1; shift ;;
+    --self-test) self_test_requested=1; shift ;;
     -h|--help) usage ;;
     *) echo "error: unknown argument: $1" >&2; usage ;;
   esac
@@ -61,6 +64,81 @@ run() {
 local_setting() {
   sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" "$app_dir/Signing.local.yml" 2>/dev/null | head -n 1 | tr -d '"' | tr -d "'"
 }
+
+# ---------------------------------------------------------------- entitlement helpers
+# plist_value FILE KEYPATH -> prints the value; exit 0 found, 3 key absent, 2 FILE is not a valid plist (message on
+# stderr). Dots inside one key (com.apple.security.app-sandbox) must be escaped in KEYPATH: com\.apple\.…
+plist_value() {
+  local lint
+  lint=$(plutil -lint "$1" 2>&1) || { echo "not a valid plist ($1): $lint" >&2; return 2; }
+  plutil -extract "$2" raw -o - "$1" 2>/dev/null || return 3
+}
+
+# ent_of BUNDLE KEY -> the signed entitlement's value, "absent" if the key is missing; dies on any other failure.
+ent_of() {
+  local tmp rc=0 val
+  tmp=$(mktemp)
+  codesign -d --entitlements :- "$1" >"$tmp" 2>/dev/null || { rm -f "$tmp"; die "codesign cannot read the entitlements of $1."; }
+  val=$(plist_value "$tmp" "${2//./\\.}") || rc=$?
+  rm -f "$tmp"
+  case $rc in 0) echo "$val" ;; 3) echo absent ;; *) die "cannot read entitlement $2 of $1 (see message above)." ;; esac
+}
+
+# profile_aps BUNDLE -> the embedded profile's aps-environment, "absent", or dies when the profile cannot be decoded.
+profile_aps() {
+  local tmp rc=0 val
+  tmp=$(mktemp)
+  security cms -D -i "$1/Contents/embedded.provisionprofile" >"$tmp" 2>/dev/null || { rm -f "$tmp"; die "cannot decode the provisioning profile of $1."; }
+  val=$(plist_value "$tmp" 'Entitlements.com\.apple\.developer\.aps-environment') || rc=$?
+  rm -f "$tmp"
+  case $rc in 0) echo "$val" ;; 3) echo absent ;; *) die "cannot read the provisioning profile of $1 (see message above)." ;; esac
+}
+
+self_test() {
+  local t fails=0 d
+  t=$(mktemp -d)
+  expect() { # name, expected, actual
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected '$2', got '$3'"; fails=$((fails + 1)); fi
+  }
+  cat >"$t/app.plist" <<'P'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.developer.aps-environment</key><string>production</string>
+<key>com.apple.security.device.audio-input</key><true/>
+</dict></plist>
+P
+  cat >"$t/ext.plist" <<'P'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.app-sandbox</key><true/>
+</dict></plist>
+P
+  cat >"$t/profile.plist" <<'P'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Entitlements</key><dict>
+<key>com.apple.developer.aps-environment</key><string>production</string>
+</dict></dict></plist>
+P
+  echo 'this is not a plist' >"$t/bad.plist"
+  expect "app without sandbox: key absent (status 3)" "3" "$(plist_value "$t/app.plist" 'com\.apple\.security\.app-sandbox' >/dev/null 2>&1; echo $?)"
+  expect "app: aps-environment read" "production" "$(plist_value "$t/app.plist" 'com\.apple\.developer\.aps-environment')"
+  expect "extension with sandbox: true" "true" "$(plist_value "$t/ext.plist" 'com\.apple\.security\.app-sandbox')"
+  expect "unescaped dots are not the key (the old bug)" "3" "$(plist_value "$t/ext.plist" 'com.apple.security.app-sandbox' >/dev/null 2>&1; echo $?)"
+  expect "the escaping used by ent_of" 'com\.apple\.security\.app-sandbox' "$(k=com.apple.security.app-sandbox; echo "${k//./\\.}")"
+  expect "profile: nested Entitlements key" "production" "$(plist_value "$t/profile.plist" 'Entitlements.com\.apple\.developer\.aps-environment')"
+  expect "malformed plist: status 2, not 'absent'" "2" "$(plist_value "$t/bad.plist" 'com\.apple\.security\.app-sandbox' >/dev/null 2>&1; echo $?)"
+  m=$(plist_value "$t/bad.plist" x 2>&1 || true)
+  if [[ $m == *"not a valid plist"* ]]; then ok=yes; else ok=no; fi
+  expect "malformed plist: message says so" "yes" "$ok"
+  d=$t; rm -rf "$d"
+  if [ "$fails" -ne 0 ]; then echo "$fails self-test(s) failed." >&2; exit 1; fi
+  echo "self-test passed."
+  exit 0
+}
+[ "$self_test_requested" -eq 1 ] && self_test
 
 # ---------------------------------------------------------------- preconditions
 step "Preconditions"
@@ -150,11 +228,11 @@ fi
 
 step "Archive (Release)"
 if [ "$dry" -eq 1 ]; then
-  echo "[dry-run] would run: xcodebuild -project $app_dir/SHAFT.xcodeproj -scheme $scheme -configuration Release -destination generic/platform=macOS -archivePath $archive -derivedDataPath $out/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$team archive"
+  echo "[dry-run] would run: xcodebuild -project $app_dir/SHAFT.xcodeproj -scheme $scheme -configuration Release -destination generic/platform=macOS -archivePath $archive -derivedDataPath $out/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$team SHAFT_APS_ENVIRONMENT=production archive"
 else
   xcodebuild -project "$app_dir/SHAFT.xcodeproj" -scheme "$scheme" -configuration Release \
     -destination 'generic/platform=macOS' -archivePath "$archive" -derivedDataPath "$out/dd" \
-    -allowProvisioningUpdates DEVELOPMENT_TEAM="$team" archive
+    -allowProvisioningUpdates DEVELOPMENT_TEAM="$team" SHAFT_APS_ENVIRONMENT=production archive
 fi
 
 step "Export with Developer ID signing"
@@ -178,14 +256,6 @@ run xcodebuild -exportArchive -archivePath "$archive" -exportOptionsPlist "$expo
   -exportPath "$export_dir" -allowProvisioningUpdates
 
 step "Verify the signed app"
-sandbox_of() { # path -> "true" or "absent"
-  codesign -d --entitlements :- "$1" 2>/dev/null | plutil -extract com.apple.security.app-sandbox raw -o - - 2>/dev/null || echo absent
-}
-aps_of() { # path -> profile's aps-environment or "absent"
-  [ -f "$1/Contents/embedded.provisionprofile" ] || { echo "no-profile"; return; }
-  security cms -D -i "$1/Contents/embedded.provisionprofile" 2>/dev/null |
-    plutil -extract Entitlements.com.apple.developer.aps-environment raw -o - - 2>/dev/null || echo absent
-}
 if [ "$dry" -eq 1 ]; then
   cat <<EOT
 [dry-run] would run: codesign --verify --deep --strict --verbose=2 $app
@@ -197,9 +267,11 @@ if [ "$dry" -eq 1 ]; then
 EOT
 else
   codesign --verify --deep --strict --verbose=2 "$app"
-  [ "$(sandbox_of "$app")" != "true" ] || die "The app is sandboxed; it must not be (project.yml SHAFT-macOS entitlements)."
-  [ "$(sandbox_of "$appex")" = "true" ] || die "The notification extension is not sandboxed; macOS extensions must be."
-  aps=$(codesign -d --entitlements :- "$app" 2>/dev/null | plutil -extract com.apple.developer.aps-environment raw -o - - 2>/dev/null || echo absent)
+  sb=$(ent_of "$app" com.apple.security.app-sandbox)
+  [ "$sb" != "true" ] || die "The app is sandboxed; it must not be (project.yml SHAFT-macOS entitlements)."
+  sbx=$(ent_of "$appex" com.apple.security.app-sandbox)
+  [ "$sbx" = "true" ] || die "The notification extension is not sandboxed (app-sandbox is '$sbx'); macOS extensions must be."
+  aps=$(ent_of "$app" com.apple.developer.aps-environment)
   [ "$aps" = "production" ] || die "The signed app's aps-environment is '$aps', not production."
   for b in "$app" "$appex"; do
     [ -f "$b/Contents/embedded.provisionprofile" ] ||
@@ -208,7 +280,7 @@ else
     printf '%s\n' "$info" | grep -q 'Authority=Developer ID Application' || die "$b is not signed with Developer ID Application."
     printf '%s\n' "$info" | grep -q 'flags=.*runtime' || die "$b lacks the hardened runtime."
   done
-  [ "$(aps_of "$app")" = "production" ] || die "The app's provisioning profile does not grant aps-environment production (is Push Notifications on for its App ID?)."
+  [ "$(profile_aps "$app")" = "production" ] || die "The app's provisioning profile does not grant aps-environment production (is Push Notifications on for its App ID?)."
   echo "app: not sandboxed, hardened, aps-environment production; extension: sandboxed."
 fi
 
