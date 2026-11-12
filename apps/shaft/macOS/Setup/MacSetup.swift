@@ -267,7 +267,8 @@ final class MacSetup {
     /// clearing the progress.
     private func completeInstall(_ session: SHAFTSession, generation mine: Int) async {
         func current() -> Bool { !Task.isCancelled && generation == mine }
-        guard let installer = installer(for: session) else { return }
+        // Stopped before this task first ran (Continue, then the window closed at once): nothing happens.
+        guard current(), let installer = installer(for: session) else { return }
         if (try? session.pairing.current()) == nil {
             // The credential was dropped since the pair row finished (401 unpaired): pair again first.
             await installer.run(only: .pair)
@@ -283,8 +284,10 @@ final class MacSetup {
         }
         // The wizard stays on screen while the session opens (it would otherwise give way to the app at the store's
         // first appearance, mid-pairing); it ends or goes on below.
-        wizardContinues = true
         if session.credential != credential || session.store == nil {
+            // session.pair saves and opens before its first suspension: the last check comes right before it.
+            guard current() else { return }
+            wizardContinues = true
             guard await session.pair(credential: credential) else {
                 wizardContinues = false
                 installError = session.problem ?? "Keeping the pairing failed."
@@ -292,6 +295,7 @@ final class MacSetup {
             }
             guard current() else { return }
         }
+        wizardContinues = true
         #if DEBUG
         if let store = session.store {
             await store.refresh()

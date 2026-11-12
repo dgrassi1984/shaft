@@ -59,6 +59,54 @@ struct MacSetupTests {
     }
 }
 
+extension MacSetupTests {
+    /// Fix round 2: Continue then the window closing before Continue's task first runs (no yield between), over a
+    /// finished install whose credential is stored: nothing opens and nothing moves.
+    @Test func continueStoppedBeforeItsTaskRunsOpensNoSession() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "mac-setup-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appending(path: "home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home.appending(path: "SHAFT/.git"), withIntermediateDirectories: true)
+        let suite = "mac-setup-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let states = SetupStateStore(defaults: defaults)
+        var saved = SetupState()
+        saved.step = .install
+        try states.save(saved)
+
+        let credentials = MemoryCredentialStore()
+        let session = SHAFTSession(pairing: PairingStore(store: credentials),
+                                   outbox: try Outbox(directory: root.appending(path: "outbox")),
+                                   drafts: DraftStore(directory: root.appending(path: "drafts")))
+        // The install's pair step finished: its credential is stored, the session not opened on it yet.
+        let local = ServerCredential(baseURL: URL(string: "http://127.0.0.1:8090")!, device: "d-1", secret: "s",
+                                     name: "mac-app", login: "local@mac")
+        try credentials.save(local)
+        let runner = PairHeldRunner(python: "/nowhere")
+        var configuration = Installer.Configuration(home: home)
+        configuration.environment = ["PATH": "/usr/bin:/bin"]
+        let setup = MacSetup(states: states, configure: { configuration }, runner: runner)
+        setup.update(session)
+        let installer = try #require(setup.installer(for: session))
+        await installer.run(only: .pair)                  // finds the stored credential: no command runs
+        #expect(installer.credential == local)
+        #expect(session.store == nil)
+
+        let task = try #require(setup.continueInstall(session))
+        setup.stopInstall()                               // before the task has run at all
+        await task.value
+
+        #expect(session.store == nil)
+        #expect(session.credential == nil)
+        #expect(try states.load().step == .install)
+        #expect(setup.state.step == .install)
+        #expect(setup.route == .wizard)
+        #expect(!setup.wizardContinues)
+        #expect(!setup.installing)
+    }
+}
+
 /// Answers uv's Python lookup, and holds `shaft web pair` open until released, ignoring cancellation.
 private final class PairHeldRunner: ProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
