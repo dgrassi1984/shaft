@@ -41,7 +41,9 @@ account `google` signed in, as the app's local `shaft google login` would), `mes
 `question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
-`services drain-end` finishes a pending scheduler drain and changes its fake pid.
+`services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
+GET /app/v1/version answer as a server of that API version, `version missing` as one older than the route (404), and
+`version` alone the real answer again (docs/app-api.md §19).
 
 `--slow-seen SECONDS` holds every "mark seen" answer that long, so leaving a chat at once cancels the request in flight.
 
@@ -124,7 +126,7 @@ def setup(base: Path, port: int):
         """The seeded instances, then those the setup wizard created here (`new`)."""
         made = sorted(d.name for d in inst.iterdir() if d.name not in INSTANCES and (d / "shaft").is_dir())
         return [*INSTANCES, *made]
-    for name in ("api", "scheduler"):
+    for name in ("api", "scheduler", "web"):        # web: the release GET /app/v1/version names (serve records its own)
         if not (base / "sup" / "services" / f"{name}.json").exists():
             _service_record(base, name, os.getpid())
     apns = _stub_apns(base)
@@ -133,7 +135,15 @@ def setup(base: Path, port: int):
 
     def respond(req):                                  # what `tailscale serve` adds to every request
         req.headers = {**req.headers, "tailscale-user-login": ME}
-        return real_respond(req)
+        response = real_respond(req)
+        # `act version`: answer as an older server would (§19), once the real route has checked the device.
+        old = _read_json(base / "version.json")
+        if old and response.status == 200 and req.path.split("?")[0] == "/app/v1/version":
+            from supervisor import app_api
+            if old.get("missing"):
+                return app_api.error(404, "not_found", f"Nothing at {req.path}.")
+            return app_api._json(200, {"server": old.get("server", "v0.0.1"), "api": old["api"]})
+        return response
 
     setup_state = base / "setup.json"            # the key names set (never their values) and the provider in use
 
@@ -1021,6 +1031,15 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                 request.unlink()
         else:
             raise SystemExit("services needs busy <text> or drain-end")
+    elif what == "version":                            # an older server for the app's version gate (§19)
+        if not args:
+            (base / "version.json").unlink(missing_ok=True)
+        elif name == "missing":
+            _write_json(base / "version.json", {"missing": True})
+        elif name.isdigit():
+            _write_json(base / "version.json", {"api": int(name), "server": text or "v0.0.1"})
+        else:
+            raise SystemExit("version needs <api> [server], missing, or nothing (the real answer again)")
     elif what in ("message", "question"):
         file = f"{datetime.now():%Y%m%d-%H%M%S-%f}-from-{name}.md"
         text = text or ("Should I archive the September notes?" if what == "question" else "The nightly report is ready.")

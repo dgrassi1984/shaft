@@ -107,6 +107,78 @@ extension MacSetupTests {
     }
 }
 
+extension MacSetupTests {
+    /// Update server (docs/app-api.md §19) updates this Mac's own install: only for a loopback pairing with ~/SHAFT
+    /// there, one updater per session, and its check is `shaft deploy --check --json` with the install's Python.
+    @Test func updateServerIsOnlyForThisMacsOwnInstall() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "mac-setup-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appending(path: "home", directoryHint: .isDirectory)
+        let server = home.appending(path: "SHAFT", directoryHint: .isDirectory)
+        let python = server.appending(path: ".runtime/python/cpython-3.12-macos/bin/python3.12")
+        let suite = "mac-setup-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var configuration = Installer.Configuration(home: home)
+        configuration.environment = ["PATH": "/usr/bin:/bin"]
+        let runner = DeployCheckRunner(python: python.path)
+        let setup = MacSetup(states: SetupStateStore(defaults: defaults), configure: { configuration }, runner: runner)
+
+        func session(_ base: String) throws -> SHAFTSession {
+            let credentials = MemoryCredentialStore()
+            try credentials.save(ServerCredential(baseURL: URL(string: base)!, device: "d-1", secret: "s",
+                                                  name: "mac-app", login: "local@mac"))
+            let folder = root.appending(path: UUID().uuidString)
+            return SHAFTSession(pairing: PairingStore(store: credentials),
+                                outbox: try Outbox(directory: folder.appending(path: "outbox")),
+                                drafts: DraftStore(directory: folder.appending(path: "drafts")))
+        }
+        let local = try session("http://127.0.0.1:8785")
+        #expect(local.credential != nil)
+        #expect(setup.updater(for: local) == nil)                 // no ~/SHAFT: nothing of this Mac's to update
+        for file in [server.appending(path: ".runtime/bin/uv"), server.appending(path: "bin/shaft"), python] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: file)
+        }
+        try FileManager.default.createDirectory(at: server.appending(path: ".git"), withIntermediateDirectories: true)
+        #expect(setup.updater(for: try session("https://other-mac.example.ts.net:8444")) == nil)   // another Mac's server
+        let updater = try #require(setup.updater(for: local))
+        #expect(setup.updater(for: local) === updater)            // one per session: its run outlives the Settings window
+        updater.checkForUpdate()
+        await updater.finished()
+        #expect(updater.check == .available(latest: "v0.61.0", current: "v0.60.0"))
+        let ran = try #require(runner.shaftCalls.last)
+        #expect(ran.args == ["deploy", "--check", "--json"])
+        #expect(ran.env["SHAFT_PYTHON"] == python.path)
+    }
+}
+
+/// Answers uv's Python lookup and `shaft deploy --check --json`; records each `shaft` call.
+private final class DeployCheckRunner: ProcessRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [(args: [String], env: [String: String])] = []
+    let python: String
+
+    init(python: String) { self.python = python }
+
+    var shaftCalls: [(args: [String], env: [String: String])] { lock.withLock { calls } }
+
+    func run(_ exe: URL, _ args: [String], env: [String: String], stdin: Data?,
+             onLine: (@Sendable (String) -> Void)?) async throws -> ProcessResult {
+        if exe.lastPathComponent == "uv", args.starts(with: ["python", "find"]) {
+            return ProcessResult(status: 0, stdout: Data((python + "\n").utf8), stderr: Data())
+        }
+        if exe.lastPathComponent == "shaft" {
+            lock.withLock { calls.append((args, env)) }
+            if args == ["deploy", "--check", "--json"] {
+                let answer = #"{"ok": true, "current": "v0.60.0", "latest": "v0.61.0", "template_tag": true}"#
+                return ProcessResult(status: 0, stdout: Data((answer + "\n").utf8), stderr: Data())
+            }
+        }
+        return ProcessResult(status: 1, stdout: Data(), stderr: Data("no answer for \(exe.lastPathComponent) \(args)".utf8))
+    }
+}
+
 /// Answers uv's Python lookup, and holds `shaft web pair` open until released, ignoring cancellation.
 private final class PairHeldRunner: ProcessRunning, @unchecked Sendable {
     private let lock = NSLock()

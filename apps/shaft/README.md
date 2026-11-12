@@ -101,7 +101,10 @@ makes an instance send a message or a question (with its push), change its state
 past the 80-turn window (`long`). Settings writes stay in the fixture's own instance files. Service restarts change
 fake records only; no CLI or launchd runs. `act ... services busy "<name> replying"` makes the API refuse a restart
 and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
-finishes a pending drain with a new fake pid. Cancel is available in the app. Run
+finishes a pending drain with a new fake pid. Cancel is available in the app. `act ... version 0` (or `version
+missing`) answers `GET /app/v1/version` as an older server would, so the app shows "This app needs a newer SHAFT
+server" at its next session; `act ... version` restores the real answer. Update server itself runs `shaft deploy`
+locally, which a fixture run has not: it shows only for a loopback pairing with `~/SHAFT` installed. Run
 `python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
 The setup wizard's routes (`/app/v1/setup/*`, docs/app-api.md §18) answer as the real verbs would, over the fixture's
 folder: OpenRouter is off until a key is set (only the key's name is kept, in `<dir>/setup.json`), a model whose name

@@ -4,11 +4,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import threading
 from unittest import mock
 
 from supervisor import actions, app_api, autonomy, channel, cloudllm, core, opconfig, runner, version, web_actions
-from supervisor.tests.test_app_api import AppTest
+from supervisor.tests.test_app_api import AppTest, write_or_check_fixtures
 from supervisor.tests.test_opconfig import CONFIG, TEMPLATE
 
 
@@ -313,6 +314,22 @@ class SettingsTest(AppTest):
                         r = self.api("/app/v1/services" + path, method)
                         self.assertEqual(r.status, 200, r.body)
                         self.assertEqual(json.loads(r.body)["version"], expected)
+
+    def test_version_names_the_running_release_and_the_api_version(self):
+        """§19: the app's compatibility check. The web process's own record when launchd runs it; else the checkout's."""
+        own = {"pid": os.getpid(), "describe": "v0.60.0"}
+        with mock.patch.object(version, "service", side_effect=lambda n, **kw: own if n == "web" else None):
+            answer = self.get("/app/v1/version")
+        self.assertEqual(answer, {"server": "v0.60.0", "api": app_api.API_VERSION})
+        write_or_check_fixtures(self, {"version": answer})   # SHAFTKit's ServerVersion decodes it
+        other = {"pid": os.getpid() + 1, "describe": "v0.59.0"}   # another web's record: not this process's code
+        with mock.patch.object(version, "service", side_effect=lambda n, **kw: other if n == "web" else None), \
+                mock.patch.object(version, "supervisor_commit", return_value="abc1234"), \
+                mock.patch.object(version, "commit_describe", side_effect=lambda c: f"v0.60.0-1-g{c}"):
+            self.assertEqual(self.get("/app/v1/version"), {"server": "v0.60.0-1-gabc1234", "api": 1})
+        self.assertEqual(app_api.API_VERSION, 1)   # bump it, and docs/app-api.md §19, with a breaking /app/v1 change
+        self.error(self.api("/app/v1/version", "POST"), 405, "method")
+        self.error(self.api("/app/v1/version", bearer=False), 401, "unpaired")
 
     def test_service_restart_and_cancel_use_existing_commands_and_timeouts(self):
         for path, args, timeout in (("api/restart", ["api", "on"], actions.SLOW_S),

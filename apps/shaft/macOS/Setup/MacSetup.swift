@@ -50,6 +50,7 @@ final class MacSetup {
     /// The install's identity: `stopInstall()` moves it on, and work started under an earlier one changes nothing.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var shared: (session: ObjectIdentifier, installer: Installer)?
+    @ObservationIgnored private var sharedUpdater: (session: ObjectIdentifier, updater: ServerUpdater)?
     @ObservationIgnored private let configure: () throws -> Installer.Configuration
     @ObservationIgnored private let runner: any ProcessRunning
 
@@ -121,6 +122,34 @@ final class MacSetup {
                                   store: session.pairing.store, configuration: configuration)
         shared = (ObjectIdentifier(session), installer)
         return installer
+    }
+
+    /// Update server for this session (Settings → Services, and the "needs a newer server" screen): only when the
+    /// session is paired with this Mac's own install (a loopback pairing, and `~/SHAFT` is there). A server on another
+    /// Mac is updated there. Kept per session, like the Installer: closing Settings never cuts a deploy halfway.
+    func updater(for session: SHAFTSession) -> ServerUpdater? {
+        guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
+              !SetupGate.setupNeeded(home: configuration.home) else { return nil }
+        if let sharedUpdater, sharedUpdater.session == ObjectIdentifier(session) { return sharedUpdater.updater }
+        guard let installer = installer(for: session) else { return nil }
+        let updater = ServerUpdater(installer: installer, reachable: { [weak session] in
+            guard let client = session?.store?.client else { return false }
+            do {
+                _ = try await client.version()
+                return true
+            } catch {
+                // The web service answered (a refusal is an answer); a 5xx is whatever stands in for it meanwhile.
+                guard let status = APIError.from(error)?.status else { return false }
+                return status < 500
+            }
+        })
+        updater.onFinished = { [weak session] in
+            guard let store = session?.store else { return }
+            await store.checkCompatibility()
+            await store.services.load()
+        }
+        sharedUpdater = (ObjectIdentifier(session), updater)
+        return updater
     }
 
     // MARK: - Local pairing

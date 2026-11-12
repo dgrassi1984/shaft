@@ -1,0 +1,334 @@
+"""`shaft deploy TAG --json` and `--check`: the deploy procedure (docs/deploy.md) on throwaway git repositories —
+origin is a local bare repository, the primary checkout a clone of it with its template worktree. launchd, the
+scheduler's drain, the instances' update and their conversations are fakes: nothing here reaches launchctl or the real
+checkout."""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from supervisor import __main__ as cli
+from supervisor import autonomy, core, deploy, runner
+
+
+def git(repo, *args) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def commit(repo, path, text, message):
+    (Path(repo) / path).write_text(text)
+    git(repo, "add", path)
+    git(repo, "commit", "-q", "-m", message)
+
+
+class FakeServices:
+    """launchd and the service records: each service runs as a PID; a kickstart gives it a new one that records itself
+    on the code checked out now (no longer stale)."""
+
+    def __init__(self, running=("api", "web", "scheduler")):
+        self.running = set(running)
+        self.pids = {name: 100 + i for i, name in enumerate(sorted(autonomy.SERVICES))}
+        self.stale = {name: True for name in autonomy.SERVICES}
+        self.kicked: list[str] = []
+        self.restarts = 0
+        self.drain = None
+
+    def launchctl(self, *args):
+        if args[:2] != ("kickstart", "-k"):
+            raise AssertionError(f"unexpected launchctl call: {args}")
+        label = args[2].rsplit("/", 1)[-1]
+        name = next(n for n, s in autonomy.SERVICES.items() if s["label"] == label)
+        self.kicked.append(name)
+        self.pids[name] += 1000
+        self.stale[name] = False
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def record(self, name, stale=True):
+        if name not in self.running:
+            return None
+        rec = {"pid": self.pids[name], "commit": "abc", "describe": "v1.1.0"}
+        return {**rec, "stale": self.stale[name]} if stale else rec
+
+    def restart(self, within_min=None, wait=False, cancel=False, poll_s=5):
+        assert wait is False and not cancel, "deploy asks a drain-restart and never waits or cancels"
+        self.restarts += 1
+        self.drain = {"pid": self.pids["scheduler"]}
+        print(f"asked scheduler {self.pids['scheduler']} to restart once its runs end")
+        return 0
+
+
+class DeployTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-deploy-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        glob = self.tmp / "gitconfig"
+        glob.write_text("[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n")
+        (self.tmp / "git-templates").mkdir()
+        env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(glob), "GIT_CONFIG_NOSYSTEM": "1",
+                                           "GIT_TEMPLATE_DIR": str(self.tmp / "git-templates")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.origin, seed, self.project = self.tmp / "origin.git", self.tmp / "seed", self.tmp / "project"
+        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        commit(seed, "app.py", "1\n", "one")
+        git(seed, "tag", "v1.0.0")
+        git(seed, "checkout", "-q", "-b", "template")
+        commit(seed, "agent.py", "1\n", "template one")
+        git(seed, "tag", "template-v1.0.0")
+        git(seed, "checkout", "-q", "main")
+        commit(seed, "app.py", "2\n", "two")
+        git(seed, "tag", "v1.1.0")
+        git(seed, "checkout", "-q", "template")
+        commit(seed, "agent.py", "2\n", "template two")
+        git(seed, "tag", "template-v1.1.0")
+        git(seed, "checkout", "-q", "main")
+        git(seed, "remote", "add", "origin", str(self.origin))
+        git(seed, "push", "-q", "origin", "main", "template", "--tags")
+        self.seed = seed
+        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.project)], check=True)
+        git(self.project, "reset", "-q", "--hard", "v1.0.0")
+        git(self.project, "worktree", "add", "-q", "-b", "template", str(self.project / "template"), "template-v1.0.0")
+        self.sup = self.project / ".supervisor"
+        self.svc = FakeServices()
+        self.open: dict[str, dict] = {}
+        self.updated: list[list[str]] = []
+        self.update_answer = (0, "alpha: updated from template (abc1234)")
+        self.behind = {"alpha": 2}
+        patches = [mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
+                   mock.patch.object(core, "log"),
+                   mock.patch.object(deploy, "_instances", lambda: sorted(self.behind)),
+                   mock.patch.object(deploy, "_behind", lambda n: self.behind[n]),
+                   mock.patch.object(deploy, "_update_all", self.fake_update),
+                   mock.patch.object(deploy, "_record", self.svc.record),
+                   mock.patch.object(deploy, "VERIFY_S", 2), mock.patch.object(deploy, "POLL_S", 0.01),
+                   mock.patch.object(runner, "open_conversations", lambda n: self.open.get(n, {})),
+                   mock.patch.object(autonomy, "_launchctl", self.svc.launchctl),
+                   mock.patch.object(autonomy, "running", lambda n: n in self.svc.running),
+                   mock.patch.object(autonomy, "launchd_pid",
+                                     lambda n: self.svc.pids[n] if n in self.svc.running else None),
+                   mock.patch.object(autonomy, "restart", self.svc.restart),
+                   mock.patch.object(autonomy, "draining_now", lambda: None),
+                   mock.patch.object(autonomy, "restart_request", lambda pid=None: self.svc.drain)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_update(self, names):
+        self.updated.append(names)
+        code, said = self.update_answer
+        if not code:
+            for n in names:
+                self.behind[n] = 0
+        return code, said
+
+    def deploy(self, *argv) -> tuple[int, list[dict]]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["deploy", *argv, "--json"])
+        return code, [json.loads(line) for line in out.getvalue().splitlines()]
+
+    def head(self, repo=None) -> str:
+        return git(repo or self.project, "rev-parse", "HEAD")
+
+    # -- the steps -----------------------------------------------------------------------------------------------------
+    def test_deploy_json_steps_in_order(self):
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual([r["step"] for r in rows], list(deploy.STEPS))
+        self.assertTrue(all(r["ok"] and r["detail"] and "error" not in r for r in rows), rows)
+        self.assertEqual(self.head(), git(self.project, "rev-parse", "v1.1.0^{commit}"))
+        self.assertEqual(self.head(self.project / "template"),
+                         git(self.project, "rev-parse", "template-v1.1.0^{commit}"))
+        self.assertEqual(self.updated, [["alpha"]])
+        self.assertEqual(self.svc.restarts, 1)
+        self.assertEqual(sorted(self.svc.kicked), ["api", "web"])   # telegram is not loaded: not restarted
+        self.assertEqual(rows[6]["restarted"], ["api", "web"])        # the app's cue: its connection is about to drop
+        verify = rows[-1]["detail"]
+        self.assertIn(f"api pid {self.svc.pids['api']}", verify)
+        self.assertIn(f"web pid {self.svc.pids['web']}", verify)
+        self.assertIn("the scheduler restarts once its runs end", verify)
+
+    def test_deploy_refuses_a_dirty_tree_with_the_path(self):
+        before = self.head()
+        (self.project / "app.py").write_text("edited\n")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 1)
+        self.assertEqual([r["step"] for r in rows], ["preflight"])
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn("app.py", rows[0]["error"])
+        self.assertIn("tracked changes", rows[0]["error"])
+        self.assertEqual(self.head(), before)
+        self.assertEqual((self.project / "app.py").read_text(), "edited\n")
+
+    def test_deploy_refuses_a_dirty_template_with_the_path(self):
+        (self.project / "template" / "agent.py").write_text("edited\n")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, rows[-1]["step"]), (1, "preflight"))
+        self.assertIn("agent.py", rows[-1]["error"])
+        self.assertIn("template worktree", rows[-1]["error"])
+
+    def test_deploy_refuses_a_checkout_off_main(self):
+        git(self.project, "checkout", "-q", "-b", "work")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 1)
+        self.assertIn("is on work, not main", rows[0]["error"])
+
+    def test_deploy_moves_an_app_install_detached_at_a_release(self):
+        """The Mac app clones `--branch vX.Y.Z`: a detached HEAD at a release tag is its primary checkout."""
+        git(self.project, "checkout", "-q", "--detach", "v1.0.0")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual(self.head(), git(self.project, "rev-parse", "v1.1.0^{commit}"))
+        self.assertEqual(git(self.project, "rev-parse", "--abbrev-ref", "HEAD"), "HEAD")   # still detached
+        self.assertEqual(self.deploy("v1.1.0")[0], 0)                                   # and at a release again
+
+    def test_deploy_refuses_a_detached_head_off_a_release(self):
+        git(self.project, "checkout", "-q", "--detach", "v1.0.0")
+        commit(self.project, "app.py", "bisect\n", "someone's detached work")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, rows[-1]["step"]), (1, "preflight"))
+        self.assertIn("a detached HEAD, not main", rows[-1]["error"])
+
+    def test_deploy_never_kicks_api_with_an_open_conversation(self):
+        self.open = {"alpha": {"web-1": "api"}}
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual([r["step"] for r in rows], list(deploy.STEPS[:-1]))   # it ends at services: no verify yet
+        services = rows[-1]
+        self.assertTrue(services["ok"] and services["waiting"])
+        self.assertEqual(services["detail"], "waiting: alpha (1 open conversation)")
+        self.assertEqual(self.svc.kicked, [])
+        # The app's Retry once the conversation ended: only services and verify run.
+        self.open = {}
+        code, rows = self.deploy("v1.1.0", "--services-only")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual([r["step"] for r in rows], ["services", "verify"])
+        self.assertEqual(sorted(self.svc.kicked), ["api", "web"])
+        self.assertEqual(self.svc.restarts, 1)   # the scheduler is not asked again
+
+    def test_services_only_refuses_a_checkout_not_at_the_tag(self):
+        code, rows = self.deploy("v1.1.0", "--services-only")
+        self.assertEqual(code, 1)
+        self.assertEqual([r["step"] for r in rows], ["services"])
+        self.assertIn("not v1.1.0", rows[0]["error"])
+        self.assertEqual(self.svc.kicked, [])
+
+    def test_deploy_refuses_a_non_fast_forward_with_gits_message(self):
+        commit(self.project, "app.py", "local\n", "someone's local commit")
+        before = self.head()
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 1)
+        self.assertEqual([r["step"] for r in rows], ["preflight", "fetch", "main"])
+        self.assertIn("cannot fast-forward to v1.1.0", rows[-1]["error"])
+        self.assertIn("fast-forward", rows[-1]["error"].split(":", 1)[1].lower())   # git's own words follow
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.updated, [])
+
+    def test_deploy_refuses_a_checkout_already_past_the_tag(self):
+        commit(self.seed, "app.py", "3\n", "three")
+        git(self.seed, "push", "-q", "origin", "main")
+        git(self.project, "fetch", "-q", "origin")
+        git(self.project, "merge", "-q", "--ff-only", "origin/main")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, rows[-1]["step"]), (1, "main"))
+        self.assertIn("already past the release", rows[-1]["error"])
+
+    def test_deploy_refuses_a_release_without_its_template_tag(self):
+        commit(self.seed, "app.py", "3\n", "three")
+        git(self.seed, "tag", "v1.2.0")
+        git(self.seed, "push", "-q", "origin", "main", "--tags")
+        code, rows = self.deploy("v1.2.0")
+        self.assertEqual(code, 1)
+        self.assertEqual([r["step"] for r in rows], ["preflight"])
+        self.assertIn("template-v1.2.0 is missing", rows[0]["error"])
+        self.assertEqual(self.head(), git(self.project, "rev-parse", "v1.0.0^{commit}"))
+
+    def test_deploy_refuses_an_unknown_tag(self):
+        code, rows = self.deploy("v9.9.9")
+        self.assertEqual(code, 1)
+        self.assertIn("v9.9.9 is not a release tag on origin", rows[0]["error"])
+
+    def test_deploy_stops_at_a_refused_instance_update(self):
+        self.update_answer = (1, "alpha: merge conflict with template, nothing changed:\nCONFLICT agent.py")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[-1]["step"], "update")
+        self.assertIn("merge conflict", rows[-1]["error"])
+        self.assertEqual((self.svc.restarts, self.svc.kicked), (0, []))
+
+    def test_deploy_rerun_after_success_is_all_ok_and_restarts_nothing(self):
+        self.assertEqual(self.deploy("v1.1.0")[0], 0)
+        restarts, kicked, updated = self.svc.restarts, list(self.svc.kicked), list(self.updated)
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual([r["step"] for r in rows], list(deploy.STEPS))
+        self.assertTrue(all(r["ok"] for r in rows), rows)
+        self.assertEqual((self.svc.restarts, self.svc.kicked, self.updated), (restarts, kicked, updated))
+        details = {r["step"]: r["detail"] for r in rows}
+        self.assertIn("already at v1.1.0", details["main"])
+        self.assertIn("already at template-v1.1.0", details["template"])
+        self.assertIn("already on the template", details["update"])
+        self.assertIn("already asked", details["scheduler"])
+        self.assertIn("already current", details["services"])
+        # Once the scheduler has restarted on the new code, it is simply current.
+        self.svc.drain, self.svc.stale["scheduler"] = None, False
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0)
+        self.assertIn("already running v1.1.0", rows[5]["detail"])
+        self.assertEqual(self.svc.restarts, restarts)
+
+    def test_deploy_takes_a_release_tag_only(self):
+        code, rows = self.deploy("main")
+        self.assertEqual(code, 2)
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn("vX.Y.Z", rows[0]["error"])
+
+    # -- --check -------------------------------------------------------------------------------------------------------
+    def check(self) -> dict:
+        code, rows = self.deploy("--check")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_check_offers_the_newest_release_with_a_template_tag(self):
+        commit(self.seed, "app.py", "9\n", "nine")
+        git(self.seed, "tag", "v1.9.0")
+        git(self.seed, "checkout", "-q", "template")
+        commit(self.seed, "agent.py", "9\n", "template nine")
+        git(self.seed, "tag", "template-v1.9.0")
+        git(self.seed, "checkout", "-q", "main")
+        commit(self.seed, "app.py", "10\n", "ten")
+        git(self.seed, "tag", "v1.10.0")                                # newer, numerically, but no template tag yet
+        git(self.seed, "push", "-q", "origin", "main", "template", "--tags")
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.0.0", "latest": "v1.9.0", "template_tag": False})
+        self.assertEqual(self.deploy("v1.9.0")[0], 0)
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.9.0", "latest": None, "template_tag": False})
+        git(self.seed, "checkout", "-q", "template")
+        commit(self.seed, "agent.py", "10\n", "template ten")
+        git(self.seed, "tag", "template-v1.10.0")
+        git(self.seed, "push", "-q", "origin", "template", "--tags")
+        self.assertEqual(self.check()["latest"], "v1.10.0")
+
+    def test_check_is_up_to_date_at_the_newest_release(self):
+        self.assertEqual(self.deploy("v1.1.0")[0], 0)
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.1.0", "latest": None, "template_tag": True})
+
+    def test_check_reports_an_unreachable_origin(self):
+        git(self.project, "remote", "set-url", "origin", str(self.tmp / "gone.git"))
+        code, rows = self.deploy("--check")
+        self.assertEqual(code, 1)
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn("ls-remote", rows[0]["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

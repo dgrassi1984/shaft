@@ -111,6 +111,17 @@ public struct SettingSave: Codable, Sendable, Equatable {
     public var applies: String
 }
 
+/// `GET /app/v1/version` (§19): the release the web service runs (git describe) and its `/app/v1` version.
+public struct ServerVersion: Codable, Sendable, Equatable {
+    public var server: String
+    public var api: Int
+
+    public init(server: String, api: Int) {
+        self.server = server
+        self.api = api
+    }
+}
+
 public struct ServicesResponse: Codable, Sendable, Equatable {
     public var services: [ServiceStatus]
     public var version: String?

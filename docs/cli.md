@@ -519,6 +519,8 @@ shaft dataset|finetune [name]
 shaft migrate source --to HOST [--check]
 shaft migrate target [--check]
 shaft browser [install [--playwright X.Y.Z]]
+shaft deploy TAG --json [--services-only]
+shaft deploy --check --json
 shaft recover [name|--all]
 shaft finetune <name> --evaluate <adapter>
 shaft mind backfill|check [names…] --project PATH
@@ -533,6 +535,13 @@ project.
 
 `shaft browser install` installs browser support, optionally with a specific Playwright version. `shaft
 recover` writes up unfinished conversations.
+
+`shaft deploy TAG --json` moves this checkout onto release `TAG` as [deploy](deploy.md) says, one JSON line per step:
+it fast-forwards main and the template worktree to `TAG` and `template-TAG` (refusing a dirty tree or a
+non-fast-forward), updates the instances, asks the scheduler for a drain-restart, and restarts api, web and telegram
+only when no conversation is open (otherwise it ends with a `waiting` step; `--services-only` retries that part).
+`shaft deploy --check --json` names the newest release on origin it could move to. The Mac app's Update server runs
+both.
 
 `shaft migrate source --to HOST` guides migration to another Mac over SSH. Enter runs each step, `q` stops,
 and completed steps resume later. There is no `--yes`. On the new Mac, `migrate target` repairs paths,

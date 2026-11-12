@@ -100,7 +100,7 @@ struct FixtureTests {
                      "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from",
                      "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-autonomy", "setup-hello",
                      "setup-errors", "setup-telegram-pair",
-                     "access", "google-labels", "google-calendars"] {
+                     "access", "google-labels", "google-calendars", "version"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
     }
@@ -252,6 +252,7 @@ enum FixtureShape {
         if has("instance", "token", "paired", "service", "pairing") { return roundTrip(TelegramStatus.self) }
         if has("alias", "labels") { return roundTrip(GoogleLabels.self) }
         if has("alias", "calendars") { return roundTrip(GoogleCalendars.self) }
+        if keys == ["server", "api"] { return roundTrip(ServerVersion.self) }
         if has("status", "body") {
             return { object, name in
                 let status = try #require(object["status"] as? Int, "\(name): missing integer status")

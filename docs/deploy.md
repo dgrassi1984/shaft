@@ -12,6 +12,15 @@ SHAFT runs from the primary checkout (the clone you installed from, on `main`) a
   keep the code they started with until restarted;
 - template fixes reach an instance only through `shaft update`, under its run lock.
 
+`shaft deploy TAG --json` runs the steps and the checks below as one command, one JSON line per step (the Mac app's
+Settings → Services → Update server runs it, after `shaft deploy --check --json` found a newer release). Each release
+tag `vX.Y.Z` has a lightweight tag `template-vX.Y.Z` on its template commit: that is the `TEMPLATE_COMMIT` below. It
+stops where these steps say to stop, never forces a service, and restarts api, web and telegram only when no
+conversation is open: otherwise its services step says who it waits for, and `shaft deploy TAG --json
+--services-only` does that part later. `model` and `embed` stay manual (step 3). Run again after success, it changes
+nothing. The Mac app installs the server as a clone detached at its release tag rather than on `main`; the command
+accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards it the same way.
+
 ## Steps
 
 1. **Fast-forward the primary checkout and the template worktree** to the tagged commits. Only a fast-forward,

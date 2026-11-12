@@ -452,6 +452,12 @@ public final class APIClient: Sendable {
         try await get("/app/v1/services")
     }
 
+    /// The server's release and the `/app/v1` version it speaks (§19): what `ServerCompatibility` decides on. A server
+    /// older than the route answers `404 not_found`.
+    public func version() async throws -> ServerVersion {
+        try await get("/app/v1/version")
+    }
+
     /// The API restart watcher must not let an individual poll outlast its confirmation deadline.
     func services(timeout: TimeInterval) async throws -> ServicesResponse {
         let path = "/app/v1/services"

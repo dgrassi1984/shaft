@@ -1193,6 +1193,7 @@ plugin grants or global settings.
 | POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
+| GET | `/version` | 200, `{"server": str, "api": int}` (§19) |
 | GET | `/services` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
@@ -1639,6 +1640,35 @@ removes it: the reply applies the choice written last, and a rewrite never lands
 there is none (the first reply has happened already, or `<n>` was not created waiting for one) it is `409 refused` in
 the verb's words and nothing is written. An unknown instance: `404 not_found`. Success: `{"instance": <n>, "then": <then>}`.
 
+## 19. Version and compatibility
+
+### `GET /app/v1/version`
+
+`{"server": str, "api": int}`. `server` is the release the web process serving `/app/v1` runs, as git describes it
+(`v0.60.0`, or `v0.60.0-3-gabc1234` past a tag): its own service record when launchd runs it, else the checkout's.
+`api` is `app_api.API_VERSION`, bumped on every breaking change to `/app/v1` (a field removed or retyped, a route
+removed or moved, a meaning changed); an added field or route is not a break. It needs the paired bearer, like every
+route but `/pair`.
+
+The app declares the lowest `api` it works with (SHAFTKit `ServerCompatibility.minimumServerAPI`, 1) and asks this once
+per session. A server whose `api` is lower, or one older than this route (`404 not_found`), gets "This app needs a newer
+SHAFT server" in place of the session, with the Mac app's Update server action, instead of calls failing one by one.
+Any other failure (the server unreachable, a 500) does not block: the calls report it themselves.
+
+### Update server (Mac)
+
+The Mac app's Settings → Services runs `shaft deploy --check --json` with the installed server's own Python (a local
+process, not this API): `{"ok": true, "current": str, "latest": "vX.Y.Z" or null, "template_tag": bool}`. `latest` is
+the newest `vX.Y.Z` on origin that also has `template-vX.Y.Z` and is newer than `current` (git describe of the primary
+checkout); `template_tag` is false while origin has a newer release still without its template tag. With `latest`, it
+offers "Update server to vX.Y.Z" (and the release's page) and runs `shaft deploy <latest> --json`, showing each step
+line `{"step", "ok", "detail"[, "error"]}` as it arrives (docs/deploy.md has the steps). The services line names what it
+restarted (`"restarted": [str]`); restarting the web service drops the app's connection, so it then shows
+"Reconnecting…" until `/version` answers again. A services step that answers
+`"waiting": true` (a conversation is open) shows its reason and a Retry that runs
+`shaft deploy <tag> --json --services-only`. The iPhone and iPad apps have no Update server: they say to update from
+the Mac.
+
 ## Appendix A. Implementation notes
 
 These Python server refactor notes describe internal implementation, not additional wire fields.
@@ -1742,6 +1772,6 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   `feedback-response`, `retried`, `plan`, `cycles`, `cycle`, `stream` (the events of §6.1, as a list).
   `supervisor/tests/test_app_api_setup.py` writes the setup ones (§18) the same way (`write_or_check_fixtures`):
   `setup-instance`, `setup-drives`, `setup-provider`, `setup-check`, `setup-autonomy`, `setup-hello`, `setup-errors`, `access`,
-  `google-labels`, `google-calendars`. SHAFTKit reads only this folder, or
+  `google-labels`, `google-calendars`; `supervisor/tests/test_app_api_settings.py` writes `version` (§19). SHAFTKit reads only this folder, or
   `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.

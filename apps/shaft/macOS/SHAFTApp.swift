@@ -20,7 +20,7 @@ struct SHAFTApp: App {
         .commands { MacCommands(state: delegate.state, menu: delegate.state.menu) }
 
         Settings {
-            MacSettings(model: delegate.model)
+            MacSettings(model: delegate.model, setup: delegate.setup)
                 .modifier(MacAppearance())
         }
     }
@@ -119,14 +119,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
-/// The Settings window (⌘,): the server, this device, notifications and Unpair (Shared's SettingsView).
+/// The Settings window (⌘,): the server, this device, notifications, Update server and Unpair (Shared's SettingsView).
 struct MacSettings: View {
     let model: AppModel
+    let setup: MacSetup
 
     var body: some View {
         Group {
             if let session = model.session {
                 SettingsView(session: session)
+                    .environment(\.serverUpdater, setup.updater(for: session))
             } else {
                 MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
             }

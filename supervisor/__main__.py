@@ -1795,6 +1795,14 @@ def main(argv: list[str]) -> int:
     p.add_argument("--operator", required=True, help="your name (the git author when none is set)")
     p.add_argument("--email", help="the git author's email (default: user@host.local)")
     p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
+    p = sub.add_parser("deploy", help="move this checkout onto release TAG as docs/deploy.md says (fast-forward main and "
+                                      "the template, update the instances, drain-restart the scheduler, restart api, "
+                                      "web and telegram when no conversation is open); one JSON line per step")
+    p.add_argument("tag", nargs="?", help="the release tag, vX.Y.Z (its template commit is template-vX.Y.Z)")
+    p.add_argument("--check", action="store_true", help="only say the newest release on origin this could move to")
+    p.add_argument("--services-only", action="store_true",
+                   help="only the services and verify steps: the retry after a deploy that waited for conversations")
+    p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
     p = sub.add_parser("update", help="merge the template into instances (only when idle; gate-tested)")
     p.add_argument("names", nargs="*")
     p.add_argument("--all", action="store_true")
@@ -2379,6 +2387,11 @@ def main(argv: list[str]) -> int:
     if args.cmd == "install":
         from . import install
         return install.run(args.operator, args.email)
+    if args.cmd == "deploy":
+        from . import deploy
+        if args.check == bool(args.tag) or (args.check and args.services_only):
+            parser.error("deploy takes TAG [--services-only], or --check alone")
+        return deploy.check() if args.check else deploy.run(args.tag, args.services_only)
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":

@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -43,6 +44,8 @@ from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
 
 PREFIX = "/app/v1"
+API_VERSION = 1                     # GET /app/v1/version's `api`: bumped on every breaking change to /app/v1 (an app
+#                                     refuses a server below the version it needs: docs/app-api.md §19)
 WAIT_MAX = 25                       # a long-poll is held at most this long (s): under URLSession's 60 s timeout
 LOOK_S = 0.5                        # a held long-poll looks at the feed again this often, saved or not
 WATCH_EVERY_S = 2.0                 # and marks its device watching again this often (web_chat.WATCH_S is 6)
@@ -1045,6 +1048,16 @@ def _services_response() -> Response:
                        "version": version.service_version(version.service("web", stale=False))})
 
 
+def _version(req: Request) -> Response:
+    """§19: what the app checks before anything else. `server` is the release this web process runs: its own service
+    record when launchd runs it, else (a web started by hand, a test) the checkout's describe."""
+    from . import version
+    rec = version.service("web", stale=False)
+    server = (version.service_version(rec) if rec and rec.get("pid") == os.getpid()
+              else version.commit_describe(version.supervisor_commit()))
+    return _json(200, {"server": server, "api": API_VERSION})
+
+
 def _get_services(req: Request) -> Response:
     return _services_response()
 
@@ -1423,6 +1436,7 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/voices/report", {"POST": _report_voices}),            # before /voices/<n>: "report" is not an instance
     (rf"/voices/{N}", {"GET": _voices, "POST": _set_voice}),
     (rf"/voices/{N}/proposals/(?P<pid>[A-Za-z0-9_-]{{1,64}})", {"POST": _decide_voice}),
+    (r"/version", {"GET": _version}),
     (r"/services", {"GET": _get_services}),
     (r"/services/(?P<service>api|scheduler)/(?P<act>restart)", {"POST": _service_action}),
     (r"/services/(?P<service>scheduler)/(?P<act>cancel)", {"POST": _service_action}),
