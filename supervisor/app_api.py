@@ -1050,12 +1050,17 @@ def _services_response() -> Response:
 
 def _version(req: Request) -> Response:
     """§19: what the app checks before anything else. `server` is the release this web process runs: its own service
-    record when launchd runs it, else (a web started by hand, a test) the checkout's describe."""
-    from . import version
+    record when launchd runs it, else (a web started by hand, a test) the checkout's describe. On loopback only (the
+    Mac app on the same Mac), `project` is the checkout it runs from: the app updates the server only from there. A
+    tailnet client never learns a path on the Mac."""
+    from . import core, version
     rec = version.service("web", stale=False)
     server = (version.service_version(rec) if rec and rec.get("pid") == os.getpid()
               else version.commit_describe(version.supervisor_commit()))
-    return _json(200, {"server": server, "api": API_VERSION})
+    answer: dict = {"server": server, "api": API_VERSION}
+    if req.local:
+        answer["project"] = str(core.PROJECT.resolve())
+    return _json(200, answer)
 
 
 def _get_services(req: Request) -> Response:

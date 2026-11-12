@@ -39,6 +39,15 @@ class LoopbackAppTest(LocalTest):
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual([i["name"] for i in json.loads(r.body)["instances"]], ["wisp"])
 
+    def test_version_names_the_checkout_only_on_loopback(self):
+        """§19, fix round 1: the Mac app updates the server only from the checkout it runs from, so a loopback answer
+        names it; the tailnet's never does (no path on the Mac leaves it)."""
+        local = json.loads(self.local_api("/app/v1/version").body)
+        self.assertEqual(local["project"], str(core.PROJECT.resolve()))
+        self.assertEqual(local["api"], 1)
+        tailnet = self.get("/app/v1/version")
+        self.assertNotIn("project", tailnet)
+
     def test_localhost_name_is_a_local_host_too(self):
         self.assertEqual(web.local_hosts(), {f"127.0.0.1:{web.PORT}", f"localhost:{web.PORT}"})
         self.assertEqual(self.local_api("/app/v1/instances", host=f"localhost:{web.PORT}").status, 200)

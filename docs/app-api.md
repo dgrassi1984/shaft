@@ -1644,24 +1644,34 @@ the verb's words and nothing is written. An unknown instance: `404 not_found`. S
 
 ### `GET /app/v1/version`
 
-`{"server": str, "api": int}`. `server` is the release the web process serving `/app/v1` runs, as git describes it
-(`v0.60.0`, or `v0.60.0-3-gabc1234` past a tag): its own service record when launchd runs it, else the checkout's.
+`{"server": str, "api": int}`, plus `"project": str` on loopback only (§1.2: the Mac app on the same Mac; a tailnet
+client never gets a path on the Mac). `server` is the release the web process serving `/app/v1` runs, as git describes
+it (`v0.60.0`, or `v0.60.0-3-gabc1234` past a tag): its own service record when launchd runs it, else the checkout's.
+`project` is the canonical path of the checkout it runs from.
 `api` is `app_api.API_VERSION`, bumped on every breaking change to `/app/v1` (a field removed or retyped, a route
 removed or moved, a meaning changed); an added field or route is not a break. It needs the paired bearer, like every
 route but `/pair`.
 
 The app declares the lowest `api` it works with (SHAFTKit `ServerCompatibility.minimumServerAPI`, 1) and asks this once
 per session. A server whose `api` is lower, or one older than this route (`404 not_found`), gets "This app needs a newer
-SHAFT server" in place of the session, with the Mac app's Update server action, instead of calls failing one by one.
-Any other failure (the server unreachable, a 500) does not block: the calls report it themselves.
+SHAFT server" in place of the session, with the Mac app's Update server action, instead of calls failing one by one;
+Check again asks once more, as coming back to the front does. Any other failure (the server unreachable, a 500) does
+not block: the calls report it themselves.
 
 ### Update server (Mac)
 
-The Mac app's Settings → Services runs `shaft deploy --check --json` with the installed server's own Python (a local
-process, not this API): `{"ok": true, "current": str, "latest": "vX.Y.Z" or null, "template_tag": bool}`. `latest` is
-the newest `vX.Y.Z` on origin that also has `template-vX.Y.Z` and is newer than `current` (git describe of the primary
-checkout); `template_tag` is false while origin has a newer release still without its template tag. With `latest`, it
-offers "Update server to vX.Y.Z" (and the release's page) and runs `shaft deploy <latest> --json`, showing each step
+The Mac app offers it only when it is paired over loopback, `~/SHAFT` is installed, and `/version`'s `project` is that
+same checkout (symlinks resolved). A server that runs from another checkout gets a line saying which, and that it is
+updated from there; one that does not say (`project` absent) gets nothing offered. Settings → Services then runs
+`shaft deploy --check --json` with the installed server's own Python (a local process, not this API):
+`{"ok": true, "current": str, "latest": "vX.Y.Z" or null, "template_tag": bool, "incomplete": "vX.Y.Z" or null,
+"incomplete_step": str or null}`. `latest` is the newest `vX.Y.Z` on origin that also has `template-vX.Y.Z` and is
+newer than `current` (git describe of the primary checkout); `template_tag` is false while origin has a newer release
+still without its template tag. `incomplete` is a release a deploy moved the checkout to without finishing (a step
+failed, or services waited), from `.supervisor/deploy-state.json`, with the first step it did not finish: the app then
+offers "Finish updating to vX.Y.Z", which runs `shaft deploy <incomplete> --json` again (the steps already done are
+skipped), also after a relaunch. With `latest`, it offers "Update server to vX.Y.Z" (and the release's page) and runs
+`shaft deploy <latest> --json`, showing each step
 line `{"step", "ok", "detail"[, "error"]}` as it arrives (docs/deploy.md has the steps). The services line names what it
 restarted (`"restarted": [str]`); restarting the web service drops the app's connection, so it then shows
 "Reconnecting…" until `/version` answers again. A services step that answers

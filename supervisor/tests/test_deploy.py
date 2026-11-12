@@ -309,9 +309,11 @@ class DeployTest(unittest.TestCase):
         commit(self.seed, "app.py", "10\n", "ten")
         git(self.seed, "tag", "v1.10.0")                                # newer, numerically, but no template tag yet
         git(self.seed, "push", "-q", "origin", "main", "template", "--tags")
-        self.assertEqual(self.check(), {"ok": True, "current": "v1.0.0", "latest": "v1.9.0", "template_tag": False})
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.0.0", "latest": "v1.9.0", "template_tag": False,
+                                        "incomplete": None, "incomplete_step": None})
         self.assertEqual(self.deploy("v1.9.0")[0], 0)
-        self.assertEqual(self.check(), {"ok": True, "current": "v1.9.0", "latest": None, "template_tag": False})
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.9.0", "latest": None, "template_tag": False,
+                                        "incomplete": None, "incomplete_step": None})
         git(self.seed, "checkout", "-q", "template")
         commit(self.seed, "agent.py", "10\n", "template ten")
         git(self.seed, "tag", "template-v1.10.0")
@@ -320,7 +322,84 @@ class DeployTest(unittest.TestCase):
 
     def test_check_is_up_to_date_at_the_newest_release(self):
         self.assertEqual(self.deploy("v1.1.0")[0], 0)
-        self.assertEqual(self.check(), {"ok": True, "current": "v1.1.0", "latest": None, "template_tag": True})
+        self.assertEqual(self.check(), {"ok": True, "current": "v1.1.0", "latest": None, "template_tag": True,
+                                        "incomplete": None, "incomplete_step": None})
+
+    def test_check_names_a_deploy_left_unfinished_and_a_rerun_finishes_it(self):
+        """Fix round 1: main moved, then a later step failed. The checkout is at the tag, so `latest` is null, but the
+        deploy is not done: --check says so (the app's "Finish updating"), and running it again finishes it."""
+        self.update_answer = (1, "alpha: merged template failed the gate; rolled back")
+        self.assertEqual(self.deploy("v1.1.0")[0], 1)
+        got = self.check()
+        self.assertEqual((got["latest"], got["incomplete"], got["incomplete_step"]), (None, "v1.1.0", "update"))
+        state = json.loads((self.sup / "deploy-state.json").read_text())
+        self.assertEqual(state["steps"]["update"], "failed")
+        self.update_answer = (0, "alpha: updated from template (abc1234)")
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual((self.check()["incomplete"], self.check()["incomplete_step"]), (None, None))
+
+    def test_check_names_services_left_waiting(self):
+        self.open = {"alpha": {"web-1": "api"}}
+        self.assertEqual(self.deploy("v1.1.0")[0], 0)
+        got = self.check()
+        self.assertEqual((got["incomplete"], got["incomplete_step"]), ("v1.1.0", "services"))
+        self.open = {}
+        self.assertEqual(self.deploy("v1.1.0", "--services-only")[0], 0)
+        self.assertIsNone(self.check()["incomplete"])
+
+    def test_check_ignores_a_deploy_the_checkout_has_moved_past(self):
+        self.update_answer = (1, "refused")
+        self.deploy("v1.1.0")
+        git(self.project, "reset", "-q", "--hard", "v1.0.0")   # moved by hand since: not this deploy's business
+        self.assertIsNone(self.check()["incomplete"])
+
+    # -- the restart barrier ----------------------------------------------------------------------------------------------
+    def test_no_conversation_opens_between_the_look_and_the_restart(self):
+        """Fix round 1: from the look at the open conversations until the old process is gone, a new conversation is
+        refused ("restarting, try again"), so the kickstart can never cut one that opened in between."""
+        tried = []
+
+        def open_one(name):
+            try:
+                with core.admitting():
+                    tried.append("admitted")
+            except core.Restarting as e:
+                tried.append(str(e))
+
+        def looked(name):
+            open_one(name)                # a conversation trying to open right after the look
+            return {}
+        real_kick = self.svc.launchctl
+
+        def kick(*args):
+            open_one("alpha")             # and right before the kickstart
+            return real_kick(*args)
+        with mock.patch.object(runner, "open_conversations", looked), mock.patch.object(autonomy, "_launchctl", kick):
+            code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual(sorted(self.svc.kicked), ["api", "web"])
+        self.assertTrue(tried)
+        self.assertEqual(set(tried), {core.RESTARTING_SAID})
+        with core.admitting():            # once the services are replaced, conversations open again
+            pass
+
+    def test_a_terminal_conversation_does_not_register_during_the_restart(self):
+        with mock.patch.object(runner, "SUP_DIR", self.sup):
+            with core.restart_barrier(wait_s=1), self.assertRaises(core.Restarting):
+                with runner.Presence("alpha", "talk-1"):
+                    pass
+            self.assertEqual(runner._held(self.sup / "conversations" / "alpha"), {})
+            with runner.Presence("alpha", "talk-2"):     # after it: as before
+                self.assertIn("talk-2", runner._held(self.sup / "conversations" / "alpha"))
+            with core.restart_barrier(wait_s=1), runner.Reply("alpha", "web"):
+                pass                                     # a reply in an open conversation is not a new one
+
+    def test_a_registering_conversation_holds_the_restart_back(self):
+        """The other order: a conversation registering holds its share, so the deploy cannot look meanwhile."""
+        with core.admitting(), self.assertRaises(TimeoutError):
+            with core.restart_barrier(wait_s=0.2):
+                pass
 
     def test_check_reports_an_unreachable_origin(self):
         git(self.project, "remote", "set-url", "origin", str(self.tmp / "gone.git"))

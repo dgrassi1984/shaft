@@ -357,6 +357,52 @@ IDLE_MINUTES, IDLE_SRC = knob(
     "before it is closed and written up into the journal", group="Runs and conversations",
     services=("runs", "api", "telegram"))
 API_TALKS = SUP_DIR / "api_talks.json"
+RESTARTING_SAID = "the server is restarting, try again in a moment"
+
+
+class Restarting(Exception):
+    """A new conversation refused while `shaft deploy` restarts the services conversations run through."""
+
+
+def _restart_barrier_file():
+    SUP_DIR.mkdir(parents=True, exist_ok=True)
+    return open(SUP_DIR / "restarting.lock", "a")
+
+
+@contextlib.contextmanager
+def admitting():
+    """Held (shared) while a new conversation registers itself (api.Conversations.talk_id, runner.Presence): never at
+    the same time as restart_barrier. While a deploy holds that, it raises Restarting instead of waiting, so a
+    conversation never opens between deploy's look at the open conversations and its restart of the services."""
+    with _restart_barrier_file() as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Restarting(RESTARTING_SAID) from None
+        yield
+
+
+@contextlib.contextmanager
+def restart_barrier(wait_s: float = 10):
+    """Held (exclusive) by `shaft deploy` from its look at the open conversations until the services it restarts are
+    replaced: no conversation registers in between (admitting). A registration holds its share for a moment only, so
+    the barrier is taken within `wait_s` or the deploy says so."""
+    import time
+    with _restart_barrier_file() as f:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"conversations kept registering for {wait_s:.0f} s: the services were not "
+                                       f"restarted") from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 # What the unsandboxed supervisor reads out of an instance's folder, which the instance fills as it likes: one file, and
 # one walk of a folder tree (the gate's code snapshot, read into memory; a battery exam's copy, written to disk). Past
 # a bound the read fails, explicitly — never an empty or partial answer (the gate then fails closed) — rather than

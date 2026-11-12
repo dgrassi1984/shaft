@@ -47,9 +47,11 @@ Successful saves show the server's value; refused saves preserve the draft. Paus
 removes the instance override, so the default cap still applies. Loading, load errors and older servers each have an explicit state.
 
 `SessionRoot` asks `GET /app/v1/version` once per paired store (`InstancesStore.checkCompatibility`); a server below
-`ServerCompatibility.minimumServerAPI`, or one without the route, gets `NeedsNewerServer` instead of the chat. On the
-Mac, Settings → Services also has Update server when the app is paired with this Mac's own install (`MacSetup.updater`:
-a loopback pairing and `~/SHAFT`): on appear it runs `shaft deploy --check --json`; "Update server to vX.Y.Z" runs
+`ServerCompatibility.minimumServerAPI`, or one without the route, gets `NeedsNewerServer` instead of the chat (Check
+again, and again whenever the app comes to the front). On the Mac, Settings → Services also has Update server when the
+app is paired with this Mac's own install (`MacSetup.updater`: a loopback pairing and `~/SHAFT`), and only once
+`/version`'s loopback `project` is that checkout (else it says where the server runs from): on appear it runs
+`shaft deploy --check --json`, which also names a deploy left unfinished ("Finish updating to vX.Y.Z"); "Update server to vX.Y.Z" runs
 `shaft deploy vX.Y.Z --json` as a local process, a row per step, "Reconnecting…" while the web service restarts, and a
 Retry (`--services-only`) when the services step waited for an open conversation. The updater (SHAFTKit
 `ServerUpdater`) owns its run, so closing Settings never cuts a deploy halfway.

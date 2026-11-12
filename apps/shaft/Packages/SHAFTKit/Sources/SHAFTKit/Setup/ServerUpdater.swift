@@ -31,11 +31,32 @@ public struct DeployRow: Equatable, Sendable, Identifiable {
     }
 }
 
-/// Settings → Services → Update server (Mac): `shaft deploy --check --json` says whether a newer release is out, and
-/// `shaft deploy <tag> --json` moves this Mac's server onto it (docs/deploy.md), each step a row as it arrives. Both run
-/// as local processes with the installed server's Python (`Installer.shaft`), not through the API: the web service
-/// restarts under them. The updater owns its work, so closing Settings never cuts a deploy halfway; `stop()` (the
-/// session going away) does.
+/// Where the paired server says it runs from (`GET /app/v1/version`'s `project`, loopback only).
+public enum ServerLocation: Equatable, Sendable {
+    case project(String)
+    /// It answered without a `project`: a server before that field, or not reached over loopback.
+    case notSaid
+    case unreachable(String)
+
+    /// Asked of the paired server: a server older than `/app/v1/version` (404) says nothing either.
+    @MainActor
+    public static func of(_ client: APIClient?) async -> ServerLocation {
+        guard let client else { return .unreachable("This app is not paired.") }
+        do {
+            return try await client.version().project.map(ServerLocation.project) ?? .notSaid
+        } catch {
+            guard let error = APIError.from(error) else { return .unreachable("Cancelled.") }
+            return error.status == 404 ? .notSaid : .unreachable(error.message)
+        }
+    }
+}
+
+/// Settings → Services → Update server (Mac): `shaft deploy --check --json` says whether a newer release is out (or a
+/// deploy was left unfinished), and `shaft deploy <tag> --json` moves this Mac's server onto it (docs/deploy.md), each
+/// step a row as it arrives. Both run as local processes in `checkout` with the installed server's Python
+/// (`Installer.shaft`), not through the API: the web service restarts under them. They are offered only when the
+/// paired server says it runs from that same checkout. The updater owns its work, so closing Settings never cuts a
+/// deploy halfway; `stop()` does.
 @MainActor
 @Observable
 public final class ServerUpdater {
@@ -44,6 +65,12 @@ public final class ServerUpdater {
         case checking
         case upToDate(current: String)
         case available(latest: String, current: String)
+        /// A deploy moved the server to `tag` but did not finish (`step` is the first it did not): Finish runs it again.
+        case incomplete(tag: String, step: String, current: String)
+        /// The paired server runs from another checkout: it is updated from there, not by this app.
+        case elsewhere(project: String)
+        /// The paired server does not say which checkout it runs from: nothing is offered.
+        case unverified
         case failed(String)
     }
 
@@ -71,7 +98,10 @@ public final class ServerUpdater {
         -> ProcessResult
 
     public let repository: URL
+    /// The checkout `shaft` runs in (`~/SHAFT`).
+    public let checkout: URL
     @ObservationIgnored private let run: Run
+    @ObservationIgnored private let locate: @MainActor () async -> ServerLocation
     @ObservationIgnored private let reachable: @MainActor () async -> Bool
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var generation = 0
@@ -79,22 +109,27 @@ public final class ServerUpdater {
     /// How long (in 1 s tries) the app waits for the restarted web service to answer.
     public static let reconnectTries = 90
 
-    public init(repository: URL, run: @escaping Run, reachable: @escaping @MainActor () async -> Bool,
+    public init(repository: URL, checkout: URL, run: @escaping Run,
+                locate: @escaping @MainActor () async -> ServerLocation,
+                reachable: @escaping @MainActor () async -> Bool,
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.repository = repository
+        self.checkout = checkout
         self.run = run
+        self.locate = locate
         self.reachable = reachable
         self.sleep = sleep
     }
 
     /// The installed server's `shaft`, through the Installer (its Python, its environment).
-    public convenience init(installer: Installer, reachable: @escaping @MainActor () async -> Bool) {
-        self.init(repository: installer.configuration.repository,
+    public convenience init(installer: Installer, locate: @escaping @MainActor () async -> ServerLocation,
+                            reachable: @escaping @MainActor () async -> Bool) {
+        self.init(repository: installer.configuration.repository, checkout: installer.configuration.server,
                   run: { [weak installer] args, onLine in
                       guard let installer else { throw CancellationError() }
                       return try await installer.shaft(args, onLine: onLine)
                   },
-                  reachable: reachable)
+                  locate: locate, reachable: reachable)
     }
 
     public var isBusy: Bool { check == .checking || phase == .running }
@@ -117,13 +152,28 @@ public final class ServerUpdater {
         reconnecting = false
     }
 
-    /// `shaft deploy --check --json`. Not while a deploy runs.
+    /// `shaft deploy --check --json`, once the paired server said it runs from `checkout`. Not while a deploy runs.
     public func checkForUpdate() {
         guard !isBusy else { return }
         let generation = self.generation
         check = .checking
         task = Task { [weak self] in
             guard let self else { return }
+            let located = await self.locate()
+            guard generation == self.generation else { return }
+            switch located {
+            case .unreachable(let why):
+                self.check = .failed(why)
+                return
+            case .notSaid:
+                self.check = .unverified
+                return
+            case .project(let project):
+                guard Self.same(project, self.checkout.path) else {
+                    self.check = .elsewhere(project: project)
+                    return
+                }
+            }
             let answer: Check
             do {
                 let r = try await self.run(["deploy", "--check", "--json"], nil)
@@ -138,10 +188,19 @@ public final class ServerUpdater {
         }
     }
 
-    /// Deploy the release the check offered.
+    /// Deploy the release the check offered, or finish the one left unfinished (each step skips what is done).
     public func update() {
-        guard !isBusy, case .available(let latest, _) = check else { return }
-        start(latest, servicesOnly: false)
+        guard !isBusy else { return }
+        switch check {
+        case .available(let tag, _), .incomplete(let tag, _, _): start(tag, servicesOnly: false)
+        default: return
+        }
+    }
+
+    /// The same folder once every symlink is resolved (`/var` and `/private/var` are one).
+    static func same(_ a: String, _ b: String) -> Bool {
+        guard let a = Installer.canonical(a), let b = Installer.canonical(b) else { return false }
+        return a == b
     }
 
     /// The services step again, after it waited for a conversation (`--services-only`).
@@ -250,6 +309,9 @@ public final class ServerUpdater {
         guard r.succeeded, let object, object["ok"] as? Bool == true, let current = object["current"] as? String else {
             let said = r.said
             return .failed("shaft deploy --check failed (exit \(r.status))" + (said.isEmpty ? "." : ": \(said)"))
+        }
+        if let tag = object["incomplete"] as? String {
+            return .incomplete(tag: tag, step: object["incomplete_step"] as? String ?? "", current: current)
         }
         if let latest = object["latest"] as? String { return .available(latest: latest, current: current) }
         return .upToDate(current: current)

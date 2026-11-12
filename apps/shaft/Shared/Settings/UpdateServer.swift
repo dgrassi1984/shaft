@@ -41,6 +41,22 @@ struct UpdateServerRows: View {
                     .disabled(updater.isBusy)
                 Link("What changes", destination: updater.releasePage(latest)).foregroundStyle(Color.brand)
             }
+        case .incomplete(let tag, let step, _):
+            LabeledContent("Server", value: "\(tag), not finished")
+            Text("Updating to \(tag) stopped" + (step.isEmpty ? "." : " at its \(step) step.") + " Finishing it runs the "
+                 + "update again; the steps already done are skipped.")
+                .font(.footnote).foregroundStyle(Color.textSecondary)
+            Button("Finish updating to \(tag)") { updater.update() }
+                .foregroundStyle(Color.brand)
+                .disabled(updater.isBusy)
+        case .elsewhere(let project):
+            Text("The server runs from \(project), not from \(updater.checkout.path): update it there "
+                 + "(`bin/shaft deploy`, docs/deploy.md).")
+                .font(.footnote).foregroundStyle(Color.textSecondary).textSelection(.enabled)
+        case .unverified:
+            Text("The server does not say which checkout it runs from, so it is not updated from here: update it with "
+                 + "`bin/shaft deploy` in its checkout (docs/deploy.md).")
+                .font(.footnote).foregroundStyle(Color.textSecondary)
         case .failed(let message):
             Text(message).foregroundStyle(Color.warning)
             Button("Try again") { updater.checkForUpdate() }.foregroundStyle(Color.brand)
@@ -87,8 +103,11 @@ struct UpdateServerRows: View {
                 Text("Updated to \(updater.tag ?? "the new release").").foregroundStyle(Color.textSecondary)
             case .failed(let message):
                 Text(message).foregroundStyle(Color.warning).textSelection(.enabled)
-                if case .available = updater.check {
+                switch updater.check {
+                case .available, .incomplete:
                     Button("Try again") { updater.update() }.foregroundStyle(Color.brand)
+                default:
+                    EmptyView()
                 }
             }
         }
@@ -96,9 +115,13 @@ struct UpdateServerRows: View {
 }
 #endif
 
-/// In place of the session when the server is older than this app needs (§19): what it runs, and on the Mac the update.
+/// In place of the session when the server is older than this app needs (§19): what it runs, on the Mac the update, and
+/// Check again (also when the app comes back to the front: the server may have been updated meanwhile).
 struct NeedsNewerServer: View {
     let server: String?
+    let store: InstancesStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var checking = false
     #if os(macOS)
     @Environment(\.serverUpdater) private var updater
     #endif
@@ -106,8 +129,12 @@ struct NeedsNewerServer: View {
     var body: some View {
         ScrollView {
             VStack(spacing: Design.Space.s16) {
-                MarkMessage("This app needs a newer SHAFT server", message: Text(explanation))
-                    .frame(minHeight: 260)
+                MarkMessage("This app needs a newer SHAFT server", message: Text(explanation)) {
+                    Button(checking ? "Checking…" : "Check again") { recheck() }
+                        .buttonStyle(ProminentAction())
+                        .disabled(checking)
+                }
+                .frame(minHeight: 260)
                 #if os(macOS)
                 if let updater {
                     UpdateServerRows(updater: updater)
@@ -120,6 +147,16 @@ struct NeedsNewerServer: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color.canvas.ignoresSafeArea())
+        .onChange(of: scenePhase) { _, phase in if phase == .active { recheck() } }
+    }
+
+    private func recheck() {
+        guard !checking else { return }
+        checking = true
+        Task {
+            await store.checkCompatibility()
+            checking = false
+        }
     }
 
     private var explanation: String {

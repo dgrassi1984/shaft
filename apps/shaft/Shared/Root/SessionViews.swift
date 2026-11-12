@@ -17,7 +17,7 @@ struct SessionRoot<Paired: View>: View {
                 if let store = session.store {
                     if case .needsNewerServer(let server) = store.compatibility {
                         // §19: one clear screen instead of every call failing on an older server.
-                        NeedsNewerServer(server: server)
+                        NeedsNewerServer(server: server, store: store)
                     } else {
                         paired(session, store)
                             .id(ObjectIdentifier(store))

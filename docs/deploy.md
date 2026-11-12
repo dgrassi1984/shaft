@@ -17,7 +17,11 @@ Settings → Services → Update server runs it, after `shaft deploy --check --j
 tag `vX.Y.Z` has a lightweight tag `template-vX.Y.Z` on its template commit: that is the `TEMPLATE_COMMIT` below. It
 stops where these steps say to stop, never forces a service, and restarts api, web and telegram only when no
 conversation is open: otherwise its services step says who it waits for, and `shaft deploy TAG --json
---services-only` does that part later. `model` and `embed` stay manual (step 3). Run again after success, it changes
+--services-only` does that part later. `model` and `embed` stay manual (step 3). From its look at the open conversations until the old
+processes are gone it holds `.supervisor/restarting.lock`: a conversation that tries to open meanwhile (API, web, Telegram
+or a terminal talk) is refused with "the server is restarting, try again in a moment", so the restart never cuts one.
+Each step's outcome is kept in `.supervisor/deploy-state.json`; `shaft deploy --check --json` names a deploy left
+unfinished, and running the same command again finishes it. Run again after success, it changes
 nothing. The Mac app installs the server as a clone detached at its release tag rather than on `main`; the command
 accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards it the same way.
 

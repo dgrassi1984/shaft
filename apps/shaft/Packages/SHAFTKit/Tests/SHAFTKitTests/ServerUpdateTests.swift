@@ -86,11 +86,71 @@ private let allSteps = ["preflight", "fetch", "main", "template", "update", "sch
 @MainActor
 struct ServerUpdaterTests {
     let repository = URL(string: "https://github.com/example/shaft")!
+    /// The checkout the updater would deploy in: a real folder, so its canonical path can be compared.
+    let checkout = FileManager.default.temporaryDirectory.appending(path: "updater-checkout", directoryHint: .isDirectory)
 
-    private func updater(_ shaft: ScriptedShaft, reachable: @escaping @MainActor () async -> Bool = { true })
-        -> ServerUpdater {
-        ServerUpdater(repository: repository, run: { try await shaft.run($0, $1) }, reachable: reachable,
-                      sleep: { _ in })
+    private func updater(_ shaft: ScriptedShaft, located: ServerLocation? = nil,
+                         reachable: @escaping @MainActor () async -> Bool = { true }) -> ServerUpdater {
+        try? FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        let location = located ?? .project(checkout.path)
+        return ServerUpdater(repository: repository, checkout: checkout, run: { try await shaft.run($0, $1) },
+                             locate: { location }, reachable: reachable, sleep: { _ in })
+    }
+
+    @Test func nothingIsOfferedForAServerRunningFromAnotherCheckout() async {
+        let shaft = ScriptedShaft([])
+        let other = updater(shaft, located: .project("/Users/someone/Development/shaft"))
+        other.checkForUpdate()
+        await other.finished()
+        #expect(other.check == .elsewhere(project: "/Users/someone/Development/shaft"))
+        other.update()
+        let silent = updater(shaft, located: .notSaid)       // a server before `project`, or not over loopback
+        silent.checkForUpdate()
+        await silent.finished()
+        #expect(silent.check == .unverified)
+        let down = updater(shaft, located: .unreachable("Could not connect to the server."))
+        down.checkForUpdate()
+        await down.finished()
+        #expect(down.check == .failed("Could not connect to the server."))
+        #expect(shaft.calls.isEmpty)                          // no `shaft deploy` ran for any of them
+    }
+
+    @Test func theServerSaysWhereItRunsFromOnlyWithProject() async {
+        let server = StubServer { _ in .json(200, #"{"server":"v0.61.0","api":1,"project":"/Users/op/SHAFT"}"#) }
+        #expect(await ServerLocation.of(server.client) == .project("/Users/op/SHAFT"))
+        server.setAnswer { _ in .json(200, #"{"server":"v0.61.0","api":1}"#) }        // the tailnet's answer
+        #expect(await ServerLocation.of(server.client) == .notSaid)
+        server.setAnswer { _ in .json(404, #"{"error":{"code":"not_found","message":"Nothing at /app/v1/version."}}"#) }
+        #expect(await ServerLocation.of(server.client) == .notSaid)
+        server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"boom"}}"#) }
+        #expect(await ServerLocation.of(server.client) == .unreachable("boom"))
+        #expect(await ServerLocation.of(nil) == .unreachable("This app is not paired."))
+    }
+
+    @Test func theSameCheckoutThroughASymlinkIsTheSame() throws {
+        let link = FileManager.default.temporaryDirectory.appending(path: "updater-link-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: checkout)
+        defer { try? FileManager.default.removeItem(at: link) }
+        #expect(ServerUpdater.same(link.path, checkout.path))
+        #expect(!ServerUpdater.same("/nowhere/at/all", checkout.path))
+    }
+
+    @Test func anUnfinishedDeployIsOfferedToFinish() async {
+        let finish = allSteps.map { row($0) } + [row("services"), row("verify")]
+        let shaft = ScriptedShaft([
+            ScriptedShaft.lines(0, #"{"ok":true,"current":"v0.61.0","latest":null,"template_tag":true,"incomplete":"v0.61.0","incomplete_step":"update"}"#),
+            { _ in ProcessResult(status: 0, stdout: Data(finish.joined(separator: "\n").utf8), stderr: Data()) },
+        ])
+        let updater = updater(shaft)
+        updater.checkForUpdate()
+        await updater.finished()
+        #expect(updater.check == .incomplete(tag: "v0.61.0", step: "update", current: "v0.61.0"))
+        updater.update()
+        await updater.finished()
+        #expect(shaft.calls.last == ["deploy", "v0.61.0", "--json"])
+        #expect(updater.phase == .done)
+        #expect(updater.check == .upToDate(current: "v0.61.0"))
     }
 
     @Test func theCheckOffersTheNewerRelease() async {

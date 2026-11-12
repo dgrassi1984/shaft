@@ -61,7 +61,7 @@ from datetime import datetime
 from urllib.parse import unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import tom
+from . import core, tom
 from .core import (jsonl_lines, API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
                    paused, port, safe_write, secrets_env, set_secret_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, Warm, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
@@ -188,14 +188,22 @@ class Conversations:
         key = self._key(model, messages, cid)
         with self.lock:
             t = self.talks.get(key)
-            if not t or t.get("written"):   # new, or its earlier part is already in the journal
+            if t and not t.get("written"):  # going on already: `shaft deploy` sees it and restarts nothing
+                return self._touch(t, channel)
+            # New, or its earlier part is already in the journal: it opens now, never while a deploy restarts the
+            # services (core.admitting raises core.Restarting then: the client is asked to try again).
+            with core.admitting():
                 t = {"talk_id": f"api-{uuid.uuid4().hex[:10]}", "model": model}
                 self.talks[key] = t
-            t["last"] = time.time()
-            t["channel"] = channel
-            t["written"] = False
-            self._save()
-            return t["talk_id"]
+                return self._touch(t, channel)
+
+    def _touch(self, t: dict, channel: str) -> str:
+        """Under self.lock."""
+        t["last"] = time.time()
+        t["channel"] = channel
+        t["written"] = False
+        self._save()
+        return t["talk_id"]
 
     def replied(self, talk_id: str) -> None:
         """A reply in this conversation has just ended: its quiet time starts now, not when the request came in."""
@@ -685,7 +693,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
         if text := _last_text(messages):
             tom.heard(model, text, channel, voice)   # what the operator said, for scoring reply predictions (tom.py)
-        talk_id = self.conversations.talk_id(model, messages, cid, channel)
+        try:
+            talk_id = self.conversations.talk_id(model, messages, cid, channel)
+        except core.Restarting as e:
+            return self._error(503, str(e), "server_error")
         self._response_talk = talk_id
         title = unquote(self.headers.get("X-Shaft-Thread-Title", ""))
         with self.conversations.lock:

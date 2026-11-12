@@ -109,7 +109,7 @@ extension MacSetupTests {
 
 extension MacSetupTests {
     /// Update server (docs/app-api.md §19) updates this Mac's own install: only for a loopback pairing with ~/SHAFT
-    /// there, one updater per session, and its check is `shaft deploy --check --json` with the install's Python.
+    /// there, one updater per session, deploying in ~/SHAFT, and only once the server said it runs from there.
     @Test func updateServerIsOnlyForThisMacsOwnInstall() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "mac-setup-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -133,7 +133,7 @@ extension MacSetupTests {
                                 outbox: try Outbox(directory: folder.appending(path: "outbox")),
                                 drafts: DraftStore(directory: folder.appending(path: "drafts")))
         }
-        let local = try session("http://127.0.0.1:8785")
+        let local = try session("http://127.0.0.1:9")            // a port nothing listens on: no real server is asked
         #expect(local.credential != nil)
         #expect(setup.updater(for: local) == nil)                 // no ~/SHAFT: nothing of this Mac's to update
         for file in [server.appending(path: ".runtime/bin/uv"), server.appending(path: "bin/shaft"), python] {
@@ -144,37 +144,35 @@ extension MacSetupTests {
         #expect(setup.updater(for: try session("https://other-mac.example.ts.net:8444")) == nil)   // another Mac's server
         let updater = try #require(setup.updater(for: local))
         #expect(setup.updater(for: local) === updater)            // one per session: its run outlives the Settings window
+        #expect(updater.checkout == server)                       // `shaft deploy` runs in ~/SHAFT, nowhere else
+        // Nothing answers at 127.0.0.1:9: the server cannot say where it runs from, so nothing is offered and
+        // no `shaft deploy` runs (the comparison itself: SHAFTKit's ServerUpdaterTests).
         updater.checkForUpdate()
         await updater.finished()
-        #expect(updater.check == .available(latest: "v0.61.0", current: "v0.60.0"))
-        let ran = try #require(runner.shaftCalls.last)
-        #expect(ran.args == ["deploy", "--check", "--json"])
-        #expect(ran.env["SHAFT_PYTHON"] == python.path)
+        guard case .failed = updater.check else {
+            Issue.record("expected the unreachable server's failure, got \(updater.check)")
+            return
+        }
+        #expect(runner.shaftCalls.isEmpty)
     }
 }
 
-/// Answers uv's Python lookup and `shaft deploy --check --json`; records each `shaft` call.
+/// Answers uv's Python lookup; records each `shaft` call (none is expected).
 private final class DeployCheckRunner: ProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
-    private var calls: [(args: [String], env: [String: String])] = []
+    private var calls: [[String]] = []
     let python: String
 
     init(python: String) { self.python = python }
 
-    var shaftCalls: [(args: [String], env: [String: String])] { lock.withLock { calls } }
+    var shaftCalls: [[String]] { lock.withLock { calls } }
 
     func run(_ exe: URL, _ args: [String], env: [String: String], stdin: Data?,
              onLine: (@Sendable (String) -> Void)?) async throws -> ProcessResult {
         if exe.lastPathComponent == "uv", args.starts(with: ["python", "find"]) {
             return ProcessResult(status: 0, stdout: Data((python + "\n").utf8), stderr: Data())
         }
-        if exe.lastPathComponent == "shaft" {
-            lock.withLock { calls.append((args, env)) }
-            if args == ["deploy", "--check", "--json"] {
-                let answer = #"{"ok": true, "current": "v0.60.0", "latest": "v0.61.0", "template_tag": true}"#
-                return ProcessResult(status: 0, stdout: Data((answer + "\n").utf8), stderr: Data())
-            }
-        }
+        if exe.lastPathComponent == "shaft" { lock.withLock { calls.append(args) } }
         return ProcessResult(status: 1, stdout: Data(), stderr: Data("no answer for \(exe.lastPathComponent) \(args)".utf8))
     }
 }

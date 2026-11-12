@@ -29,11 +29,11 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import gate, localmodel, protected, sandbox
+from . import core, gate, localmodel, protected, sandbox
 from .broker import Broker
 from .core import (API_TALKS, BROKER_MAX_CALLS, err_text, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
                    LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, TreeTooBig, UnsafePath,
@@ -147,6 +147,11 @@ class Presence:
         self.f = None
 
     def __enter__(self):
+        # A conversation never opens while `shaft deploy` restarts the services (core.admitting: core.Restarting).
+        with core.admitting() if self.path.parent.parent.name == "conversations" else nullcontext():
+            return self._register()
+
+    def _register(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         while True:
             f = self.path.open("a+")
@@ -1555,6 +1560,9 @@ def run_conversation(name: str, kind: str, agent_args: list[str], talk_id: str, 
         _trap_runs(saved)
         with Presence(name, talk_id, kind):
             return _conversation(name, root, kind, agent_args, talk_id, driver)
+    except core.Restarting as e:
+        print(f"{name}: {e}", file=sys.stderr)
+        return 1
     except RunRefused as e:                      # includes profile refusal at launch or settlement
         return _refused(name, e)
     finally:

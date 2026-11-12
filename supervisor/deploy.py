@@ -20,7 +20,9 @@ One JSON line per step on stdout, `{"step", "ok", "detail"}` (`"error"` too when
 
 The first failure ends the verb (exit 1, its line holds the real message); all ok, or waiting, is exit 0; a TAG that is
 not vX.Y.Z is exit 2. Only a loaded service whose code changed since it started is restarted, so a rerun after
-success is all ok and restarts nothing. `--check --json` answers one line: the release the app may offer.
+success is all ok and restarts nothing. Each step's outcome is kept in .supervisor/deploy-state.json, so `--check
+--json` (one line: the release the app may offer) also names a deploy left unfinished. While the services step looks at
+the open conversations and restarts, new conversations are refused for a moment (core.restart_barrier), so none is cut.
 """
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ SERVICES_ONLY = ("services", "verify")
 RESTARTED = ("api", "web", "telegram")   # docs/deploy.md: restarted only with no conversation open
 TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 VERIFY_S = 90          # how long verify waits for a restarted service's new process to record itself
+REPLACE_S = 30         # how long the services step holds new conversations back while launchd replaces a process
 POLL_S = 1.0
 
 
@@ -234,14 +237,27 @@ def services(tag: str, kicked: dict[str, int | None]) -> str | tuple[str, dict]:
             due.append(name)
     if not due:
         return "already current: " + ", ".join(current) if current else "none running"
-    if (open_now := _open_conversations()):
-        who = ", ".join(f"{n} ({len(c)} open conversation{'s' * (len(c) != 1)})" for n, c in open_now.items())
-        raise Waiting(f"waiting: {who}")
-    for name in due:
-        kicked[name] = autonomy.launchd_pid(name)
-        _kickstart(name)
+    # From the look at the open conversations until the old processes are gone, no conversation can open
+    # (core.admitting refuses it, "try again in a moment"): none is cut by the restart.
+    with core.restart_barrier():
+        if (open_now := _open_conversations()):
+            who = ", ".join(f"{n} ({len(c)} open conversation{'s' * (len(c) != 1)})" for n, c in open_now.items())
+            raise Waiting(f"waiting: {who}")
+        for name in due:
+            kicked[name] = autonomy.launchd_pid(name)
+            _kickstart(name)
+        for name in due:
+            _replaced(name, kicked[name])
     return ("restarted " + ", ".join(due) + (f"; already current: {', '.join(current)}" if current else ""),
             {"restarted": due})
+
+
+def _replaced(name: str, old: int | None) -> None:
+    """Until launchd no longer runs the old process (at most REPLACE_S; verify then says what did not come back)."""
+    from . import autonomy
+    deadline = time.monotonic() + REPLACE_S
+    while old is not None and autonomy.launchd_pid(name) == old and time.monotonic() < deadline:
+        time.sleep(POLL_S)
 
 
 def _new_process(name: str, old: int | None) -> dict:
@@ -307,8 +323,30 @@ def run(tag: str, services_only: bool = False) -> int:
         return 1
 
 
+def _state_path() -> Path:
+    return core.SUP_DIR / "deploy-state.json"
+
+
+def _load_state() -> dict | None:
+    try:
+        state = json.loads(_state_path().read_text())
+        return state if isinstance(state, dict) and isinstance(state.get("steps"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_state(state: dict) -> None:
+    """After every step: what a deploy left unfinished outlives it (the app's "Finish updating", `--check`)."""
+    path = _state_path()
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({**state, "updated": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1))
+    os.replace(tmp, path)
+
+
 def _run(tag: str, order: tuple[str, ...]) -> int:
     kicked: dict[str, int | None] = {}
+    before = _load_state()
+    state = before if order == SERVICES_ONLY and before and before.get("tag") == tag else {"tag": tag, "steps": {}}
     steps = {"preflight": preflight, "fetch": fetch, "main": step_main, "template": step_template, "update": update,
              "scheduler": scheduler, "services": lambda t: services(t, kicked), "verify": lambda t: verify(t, kicked)}
     for step in order:
@@ -323,6 +361,8 @@ def _run(tag: str, order: tuple[str, ...]) -> int:
             detail = str(e) or type(e).__name__
             record.update(ok=False, detail=detail, error=detail)
         core.log((f"deploy {tag}: {step} " + ("ok" if record["ok"] else "FAILED") + f" — {record['detail']}")[:400])
+        state["steps"][step] = "waiting" if record.get("waiting") else "ok" if record["ok"] else "failed"
+        _save_state(state)
         _emit(record)
         if not record["ok"]:
             return 1
@@ -339,8 +379,10 @@ def _semver(tag: str) -> tuple[int, int, int] | None:
 
 def check() -> int:
     """One line: the checked-out release (`current`, git describe of HEAD), the newest release on origin newer than it
-    that has its template tag (`latest`, null when up to date), and `template_tag`: false when origin has a newer
-    vX.Y.Z still without template-vX.Y.Z (not deployable yet), true otherwise."""
+    that has its template tag (`latest`, null when up to date), `template_tag`: false when origin has a newer
+    vX.Y.Z still without template-vX.Y.Z (not deployable yet), true otherwise, and `incomplete` / `incomplete_step`:
+    the release a deploy moved this checkout to without finishing, and the first step it did not finish (null when
+    none): running `shaft deploy <incomplete> --json` again finishes it."""
     project = core.PROJECT
     d = _git(project, "describe", "--tags", "--match", "v[0-9]*", "--always", "HEAD")
     if d.returncode:
@@ -358,10 +400,26 @@ def check() -> int:
             templates.add(v)
         elif (v := _semver(name)):
             releases[v] = name
+    incomplete = _incomplete(project)
     have = _semver(current.split("-", 1)[0])
     newer = [v for v in releases if have is None or v > have]
     deployable = [v for v in newer if v in templates]
     latest = releases[max(deployable)] if deployable else None
     _emit({"ok": True, "current": current, "latest": latest,
-           "template_tag": not newer or max(newer) in templates})
+           "template_tag": not newer or max(newer) in templates,
+           "incomplete": incomplete[0] if incomplete else None, "incomplete_step": incomplete[1] if incomplete else None})
     return 0
+
+
+def _incomplete(project) -> tuple[str, str] | None:
+    """(tag, the first step not done) of a deploy that left this checkout at its tag without finishing (a failed step,
+    or services waiting for a conversation), from deploy-state.json; None when the last one finished or the checkout
+    has moved on since."""
+    state = _load_state()
+    tag = (state or {}).get("tag", "")
+    if not state or not TAG_RE.fullmatch(tag) or state["steps"].get("verify") == "ok":
+        return None
+    target = _commit(project, f"refs/tags/{tag}")
+    if not target or target != _commit(project, "HEAD"):
+        return None
+    return tag, next(s for s in STEPS if state["steps"].get(s) != "ok")

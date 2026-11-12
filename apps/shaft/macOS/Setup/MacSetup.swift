@@ -126,13 +126,16 @@ final class MacSetup {
 
     /// Update server for this session (Settings → Services, and the "needs a newer server" screen): only when the
     /// session is paired with this Mac's own install (a loopback pairing, and `~/SHAFT` is there). A server on another
-    /// Mac is updated there. Kept per session, like the Installer: closing Settings never cuts a deploy halfway.
+    /// Mac is updated there; one on this Mac that says it runs from another checkout too (ServerUpdater's check). Kept per session, like the Installer: closing Settings never cuts a deploy halfway.
     func updater(for session: SHAFTSession) -> ServerUpdater? {
         guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
               !SetupGate.setupNeeded(home: configuration.home) else { return nil }
         if let sharedUpdater, sharedUpdater.session == ObjectIdentifier(session) { return sharedUpdater.updater }
         guard let installer = installer(for: session) else { return nil }
-        let updater = ServerUpdater(installer: installer, reachable: { [weak session] in
+        // The paired server must say it runs from the checkout `shaft deploy` would run in (its loopback `project`).
+        let updater = ServerUpdater(installer: installer, locate: { [weak session] in
+            await ServerLocation.of(session?.store?.client)
+        }, reachable: { [weak session] in
             guard let client = session?.store?.client else { return false }
             do {
                 _ = try await client.version()
