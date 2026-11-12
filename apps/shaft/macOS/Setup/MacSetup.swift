@@ -51,6 +51,7 @@ final class MacSetup {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var shared: (session: ObjectIdentifier, installer: Installer)?
     @ObservationIgnored private var sharedUpdater: (session: ObjectIdentifier, updater: ServerUpdater)?
+    @ObservationIgnored private var sharedPhoneAccess: (session: ObjectIdentifier, access: PhoneAccess)?
     @ObservationIgnored private let configure: () throws -> Installer.Configuration
     @ObservationIgnored private let runner: any ProcessRunning
 
@@ -153,6 +154,19 @@ final class MacSetup {
         }
         sharedUpdater = (ObjectIdentifier(session), updater)
         return updater
+    }
+
+    /// "Use SHAFT from iPhone/iPad" for this session (Settings → Services): offered under the same conditions as the
+    /// updater, on this Mac's own install. Kept per session, so closing Settings never cuts it halfway.
+    func phoneAccess(for session: SHAFTSession) -> PhoneAccess? {
+        guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
+              !SetupGate.setupNeeded(home: configuration.home) else { return nil }
+        if let sharedPhoneAccess, sharedPhoneAccess.session == ObjectIdentifier(session) { return sharedPhoneAccess.access }
+        guard let installer = installer(for: session) else { return nil }
+        let access = PhoneAccess(installer: installer)
+        access.onConnected = { [weak session] in await session?.store?.services.load() }
+        sharedPhoneAccess = (ObjectIdentifier(session), access)
+        return access
     }
 
     // MARK: - Local pairing

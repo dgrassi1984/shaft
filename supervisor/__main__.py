@@ -1544,6 +1544,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p.add_argument("--local", action="store_true", help="on: without Tailscale — allow the Mac app's local login, "
                                                         "expose nothing")
+    p.add_argument("--json", action="store_true", help="on: one JSON object on stdout ({ok} or {ok: false, error})")
     p = sub.add_parser("secrets", help="the supervisor's .env secrets: set NAME (value on stdin), unset NAME, list "
                                        "(names only)")
     p.add_argument("action", choices=["set", "unset", "list"])
@@ -1618,7 +1619,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--all", action="store_true", help="unpair: every browser")
     p.add_argument("--local", action="store_true", help="on: without Tailscale (SHAFT_WEB_LOCAL=on, /app/v1 at "
                                                         "127.0.0.1); pair: the Mac app on this Mac, no link")
-    p.add_argument("--json", action="store_true", help="pair: one JSON object on stdout")
+    p.add_argument("--json", action="store_true", help="pair, on (tailnet): one JSON object on stdout")
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
@@ -2031,11 +2032,15 @@ def main(argv: list[str]) -> int:
     if args.cmd == "tick":
         return autonomy.tick()
     if args.cmd in actions.GUARDED_CLI and (refused := actions.cli_guard(args.cmd, args.action, args.force)):
-        print(refused, file=sys.stderr)
+        if getattr(args, "json", False):    # the Mac app reads one JSON line, whatever refused
+            # the app's own words: no --force or terminal verb in what it shows
+            print(json.dumps({"ok": False, "error": refused.split(" Try again when")[0] + " Try again when they end."}))
+        else:
+            print(refused, file=sys.stderr)
         return 1
     if args.cmd == "api":
         from . import api
-        return api.command(args.action, local=args.local)
+        return api.command(args.action, local=args.local, as_json=args.json)
     if args.cmd == "secrets":
         from . import opsecrets
         return opsecrets.command(args.action, args.name, args.json)

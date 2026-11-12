@@ -1841,9 +1841,15 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
     if local and action not in ("on", "pair"):
         print(f"--local goes with on or pair, not {action}", file=sys.stderr)
         return 2
-    if as_json and action != "pair":
-        print(f"--json goes with pair, not {action}", file=sys.stderr)
+    if as_json and action not in ("pair", "on"):
+        print(f"--json goes with pair or on, not {action}", file=sys.stderr)
         return 2
+    if as_json and action == "on":
+        if local:
+            print("--json goes with on for the tailnet install, not on --local", file=sys.stderr)
+            return 2
+        from .api import json_verb
+        return json_verb(lambda: command("on"))
     if action == "serve":
         return serve()
     if action == "pair" and local:
@@ -1853,9 +1859,12 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
             message = "no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)"
             print(json.dumps({"ok": False, "error": message}) if as_json else message)
             return 1
+        if as_json and not allowed_hosts():     # a tailnet link needs the name `shaft web on` recorded
+            print(json.dumps({"ok": False, "error": "the web service is not on the tailnet yet: set up Tailscale first"}))
+            return 1
         link = new_pairing(name or f"browser {datetime.now():%Y-%m-%d %H:%M}")
         if as_json:
-            print(json.dumps({"ok": True, "link": link, "minutes": PAIR_MINUTES}))
+            print(json.dumps({"ok": True, "link": link, "expires_minutes": PAIR_MINUTES}))
         else:
             print(f"Open this link in the browser to pair (valid {PAIR_MINUTES} minutes, once):\n\n  {link}\n")
         return 0
@@ -1891,6 +1900,10 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
     if action == "on":
         if not allowed_logins():
             print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
+            return 1
+        from .api import tailnet_problem
+        if problem := tailnet_problem():
+            print(problem)
             return 1
         if not record_hosts():              # the service cannot ask tailscale itself (launchd): it reads this
             print("cannot read this Mac's tailnet name: is Tailscale running? (tailscale status)")

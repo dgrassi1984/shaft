@@ -332,6 +332,106 @@ class LocalInstallTest(LocalTest):
         self.assertTrue(web.paired_device(fields["device"], fields["secret"]))
         self.assertEqual(fields["login"], "operator@local")
 
+    # -- Tailscale added later (the Mac app's "Use SHAFT from iPhone/iPad") ------------------------------------------
+    def fake_tailscale(self, state="Running", code=0, login="me@x"):
+        """api._tailscale as a Mac with Tailscale in `state` answers it; every call is recorded, none reaches the Mac."""
+        self.ts_calls = []
+        status = json.dumps({"BackendState": state, "Self": {"UserID": 7, "DNSName": "mac.example.ts.net."},
+                             "User": {"7": {"LoginName": login}}})
+
+        def tailscale(*a):
+            self.ts_calls.append(a)
+            if code:
+                return subprocess.CompletedProcess(a, code, stdout="", stderr="tailscale is not installed")
+            return subprocess.CompletedProcess(a, 0, stdout=status if "status" in a else "", stderr="")
+        return mock.patch.object(api, "_tailscale", side_effect=tailscale)
+
+    def only_json(self, out):
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 1, out)               # the Mac app reads exactly one line
+        return json.loads(lines[0])
+
+    def test_web_on_tailnet_after_local_keeps_local_on_and_adds_the_login(self):
+        self.assertEqual(self.cli("api", "on", "--local")[0], 0)
+        self.assertEqual(self.cli("web", "on", "--local")[0], 0)
+        with self.fake_tailscale():
+            code, out, err = self.cli("api", "on", "--json")
+            self.assertEqual((code, self.only_json(out)), (0, {"ok": True}), out + err)
+            code, out, err = self.cli("web", "on", "--json")
+            self.assertEqual((code, self.only_json(out)), (0, {"ok": True}), out + err)
+        # the tailnet login joined the local one; neither the login nor the loopback switch went away
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "operator@local,me@x")
+        self.assertIn("SHAFT_WEB_LOCAL=on", (self.sup / "settings.env").read_text().splitlines())
+        self.assertEqual(json.loads((self.sup / "web" / "hosts.json").read_text())["hosts"],
+                         [f"mac.example.ts.net:{web.HTTPS_PORT}"])
+        self.assertEqual(self.services, [("api", "on"), ("web", "on")] * 2)
+        serves = [c for c in self.ts_calls if c[0] == "serve"]
+        self.assertEqual(len(serves), 2)                    # the API's and the web UI's tailnet mapping
+        # and the Mac's own pairing still works afterwards
+        code, out, _ = self.cli("web", "pair", "--local", "--name", "my-mac", "--json")
+        self.assertEqual(code, 0, out)
+
+    def test_api_on_json_says_why_tailscale_is_missing_or_signed_out(self):
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        cases = [(dict(code=127), "not installed"), (dict(state="NeedsLogin"), "not signed in"),
+                 (dict(state="Stopped"), "switched off")]
+        for kw, expect in cases:
+            with self.subTest(expect=expect), self.fake_tailscale(**kw):
+                code, out, err = self.cli("api", "on", "--json")
+            got = self.only_json(out)
+            self.assertEqual(code, 1)
+            self.assertIs(got["ok"], False)
+            self.assertIn(expect, got["error"])
+            self.assertNotIn("shaft ", got["error"])        # no terminal command in what the app shows
+        self.assertEqual(self.services, [])                 # nothing was installed or restarted
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "operator@local")
+
+    def test_web_on_json_says_why_tailscale_is_missing_and_keeps_local_on(self):
+        self.assertEqual(self.cli("api", "on", "--local")[0], 0)
+        self.assertEqual(self.cli("web", "on", "--local")[0], 0)
+        self.services.clear()
+        with self.fake_tailscale(code=127):
+            code, out, err = self.cli("web", "on", "--json")
+        got = self.only_json(out)
+        self.assertEqual(code, 1)
+        self.assertIn("not installed", got["error"])
+        self.assertEqual(self.services, [])
+        self.assertIn("SHAFT_WEB_LOCAL=on", (self.sup / "settings.env").read_text().splitlines())
+        self.assertFalse((self.sup / "web" / "hosts.json").exists())
+
+    def test_web_pair_json_prints_the_tailnet_link(self):
+        with mock.patch.object(web, "allowed_hosts", return_value={HOST}):
+            code, out, err = self.cli("web", "pair", "--name", "iphone", "--json")
+        got = self.only_json(out)
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(got["ok"])
+        self.assertTrue(got["link"].startswith(f"https://{HOST}/pair?t="), got)
+        self.assertEqual(got["expires_minutes"], web.PAIR_MINUTES)
+        self.assertEqual(set(got), {"ok", "link", "expires_minutes"})
+
+    def test_web_pair_json_without_a_tailnet_name_is_a_refusal_not_a_bad_link(self):
+        with mock.patch.object(web, "allowed_hosts", return_value=set()):
+            code, out, _ = self.cli("web", "pair", "--name", "iphone", "--json")
+        got = self.only_json(out)
+        self.assertEqual(code, 1)
+        self.assertIs(got["ok"], False)
+        self.assertNotIn("not running", got.get("link", ""))
+
+    def test_api_on_json_refused_for_a_running_reply_is_one_json_line_without_terminal_words(self):
+        with mock.patch("supervisor.autonomy.running", return_value=True), \
+                mock.patch("supervisor.actions.service_guard", return_value="2 replies are running."):
+            code, out, err = self.cli("api", "on", "--json")
+        got = self.only_json(out)
+        self.assertEqual(code, 1)
+        self.assertIn("2 replies are running", got["error"])
+        self.assertNotIn("--force", got["error"])
+        self.assertEqual(self.services, [])
+
+    def test_json_goes_with_the_tailnet_on_only(self):
+        self.assertEqual(self.cli("api", "status", "--json")[0], 2)
+        self.assertEqual(self.cli("web", "on", "--local", "--json")[0], 2)
+        self.assertEqual(self.services, [])
+
     def test_json_and_local_on_other_web_actions_are_usage_errors(self):
         self.assertEqual(self.cli("web", "status", "--json")[0], 2)
         self.assertEqual(self.cli("web", "off", "--local")[0], 2)

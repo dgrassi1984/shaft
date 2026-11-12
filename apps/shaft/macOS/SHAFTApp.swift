@@ -129,6 +129,7 @@ struct MacSettings: View {
             if let session = model.session {
                 SettingsView(session: session)
                     .environment(\.serverUpdater, setup.updater(for: session))
+                    .environment(\.phoneAccess, setup.phoneAccess(for: session))
             } else {
                 MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
             }

@@ -158,6 +158,7 @@ struct MacRoot: View {
         }
         .environment(model)
         .environment(\.serverUpdater, model.session.flatMap { setup.updater(for: $0) })
+        .environment(\.phoneAccess, model.session.flatMap { setup.phoneAccess(for: $0) })
         // The gate decides again when the session opens or changes, and when a pairing comes or goes.
         .onChange(of: model.session.map(ObjectIdentifier.init), initial: true) { setup.update(model.session) }
         .onChange(of: model.session?.store.map(ObjectIdentifier.init)) { setup.update(model.session) }

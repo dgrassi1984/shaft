@@ -90,11 +90,11 @@ run` runs one scheduled plugin now.
 ## Services
 
 ```text
-shaft web on [--local]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
+shaft web on [--local|--json]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
 shaft grok login|status
 shaft codex login [--json]|status
 shaft model on|off|status
-shaft api on [--local]|off|status|key|inbox-key
+shaft api on [--local] [--json]|off|status|key|inbox-key
 shaft telegram token <name>|pair [--json]|unpair|on|off|status
 shaft embed on|off|status
 ```
@@ -106,7 +106,11 @@ device, and `unpair` removes one or all devices. See [web and API](web-and-api.m
 `operator@local` to `SHAFT_API_LOGINS` and exposes nothing. `shaft web on --local` sets `SHAFT_WEB_LOCAL=on` and
 installs the web service, which then serves `/app/v1` at `127.0.0.1` (the pages stay tailnet-only). `shaft web pair
 --local --name N` pairs that app directly and prints its base URL, device id and secret once (`--json`: one JSON line).
-A later `shaft api on` adds your tailnet login next to the local one.
+A later `shaft api on` adds your tailnet login next to the local one, and a later `shaft web on` records the tailnet
+name and runs `tailscale serve`; both keep `operator@local` and `SHAFT_WEB_LOCAL=on`. The Mac app's "Use SHAFT from
+iPhone/iPad" runs `shaft api on --json`, `shaft web on --json` and `shaft web pair --name iphone --json`: each prints
+one JSON line, `{"ok": true}` (pair: `{"ok": true, "link": …, "expires_minutes": 10}`) or `{"ok": false, "error": …}`
+naming Tailscale missing, signed out or switched off, and exits 0 or 1.
 
 `shaft api` controls the OpenAI-compatible API and inbox doorbell. `key` and `inbox-key` show their separate
 bearer keys. `shaft telegram` configures tokens and pairing and controls Telegram chat. See

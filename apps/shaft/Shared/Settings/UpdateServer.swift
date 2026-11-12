@@ -6,6 +6,8 @@ extension EnvironmentValues {
     /// The Mac's Update server for this session (MacSetup.updater): nil when this Mac's own install is not what the app
     /// is paired with, and on iOS, which has none.
     @Entry var serverUpdater: ServerUpdater? = nil
+    /// "Use SHAFT from iPhone/iPad" for this session (MacSetup.phoneAccess): nil under the same conditions.
+    @Entry var phoneAccess: PhoneAccess? = nil
 }
 
 /// Settings → Services → Update server (docs/app-api.md §19): the newer release, its page, then each step of

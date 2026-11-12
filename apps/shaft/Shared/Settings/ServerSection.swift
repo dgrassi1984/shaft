@@ -6,6 +6,7 @@ struct ServerSection: View {
     @State private var confirming: String?
     #if os(macOS)
     @Environment(\.serverUpdater) private var updater
+    @Environment(\.phoneAccess) private var phoneAccess
     #endif
 
     var body: some View {
@@ -24,6 +25,7 @@ struct ServerSection: View {
             }
             #if os(macOS)
             if let updater { UpdateServerRows(updater: updater) }
+            if let phoneAccess { PhoneAccessRows(access: phoneAccess) }
             #endif
         } header: { Text("Services") } footer: {
             Text("These restart a service for all instances.").foregroundStyle(Color.textSecondary)

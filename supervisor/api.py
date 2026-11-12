@@ -983,6 +983,46 @@ def _tailscale_status() -> dict | None:
     return json.loads(r.stdout or "{}")
 
 
+def tailnet_problem() -> str | None:
+    """Why this Mac cannot join a tailnet right now, in words for the person at the Mac (the Mac app shows it as is):
+    Tailscale missing, signed out or switched off. None when it looks fine, or when its status cannot be read at all
+    (the callers' own checks then say what is missing)."""
+    r = _tailscale("status", "--json")
+    if r.returncode == 127:
+        return "Tailscale is not installed on this Mac: install it from the Mac App Store, open it and sign in"
+    if _outside_gui(r):
+        return None
+    try:
+        state = json.loads(r.stdout or "{}").get("BackendState")
+    except ValueError:
+        return None
+    if state in ("NeedsLogin", "NeedsMachineAuth"):
+        return "Tailscale is not signed in: open Tailscale, log in, then try again"
+    if state in ("Stopped", "NoState"):
+        return "Tailscale is switched off: open Tailscale, turn it on, then try again"
+    return None
+
+
+def json_verb(fn) -> int:
+    """Run a CLI verb with its prints captured and answer with one JSON line, the Mac app's contract: {"ok": true} (exit
+    0) or {"ok": false, "error": <what the verb said>} (exit 1); a crash is an error too, never a traceback."""
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = fn()
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e) or type(e).__name__}))
+        return 1
+    said = " ".join(t for t in (err.getvalue().strip(), out.getvalue().strip()) if t)
+    if code:
+        print(json.dumps({"ok": False, "error": said or f"exit {code}"}))
+        return 1
+    print(json.dumps({"ok": True}))
+    return 0
+
+
 def url() -> str:
     st = _tailscale_status()
     if st is None:
@@ -1003,12 +1043,18 @@ def _add_login(login: str) -> None:
         set_secret_env("SHAFT_API_LOGINS", ",".join([*logins, login]))
 
 
-def command(action: str, local: bool = False) -> int:
+def command(action: str, local: bool = False, as_json: bool = False) -> int:
     """`shaft api on` creates the keys (SHAFT_API_KEY, SHAFT_INBOX_KEY) if missing, adds your Tailscale login to
     SHAFT_API_LOGINS, installs the service and exposes it with `tailscale serve`. `shaft api on --local` does the same
     without Tailscale: it adds LOCAL_LOGIN instead and exposes nothing (the Mac app on this Mac pairs with
-    `shaft web pair --local`). Logins are merged, never replaced."""
+    `shaft web pair --local`). Logins are merged, never replaced. `on --json` (the Mac app's "Use SHAFT from iPhone/iPad")
+    answers with one JSON line instead of the prose."""
     from . import autonomy
+    if as_json:
+        if action != "on":
+            print(f"--json goes with on, not {action}", file=sys.stderr)
+            return 2
+        return json_verb(lambda: command(action, local))
     if local and action != "on":
         print(f"--local goes with on only (shaft api on --local), not {action}", file=sys.stderr)
         return 2
@@ -1044,6 +1090,9 @@ def command(action: str, local: bool = False) -> int:
                   f"  allowed: {', '.join(sorted(allowed_logins()))}\n"
                   f"  next: shaft web on --local, then shaft web pair --local --name <this mac>")
             return 0
+        if problem := tailnet_problem():
+            print(problem)
+            return 1
         st = _tailscale_status() or {}
         me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
         if me:
