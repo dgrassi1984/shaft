@@ -335,6 +335,19 @@ class ChannelTest(unittest.TestCase):
         self.channel._turn['initialized'] = True
         self.assertTrue(self.channel._calls_ready(step, time.monotonic()))
 
+    def test_tool_search_is_off_and_a_refused_tool_is_named(self):
+        # Regression (bake-off 2026-11-12): Claude Code's server-side tool search failed a cycle as an unnamed
+        # "native tool forbidden", then "bridge died" replaced that cause.
+        self.channel.complete(body())
+        self.assertEqual(self.wire()[0]['env']['ENABLE_TOOL_SEARCH'], 'false')
+        self.scenario(mode='native')
+        c = claude.Channel('example', 'example', mock.Mock())
+        self.addCleanup(c.close)
+        with self.assertRaisesRegex(planchannel.ChannelSecurity, 'native tool forbidden: tool_use Bash'):
+            c.complete(body())
+        c._fail(planchannel.ChannelFailure('Claude bridge died'))
+        self.assertIn('native tool forbidden', c._fatal.reason)
+
     def test_step_timeout(self):
         self.scenario(mode='hang')
         with mock.patch.object(claude, 'TIMEOUT_S', .2):
@@ -544,8 +557,9 @@ class MappingTest(unittest.TestCase):
         with self.assertRaisesRegex(planchannel.ChannelFailure, 'server unavailable'):
             self.dispatch({**good, 'mcp_servers': [{'name': 'shaft', 'status': 'failed'}]})
         for name in ('Bash', 'mcp__other__echo', 'mcp__shaft__unknown', 'private prompt'):
-            with self.assertRaisesRegex(planchannel.ChannelSecurity, '^Claude native tool forbidden$'):
+            with self.assertRaisesRegex(planchannel.ChannelSecurity, '^Claude native tool forbidden: tool_use ') as caught:
                 self.response(blocks=[{'type': 'tool_use', 'name': name}])
+            self.assertNotIn('private prompt', str(caught.exception))
         with self.assertRaises(planchannel.ChannelSecurity):
             self.dispatch({'type': 'control_request', 'request': {'subtype': 'can_use_tool'}})
 

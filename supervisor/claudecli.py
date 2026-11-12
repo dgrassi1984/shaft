@@ -85,7 +85,10 @@ def child_env(config_dir: Path, folder: Path) -> dict:
                 TMPDIR=str(folder), CLAUDE_CODE_TMPDIR=str(folder), LANG='en_US.UTF-8', CLAUDE_CONFIG_DIR=str(config_dir),
                 DISABLE_AUTOUPDATER='1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
                 # Held SHAFT calls can outlast the default MCP tool timeout; the channel's own timeout governs.
-                MCP_TOOL_TIMEOUT=str((TIMEOUT_S + 3600) * 1000))
+                MCP_TOOL_TIMEOUT=str((TIMEOUT_S + 3600) * 1000),
+                # With many long MCP tool definitions Claude Code defers them behind a server-side tool search
+                # (bake-off 2026-11-12: a server_tool_use failed a cycle). Every tool stays loaded, as on the other paths.
+                ENABLE_TOOL_SEARCH='false')
 
 
 def login_status() -> dict:
@@ -455,7 +458,9 @@ class Channel(planchannel.Channel):
                     name = block.get('name')
                     if (block['type'] != 'tool_use' or not isinstance(name, str)
                             or not name.startswith('mcp__shaft__') or name[12:] not in self._tool_names):
-                        raise planchannel.ChannelSecurity('Claude native tool forbidden')
+                        # A tool name is not message content: name it, so an event can be told apart from a slip.
+                        shown = name if isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', name) else '<invalid name>'
+                        raise planchannel.ChannelSecurity(f'Claude native tool forbidden: {block["type"]} {shown}')
             if not turn or not turn['initialized']:
                 raise self.failure('Claude assistant before init')
             step = turn['step']
@@ -649,9 +654,14 @@ class Channel(planchannel.Channel):
                     self._fail(self.failure('Claude process died'))
 
     def _fail(self, exc):
-        if not self._restarting:
-            super()._fail(exc)
-            self._kill()
+        # Keep the first cause: the dead process's bridge stops pinging and would replace a security event with
+        # "bridge died" (bake-off 2026-11-12), and every new reason notifies the operator again.
+        if self._restarting or self._fatal is not None:
+            return
+        super()._fail(exc)
+        if self._bridge:
+            self._bridge.close()
+        self._kill()
 
     def _watch(self):
         process = self._process  # one watcher per process; a restart retires it
