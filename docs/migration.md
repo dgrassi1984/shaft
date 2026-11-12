@@ -327,7 +327,7 @@ bin/shaft codex status
 If it shows you signed out, run `bin/shaft codex login`. We have not tested
 whether a copied Codex login keeps working on another machine. If Codex cannot
 start, a live run falls back to `SHAFT_CODEX_FALLBACK_MODEL` without stopping.
-That costs API dollars.
+That costs API dollars (with `SHAFT_CODEX_FALLBACK_MODEL=none` the run ends with Codex's error instead).
 
 For `grok/*` models, check `bin/shaft grok status` before starting the scheduler.
 If signed out or the copied login fails, run `bin/shaft grok login` again.

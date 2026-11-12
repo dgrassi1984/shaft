@@ -250,6 +250,26 @@ def any_model(s: str) -> str:
     return s
 
 
+NO_FALLBACK = "none"
+
+
+def fallback_model(s: str) -> str:
+    """A fallback model (any_model), or `none`: no fallback — what would have fallen back ends with its own error, and
+    nothing is moved onto a model the operator has no provider for."""
+    s = model_name(s)
+    return s if s == NO_FALLBACK else any_model(s)
+
+
+def channel_fallback(s: str) -> str:
+    """What a live run uses after its plan channel (codex/, grok/) fails: a model the broker calls directly —
+    claude-…, openrouter/… or a priced custom/… — or `none` (the channel's failure ends the run)."""
+    s = model_name(s)
+    if s.partition("/")[0] in ("codex", "grok"):
+        raise ValueError(f"{s!r} is a plan model: a failed plan channel falls back to a claude-…, openrouter/… or "
+                         f"priced custom/… model, or none")
+    return s if s == NO_FALLBACK else cloud_model(s)
+
+
 def any_models(s: str) -> list[str]:
     """A non-empty comma-separated list of any_model names."""
     out = [any_model(m) for m in s.split(",") if m.strip()]

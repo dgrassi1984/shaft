@@ -71,19 +71,21 @@ class NoAnswerYet(ModelCallError):
     """Cut off at max_tokens twice: there is no answer to use."""
 
 
-def available(model: str) -> str | None:
-    """None when `model` can be called now, else the reason in words that name what is missing."""
+def available(model: str, secrets: dict | None = None) -> str | None:
+    """None when `model` can be called now, else the reason in words that name what is missing. `secrets`: the keys
+    the caller holds (default: the project .env)."""
     model = str(model or "")
+    keys = secrets_env() if secrets is None else secrets
     if model.startswith("claude-"):
-        return None if secrets_env().get("ANTHROPIC_API_KEY") else "no ANTHROPIC_API_KEY in the supervisor's .env"
+        return None if keys.get("ANTHROPIC_API_KEY") else "no ANTHROPIC_API_KEY in the supervisor's .env"
     if model.startswith("openrouter/"):
-        return None if secrets_env().get("OPENROUTER_API_KEY") else "no OPENROUTER_API_KEY in the supervisor's .env"
+        return None if keys.get("OPENROUTER_API_KEY") else "no OPENROUTER_API_KEY in the supervisor's .env"
     if model.startswith("custom/"):
         if cloudllm.custom_price(model) is None:
             return f"{model} has no declared price in SHAFT_CUSTOM_PRICES"
         if not cloudllm.CUSTOM_BASE_URL:
             return "no SHAFT_CUSTOM_BASE_URL set: custom/ models have no endpoint"
-        return None if secrets_env().get("SHAFT_CUSTOM_API_KEY") else "no SHAFT_CUSTOM_API_KEY in the supervisor's .env"
+        return None if keys.get("SHAFT_CUSTOM_API_KEY") else "no SHAFT_CUSTOM_API_KEY in the supervisor's .env"
     if model.startswith("codex/"):
         from . import codexcli
         if model not in codexcli.MODELS:
@@ -333,16 +335,36 @@ class _OpenAI:
 
 
 # -- Codex ----------------------------------------------------------------------------------------------------------
-def _codex_channel_class():
+def codex_channel(on_step: Callable[[planchannel.Step], None] | None = None):
+    """A Codex app-server of the supervisor's own (not an instance's run): the in-run channel — its start (Seatbelt
+    profile, native tools off, the weekly-cap check), item checks, OpenAI-format complete() with tools, teardown —
+    unchanged, but it writes no usage row: each finished step goes to `on_step` (once, with its final usage) and the
+    caller keeps its own ledger. The coder's tool loop runs on it; close() it when done."""
+    return _quiet_codex_class()("supervisor", "supervisor", supervisor_log, on_step)
+
+
+def _quiet_codex_class():
     from . import codexcli
 
-    class OneThread(codexcli.Channel):
-        """A Codex app-server of the supervisor's own for one call: the in-run channel's start (Seatbelt profile,
-        native tools off, the weekly-cap check), item checks and teardown, unchanged; one thread without tools, one
-        turn per send. Its usage row is the caller's to keep, so the channel writes none."""
+    class Quiet(codexcli.Channel):
+        def __init__(self, name, usage_name, log, on_step=None):
+            super().__init__(name, usage_name, log)
+            self.on_step = on_step
 
         def _record(self, step):
+            if step.recorded:
+                return
             step.recorded = True
+            if self.on_step:
+                self.on_step(step)
+
+    return Quiet
+
+
+def _codex_channel_class():
+    class OneThread(_quiet_codex_class()):
+        """A Codex app-server of the supervisor's own for one call: one thread without tools, one turn per send.
+        Its usage row is the caller's to keep, so the channel writes none."""
 
         def turn(self, model, system, text, images, effort) -> planchannel.Step:
             with self._serial:

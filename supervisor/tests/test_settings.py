@@ -130,6 +130,15 @@ class SetTest(FileCase):
                          ("claude-sonnet-5-5", "file"))
         self.assertEqual(listed["SHAFT_JUDGE_MODELS"]["kind"], "models")
         self.assertIn("openrouter/xiaomi/mimo-v2.6-pro", listed["SHAFT_JUDGE_MODELS"]["choices"])
+        # the coder and the fallbacks run on the operator's provider: model pickers, `none` where it means no fallback
+        coder_, codex_fb, trial_fb = (listed[n] for n in ("SHAFT_CODER_MODEL", "SHAFT_CODEX_FALLBACK_MODEL",
+                                                          "SHAFT_TRIAL_FALLBACK_MODEL"))
+        self.assertEqual((coder_["kind"], codex_fb["kind"], trial_fb["kind"]), ("model", "model", "model"))
+        self.assertIn("codex/gpt-6-astra", coder_["choices"])
+        self.assertNotIn("none", coder_["choices"])
+        self.assertIn("none", codex_fb["choices"])
+        self.assertNotIn("codex/gpt-6-astra", codex_fb["choices"])
+        self.assertTrue({"none", "codex/gpt-6-astra"} <= set(trial_fb["choices"]))
         self.assertFalse(listed["SHAFT_WEB_PORT"]["web"])
         code, out = run("unset", ["SHAFT_JUDGE_MODELS"], ["SHAFT_JUDGE_MODELS=claude-sonnet-5-5"], [])
         self.assertEqual(code, 0, out)

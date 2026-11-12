@@ -15,7 +15,7 @@ import time
 from typing import Callable
 
 from . import planchannel, sandbox
-from .core import SUP_DIR, cloud_model, knob, positive_int
+from .core import SUP_DIR, channel_fallback, knob, positive_int
 
 
 def serves(model: str | None) -> bool:
@@ -44,8 +44,9 @@ MODELS, _ = knob("SHAFT_CODEX_MODELS", "codex/gpt-6-astra,codex/gpt-6.1-sol", _m
     "Codex models offered to instances, comma separated", group="Codex", services=("runs", "api"))
 WEEKLY_PCT, _ = knob("SHAFT_CODEX_WEEKLY_PCT", "85", _percent,
     "stop Codex calls at this percentage of the weekly allowance", group="Codex", services=("runs", "api"))
-FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", cloud_model,
-    "cloud model used for the run after a Codex failure", group="Codex", services=("runs", "api"))
+FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", channel_fallback,
+    "cloud model used for the run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or none: the "
+    "failure ends the run", group="Codex", services=("runs", "api"))
 TIMEOUT_S, _ = knob("SHAFT_CODEX_TIMEOUT_S", "900", positive_int,
     "seconds Codex may take for one model step; held tool calls are exempt", group="Codex", services=("runs", "api"))
 LOG_HOURS, _ = knob("SHAFT_CODEX_LOG_HOURS", "24", positive_int,

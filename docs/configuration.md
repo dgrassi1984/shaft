@@ -101,13 +101,13 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_MODELS` | `codex/gpt-6-astra,codex/gpt-6.1-sol` | Codex models offered to instances, comma separated | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
-| `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_LOG_HOURS` | `24` | positive integer hours of Codex's own SQLite logs to keep; read by runs and api | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated | [grokcli.py](../supervisor/grokcli.py) |
-| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -118,11 +118,11 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CUSTOM_VISION` | _(empty)_ | the custom/<model> names (without the custom/ prefix, comma separated) the operator declares able to read images: only these may be `SHAFT_DESCRIBE_MODEL` | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_DECISION_MODELS` | `typesafe/jev-1.13,~typesafe/jev-latest` | the models the broker's decide tool may call (OpenRouter's decisions API); the first is its default | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_DECISION_PROVIDER` | `{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}` | the decide tool's provider routing and data policy (JSON) | [cloudllm.py](../supervisor/cloudllm.py) |
-| `SHAFT_CONSULT_MODELS` | `openrouter/anthropic/claude-opus-5.5,openrouter/anthropic/claude-sonnet-5.5,openrouter/moonshotai/kimi-k3.1-pro,openrouter/google/gemini-4-argon,openrouter/openai/gpt-6.1-sol,openrouter/openai/gpt-6.1-terra,openrouter/meta/muse-spark-1.3,openrouter/z-ai/glm-5.3,openrouter/minimax/minimax-m3.1-flash` | models on the instance's consult menu | [consult.py](../supervisor/consult.py) |
+| `SHAFT_CONSULT_MODELS` | `openrouter/anthropic/claude-opus-5.5,openrouter/anthropic/claude-sonnet-5.5,openrouter/moonshotai/kimi-k3.1-pro,openrouter/google/gemini-4-argon,openrouter/openai/gpt-6.1-sol,openrouter/openai/gpt-6.1-terra,openrouter/meta/muse-spark-1.3,openrouter/z-ai/glm-5.3,openrouter/minimax/minimax-m3.1-flash` | models on the instance's consult menu, each called by its prefix: openrouter/… (priced from OpenRouter's catalogue), custom/… (at its `SHAFT_CUSTOM_PRICES`, reserved at them too) or codex/… (the ChatGPT plan: no dollars); the instance's own custom/ or codex/ model is left off its menu | [consult.py](../supervisor/consult.py) |
 | `SHAFT_CONSULT_DAILY_USD` | `3` | dollars per day per instance for model consultations; `shaft limits <name> consult-cap <usd>` overrides this | [consult.py](../supervisor/consult.py) |
 | `SHAFT_CONSULT_PROVIDER` | `{"data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter consult provider routing and data policy; instances cannot override it | [consult.py](../supervisor/consult.py) |
 | `SHAFT_CONSULT_MAX_TOKENS` | `8000` | default and maximum output tokens per consultation | [consult.py](../supervisor/consult.py) |
-| `SHAFT_CODER_MODEL` | `claude-opus-5-5` | the model an instance hands a coding task to (delegate) | [coder.py](../supervisor/coder.py) |
+| `SHAFT_CODER_MODEL` | `claude-opus-5-5` | the model an instance hands a coding task to (delegate): claude-… (a priced one), openrouter/…, a priced custom/… or a codex/… plan model; without its credential a hand-off is refused with the reason | [coder.py](../supervisor/coder.py) |
 | `SHAFT_CODER_DAILY_USD` | `5` | dollars per day per instance its coding hand-offs may spend | [coder.py](../supervisor/coder.py) |
 | `SHAFT_CYCLE_TIMEOUT_S` | `2400` | seconds a cycle (and a trial's replayed cycle) may run before it is stopped | [core.py](../supervisor/core.py) |
 | `SHAFT_SLEEP_TIMEOUT_S` | `5400` | seconds the nightly sleep (consolidation) may run; nobody is waiting for it | [core.py](../supervisor/core.py) |
@@ -174,7 +174,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` | `24` | replayed cycles per day an instance's own trials may run on the local model; past it they run on the fallback model | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_N_MAX` | `10` | maximum replay units per arm across selected past states, counting live cycles and sleeps | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_LOCAL_WAIT_H` | `6` | hours a trial waits for the local model's idle time before it runs on the fallback model | [trial.py](../supervisor/trial.py) |
-| `SHAFT_TRIAL_FALLBACK_MODEL` | `openrouter/xiaomi/mimo-v2.6-pro` | the cloud model a local-model trial runs on when the local model stays busy | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_FALLBACK_MODEL` | `openrouter/xiaomi/mimo-v2.6-pro` | the cloud model a local-model trial runs on when the local model stays busy (any supervisor model), or `none`: its pairs wait for the local model, and a trial or probe that needs a cloud model is refused | [trial.py](../supervisor/trial.py) |
 | `SHAFT_TRIAL_PARALLEL` | `3` | replayed cycles a cloud-model trial runs at once | [trial.py](../supervisor/trial.py) |
 | `SHAFT_MAX_IMAGES` | `4` | images one model call may carry | [vision.py](../supervisor/vision.py) |
 | `SHAFT_WEB_PORT` | `8785` | the web UI's local port (tailscale serve forwards to it) | [web.py](../supervisor/web.py) |
@@ -454,8 +454,10 @@ or another model in `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft 
 shows whether login is present, the last observed weekly usage, offered models and any outage.
 The allowance is shared with other Codex use. Calls use no API dollars; after a failure,
 the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
-`codex/x (fallback y)`. Trial replays and bake-offs fail instead of falling back.
-Judges, image descriptions, consults, coder hand-offs and recaps still require their API models.
+`codex/x (fallback y)`; with `SHAFT_CODEX_FALLBACK_MODEL=none` the failure is the run's error instead.
+Trial replays and bake-offs fail instead of falling back. Judges, image descriptions, recaps,
+consults (codex/ names in `SHAFT_CONSULT_MODELS`) and coder hand-offs (`SHAFT_CODER_MODEL`) can run
+on the plan too, each through a Codex app-server of the supervisor's own.
 Source: [broker.py](../supervisor/broker.py).
 
 ### Codex log retention
@@ -484,7 +486,7 @@ receive an explicit environment, with imported skills, rules, hooks and MCPs dis
 | `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 |
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable |
 | `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated |
-| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
+| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run, or `none` |
 | `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain |
 

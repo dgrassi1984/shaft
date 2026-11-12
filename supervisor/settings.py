@@ -180,6 +180,7 @@ def model_choices() -> list[str]:
 def listing() -> list[dict]:
     """Every setting, in its group: value (as text), source (env / file / default), default, what it does, the
     services that hold it, whether the web may set it, its value in the file, and the services where it is not live."""
+    from . import coder
     load_all()
     file, late = file_values(), not_live()
     out = []
@@ -192,10 +193,15 @@ def listing() -> list[dict]:
             f.update(kind="models", choices=[m for m in model_choices() if not planchannel.prefix(m)])
         elif k.parse in (core.cloud_model, core.claude_model, core.openrouter_model):
             f.update(kind="model", choices=[m for m in model_choices() if not planchannel.prefix(m)])
-        elif k.parse in (core.any_models, core.any_model):   # the supervisor's own calls (modelcall): Codex plan too
+        elif k.parse in (core.any_models, core.any_model, core.fallback_model, coder._priced_model):
+            # the supervisor's own calls (modelcall, the coder) and the trials' fallback: a Codex plan too
             from . import codexcli
             f.update(kind="models" if k.parse is core.any_models else "model", choices=list(dict.fromkeys(
-                [m for m in model_choices() if not planchannel.prefix(m)] + codexcli.models())))
+                [m for m in model_choices() if not planchannel.prefix(m)] + codexcli.models()
+                + ([core.NO_FALLBACK] if k.parse is core.fallback_model else []))))
+        elif k.parse is core.channel_fallback:   # after a plan channel fails: a model the broker calls, or none
+            f.update(kind="model", choices=[m for m in model_choices() if not planchannel.prefix(m)]
+                     + [core.NO_FALLBACK])
         elif k.parse in (core.positive_int, core.whole, core.port):
             f["kind"] = "int"
         out.append(f)

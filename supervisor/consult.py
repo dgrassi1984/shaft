@@ -32,6 +32,7 @@ MAX_TOKENS, _ = knob(
     "SHAFT_CONSULT_MAX_TOKENS", "8000", positive_int, "maximum output tokens per model consultation",
     group="Models and spend", services=("runs", "api"))
 USAGE = SUP_DIR / "consult_usage.jsonl"
+DIRECT = ("custom/", "codex/")   # consult models called without OpenRouter: the operator's endpoint, a ChatGPT plan
 SEND_TIMEOUT_S = 300   # one POST, no retry: well inside a reservation's 30 minutes (the chat path's retries were not)
 RESERVATION_S = 1800
 
@@ -137,22 +138,54 @@ def _price(value):
         return None
 
 
-def menu(instance: str, fetch: bool = True) -> list[dict]:
+def _own_model(instance: str) -> str | None:
+    """The instance's own model (its config.env): never on its consult menu off OpenRouter — a consult asks another."""
+    from . import core
+    return core.instance_config(instance).get("LLM_MODEL") if instance.replace("-", "").isalnum() else None
+
+
+def _direct(name: str, secrets: dict | None) -> dict:
+    """A custom/ (the declared prices: what it costs and what is reserved) or codex/ (a ChatGPT plan: no dollars)
+    menu item; `why` names what is missing when it cannot be called now."""
+    from . import modelcall
+    if name.startswith("codex/"):
+        item = {"model": name, "plan": True, "in_per_m": 0.0, "out_per_m": 0.0, "reserve_in_per_m": 0.0,
+                "reserve_out_per_m": 0.0}
+    else:
+        price = cloudllm.custom_price(name) or (None, None)
+        item = {"model": name, "in_per_m": price[0], "out_per_m": price[1], "reserve_in_per_m": price[0],
+                "reserve_out_per_m": price[1]}
+    why = modelcall.available(name, secrets) or ""
+    return {**item, "available": not why, "why": why}
+
+
+def menu(instance: str, fetch: bool = True, secrets: dict | None = None) -> list[dict]:
+    """The instance's consult menu: SHAFT_CONSULT_MODELS, each routed by its own prefix — openrouter/… priced from
+    OpenRouter's catalogue, custom/… from SHAFT_CUSTOM_PRICES, codex/… on the ChatGPT plan (no dollars) — less the
+    instance's own custom/ or codex/ model. `secrets`: the keys the caller holds (the broker's; default the .env)."""
     from . import planchannel
-    catalogue = _catalogue(fetch)
+    own = _own_model(instance) if any(n.startswith(DIRECT) for n in MODELS) else None
+    names = [n for n in MODELS if not (n.startswith(DIRECT) and n == own)]
+    # The catalogue is OpenRouter's: an install whose menu has no OpenRouter model never waits on it (nor fails on it).
+    catalogue = _catalogue(fetch) if any(not n.startswith(DIRECT) and not planchannel.prefix(n) for n in names) else {}
     if catalogue is None:   # the envelope before the first catalogue has loaded
-        return [{"model": name, "in_per_m": None, "out_per_m": None, "available": False,
-                 "why": "prices not loaded yet (they load in the background; ask again in a minute)"} for name in MODELS]
-    models = {m["id"]: m for m in catalogue["models"]}
+        return [_direct(name, secrets) if name.startswith(DIRECT) else
+                {"model": name, "in_per_m": None, "out_per_m": None, "available": False,
+                 "why": "prices not loaded yet (they load in the background; ask again in a minute)"} for name in names]
+    models = {m["id"]: m for m in catalogue.get("models", [])}
     result = []
-    for name in MODELS:
+    for name in names:
+        if name.startswith(DIRECT):
+            result.append(_direct(name, secrets))
+            continue
         if planchannel.prefix(name):
             result.append({"model": name, "in_per_m": None, "out_per_m": None, "available": False,
-                           "why": f"consults require an OpenRouter cloud model; {name.partition('/')[0]}/ is not supported"})
+                           "why": f"consults require an OpenRouter, custom/ or codex/ model; "
+                                  f"{name.partition('/')[0]}/ is not supported"})
             continue
         model = models.get(name.removeprefix("openrouter/"), {})
         ids = {model.get("id"), model.get("canonical_slug")} - {None}
-        endpoints = [e for e in catalogue["endpoints"] if e.get("model_id") in ids]
+        endpoints = [e for e in catalogue.get("endpoints", []) if e.get("model_id") in ids]
         if PROVIDER.get("only"):
             endpoints = [e for e in endpoints if e.get("tag") in PROVIDER["only"]
                          or e.get("provider_name") in PROVIDER["only"]]
@@ -180,8 +213,8 @@ def menu(instance: str, fetch: bool = True) -> list[dict]:
     return result
 
 
-def envelope(instance: str) -> dict:
-    models = menu(instance, fetch=False)
+def envelope(instance: str, secrets: dict | None = None) -> dict:
+    models = menu(instance, fetch=False, secrets=secrets)
     with editing_lock():
         return {"spent_usd": spent_today(instance), "reserved_usd": _reserved(_reservations(), instance),
                 "cap_usd": daily_cap(instance), "models": models}
@@ -221,8 +254,9 @@ def _send_once(req: urllib.request.Request) -> tuple[dict | None, str | None, in
 def complete(instance: str, body: dict, secrets: dict, caller, run, run_started) -> dict:
     from . import planchannel
     model = body.get("model")
-    if planchannel.prefix(model):
-        raise ConsultError(403, f"consults require an OpenRouter cloud model; {model.partition('/')[0]}/ is not supported")
+    if planchannel.prefix(model) and not str(model).startswith(DIRECT):
+        raise ConsultError(403, f"consults require an OpenRouter, custom/ or codex/ model; "
+                                f"{model.partition('/')[0]}/ is not supported")
     if model not in MODELS:
         raise ConsultError(403, f"model {model!r} is not on the consult menu (SHAFT_CONSULT_MODELS)")
     if body.get("stream"):
@@ -235,19 +269,28 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     if body.get("modalities"):
         raise ConsultError(400, "consults answer in text only (no modalities)")
     _text_only(body.get("messages"))
-    item = next(m for m in menu(instance) if m["model"] == model)
+    item = next((m for m in menu(instance, secrets=secrets) if m["model"] == model), None)
+    if item is None:
+        raise ConsultError(403, f"{model} is this instance's own model: a consult asks another model")
     if not item["available"]:
         raise ConsultError(403, f"{model}: {item['why']}")
-    key = secrets.get("OPENROUTER_API_KEY")
-    if not key:
-        raise ConsultError(503, "no OPENROUTER_API_KEY configured")
+    provider = "codex" if model.startswith("codex/") else "custom" if model.startswith("custom/") else "openrouter"
+    effort = body.get("reasoning_effort") or (body.get("reasoning") if isinstance(body.get("reasoning"), dict)
+                                              else {}).get("effort")
+    key = secrets.get({"custom": "SHAFT_CUSTOM_API_KEY", "openrouter": "OPENROUTER_API_KEY"}.get(provider, ""))
+    if provider != "codex" and not key:
+        raise ConsultError(503, f"no {'SHAFT_CUSTOM_API_KEY' if provider == 'custom' else 'OPENROUTER_API_KEY'} "
+                                f"configured")
     tokens = body.get("max_tokens", MAX_TOKENS)
     if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens <= 0:
         raise ConsultError(400, "max_tokens must be a positive integer")
     tokens = min(tokens, MAX_TOKENS)
     payload = {k: v for k, v in body.items() if k not in ("provider", "stream_options", "max_completion_tokens")}
-    payload.update(model=model.removeprefix("openrouter/"), max_tokens=tokens, provider=PROVIDER,
-                   usage={"include": True})
+    payload.update(model=model.removeprefix("openrouter/"), max_tokens=tokens)
+    if provider == "openrouter":
+        payload.update(provider=PROVIDER, usage={"include": True})
+    else:                         # OpenRouter's own knobs mean nothing to the operator's endpoint or a plan
+        payload = {k: v for k, v in payload.items() if k not in ("reasoning", "usage", "transforms", "route")}
     if isinstance(payload.get("reasoning"), dict) and "max_tokens" in payload["reasoning"]:
         # a thinking budget above max_tokens would be output the worst case does not count
         payload["reasoning"] = {**payload["reasoning"], "max_tokens": min(_int(payload["reasoning"]["max_tokens"]),
@@ -266,20 +309,36 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
         _save_reservations(rows)
     started, data, error, cost, usage = time.monotonic(), None, None, worst, {}
     try:
-        req = urllib.request.Request(cloudllm.OPENROUTER_API, data=json.dumps(payload).encode(), headers={
-            "content-type": "application/json", "authorization": f"Bearer {key}", "x-title": "SHAFT"})
-        data, error, status = _send_once(req)
-        usage = (data or {}).get("usage") or {}
-        reported = usage.get("cost")
-        if isinstance(reported, (int, float)) and not isinstance(reported, bool) and 0 < reported < math.inf:
-            cost = reported   # 0 or missing: the worst case (the plan: never $0 for a call that answered)
-            if reported > worst:
-                from .core import log
-                log(f"{instance}: consult {model} cost ${reported:.6f}, over its ${worst:.6f} reservation")
-        if data is None and status is not None and 400 <= status < 500 and status != 429:
-            cost = 0.0   # one attempt, refused outright: nothing was generated (a timeout or 5xx may have been)
-        if data is None or not data.get("choices"):
-            raise ConsultError(502, f"OpenRouter consult failed: {error or json.dumps(data)[:400]}")
+        if provider == "codex":
+            data, usage, cost = _plan(model, payload["messages"], tokens, effort)
+        elif provider == "custom":
+            data, error, status = _send_once(cloudllm._custom_request(payload, key, stream=False))
+            if data is not None:          # the declared price of the endpoint's counts, else of the worst case
+                tin, tout, cost, _ = cloudllm._custom_counts(
+                    cloudllm.custom_price(model), payload, data.get("usage") or {},
+                    cloudllm._message_chars(((data.get("choices") or [{}])[0] or {}).get("message") or {}))
+                usage = {"prompt_tokens": tin, "completion_tokens": tout}
+                data["usage"] = {**usage, "cost": cost}
+            elif status is not None and 400 <= status < 500 and status != 429:
+                cost = 0.0
+            if data is None or not data.get("choices"):
+                raise ConsultError(502, f"consult on {cloudllm.CUSTOM_BASE_URL} failed: "
+                                        f"{error or json.dumps(data)[:400]}")
+        else:
+            req = urllib.request.Request(cloudllm.OPENROUTER_API, data=json.dumps(payload).encode(), headers={
+                "content-type": "application/json", "authorization": f"Bearer {key}", "x-title": "SHAFT"})
+            data, error, status = _send_once(req)
+            usage = (data or {}).get("usage") or {}
+            reported = usage.get("cost")
+            if isinstance(reported, (int, float)) and not isinstance(reported, bool) and 0 < reported < math.inf:
+                cost = reported   # 0 or missing: the worst case (the plan: never $0 for a call that answered)
+                if reported > worst:
+                    from .core import log
+                    log(f"{instance}: consult {model} cost ${reported:.6f}, over its ${worst:.6f} reservation")
+            if data is None and status is not None and 400 <= status < 500 and status != 429:
+                cost = 0.0   # one attempt, refused outright: nothing was generated (a timeout or 5xx may have been)
+            if data is None or not data.get("choices"):
+                raise ConsultError(502, f"OpenRouter consult failed: {error or json.dumps(data)[:400]}")
     except Exception as e:
         error = str(e)
         raise
@@ -290,7 +349,7 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
                        "caller": str(caller or "")[:60], "run": run, "run_started": run_started,
                        "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                        "usd": cost, "reserved_usd": worst, "seconds": round(time.monotonic() - started, 1),
-                       "error": error}
+                       "error": error, **({"plan": "codex"} if provider == "codex" else {})}
                 ledger.record_charge(cost)
                 with USAGE.open("a") as f:
                     f.write(json.dumps(row) + "\n")
@@ -300,3 +359,18 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
             shaft = {"usd": cost, "spent_usd": spent_today(instance), "reserved_usd": _reserved(rows, instance),
                      "cap_usd": daily_cap(instance)}
     return {**data, "shaft": shaft}
+
+
+def _plan(model: str, messages: list, tokens: int, effort: str | None) -> tuple[dict, dict, float]:
+    """A codex/ consult: one answer on the ChatGPT plan through a Codex app-server of the supervisor's own
+    (modelcall), as an OpenAI-format reply. No dollars: (reply, usage, 0.0)."""
+    from . import modelcall
+    try:
+        answer = modelcall.ask(model, "", messages, max_tokens=tokens, effort=effort, purpose="consult")
+    except modelcall.ModelCallError as e:
+        raise ConsultError(502, f"Codex consult failed: {e}") from None
+    usage = {"prompt_tokens": answer.usage.get("prompt_tokens"),
+             "completion_tokens": answer.usage.get("completion_tokens")}
+    return ({"id": f"consult-{uuid.uuid4().hex[:12]}", "object": "chat.completion", "model": model,
+             "choices": [{"index": 0, "message": {"role": "assistant", "content": answer.text},
+                          "finish_reason": "stop"}], "usage": {**usage, "cost": 0.0, "plan": "codex"}}, usage, 0.0)

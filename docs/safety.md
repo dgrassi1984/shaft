@@ -164,7 +164,8 @@ committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`.
 ### Coding delegation
 
 `delegate_coding`: an
-Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
+Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`; any provider the supervisor calls:
+claude-…, openrouter/…, a priced custom/… or a codex/… plan model) reads the instance's code
 read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
 the gate passes; code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
 `SHAFT_CODER_DAILY_USD` (5) per instance per day. Admission blocks new tasks once
@@ -441,7 +442,7 @@ in both orders; a sign test (α 0.1) gives better / worse / no clear difference,
 Nothing is applied: the instance adopts the change itself, and if it makes the trialled edit (the same lines
 removed and added, even if the rest of the file moved on) its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
 sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_TRIAL_FALLBACK_MODEL`
-(mimo); at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
+(mimo; `none` keeps it waiting for the local model); at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
 (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
 `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
 trials: `.supervisor/trials/<name>/<id>/`.

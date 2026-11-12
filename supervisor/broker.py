@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import judge
-from .core import NETWORK_ERRORS, any_model, jsonl_lines, knob, whole
+from .core import NETWORK_ERRORS, NO_FALLBACK, any_model, jsonl_lines, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
@@ -1260,7 +1260,14 @@ class Broker:
                     if planchannel.serves(original):
                         if not broker.local_fallback:
                             raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {broker.channel_down}")
-                        body = {**body, "model": planchannel.fallback_model(original)}
+                        if (fallback := planchannel.fallback_model(original)) == NO_FALLBACK:
+                            # No other provider: the channel's failure is the run's error (the channel stays down, so
+                            # each later call of the run gets it at once and the instance's retries end the run).
+                            prefix = original.partition("/")[0].upper()
+                            raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: "
+                                                           f"{broker.channel_down}; no fallback model "
+                                                           f"(SHAFT_{prefix}_FALLBACK_MODEL={NO_FALLBACK})")
+                        body = {**body, "model": fallback}
                         try:
                             fallback_vision = not images or vision.sees_images(body["model"])
                         except vision.VisionError:
@@ -2406,7 +2413,7 @@ class Broker:
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
                 "consult": None if self.usage_name != self.name or not self.model_allowed else
-                    field("consult", lambda: consult.envelope(self.name)),
+                    field("consult", lambda: consult.envelope(self.name, self.secrets)),
                 "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in unavailable else
                     field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name, **until)),
                                             "cap_usd": float(coder.DAILY_USD)}),

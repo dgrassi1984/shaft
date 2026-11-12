@@ -91,7 +91,9 @@ Native provider tools are denied. SHAFT tools are relayed through
 
 Consultations have their own model menu and daily allowance in `supervisor/consult.py`.
 The broker route `/llm/consult/v1/chat/completions` accepts non-streaming, text-only
-requests and reserves their worst-case cost before dispatch. Consultations are unavailable
+requests and reserves their worst-case cost before dispatch. Each menu model is called by its
+prefix: openrouter/… on OpenRouter, custom/… on the operator's endpoint at its declared prices,
+codex/… on the ChatGPT plan through `supervisor/modelcall.py` (no dollars). Consultations are unavailable
 to scheduled jobs, trial replays, and battery exams.
 
 `web_search` uses a 35-second socket timeout per attempt. It makes up to three attempts

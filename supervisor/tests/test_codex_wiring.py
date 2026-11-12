@@ -265,6 +265,34 @@ class BrokerTest(Case):
         h.send_response.assert_called_once_with(502)
         self.assertIn("weekly cap", json.loads(h.wfile.getvalue())["error"]["message"])
 
+    def test_fallback_none_ends_the_run_with_the_channel_error(self):
+        """SHAFT_CODEX_FALLBACK_MODEL=none (an operator with a ChatGPT plan only): a live run's channel failure is its
+        error — never a call to some other model, never a silent continue — and every later call of the run gets
+        the same error at once (the channel stays down), so the instance's retries end the run."""
+        self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", "none"))
+        for streaming in (False, True):
+            with self.subTest(stream=streaming):
+                self.b.channel_down, self.b._log = None, mock.Mock()
+                self.channel.complete.reset_mock()
+                self.channel.stream.reset_mock()
+                self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+                self.channel.stream.side_effect = codexcli.CodexFailure("offline")
+                with mock.patch.object(cloudllm, "complete") as cloud, \
+                        mock.patch.object(cloudllm, "openrouter_stream") as cloud_stream:
+                    first, _ = self.call(stream=streaming)
+                    again, _ = self.call(stream=streaming)
+                cloud.assert_not_called()
+                cloud_stream.assert_not_called()
+                for h in (first, again):
+                    h.send_response.assert_called_once_with(502)
+                    message = json.loads(h.wfile.getvalue())["error"]["message"]
+                    self.assertIn("Codex failed: offline", message)
+                    self.assertIn("SHAFT_CODEX_FALLBACK_MODEL=none", message)
+                self.assertEqual((self.channel.stream if streaming else self.channel.complete).call_count, 1)
+                self.assertEqual(self.b.channel_down, "offline")
+                logged = [c.args[0] for c in self.b._log.call_args_list]
+                self.assertTrue(any("ERROR" in line and "Codex failed: offline" in line for line in logged), logged)
+
     def test_codex_closed_is_shutdown_without_false_outage_or_paid_fallback(self):
         for streaming in (False, True):
             with self.subTest(stream=streaming):
@@ -396,15 +424,14 @@ class ModelsTest(Case):
         for parse in (core.cloud_model, core.claude_model, core.openrouter_model):
             with self.assertRaisesRegex(ValueError, "model"):
                 parse(MODEL)
-        from supervisor import coder, recap
-        with self.assertRaisesRegex(ValueError, "Claude model"):
-            coder._priced_claude(MODEL)
 
     def test_supervisor_side_calls_accept_codex_models(self):
-        """modelcall runs judges, recaps and describe_image on a Codex plan too (a standalone app-server)."""
+        """modelcall runs judges, recaps and describe_image on a Codex plan too (a standalone app-server), and the
+        coder runs a hand-off there."""
         for name in ("SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL", "SHAFT_DESCRIBE_MODEL"):
             self.assertIs(core.KNOBS[name].parse, core.any_model, name)
             self.assertEqual(core.KNOBS[name].parse(MODEL), MODEL)
+        self.assertEqual(core.KNOBS["SHAFT_CODER_MODEL"].parse(MODEL), MODEL)
         self.assertEqual(core.KNOBS["SHAFT_JUDGE_MODELS"].parse(MODEL), [MODEL])
         with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS"):
             core.any_model("codex/not-offered")
@@ -534,16 +561,57 @@ class ModelsTest(Case):
                 mock.patch.object(version, "supervisor_commit", return_value="abc"):
             self.assertIn(f"model {MODEL} via the broker (Codex plan)", version.describe("bird"))
 
-    def test_unsupported_consult_and_probes_refuse_codex_clearly(self):
+    def test_unsupported_consult_and_probes_refuse_plans_clearly(self):
+        """Probes still need an OpenRouter model; a consult runs on a Codex plan (below) but not on Grok's."""
         with self.assertRaisesRegex(experiments.ExperimentError, "openrouter/"):
             experiments._probe_model(MODEL)
-        with self.assertRaisesRegex(consult.ConsultError, "codex/ is not supported"):
-            consult.complete("bird", {"model": MODEL}, {}, None, None, None)
-        with mock.patch.object(consult, "MODELS", [MODEL]), \
+        with self.assertRaisesRegex(consult.ConsultError, "grok/ is not supported"):
+            consult.complete("bird", {"model": "grok/grok-4.7"}, {}, None, None, None)
+        with mock.patch.object(consult, "MODELS", ["grok/grok-4.7"]), \
                 mock.patch.object(consult, "_catalogue", return_value={"models": [], "endpoints": []}):
             item = consult.menu("bird")[0]
         self.assertFalse(item["available"])
-        self.assertIn("codex/ is not supported", item["why"])
+        self.assertIn("grok/ is not supported", item["why"])
+
+    def test_consult_on_codex_is_plan_priced(self):
+        """A ChatGPT-plan install consults the plan's other models: no dollars (usd 0, plan: true), its own model
+        left off the menu, the answer through a short-lived Codex app-server of the supervisor's own."""
+        from supervisor.tests.test_modelcall import FakeCodex
+        fake = FakeCodex(self, self.root)
+        fake.say("from codex")
+        other = "codex/gpt-6.1-sol"
+        self.enterContext(mock.patch.object(consult, "USAGE", self.root / "consult_usage.jsonl"))
+        self.enterContext(mock.patch.object(consult, "SUP_DIR", self.root))
+        self.enterContext(mock.patch.object(consult, "MODELS", [MODEL, other]))
+        self.enterContext(mock.patch.object(core, "instance_config", return_value={"LLM_MODEL": MODEL}))
+        self.enterContext(mock.patch.object(consult, "_catalogue", side_effect=AssertionError("no catalogue")))
+        self.assertEqual(consult.menu("bird"), [{"model": other, "plan": True, "in_per_m": 0.0, "out_per_m": 0.0,
+                                                 "reserve_in_per_m": 0.0, "reserve_out_per_m": 0.0,
+                                                 "available": True, "why": ""}])
+        body = {"model": other, "messages": [{"role": "system", "content": "be brief"},
+                                             {"role": "user", "content": "hello"}], "max_tokens": 100}
+        reply = consult.complete("bird", body, {}, "plugin", "live", "2026-11-12T10:00:00")
+        self.assertEqual(reply["choices"][0]["message"]["content"], "from codex")
+        self.assertEqual(reply["shaft"]["usd"], 0.0)
+        self.assertEqual(fake.requests("thread/start")[-1]["params"]["model"], "gpt-6.1-sol")
+        self.assertEqual(fake.requests("thread/start")[-1]["params"]["baseInstructions"], "be brief")
+        row = json.loads(consult.USAGE.read_text())
+        self.assertEqual((row["model"], row["usd"], row["reserved_usd"], row["plan"]), (other, 0.0, 0.0, "codex"))
+        self.assertEqual(consult._reservations(), [])
+        with self.assertRaisesRegex(consult.ConsultError, "own model"):
+            consult.complete("bird", {**body, "model": MODEL}, {}, "plugin", "live", None)
+
+    def test_fallback_knobs_take_any_supervisor_model_or_none(self):
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
+            parse = core.KNOBS[name].parse
+            for value in ("none", "claude-haiku-5-5", "openrouter/x/y"):
+                self.assertEqual(parse(value), value, name)
+            with self.assertRaises(ValueError):
+                parse("codex/not-offered")
+        self.assertEqual(core.KNOBS["SHAFT_TRIAL_FALLBACK_MODEL"].parse(MODEL), MODEL)
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL"):   # a failed channel's fallback is
+            with self.assertRaisesRegex(ValueError, "none"):                     # called directly, not on a plan
+                core.KNOBS[name].parse(MODEL)
 
 
 class AccountingTest(Case):
