@@ -223,15 +223,15 @@ class OpeningTest(ChatTest):
         failure = web_chat.feed("wisp")["items"][0]["failure"]
         retry = failure["retry"]
         self.assertEqual((retry["text"], retry["retry_of"], retry["confirm"]),
-                         (web_chat.OPENING_RETRY, None, web_chat.RETRY_CONFIRM))
+                         (web_chat.OPENING_RETRY, 1, web_chat.RETRY_CONFIRM))
         self.assertIn("Actions may already have run", failure["action"])
         self.assertEqual([x["label"] for x in failure["links"]], ["Activity", "Services"])
         rendered = str(web_views.chat_feed("wisp", c, web_chat.from_rows("wisp")))
         self.assertIn("data-retry-confirm=", rendered)
-        self.assertNotIn("data-retry-of=", rendered)
+        self.assertIn('data-retry-of="1"', rendered)                    # the re-ask is known by it, after the confirm
         self.assertNotIn("SETUP-ONLY", rendered)
-        # Retry after its confirm, as the page and the apps send it: no retry_of
-        chat, said = web_chat.send("wisp", ME, retry["text"], [], mid="m-again")
+        # Retry after its confirm, as the page and the apps send it: with retry_of
+        chat, said = web_chat.send("wisp", ME, retry["text"], [], mid="m-again", retry_of=str(retry["retry_of"]))
         self.assertEqual(said, "sent to wisp")
         c = self.wait_idle(chat["id"])
         self.assertEqual([t.get("retried", False) for t in c["turns"]], [False, False, False, False])   # nothing folded
@@ -248,8 +248,35 @@ class OpeningTest(ChatTest):
         self.assertTrue(self.marker().exists())
         # The old failure's Retry, once the welcome has come: refused, never sent as an operator message
         with self.assertRaisesRegex(web_chat.Refused, "not asked for again"):
-            web_chat.send("wisp", ME, retry["text"], [], mid="m-late")
+            web_chat.send("wisp", ME, retry["text"], [], mid="m-late", retry_of=str(retry["retry_of"]))
         self.assertEqual(len(web_chat.load(c["id"])["turns"]), 4)
+
+    def test_typing_the_retry_phrase_is_an_ordinary_message(self):
+        """Only explicit retry intent (retry_of naming the failed opening) asks for the welcome again. The same words
+        typed by the operator are their message: stored and sent as typed, shown — after a failed opening, and after
+        the welcome alike."""
+        conn = mock.Mock()
+        conn.request.side_effect = ConnectionResetError("reset by peer")
+        with mock.patch.object(web_chat, "_api_conn", return_value=conn):
+            c = self.open_and_wait()
+        self.assertTrue(web_chat.failed(c))
+        chat, said = web_chat.send("wisp", ME, web_chat.OPENING_RETRY, [], mid="m-typed")
+        self.assertEqual(said, "sent to wisp")
+        c = self.wait_idle(chat["id"])
+        self.assertEqual([(t["role"], bool(t.get("hidden"))) for t in c["turns"]],
+                         [("user", True), ("assistant", False), ("user", False), ("assistant", False)])
+        self.assertEqual(c["turns"][2]["shown"], web_chat.OPENING_RETRY)
+        self.assertEqual(self.api.chats()[-1][2]["messages"][-1], {"role": "user", "content": web_chat.OPENING_RETRY})
+        self.assertEqual(sum("SETUP-ONLY" in m["content"] for m in self.api.chats()[-1][2]["messages"]), 1)
+        items = web_chat.feed("wisp")["items"]
+        self.assertEqual([i["type"] for i in items], ["assistant", "user", "assistant"])
+        self.assertEqual(items[1]["text"], web_chat.OPENING_RETRY)
+        # after the welcome too: an ordinary message, never refused as a stale Retry
+        chat, said = web_chat.send("wisp", ME, web_chat.OPENING_RETRY, [], mid="m-typed-2")
+        self.assertEqual(said, "sent to wisp")
+        c = self.wait_idle(chat["id"])
+        self.assertEqual(sum(bool(t.get("hidden")) for t in c["turns"]), 1)
+        self.assertEqual(c["turns"][-2]["shown"], web_chat.OPENING_RETRY)
 
     def test_the_conversation_is_open_while_the_opening_replies(self):
         """The opening's reply is an API conversation like any (keyed by Main's id): the API registers it, so
@@ -311,6 +338,41 @@ class ReadThreadTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in web_chat._api_messages(web_chat.load(chat["id"]))],
                          ["user", "assistant", "user"])
         self.assertEqual(web_chat.thread_mark(web_chat.load(chat["id"]))[0], 1)
+
+
+class SetupNamedInstanceTest(unittest.TestCase):
+    """Who wrote a line is its kind, never a name: an instance may be called "setup"."""
+
+    def setUp(self):
+        self.f = Fixture()
+        self.f.make(self)
+        root = self.f.project / "instances" / "setup"
+        (root / "shaft").mkdir(parents=True)
+        (root / ".git").write_text("gitdir: x")
+        for p in (mock.patch("supervisor.feedback.by_target", return_value={}),
+                  mock.patch.object(web_chat, "_start"),
+                  mock.patch.object(web_chat, "_docs_now", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_an_instance_named_setup_is_not_the_setup(self):
+        chat = web_chat.opening("setup", ME, OPENING)
+        with web_chat._lock(chat["id"]):
+            c = web_chat.load(chat["id"])
+            c["state"], c["reply"] = "idle", None
+            c["turns"] += [{"role": "assistant", "content": "Hello, I am the instance.", "ts": "2099-01-01T10:00:01"}]
+            web_chat.save(c)
+        senders = [who for *_, who in web_chat.dialogue(web_chat.load(chat["id"]), [], senders=True)]
+        self.assertEqual(senders, [{"kind": web_chat.SETUP, "name": "setup"},
+                                   {"kind": web_chat.INSTANCE, "name": "setup"}])
+        self.assertEqual(web_chat.thread_mark(web_chat.load(chat["id"]))[0], 0)
+        read = broker.Broker("setup", self.f.project, {}, self.f.project / "broker.log").call(
+            "read_thread", {"id": chat["id"]})
+        self.assertTrue(read["ok"], read)
+        out = read["result"]
+        self.assertTrue(out.startswith("setup, on the operator's behalf ("), out[:80])
+        self.assertIn("\n\nsetup (2099-01-01T10:00:01): Hello, I am the instance.", out)
+        self.assertEqual(out.count("on the operator's behalf"), 1)            # its own answer is never the setup's
 
 
 if __name__ == "__main__":

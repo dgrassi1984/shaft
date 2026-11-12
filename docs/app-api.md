@@ -433,8 +433,9 @@ Native apps normalize this only for drawing; Copy and Reply keep the source.
 A new instance's Main opens with a request from setup that no feed shows (a hidden turn: no item, excerpt, title or
 `mids` entry), so its first item is the instance's welcome. When that reply fails, `retry.text` is
 "Ask for the welcome again": sent back as any Retry (§6), it asks for the welcome again, still hidden, never as a
-message of the operator's. As any Retry, it is one tap folding the failed try (`retry_of`: k, `confirm` null) only when
-nothing ran; else `confirm` is set, `retry_of` is null and the failed try is kept.
+message of the operator's. Its `retry_of` is always `k`: the re-ask is known by it, and the same words sent without it
+are an ordinary message. As any Retry, it is one tap folding the failed try (`confirm` null) only when nothing ran;
+else `confirm` is set (ask first) and the failed try is kept.
 
 **`sent`**: a message or question the instance sent the operator (`send_message`) over the chat's span (key
 `s<file>`).

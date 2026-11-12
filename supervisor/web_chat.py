@@ -487,14 +487,16 @@ def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | No
     if asked and asked.get("role") == "user" and asked.get("hidden"):
         # The opening's reply failed: Retry asks for the welcome again, still hidden (send → _reopen) — never with the
         # opening's text, which is setup's, not the operator's. As any Retry: one tap folding the failed try only when
-        # nothing ran (note_retry); else after the confirm, the failed try kept.
+        # nothing ran (note_retry); else after the confirm, the failed try kept. Always with retry_of: a re-ask is
+        # known by it, never by its text (a message that says the same is the operator's own).
         safe = bool(turn.get("note_retry"))
         if safe:
             action, retry, links = "No external actions ran: Retry asks for the welcome again.", {
                 "text": OPENING_RETRY, "retry_of": k, "confirm": None}, []
         else:
+            # retry_of still names it — the only way a re-ask is told from a message — and the client asks first
             action, retry, links = ("Actions may already have run. Check Activity and Services before you retry.",
-                                    {"text": OPENING_RETRY, "retry_of": None, "confirm": RETRY_CONFIRM},
+                                    {"text": OPENING_RETRY, "retry_of": k, "confirm": RETRY_CONFIRM},
                                     [{"label": "Activity", "url": f"/i/{name}/activity"},
                                      {"label": "Services", "url": "/services"}])
         return {"kind": kind, "why": FAILURE_WHY.get(kind, "The reply failed."), "action": action, "detail": note,
@@ -909,7 +911,9 @@ def routed(name: str, cid: str | None, history: list[dict] | None = None) -> lis
     return [m for m in rows if not m.get("cancelled")]     # a note taken back before any run read it was never said
 
 
-SETUP = "setup"          # who wrote a hidden opening (opening): setup, on the operator's behalf — never the operator
+# Who wrote an item of a conversation (dialogue's senders): its kind — never its name, which an instance chooses (one
+# may be called "setup") — and the name it goes by.
+OPERATOR, SETUP, INSTANCE = "operator", "setup", "instance"   # SETUP: the hidden opening, on the operator's behalf
 
 
 def dialogue(chat: dict, history: list[dict] | None = None, *, senders: bool = False) -> list[tuple]:
@@ -917,32 +921,37 @@ def dialogue(chat: dict, history: list[dict] | None = None, *, senders: bool = F
     retried) and, in time order among them, what was routed into it from outside its replies: the instance's answers
     from a cycle (assistant) and the operator's notes for the next cycle (user), each saying so. What a reply's API call
     and read_thread both read, so the thread never has two voices (2026-11-10: a cycle's answer sent at 21:15
-    that the replies after it never knew about). `senders`: (ts, role, text, who wrote it) — "operator", SETUP (the
-    hidden opening, a user message to the API but not the operator's) or the instance's name; read_thread says so."""
+    that the replies after it never knew about). `senders`: (ts, role, text, sender) — sender {"kind", "name"}: kind
+    OPERATOR, SETUP (the hidden opening: a user message to the API, but not the operator's) or INSTANCE (name: the
+    instance's); read_thread says who wrote each line by its kind."""
     return [(ts, role, text, who) if senders else (ts, role, text) for ts, role, text, _, who in _dialogue(chat, history)]
 
 
-def _sender(name: str, t: dict) -> str:
-    return name if t["role"] != "user" else SETUP if t.get("hidden") else "operator"
+def _sender(kind: str, name: str = "") -> dict:
+    return {"kind": kind, "name": name or kind}
+
+
+def _turn_sender(name: str, t: dict) -> dict:
+    return _sender(INSTANCE, name) if t["role"] != "user" else _sender(SETUP) if t.get("hidden") else _sender(OPERATOR)
 
 
 def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str, bool, str]]:
     """dialogue(), each item also saying whether it was routed in (True) or is a turn of the thread (False), and who
     wrote it."""
     name = chat["instance"]
-    items = [(t.get("ts", ""), 0, t["role"], t["content"], False, _sender(name, t)) for t in chat.get("turns") or []
+    items = [(t.get("ts", ""), 0, t["role"], t["content"], False, _turn_sender(name, t)) for t in chat.get("turns") or []
              if not t.get("retried") and (t.get("content") or t["role"] == "user")]
     for m in routed(name, chat["id"], history):
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
             items.append((m["ts"], 1, "assistant", f"[sent at {m['ts'][11:16]} in another conversation, shown in "
-                                                   f"From]\n{m['text']}", True, name))
+                                                   f"From]\n{m['text']}", True, _sender(INSTANCE, name)))
         elif m["from"] == name:
             where = "into this thread" if m.get("thread") else "shown in From"
             items.append((m["ts"], 1, "assistant", f"[sent from my cycle at {m['ts'][11:16]}, {where}]\n"
-                                                   f"{m['text']}", True, name))
+                                                   f"{m['text']}", True, _sender(INSTANCE, name)))
         else:
             items.append((m["ts"], 1, "user", f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n"
-                                              f"{m['text']}", True, "operator"))
+                                              f"{m['text']}", True, _sender(OPERATOR)))
     return [(ts, role, text, rt, who) for ts, _, role, text, rt, who in sorted(items, key=lambda x: (x[0], x[1]))]
 
 
@@ -950,7 +959,7 @@ def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str
     """What the operator has written in the thread so far — (how many, the newest one's time): its turns and the notes
     for the next cycle routed into it. read_thread records it; a send_message into the thread needs it unchanged, so
     an answer from a cycle is written knowing what was said since (broker._conversation_target)."""
-    said = [ts for ts, _, _, who in dialogue(chat, history, senders=True) if who == "operator"]   # never setup's opening
+    said = [ts for ts, _, _, who in dialogue(chat, history, senders=True) if who["kind"] == OPERATOR]  # never setup's
     return len(said), max(said, default="")
 
 
@@ -1518,11 +1527,6 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
                     save(c)
                 elif mark_retried(c, int(retry_of), text):
                     save(c)
-        elif text.strip() == OPENING_RETRY and c and c.get("state") != "replying" and not files:
-            with _lock(c["id"]):                  # Retry after its confirm (actions may have run): no retry_of
-                c = load(c["id"])
-                if reopened := _reopen(c, None, text, mid):
-                    save(c)
         if reopened:                              # the welcome asked for again: no message of the operator's
             _start(c["id"])
             log(f"web: {login or 'operator'} asked {name} for its welcome again")
@@ -1750,27 +1754,23 @@ def _failed_opening(turns: list[dict], k: int) -> bool:
             and not asked.get("retried"))
 
 
-def _reopen(chat: dict, k: int | None, text: str, mid: str = "") -> bool:
-    """Retry on a failed reply to the opening (failure offers OPENING_RETRY): the opening is asked again, hidden. As
-    mark_retried, the failed try and the opening fold (retried) only when `k` names a failure where nothing ran
-    (note_retry); else — Retry after its confirm, `k` None for the latest turn — the failed try stays, in view and
-    in the conversation. False when there is no such failure: the message is sent as any other. Refused for an
-    earlier failure's Retry: the operator has written since, or the welcome came since."""
+def _reopen(chat: dict, k: int, text: str, mid: str = "") -> bool:
+    """Retry on a failed reply to the opening — only on its explicit intent: `retry_of` naming that failure, with the
+    text failure() offered (OPENING_RETRY). The opening is asked again, hidden. As mark_retried, the failed try and the
+    opening fold (retried) only when nothing ran (note_retry); when actions may have run, failure() made the client
+    ask first (confirm), and the failed try stays, in view and in the conversation. False when `k` names no failed
+    opening: the message is sent as typed, as any other. Refused for an earlier failure's Retry, once the operator or
+    a later turn has come since."""
     turns = chat.get("turns") or []
-    if text.strip() != OPENING_RETRY:
+    if text.strip() != OPENING_RETRY or not _failed_opening(turns, k):
         return False
-    at = len(turns) - 1 if k is None else k
-    if not _failed_opening(turns, at):
-        if any(_failed_opening(turns, i) for i in range(1, len(turns))):
-            raise Refused("you have written to it since: the welcome is not asked for again")
-        return False
-    if at != len(turns) - 1:
+    if k != len(turns) - 1:
         raise Refused("you have written to it since: the welcome is not asked for again")
-    if k is not None and turns[at].get("note_retry"):
-        turns[at]["retried"] = turns[at - 1]["retried"] = True
+    if turns[k].get("note_retry"):
+        turns[k]["retried"] = turns[k - 1]["retried"] = True
     if mid:                                       # the client's "sending" copy has arrived (sent_mids)
         chat["mids"] = ((chat.get("mids") or []) + [mid])[-MIDS_KEPT:]
-    _ask_opening(chat, turns[at - 1]["content"])
+    _ask_opening(chat, turns[k - 1]["content"])
     return True
 
 

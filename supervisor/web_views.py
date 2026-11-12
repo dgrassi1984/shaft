@@ -1484,8 +1484,10 @@ def _reply_failure(f: dict | None) -> Html:
         recovery = h('<button type="button" class="small retry" data-retry="{text}" data-retry-of="{k}">Retry</button>',
                      text=retry["text"], k=retry["retry_of"])
     elif retry:
-        recovery = join([h('<button type="button" class="small retry" data-retry="{text}" data-retry-confirm="{c}">Retry'
-                           '</button> ', text=retry["text"], c=retry["confirm"]), links])
+        # a retry_of here (a failed opening's Retry) goes with the confirm: it is how the server knows a re-ask
+        of = Html("") if retry["retry_of"] is None else h(' data-retry-of="{k}"', k=retry["retry_of"])
+        recovery = join([h('<button type="button" class="small retry" data-retry="{text}"{of} data-retry-confirm="{c}">'
+                           'Retry</button> ', text=retry["text"], of=of, c=retry["confirm"]), links])
     else:
         recovery = links
     return h('<div class="reply-failure"><p class="failure-why"><strong>{why}</strong></p>'
