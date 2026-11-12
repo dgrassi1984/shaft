@@ -349,3 +349,41 @@ wizard in a dev run"); its pasted-link pairing is the wizard's "Connect to an ex
 - A push carries the title only. The notification service extension fetches the body from `/app/v1/push/latest`
   with the shared credential, within its time limit; on any failure the title shows alone.
 - The simulator receives remote pushes too (Xcode 14+ on Apple silicon), so the iOS extension can be tried there.
+
+## Release a signed build
+
+`Scripts/release-mac.sh` makes the Mac app's download: a Developer ID signed, notarized, stapled
+`build/release/SHAFT-<version>.dmg` (with an Applications shortcut). It uploads nothing; attach the file to the release
+yourself.
+
+One-time setup, with your paid Apple Developer team:
+
+1. A **Developer ID Application** certificate in your login keychain (Xcode → Settings → Accounts → Manage
+   Certificates → + → Developer ID Application). `security find-identity -v -p codesigning` must list it.
+2. A **notary profile**, so the script never sees an Apple ID password:
+
+   ```bash
+   xcrun notarytool store-credentials shaft-notary --apple-id <your Apple ID> --team-id <TEAMID>
+   # it asks for an app-specific password (account.apple.com → Sign-In and Security) and stores it in the keychain
+   ```
+
+3. **Provisioning profiles.** A Developer ID app that uses push (`com.apple.developer.aps-environment`) or a
+   team keychain group needs a provisioning profile that grants it, for the app *and* for the notification extension
+   (`<prefix>.shaft` and `<prefix>.shaft.NotificationService`). In the developer portal, both App IDs need Push
+   Notifications (the app) and Keychain Sharing capabilities; the script lets Xcode create and embed the Developer ID
+   profiles at export (`-allowProvisioningUpdates`, using the account signed in to Xcode). Release builds set
+   `aps-environment` to `production` (`SHAFT_APS_ENVIRONMENT` in `project.yml`; Debug stays `development`). The script
+   checks the exported bundles and fails if a profile is missing or the app's does not grant production push.
+
+Then, from a clean checkout on a release tag:
+
+```bash
+# Working directory: apps/shaft/
+Scripts/release-mac.sh --notary-profile shaft-notary
+```
+
+Options: `--team TEAMID` (default: `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
+`--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the preconditions and
+prints every command, signing and contacting Apple for nothing). It stops at the first failed step, and when Apple
+rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
+SHA-256.

@@ -134,6 +134,13 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      # The APNs environment the entitlement below names: a development build talks to the sandbox, a Release
+      # (Developer ID) build to production. Scripts/release-mac.sh checks the signed result.
+      configs:
+        Debug:
+          SHAFT_APS_ENVIRONMENT: development
+        Release:
+          SHAFT_APS_ENVIRONMENT: production
     info:
       path: Generated/macOS-Info.plist
       properties:
@@ -175,7 +182,7 @@ targets:
         # stays on (ENABLE_HARDENED_RUNTIME); NotificationService-macOS keeps its sandbox (extensions must).
         # The microphone for voice mode, under the hardened runtime.
         com.apple.security.device.audio-input: true
-        com.apple.developer.aps-environment: development
+        com.apple.developer.aps-environment: $(SHAFT_APS_ENVIRONMENT)
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
   # The Mac app's own logic that needs no window: its Markdown text, its text views' menu items, the setup gate and the
