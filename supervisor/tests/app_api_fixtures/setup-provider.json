@@ -1,0 +1,17 @@
+{
+  "provider": "openrouter",
+  "changed": [
+    "SHAFT_JUDGE_MODELS"
+  ],
+  "covers": [
+    "instances",
+    "judges"
+  ],
+  "off": [
+    {
+      "function": "coding",
+      "why": "no openrouter coder is configured"
+    }
+  ],
+  "not_live": []
+}

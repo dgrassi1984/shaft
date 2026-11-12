@@ -88,7 +88,7 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 | 403 | `local_pair` | `POST /app/v1/pair` on loopback (§1.2): pair with `shaft web pair --local` | — |
 | 404 | `not_found` | No such route, instance, chat, turn, attachment, document | — |
 | 405 | `method` | The route exists, the method does not | — |
-| 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, `voices.Refused` (§17), a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
+| 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, setup verb (§18) or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, `voices.Refused` (§17), a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | `POST /setup/instance`: `done`, the steps already completed (§18.1) |
 | 409 | `not_replying` | The stream (§6.1) with no reply running and nothing buffered after `after` | — |
 | 409 | `stale` | A document save or delete with an old `sha`, or a setting save with an old `expect` | Documents: `sha`, `diff` (§10.4). Settings: `settings`, the fresh settings (§15) |
 | 409 | `busy` | An API restart would interrupt a run or reply; the message is the service guard's reason | — |
@@ -1430,6 +1430,162 @@ The voices object:
 The app reports its voices at launch and when the voice settings open. When the chosen voice is not installed on
 the device, the app says so on screen and speaks with the system voice for that language.
 
+## 18. Setup
+
+The Mac app's setup wizard creates an instance, stores the provider keys, switches the provider, grants access and
+asks the new instance for its welcome. The routes need the bearer like every other route (§1.2), on the tailnet or
+on loopback; the wizard uses loopback (`shaft web pair --local`). Each state change runs the CLI verb an operator would
+type (`supervisor/actions.py`: `run_json` for the verbs that answer in JSON, `run_now` for the others), logged as
+`app <device name>: operator ran shaft …`, so every verb's own checks and refusals apply. A key or a token goes to the
+verb's **stdin**, never into its arguments, a log line or an answer.
+
+| Method | Route under `/app/v1` | Request (JSON) | Success |
+|---|---|---|---|
+| POST | `/setup/instance` | `{name, operator, model, drive, autonomy}` | 200, `{"instance", "done", "paused"}` (§18.1) |
+| GET | `/setup/drives` | | 200, `{"drives": [preset]}` (§18.2) |
+| POST | `/setup/secret` | `{name, value}` | 200, `{"said": "<NAME> saved"}` (§18.3) |
+| POST | `/setup/provider` | `{provider, model?, judge_model?, base_url?, price_in?, price_out?, judge_price_in?, judge_price_out?, vision?}` | 200, the coverage (§18.4) |
+| POST | `/setup/provider/check` | `{provider}` | 200, one row per model (§18.4) |
+| POST | `/setup/telegram` | `{name, token}` | 200, `{"said": <the verb's line>}` (§18.5) |
+| GET | `/access/<n>` | | 200, the access object (§18.6) |
+| POST | `/access/<n>` | `{grant, action, alias?, what?, all?, writable?}` | 200, the fresh access object (§18.6) |
+| GET | `/google/<alias>/labels` | | 200, `{"alias", "labels": [str]}` (§18.7) |
+| GET | `/google/<alias>/calendars` | | 200, `{"alias", "calendars": [{id, title, primary, access}]}` (§18.7) |
+| POST | `/setup/hello/<n>` | (empty) | 200, `{"said", "chat": {"id", "title"}}` (§18.8) |
+
+A missing or extra field, or a field of the wrong type: `400 bad_request`, and nothing runs. A verb that refuses:
+`409 refused` with the verb's own words.
+
+### 18.1 `POST /setup/instance`
+
+Runs, in order, as the device:
+
+1. `new <name> --json --paused-until-first-reply resume|stay` (`autonomy` `"own"` → `resume`, `"talk"` → `stay`), with
+   `actions.SLOW_S`. The instance is created paused; its first-reply marker says what the operator's first answered
+   reply does (`resume`: the scheduler takes it from there; `stay`: it stays paused, talking only when talked to).
+2. `config <name> set OPERATOR_NAME=<operator> LLM_MODEL=<model>`.
+3. `drive <name> set --file <temporary file> --expect-sha <sha>`, where `<sha>` is that of the `drive.md` `shaft new`
+   left (the template's): a drive.md changed meanwhile is refused. When `drive` is the template's text already,
+   nothing is written. The temporary file (`.supervisor/web/drive-*.md`) is removed either way.
+
+It does not send the opening: that is `/setup/hello/<n>`, the wizard's last step, once access is granted.
+
+`name`, `operator` and `model` are one non-empty line each (`name` at most 31 characters; `shaft new` checks the
+rest: lowercase letters, digits and `-`, not `operator`, not taken). `drive` is the drive's text, at most 20000
+characters. `autonomy` is `"own"` or `"talk"`.
+
+Success: `{"instance": str, "done": ["new", "config", "drive"], "paused": bool}`. A refused step answers
+`409 refused` with that verb's message and `done`, the steps already completed, inside `error`:
+
+```json
+{"error": {"code": "refused", "message": "refused: LLM_MODEL: no such model", "done": ["new"]}}
+```
+
+An instance whose `new` succeeded stays created (and paused); the app shows the message and lets the operator fix the
+setting, or `shaft delete <name>`.
+
+### 18.2 `GET /setup/drives`
+
+`{"drives": [{id, title, text, suggests}]}`, four presets from `supervisor/drive_presets.py`, in this order:
+
+| `id` | `title` | `suggests` |
+|---|---|---|
+| `assistant` | Personal assistant | `mail`, `calendar`, `drive` |
+| `research` | Research partner | `web`, `drive` |
+| `builder` | Builder | `web`, `folder` |
+| `improve` | Just improve yourself | (none) |
+
+`text` is a whole `drive.md`, addressed to the instance; the app shows it editable and sends the edited text with
+`/setup/instance`. The `improve` text is the template's own `drive.md`, read when asked (`409 refused` when it cannot
+be read). `suggests` names the access rows (§18.6) the Access step pre-ticks: `folder`, `browser`, `web` (web search:
+its key through `/setup/secret`), `telegram`, `mail`, `calendar`, `drive`, `chat`.
+
+### 18.3 `POST /setup/secret`
+
+`{"name": str, "value": str}`: `secrets set <NAME> --json`, the value (one line) on stdin. Only the provider and tool
+keys: `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`; any other name is
+`400 bad_request` naming them. The server's own credentials (`SHAFT_API_KEY`, `SHAFT_INBOX_KEY`, `SHAFT_API_LOGINS`),
+Google clients and Telegram tokens are not written here. A value that is empty or more than one line: `400
+bad_request`. The answer never carries the value.
+
+### 18.4 `POST /setup/provider` and `/setup/provider/check`
+
+`/setup/provider` runs `provider use <provider> --json` (`openrouter`, `codex` or `custom`) with `actions.SLOW_S`; each
+optional field becomes its flag: `model` `--model`, `judge_model` `--judge-model`, `base_url` `--base-url` (strings);
+`price_in`, `price_out`, `judge_price_in`, `judge_price_out` (numbers ≥ 0, dollars per million tokens); `vision`
+(`true` adds `--vision`). The verb decides which fields a provider takes (`409 refused` with its words, e.g. "custom
+needs --model"). Keys are set first with `/setup/secret`. Success:
+
+| Field | Type | |
+|---|---|---|
+| `provider` | str | the provider |
+| `changed` | [str] | the settings it changed |
+| `covers` | [str] | what the provider now runs: `instances`, `judges`, … |
+| `off` | [{`function`, `why`}] | what stays off with this provider, and why |
+| `not_live` | [str] | changed settings a running service picks up only when restarted |
+
+`/setup/provider/check` (`{"provider"}` alone) runs `provider check <provider> --json` with `2 × actions.SLOW_S`: one
+minimal live call per configured model of the provider. `{"provider", "ok": bool, "models": [{ok, model, error}]}`:
+`ok` is true when every model answered; a model that failed is a row with the provider's own error, not a refusal.
+A check that could not run at all is `409 refused`.
+
+### 18.5 `POST /setup/telegram`
+
+`{"name": <instance>, "token": <bot token>}`: `telegram token <name>` with the token on stdin (the verb asks Telegram
+who the bot is before it saves it). An unknown instance: `404 not_found`. A refused token: `409 refused` with the
+verb's line ("not saved: Telegram refused the token (…)"). Success: `{"said": <the verb's last line>}`.
+
+### 18.6 Access
+
+`GET /access/<n>` answers what the operator has granted `<n>`, all fields present (`supervisor/setup.access`, from
+`web_config.access`):
+
+| Field | Type | |
+|---|---|---|
+| `instance` | str | |
+| `folder` | str or null | the folder it may read (`shaft share`) |
+| `browser` | `{installed: str or null, run: bool}` | the shared Chromium's Playwright version (null: not installed), and whether its `run` tool is on — it browses from inside `run` |
+| `web_search` | bool | `SCRAPEBADGER_API_KEY` is set |
+| `telegram` | bool | it has a Telegram bot |
+| `mail` | [{`account`, `label`, `draft`: bool}] | Gmail labels; `draft`: it may leave drafts there |
+| `calendar` | [{`account`, `calendar`, `name`, `write`: bool}] | calendars by id, with their title when granted |
+| `drive` | [{`account`, `reach`}] | `reach` `own` or `all` |
+| `chat` | [{`account`}] | Google Chat accounts |
+| `google_accounts` | [{`alias`, `address`, `scopes`: [str]}] | the operator's Google logins, with the scopes they granted (`gmail.readonly`, `calendar.readonly`, …) |
+
+`POST /access/<n>` takes `{"grant", "action": "grant"|"revoke", …}` and runs the verb, then answers the fresh access
+object:
+
+| `grant` | Fields | Verb |
+|---|---|---|
+| `folder` | `what` (a path; grant only) | `share <n> <what>`; revoke: `share <n> off` |
+| `browser` | | `browser install` (only when none is installed, held up to 15 minutes), then `tools <n> on run` when `run` is off. Revoke is `409 refused`: the browser is shared, and switching `run` off would also stop the instance running its own code |
+| `mail` | `alias`, `what` (label), `writable` | `mail <n> grant|revoke <alias> <what>`; `writable`: `grant-draft`/`revoke-draft` (revoking the draft keeps the read) |
+| `calendar` | `alias`, `what` (`primary`, a title or an id), `writable` | `calendar <n> grant|revoke <alias> <what>`; a writable grant then runs `grant-write` with the calendar's saved id; `writable` revoke: `revoke-write` |
+| `drive` | `alias`, `all` | `gdrive <n> grant <alias> [--all]` / `revoke <alias>` |
+| `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
+
+`alias` is a Google account alias (`[a-z][a-z0-9-]{0,30}`); `all` and `writable` are booleans. A field another grant
+takes, or a missing one: `400 bad_request`. Web search and Telegram have no grant here: their key and token go
+through `/setup/secret` and `/setup/telegram`.
+
+### 18.7 `GET /google/<alias>/labels` and `/calendars`
+
+What a mail or calendar grant may name, read live from Google with the operator's account (`mail.labels`,
+`calendar.calendars`). `labels`: the label names, sorted. `calendars`: `{id, title, primary, access}`, primary first.
+An account that is not logged in, or whose login lacks `gmail.readonly` / `calendar.readonly`, is `409 refused` with
+the command that fixes it; Google's own error (`Google answered HTTP …`) is `409 refused` too.
+
+### 18.8 `POST /setup/hello/<n>`
+
+The wizard's last step: the setup's hidden opening to `<n>`'s Main conversation (`web_chat.opening`), as the device's
+login. Its text (`setup.opening_text`) says who the operator is (`OPERATOR_NAME`), the instance's `drive.md`, what it
+has been granted (§18.6, without any key's value), and asks it to introduce itself briefly and ask two or three
+questions to start. The operator never sees it in the feed; the instance's reply is the first thing in Main, and the
+operator's first answered reply resumes the instance or leaves it paused, as `autonomy` said (§18.1). Success:
+`{"said": "<n> is writing its welcome", "chat": {"id": <Main's id>, "title": <n>}}`. Once Main has any turn:
+`409 refused` ("… has a conversation already").
+
 ## Appendix A. Implementation notes
 
 These Python server refactor notes describe internal implementation, not additional wire fields.
@@ -1530,6 +1686,9 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
   rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
   `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
-  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`, `stream` (the events of §6.1, as a list). SHAFTKit reads only this folder, or
+  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`, `stream` (the events of §6.1, as a list).
+  `supervisor/tests/test_app_api_setup.py` writes the setup ones (§18) the same way (`write_or_check_fixtures`):
+  `setup-instance`, `setup-drives`, `setup-provider`, `setup-check`, `setup-hello`, `setup-errors`, `access`,
+  `google-labels`, `google-calendars`. SHAFTKit reads only this folder, or
   `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.

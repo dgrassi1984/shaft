@@ -748,6 +748,12 @@ set by `SHAFT_APP_API_FIXTURES`.
   `/pause` and `/resume` share the web action. `GET /app/v1/services` shows API and scheduler status and the server's version.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
   and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
+- **Setup.** The Mac app's setup wizard creates an instance (`POST /app/v1/setup/instance`: `shaft new`, `config`,
+  `drive`, created paused until your first answered reply), offers four starting drives, stores the provider and
+  web-search keys (`/setup/secret`, on the verb's stdin), switches and checks the provider, grants a folder, the
+  browser, Gmail labels, calendars, Drive and Chat (`/app/v1/access/<name>`), sets a Telegram bot, and last asks the
+  instance for its welcome (`/setup/hello/<name>`). Each runs the CLI verb as the device. See
+  [the contract](app-api.md#18-setup).
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
   logic. Push to the apps (APNs) is set up separately.
 - **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat

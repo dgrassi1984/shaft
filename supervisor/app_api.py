@@ -1074,6 +1074,280 @@ def _service_action(req: Request, service: str, act: str) -> Response:
     return _services_response()
 
 
+# -- setup (§18) ------------------------------------------------------------------------------------------------------
+# The Mac app's setup wizard. Each state change runs the CLI verb an operator would type, as the paired device (_who):
+# JSON verbs through actions.run_json, the others through actions.run_now. A secret goes on the verb's stdin (input=),
+# never in argv, a log line or an answer.
+SETUP_SECRETS = ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "SCRAPEBADGER_API_KEY", "SHAFT_CUSTOM_API_KEY")
+AUTONOMY = {"own": "resume", "talk": "stay"}      # §18.1: what the first reply does to the paused new instance
+BROWSER_INSTALL_S = 900                           # `browser install` downloads Chromium: the request is held this long
+PROVIDERS = ("openrouter", "codex", "custom")
+PROVIDER_FLAGS = {"model": str, "judge_model": str, "base_url": str, "price_in": float, "price_out": float,
+                  "judge_price_in": float, "judge_price_out": float, "vision": bool}
+ALIAS = r"(?P<alias>[a-z][a-z0-9-]{0,30})"        # google.ALIAS_RE
+
+
+def _text(data: dict, key: str, most: int = 500) -> str:
+    """A required, non-empty, single-line string field."""
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip() or len(value) > most or "\n" in value or "\r" in value:
+        raise Refusal(400, "bad_request", f"{key} must be one non-empty line of at most {most} characters.")
+    return value
+
+
+def _verb_said(rows: list[dict]) -> str:
+    """What a JSON verb said when it refused: its own `error`."""
+    last = rows[-1] if rows else {}
+    return str(last.get("error") or last or "refused")
+
+
+def _setup_instance(req: Request) -> Response:
+    """`new --json --paused-until-first-reply`, then `config set`, then `drive set`: the instance as the wizard set it
+    up. No opening (that is /setup/hello, once access is granted). A step's refusal: 409 with its words and `done`."""
+    import secrets as _secrets
+    from . import actions, core, opconfig
+    from .web_config import DRIVE_MAX               # the web Drive page's limit, the same here
+    data = _body(req)
+    if set(data) != {"name", "operator", "model", "drive", "autonomy"}:
+        raise Refusal(400, "bad_request", "Send name, operator, model, drive and autonomy.")
+    name, operator, model = _text(data, "name", 31), _text(data, "operator"), _text(data, "model")
+    drive = data["drive"]
+    if not isinstance(drive, str) or not drive.strip() or len(drive) > DRIVE_MAX:
+        raise Refusal(400, "bad_request", f"drive must be the drive's text, at most {DRIVE_MAX} characters.")
+    if data["autonomy"] not in AUTONOMY:
+        raise Refusal(400, "bad_request", "autonomy must be own or talk.")
+    who = _who(req)
+    log(f"{who}: operator set up instance {name}")
+    done: list[str] = []
+
+    def refused(said: str) -> Refusal:
+        return Refusal(409, "refused", said, done=list(done))
+
+    code, rows = actions.run_json(["new", name, "--json", "--paused-until-first-reply", AUTONOMY[data["autonomy"]]],
+                                  actions.SLOW_S, who=who)
+    if code != 0 or not rows[-1].get("ok"):
+        raise refused(_verb_said(rows))
+    done.append("new")
+    ok, said = actions.run_now(["config", name, "set", f"OPERATOR_NAME={operator}", f"LLM_MODEL={model}"], who=who)
+    if not ok:
+        raise refused(said)
+    done.append("config")
+    text = drive.replace("\r\n", "\n")
+    now, sha = opconfig.drive(name)                 # what `shaft new` left (the template's drive.md): its sha, not none
+    if (now or "").rstrip("\n") != text.rstrip("\n"):
+        tmp = core.SUP_DIR / "web" / f"drive-{_secrets.token_hex(6)}.md"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text)
+        try:
+            ok, said = actions.run_now(["drive", name, "set", "--file", str(tmp), "--expect-sha", sha], who=who)
+        finally:
+            tmp.unlink(missing_ok=True)
+        if not ok:
+            raise refused(said)
+    done.append("drive")
+    return _json(200, {"instance": name, "done": done, "paused": bool(rows[-1].get("paused"))})
+
+
+def _setup_drives(req: Request) -> Response:
+    from . import drive_presets
+    try:
+        return _json(200, {"drives": drive_presets.presets()})
+    except drive_presets.Missing as e:
+        raise Refusal(409, "refused", str(e)) from None
+
+
+def _setup_secret(req: Request) -> Response:
+    """`secrets set NAME --json`, the value on its stdin: only the provider and tool keys (SETUP_SECRETS) — the
+    server's own auth, Google clients and Telegram tokens have their own verbs."""
+    from . import actions
+    data = _body(req)
+    if set(data) != {"name", "value"} or data.get("name") not in SETUP_SECRETS:
+        raise Refusal(400, "bad_request", f"name must be one of {', '.join(SETUP_SECRETS)}, with its value.")
+    value = data["value"]
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+        raise Refusal(400, "bad_request", "value must be the key, one non-empty line.")
+    code, rows = actions.run_json(["secrets", "set", data["name"], "--json"], who=_who(req), input=value + "\n")
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _said(f"{data['name']} saved")
+
+
+def _provider(data: dict) -> str:
+    provider = data.get("provider")
+    if provider not in PROVIDERS:
+        raise Refusal(400, "bad_request", f"provider must be one of {', '.join(PROVIDERS)}.")
+    return provider
+
+
+def _setup_provider(req: Request) -> Response:
+    """`provider use PROVIDER --json` with the given flags: the answer's coverage, `off` as a list."""
+    from . import actions
+    data = _body(req)
+    provider = _provider(data)
+    args = ["provider", "use", provider, "--json"]
+    for key, value in data.items():
+        if key == "provider":
+            continue
+        kind = PROVIDER_FLAGS.get(key)
+        flag = "--" + key.replace("_", "-")
+        if kind is bool and type(value) is bool:
+            args += [flag] if value else []
+        elif kind is float and type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            args += [flag, str(value)]
+        elif kind is str and isinstance(value, str) and value.strip() and "\n" not in value:
+            args += [flag, value]
+        else:
+            raise Refusal(400, "bad_request", f"{key} is not a provider field of its type "
+                                              f"({', '.join(PROVIDER_FLAGS)}).")
+    code, rows = actions.run_json(args, actions.SLOW_S, who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    r = rows[-1]
+    return _json(200, {"provider": r["provider"], "changed": r["changed"], "covers": r["covers"],
+                       "off": [{"function": f, "why": why} for f, why in r["off"].items()], "not_live": r["not_live"]})
+
+
+def _setup_check(req: Request) -> Response:
+    """`provider check PROVIDER --json`: one live call per configured model; a failed model is a row, not an error."""
+    from . import actions
+    data = _body(req)
+    if set(data) != {"provider"}:
+        raise Refusal(400, "bad_request", "Send the provider alone.")
+    provider = _provider(data)
+    code, rows = actions.run_json(["provider", "check", provider, "--json"], actions.SLOW_S * 2, who=_who(req))
+    if not all("model" in r for r in rows):          # the verb could not check at all
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {"provider": provider, "ok": code == 0 and all(r.get("ok") for r in rows),
+                       "models": [{"ok": bool(r.get("ok")), "model": r["model"], "error": r.get("error")} for r in rows]})
+
+
+def _setup_telegram(req: Request) -> Response:
+    """`telegram token NAME`, the token on its stdin."""
+    from . import actions
+    data = _body(req)
+    if set(data) != {"name", "token"}:
+        raise Refusal(400, "bad_request", "Send name and token.")
+    name, token = _text(data, "name", 31), _text(data, "token")
+    if name not in web._names():
+        raise Refusal(404, "not_found", f"No instance named {name}.")
+    ok, said = actions.run_now(["telegram", "token", name], who=_who(req), input=token + "\n")
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _said(said)
+
+
+def _setup_hello(req: Request, n: str) -> Response:
+    """The setup's last step: the hidden opening (setup.opening_text) to Main, which the instance answers with its
+    welcome. Refused once Main has a turn."""
+    from . import setup, web_chat
+    log(f"{_who(req)}: operator asked {n} for its welcome")
+    try:
+        chat = web_chat.opening(n, _login(req), setup.opening_text(n))
+    except web_chat.Refused as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _said(f"{n} is writing its welcome", chat={"id": chat["id"], "title": web_chat.title(chat)})
+
+
+# -- access (§18.6) ---------------------------------------------------------------------------------------------------
+GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
+                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"}}
+GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat"}
+
+
+def _get_access(req: Request, n: str) -> Response:
+    from . import setup
+    return _json(200, setup.access(n))
+
+
+def _access_args(n: str, data: dict) -> list[list[str]]:
+    """The verbs one access change runs, in order (the browser's and the calendar's write upgrade: _set_access)."""
+    from . import google
+    grant, action = data.get("grant"), data.get("action")
+    if grant not in GRANT_FIELDS or action not in ("grant", "revoke"):
+        raise Refusal(400, "bad_request", f"grant must be one of {', '.join(GRANT_FIELDS)}; action grant or revoke.")
+    fields = GRANT_FIELDS[grant]
+    if set(data) - fields - {"grant", "action"} or any(type(data[k]) is not bool for k in ("writable", "all")
+                                                        if k in data):
+        raise Refusal(400, "bad_request", f"{grant} takes {', '.join(sorted(fields)) or 'no other field'} "
+                                          "(writable and all are true or false).")
+    if grant == "folder":
+        return [["share", n, "off" if action == "revoke" else _text(data, "what", 4096)]]
+    if grant == "browser":
+        return []
+    alias = _text(data, "alias", 31)
+    if not google.ALIAS_RE.fullmatch(alias):
+        raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")
+    verb = GRANT_VERBS[grant]
+    if grant in ("drive", "chat"):
+        return [[verb, n, action, alias] + (["--all"] if action == "grant" and data.get("all") else [])]
+    op = action
+    if data.get("writable") and not (grant == "calendar" and action == "grant"):   # granted first, then upgraded
+        op += "-draft" if grant == "mail" else "-write"
+    return [[verb, n, op, alias, _text(data, "what")]]
+
+
+def _set_access(req: Request, n: str) -> Response:
+    """One grant or revocation through its CLI verb (§18.6), then the fresh access."""
+    from . import actions, browser, core, setup
+    data = _body(req)
+    runs = _access_args(n, data)
+    who = _who(req)
+    log(f"{who}: operator {data['action']} {data['grant']} for {n}")
+    if data["grant"] == "browser":
+        if data["action"] == "revoke":
+            raise Refusal(409, "refused", "The browser is shared by every instance and reached from inside run: there "
+                                          f"is none to take back from {n} alone (shaft tools {n} off run would also "
+                                          "stop it running its own code).")
+        if not browser.version():
+            ok, said = actions.run_now(["browser", "install"], BROWSER_INSTALL_S, who=who)
+            if not ok:
+                raise Refusal(409, "refused", said)
+        if "run" in core.disabled_tools(n):
+            runs = [["tools", n, "on", "run"]]
+    for args in runs:
+        ok, said = actions.run_now(args, who=who)
+        if not ok:
+            raise Refusal(409, "refused", said)
+    if data["grant"] == "calendar" and data["action"] == "grant" and data.get("writable"):
+        # as the web Access page: upgrade the grant by its saved calendar ID, never its title again (titles hold commas)
+        grant = [g for g in core.calendar_grants(n) if g["account"] == data["alias"]][-1]
+        ok, said = actions.run_now(["calendar", n, "grant-write", data["alias"], grant["calendar"]], who=who)
+        if not ok:
+            raise Refusal(409, "refused", said)
+    return _json(200, setup.access(n))
+
+
+def _google_account(alias: str, scope: str):
+    from . import core, google
+    try:
+        return google.Account(alias, core.secrets_env()).require(scope)
+    except google.AccountError as e:
+        raise Refusal(409, "refused", str(e)) from None
+
+
+def _google_labels(req: Request, alias: str) -> Response:
+    """The account's Gmail labels, by name: what a mail grant may name."""
+    from . import google, mail
+    acct = _google_account(alias, google.GMAIL)
+    try:
+        names = sorted(mail.labels(acct), key=str.casefold)
+    except (google.AccountError, google.ApiError) as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"alias": alias, "labels": names})
+
+
+def _google_calendars(req: Request, alias: str) -> Response:
+    """The account's calendars, primary first: what a calendar grant may name (by id)."""
+    from . import calendar, google
+    acct = _google_account(alias, google.CALENDAR)
+    try:
+        cals = calendar.calendars(acct)
+    except (google.AccountError, google.ApiError) as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"alias": alias, "calendars": [{k: c[k] for k in ("id", "title", "primary", "access")}
+                                                     for c in cals]})
+
+
 ROUTES: list[tuple[str, dict]] = [
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
@@ -1111,4 +1385,14 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/push/register", {"POST": _register, "DELETE": _unregister}),
     (r"/push/status", {"GET": _push_status}),
     (r"/push/latest", {"GET": _latest}),
+    (r"/setup/instance", {"POST": _setup_instance}),
+    (r"/setup/drives", {"GET": _setup_drives}),
+    (r"/setup/secret", {"POST": _setup_secret}),
+    (r"/setup/provider", {"POST": _setup_provider}),
+    (r"/setup/provider/check", {"POST": _setup_check}),
+    (r"/setup/telegram", {"POST": _setup_telegram}),
+    (rf"/setup/hello/{N}", {"POST": _setup_hello}),
+    (rf"/access/{N}", {"GET": _get_access, "POST": _set_access}),
+    (rf"/google/{ALIAS}/labels", {"GET": _google_labels}),
+    (rf"/google/{ALIAS}/calendars", {"GET": _google_calendars}),
 ]

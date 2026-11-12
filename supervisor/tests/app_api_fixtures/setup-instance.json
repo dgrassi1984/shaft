@@ -1,0 +1,9 @@
+{
+  "instance": "ledger",
+  "done": [
+    "new",
+    "config",
+    "drive"
+  ],
+  "paused": true
+}

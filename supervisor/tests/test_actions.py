@@ -229,3 +229,80 @@ class ActionTest(write.WriteCase):
             self.assertTrue(actual['ok'], actual)
             self.assertEqual(json.dumps(actual), json.dumps(expected))
             self.assertFalse((self.sup / 'actions/wisp.jsonl').exists())
+
+
+class RunNowInputTest(unittest.TestCase):
+    """The setup routes hand a secret to a CLI verb on its stdin (`input`), never in argv or a log line; the JSON verbs
+    answer through run_json, one parsed object per stdout line. A real subprocess stands in for the CLI."""
+
+    SECRET = 'sk-never-in-a-log-4f1d9c'
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.sup = Path(tempfile.mkdtemp(prefix='shaft-actions-'))
+        self.addCleanup(shutil.rmtree, self.sup, True)
+        for p in (mock.patch.object(core, 'SUP_DIR', self.sup), mock.patch.object(actions, 'SUP_DIR', self.sup)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def cli(self, script):
+        import sys
+        return mock.patch.object(actions, '_cli', lambda args: [sys.executable, '-c', script, *args])
+
+    def logged(self):
+        path = self.sup / 'supervisor.log'
+        return path.read_text() if path.exists() else ''
+
+    def test_run_now_passes_input_on_stdin_and_never_logs_it(self):
+        echo = 'import sys; line = sys.stdin.readline().strip(); print("got", len(line), "chars")'
+        with self.cli(echo):
+            ok, last = actions.run_now(['secrets', 'set', 'X'], who='app mac', input=self.SECRET + '\n')
+        self.assertTrue(ok)
+        self.assertEqual(last, f'got {len(self.SECRET)} chars')
+        self.assertIn('app mac: operator ran shaft secrets set X', self.logged())
+        self.assertNotIn(self.SECRET, self.logged())
+
+    def test_run_now_without_input_keeps_todays_stdin(self):
+        # input=None changes nothing for the existing callers: no input and no stdin argument reach subprocess.run
+        with self.cli('print("ok")'), mock.patch.object(actions.subprocess, 'run', wraps=actions.subprocess.run) as run:
+            ok, last = actions.run_now(['x'])
+        self.assertEqual((ok, last), (True, 'ok'))
+        self.assertIsNone(run.call_args.kwargs.get('input'))
+        self.assertNotIn('stdin', run.call_args.kwargs)
+
+    def test_run_json_parses_every_line(self):
+        script = 'import json; print(json.dumps({"ok": True, "model": "a"})); print(json.dumps({"ok": False, "model": "b"}))'
+        with self.cli(script):
+            code, rows = actions.run_json(['provider', 'check', 'custom', '--json'], who='app mac')
+        self.assertEqual(code, 0)
+        self.assertEqual(rows, [{'ok': True, 'model': 'a'}, {'ok': False, 'model': 'b'}])
+
+    def test_run_json_passes_input_and_keeps_the_exit_code(self):
+        script = ('import json, sys; v = sys.stdin.readline().strip(); '
+                  'print(json.dumps({"ok": False, "error": "no " + str(len(v))})); sys.exit(1)')
+        with self.cli(script):
+            code, rows = actions.run_json(['secrets', 'set', 'X', '--json'], input=self.SECRET + '\n')
+        self.assertEqual(code, 1)
+        self.assertEqual(rows, [{'ok': False, 'error': f'no {len(self.SECRET)}'}])
+        self.assertNotIn(self.SECRET, self.logged())
+
+    def test_run_json_a_line_that_is_not_json_is_a_failure_with_its_text(self):
+        with self.cli('print("Traceback: boom")'):
+            code, rows = actions.run_json(['new', 'x', '--json'])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['ok'])
+        self.assertIn('Traceback: boom', rows[0]['error'])
+
+    def test_run_json_no_output_names_stderr_or_the_exit(self):
+        with self.cli('import sys; print("bad flag", file=sys.stderr); sys.exit(2)'):
+            code, rows = actions.run_json(['new'])
+        self.assertEqual(code, 2)
+        self.assertEqual(rows, [{'ok': False, 'error': 'bad flag'}])
+
+    def test_run_json_timeout_is_a_failure(self):
+        with self.cli('import time; time.sleep(5)'):
+            code, rows = actions.run_json(['provider', 'check', 'custom'], timeout=0.5)
+        self.assertNotEqual(code, 0)
+        self.assertIn('still running after', rows[0]['error'])

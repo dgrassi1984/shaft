@@ -97,7 +97,9 @@ struct FixtureTests {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                     "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"] {
+                     "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from",
+                     "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-hello", "setup-errors",
+                     "access", "google-labels", "google-calendars"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
     }
@@ -240,6 +242,13 @@ enum FixtureShape {
         if has("dir", "max_bytes", "docs") { return roundTrip(DocsList.self) }
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }
         if has("events", "badge") { return roundTrip(PushLatest.self) }
+        if has("instance", "done", "paused") { return roundTrip(SetupInstanceResponse.self) }
+        if keys == ["drives"] { return roundTrip(DrivePresets.self) }
+        if has("provider", "covers", "off") { return roundTrip(ProviderUseResponse.self) }
+        if has("provider", "ok", "models") { return roundTrip(ProviderCheckResponse.self) }
+        if has("instance", "browser", "google_accounts") { return roundTrip(AccessResponse.self) }
+        if has("alias", "labels") { return roundTrip(GoogleLabels.self) }
+        if has("alias", "calendars") { return roundTrip(GoogleCalendars.self) }
         if has("status", "body") {
             return { object, name in
                 let status = try #require(object["status"] as? Int, "\(name): missing integer status")

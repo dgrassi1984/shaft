@@ -1,0 +1,47 @@
+{
+  "instance": "wisp",
+  "folder": null,
+  "browser": {
+    "installed": "1.64.0",
+    "run": true
+  },
+  "web_search": false,
+  "telegram": false,
+  "mail": [
+    {
+      "account": "work",
+      "label": "Assistant",
+      "draft": true
+    }
+  ],
+  "calendar": [
+    {
+      "account": "work",
+      "calendar": "me@example.com",
+      "name": "me@example.com",
+      "write": true
+    }
+  ],
+  "drive": [
+    {
+      "account": "work",
+      "reach": "own"
+    }
+  ],
+  "chat": [
+    {
+      "account": "work"
+    }
+  ],
+  "google_accounts": [
+    {
+      "alias": "work",
+      "address": "me@example.com",
+      "scopes": [
+        "gmail.readonly",
+        "calendar.readonly",
+        "drive.readonly"
+      ]
+    }
+  ]
+}

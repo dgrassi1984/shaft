@@ -94,7 +94,12 @@ def setup(base: Path, port: int):
         req.headers = {**req.headers, "tailscale-user-login": ME}
         return real_respond(req)
 
-    def run_now(args, timeout=60, who="top"):
+    def run_json(args, timeout=60, who="top", input=None):
+        # The setup verbs (docs/app-api.md §18) have no fixture fakes yet: refused, never the real subprocess runner,
+        # which would run them against this checkout's own .env and instances.
+        raise ValueError(f"the fixture server has no fake for {' '.join(args[:2])}")
+
+    def run_now(args, timeout=60, who="top", input=None):
         # Never fall through to actions' real subprocess runner, including for an unknown verb.
         if not args:
             raise ValueError("fixture command needs a verb")
@@ -159,12 +164,13 @@ def setup(base: Path, port: int):
             (rec := _read_json(base / "sup" / "services" / f"{name}.json")).get("fixture")
             and rec.get("pid") == pid for name in ("api", "scheduler"))
 
-    try:
-        run_now(["unknown-fixture-verb"])
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unknown fixture commands must raise")
+    for fake in (run_now, run_json):
+        try:
+            fake(["unknown-fixture-verb"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown fixture commands must raise")
 
     for p in (mock.patch.object(dashboard, "_scheduler_running", return_value=True),
               mock.patch.object(core, "secrets_env", return_value={}),
@@ -184,6 +190,7 @@ def setup(base: Path, port: int):
               mock.patch.object(commitments, "INSTANCES", inst), mock.patch.object(metrics, "INSTANCES", inst),
               mock.patch.object(docs, "instance_root", lambda n: inst / n),
               mock.patch.object(actions, "run_now", side_effect=run_now),
+              mock.patch.object(actions, "run_json", side_effect=run_json),
               mock.patch.object(actions, "service_guard", side_effect=lambda name, action:
                                 _read_json(base / "services.json").get("busy", "") if name == "api" else ""),
               mock.patch.object(autonomy, "_launchctl", side_effect=forbidden_launchctl),
