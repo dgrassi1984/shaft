@@ -40,8 +40,16 @@ class FakeServices:
         self.kicked: list[str] = []
         self.restarts = 0
         self.drain = None
+        self.down: set[str] = set()       # loaded, but its process never comes back (launchd runs none)
+
+    def pid(self, name):
+        return self.pids[name] if name in self.running and name not in self.down else None
 
     def launchctl(self, *args):
+        if args[0] == "print":            # loaded: running, or down after its restart
+            label = args[1].rsplit("/", 1)[-1]
+            name = next(n for n, s in autonomy.SERVICES.items() if s["label"] == label)
+            return subprocess.CompletedProcess(args, 0 if name in self.running else 113, "", "")
         if args[:2] != ("kickstart", "-k"):
             raise AssertionError(f"unexpected launchctl call: {args}")
         label = args[2].rsplit("/", 1)[-1]
@@ -52,7 +60,7 @@ class FakeServices:
         return subprocess.CompletedProcess(args, 0, "", "")
 
     def record(self, name, stale=True):
-        if name not in self.running:
+        if name not in self.running or name in self.down:
             return None
         rec = {"pid": self.pids[name], "commit": "abc", "describe": "v1.1.0"}
         return {**rec, "stale": self.stale[name]} if stale else rec
@@ -113,8 +121,7 @@ class DeployTest(unittest.TestCase):
                    mock.patch.object(runner, "open_conversations", lambda n: self.open.get(n, {})),
                    mock.patch.object(autonomy, "_launchctl", self.svc.launchctl),
                    mock.patch.object(autonomy, "running", lambda n: n in self.svc.running),
-                   mock.patch.object(autonomy, "launchd_pid",
-                                     lambda n: self.svc.pids[n] if n in self.svc.running else None),
+                   mock.patch.object(autonomy, "launchd_pid", self.svc.pid),
                    mock.patch.object(autonomy, "restart", self.svc.restart),
                    mock.patch.object(autonomy, "draining_now", lambda: None),
                    mock.patch.object(autonomy, "restart_request", lambda pid=None: self.svc.drain)]
@@ -375,6 +382,55 @@ class DeployTest(unittest.TestCase):
         self.assertEqual((self.updated, self.svc.restarts), ([["alpha"]], 1))           # update and drain not redone
         self.assertEqual(sorted(self.svc.kicked), ["api", "web"])
         self.assertIsNone(self.check_local()["incomplete"])
+
+    def test_a_retried_verify_checks_the_services_the_deploy_restarted(self):
+        """Fix round 3: web never came back after its restart, so verify failed. A retry resumes at verify; it must
+        check web again (its old PID is kept in deploy-state.json), failing with the real reason until web runs a new
+        process, and never pass as "nothing to verify"."""
+        real_kick = self.svc.launchctl
+
+        def kick_web_down(*args):
+            answer = real_kick(*args)
+            if args[0] == "kickstart" and args[2].endswith("com.shaft.web"):
+                self.svc.down.add("web")
+            return answer
+        with mock.patch.object(autonomy, "_launchctl", kick_web_down):
+            code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, rows[-1]["step"]), (1, "verify"))
+        self.assertIn("web: no new process recorded itself", rows[-1]["error"])
+        state = json.loads((self.sup / "deploy-state.json").read_text())
+        self.assertEqual(sorted(state["kicked"]), ["api", "web"])
+        self.assertEqual(self.check()["incomplete_step"], "verify")
+        code, rows = self.deploy("v1.1.0")                      # the retry: still down
+        self.assertEqual((code, rows[-1]["step"]), (1, "verify"))
+        self.assertIn("done by the deploy this finishes", rows[6]["detail"])      # services not restarted again
+        self.assertIn("web: no new process recorded itself", rows[-1]["error"])
+        self.assertEqual(sorted(self.svc.kicked), ["api", "web"])
+        self.svc.down.clear()                                   # web comes up (launchd's KeepAlive, by hand)
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertIn(f"web pid {self.svc.pids['web']}", rows[-1]["detail"])
+        self.assertIsNone(self.check()["incomplete"])
+
+    def test_a_retried_verify_without_the_record_checks_every_loaded_service(self):
+        """A deploy-state.json from before the restarted services were kept: verify checks each loaded service it
+        would restart (api, web; telegram is not loaded) runs on the checked-out code."""
+        self.svc.stale.update(api=False, web=False)
+        self.svc.down.add("web")
+        self.open = {"alpha": {"web-1": "api"}}
+        self.deploy("v1.1.0")                                   # waits at services
+        state = json.loads((self.sup / "deploy-state.json").read_text())
+        state["steps"]["services"] = "ok"
+        del state["kicked"]
+        (self.sup / "deploy-state.json").write_text(json.dumps(state))
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, rows[-1]["step"]), (1, "verify"))
+        self.assertIn("web: it is not running", rows[-1]["error"])
+        self.svc.down.clear()
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertIn("api pid", rows[-1]["detail"])
+        self.assertIn("web pid", rows[-1]["detail"])
 
     def test_a_rerun_after_the_checkout_moved_runs_every_step(self):
         """deploy-state.json is not trusted blindly: once the checkout no longer shows what it records, every step runs

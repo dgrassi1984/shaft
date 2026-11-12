@@ -23,7 +23,8 @@ or a terminal talk) is refused with "the server is restarting, try again in a mo
 Each step's outcome is kept in `.supervisor/deploy-state.json`; `shaft deploy --check --json` names a deploy left
 unfinished, and running the same command again finishes it from the step it stopped at: what it recorded done and the
 checkout still shows (main and the template at the tags' commits) is not repeated, and origin is not asked
-(`shaft deploy --check --local --json` names it without origin too). Run again after success, it changes
+(`shaft deploy --check --local --json` names it without origin too). The services it restarted are kept with their old
+PIDs, so a verify retried later checks those same services again: it passes only once each runs a new process. Run again after success, it changes
 nothing. The Mac app installs the server as a clone detached at its release tag rather than on `main`; the command
 accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards it the same way.
 

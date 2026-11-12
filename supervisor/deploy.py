@@ -24,7 +24,8 @@ success is all ok and restarts nothing. Each step's outcome is kept in .supervis
 --json` (one line: the release the app may offer) also names a deploy left unfinished. While the services step looks at
 the open conversations and restarts, new conversations are refused for a moment (core.restart_barrier), so none is cut.
 Run again for the same TAG after it stopped, it finishes the deploy from the step it stopped at (_resume_from): the steps
-recorded done that the checkout still shows are not repeated, and origin is not asked again.
+recorded done that the checkout still shows are not repeated, and origin is not asked again; the services the services
+step restarted (with their old PIDs) are kept too, so a verify retried later checks those same services.
 """
 from __future__ import annotations
 
@@ -279,15 +280,43 @@ def _new_process(name: str, old: int | None) -> dict:
         time.sleep(POLL_S)
 
 
-def verify(tag: str, kicked: dict[str, int | None]) -> str:
+def _loaded(name: str) -> bool:
+    """launchd has the service's job (running or not): one the deploy would restart, so verify checks it."""
+    from . import autonomy
+    return autonomy._launchctl("print", f"gui/{os.getuid()}/{autonomy.SERVICES[name]['label']}").returncode == 0
+
+
+def _current_process(name: str) -> dict:
+    """A loaded service the deploy would restart, when what it restarted is not known: it runs (launchd's pid has
+    recorded itself) on the code checked out now."""
+    from . import autonomy
+    deadline = time.monotonic() + VERIFY_S
+    while True:
+        pid = autonomy.launchd_pid(name)
+        rec = _record(name)
+        if pid and rec and rec.get("pid") == pid and not rec.get("stale"):
+            return rec
+        if time.monotonic() >= deadline:
+            why = ("it is not running" if not pid else "it has not recorded itself" if not rec or rec.get("pid") != pid
+                   else "it runs older code than the checkout")
+            raise StepFailed(f"{name}: {why} (launchd pid {pid or 'none'}): `shaft status` and its log say why")
+        time.sleep(POLL_S)
+
+
+def verify(tag: str, kicked: dict[str, int | None] | None) -> str:
+    """`kicked`: the services this deploy restarted, with their old PIDs (kept in deploy-state.json, so a verify
+    retried later checks the same ones); None when that is not known: every loaded service it would restart."""
     from . import version
     for repo, ref, what in ((core.PROJECT, tag, "main"), (_template(), f"template-{tag}", "template")):
         at, target = _commit(repo, "HEAD"), _commit(repo, f"refs/tags/{ref}")
         if not target or at != target:
             raise StepFailed(f"{what} is at {(at or '?')[:12]}, not {ref} ({(target or '?')[:12]})")
     parts = [f"main = {tag}, template = template-{tag}"]
-    for name, old in kicked.items():
-        rec = _new_process(name, old)
+    checks = ([(name, lambda name=name: _current_process(name)) for name in RESTARTED if _loaded(name)]
+              if kicked is None else [(name, lambda name=name, old=old: _new_process(name, old))
+                                      for name, old in kicked.items()])
+    for name, check in checks:
+        rec = check()
         parts.append(f"{name} pid {rec['pid']} on {version.service_version(rec)}")
     if _drain_pending(_record("scheduler", stale=False)):
         parts.append("the scheduler restarts once its runs end")
@@ -366,13 +395,21 @@ def _resume_from(tag: str, state: dict | None) -> str | None:
 
 
 def _run(tag: str, order: tuple[str, ...]) -> int:
-    kicked: dict[str, int | None] = {}
     before = _load_state()
     resume = _resume_from(tag, before) if order == STEPS else None
     keep = resume or (order == SERVICES_ONLY and before and before.get("tag") == tag)
-    state = before if keep else {"tag": tag, "steps": {}}
+    state = before if keep else {"tag": tag, "steps": {}, "kicked": {}}
+    # What the services step restarted (old PIDs), kept with the state: a verify retried later checks the same
+    # services. A state from before this was kept: None, verify checks every service the deploy would restart.
+    recorded = state.get("kicked")
+    kicked: dict[str, int | None] = dict(recorded) if isinstance(recorded, dict) else {}
+    unknown = keep and not isinstance(recorded, dict) and state["steps"].get("services") == "ok"
+    state["kicked"] = None if unknown else kicked              # null stays null until a deploy runs services afresh
+
+    def verify_step(t: str) -> str:
+        return verify(t, None if unknown else kicked)
     steps = {"preflight": preflight, "fetch": fetch, "main": step_main, "template": step_template, "update": update,
-             "scheduler": scheduler, "services": lambda t: services(t, kicked), "verify": lambda t: verify(t, kicked)}
+             "scheduler": scheduler, "services": lambda t: services(t, kicked), "verify": verify_step}
     if resume:
         # Finishing a deploy: what it did and the checkout still shows is not done again, and nothing reaches origin
         # (a deploy stopped at services finishes with origin unreachable). The local checks still run.
