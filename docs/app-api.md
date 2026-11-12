@@ -32,10 +32,12 @@ Every request passes three checks, in this order:
    missing or malformed, the device is unknown (never paired, or unpaired since) or the secret is wrong: `401 unpaired`.
    The app then shows its pairing screen. `POST /app/v1/pair` (§2) is the one route without a bearer.
 
-**On loopback** (`SHAFT_WEB_LOCAL=on`, `Host` one of `web.local_hosts()`: `127.0.0.1:<port>` or `localhost:<port>`),
-checks 1 and 2 are skipped and only `/app/v1` is served; the pages keep their refusals. The bearer (check 3) is then
-the only credential, and the request acts as the device's recorded `login`, never as a `Tailscale-User-Login` header,
-which any local process could send. Such a device is made by `shaft web pair --local`; `POST /app/v1/pair` on loopback
+**On loopback** (`SHAFT_WEB_LOCAL=on`, `Host` one of `web.local_hosts()`: `127.0.0.1:<port>` or `localhost:<port>`,
+and none of the headers `tailscale serve` adds: `X-Forwarded-For`, `Forwarded`, `X-Forwarded-Host`,
+`Tailscale-User-Login`, `Tailscale-User-Name`), checks 1 and 2 are skipped and only `/app/v1` is served; the pages keep
+their refusals. The bearer (check 3) is then the only credential, and the request acts as the device's recorded
+`login`; a device unpaired meanwhile is `401 unpaired`. A request with any of those headers came through the tailnet,
+whatever `Host` it names, and must pass all three checks as above. Such a device is made by `shaft web pair --local`; `POST /app/v1/pair` on loopback
 is refused: `403 local_pair`.
 
 - `/app/v1` reads no cookie, and the web UI's routes accept no bearer. A browser page can never reach the API with an

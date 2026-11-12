@@ -36,21 +36,46 @@ class LoopbackAppTest(LocalTest):
         self.assertEqual(web.local_hosts(), {f"127.0.0.1:{web.PORT}", f"localhost:{web.PORT}"})
         self.assertEqual(self.local_api("/app/v1/instances", host=f"localhost:{web.PORT}").status, 200)
 
-    def test_local_without_bearer_is_unpaired_even_with_a_forged_login(self):
-        r = self.local_api("/app/v1/instances", bearer=False, login=ME)
-        self.error(r, 401, "unpaired")
+    def test_local_without_bearer_is_unpaired(self):
+        self.error(self.local_api("/app/v1/instances", bearer=False), 401, "unpaired")
 
     def test_local_with_a_wrong_secret_is_unpaired(self):
-        r = self.local_api("/app/v1/instances", bearer=f"Bearer {self.dev}.not-the-secret", login=ME)
+        r = self.local_api("/app/v1/instances", bearer=f"Bearer {self.dev}.not-the-secret")
         self.error(r, 401, "unpaired")
 
-    def test_local_identity_is_the_devices_login_not_the_header(self):
+    def test_local_host_with_a_proxy_or_login_header_takes_the_tailnet_path(self):
+        # tailscale serve forwards a tailnet request with whatever Host it names, adding these headers: such a request
+        # must pass the tailnet login and Host checks even when it names the loopback host with a valid bearer
+        for header in web.PROXY_HEADERS:
+            with self.subTest(header=header):
+                r = self.local_api("/app/v1/instances", headers={header.title(): "100.64.0.9"})
+                self.error(r, 403, "login")
+        self.error(self.local_api("/app/v1/instances", login="evil@x"), 403, "login")       # a forged login header
+        self.error(self.local_api("/app/v1/instances", headers={"X-Forwarded-For": "100.64.0.9"}), 403, "login")
+        # an allowed login still has to name the tailnet host
+        self.error(self.local_api("/app/v1/instances", login=ME), 403, "host")
+        r = self.send_local(login="evil@x")
+        self.error(r, 403, "login")
+
+    def test_local_identity_is_the_devices_login(self):
         with mock.patch.object(web_chat, "send", wraps=web_chat.send) as send:
-            r = self.send_local(login="evil@x")
+            r = self.send_local()
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(send.call_count, 1)
         self.assertEqual(send.call_args.args[1], "operator@local")
-        self.assertNotEqual(send.call_args.args[1], "evil@x")
+
+    def test_a_device_unpaired_after_its_bearer_was_checked_is_unpaired_not_a_500(self):
+        # the race: the bearer passed web.paired_device, then `shaft web unpair` removed the record before _login read it
+        def checked_then_unpaired(dev, secret):
+            web.unpair(dev)
+            return True
+        with mock.patch.object(web, "paired_device", side_effect=checked_then_unpaired), \
+                mock.patch.object(web_chat, "send", wraps=web_chat.send) as send:
+            r = self.send_local()
+        err = self.error(r, 401, "unpaired")
+        self.assertIn("shaft web pair --local", err["message"])
+        self.assertEqual(send.call_count, 0)
+        self.assertNotIn(self.dev, web.devices())
 
     def send_local(self, login=None):
         body = b"".join(f'--B\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()

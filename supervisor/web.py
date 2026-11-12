@@ -18,9 +18,11 @@ the port at all: a run's sandbox allows only the LLM, embed, broker and egress p
 on a port a run may reach.
 
 One exception, off by default: with SHAFT_WEB_LOCAL on, a request to /app/v1 (the native apps' API, app_api.py) whose
-Host is this Mac's loopback at the web port (local_hosts) skips the login and Host checks — the Mac app on this Mac,
-without Tailscale. It is marked `local`; app_api then needs the paired device's bearer for every route, acts as that
-device's recorded login (never the forgeable header) and refuses /pair. The pages stay tailnet-only.
+Host is this Mac's loopback at the web port (local_hosts) and which carries none of the headers tailscale serve's proxy
+adds (PROXY_HEADERS) skips the login and Host checks — the Mac app on this Mac, without Tailscale. A request through
+`tailscale serve` can name any Host, so one with such a header always takes the tailnet path. A local request is marked
+`local`; app_api then needs the paired device's bearer for every route, acts as that device's recorded login (never
+the forgeable header) and refuses /pair. The pages stay tailnet-only.
 
 Every request must also name this host (Host is the tailnet name: no DNS rebinding), and every POST must come from
 this page — Sec-Fetch-Site same-origin, or an Origin naming this host — and carry the CSRF token derived from the
@@ -117,6 +119,11 @@ def allowed_hosts() -> set[str]:
         hosts = {str(h).lower() for h in recorded} if isinstance(recorded, list) and recorded else tailnet_hosts()
         _hosts.update(at=time.time(), hosts=hosts)
     return _hosts["hosts"]
+
+
+# What tailscale serve's reverse proxy adds to every request it forwards (lower case, as Request.headers): a request
+# with any of them came through the tailnet, whatever Host it names, so it never takes the loopback path.
+PROXY_HEADERS = ("x-forwarded-for", "forwarded", "x-forwarded-host", "tailscale-user-login", "tailscale-user-name")
 
 
 def local_hosts() -> set[str]:
@@ -386,9 +393,11 @@ def respond(req: Request) -> Response:
 def _route(req: Request) -> Response:
     login = (req.headers.get("tailscale-user-login") or "").lower()
     app = req.path == "/app/v1" or req.path.startswith("/app/v1/")     # the native apps' JSON API (app_api.py)
-    if app and LOCAL and req.headers.get("host", "").lower() in local_hosts():
+    if (app and LOCAL and req.headers.get("host", "").lower() in local_hosts()
+            and not any(h in req.headers for h in PROXY_HEADERS)):
         # The Mac app on this Mac, without Tailscale: no login header is read (any local process could forge one);
-        # app_api needs the paired bearer for every route, acts as that device's login, and refuses /pair.
+        # app_api needs the paired bearer for every route, acts as that device's login, and refuses /pair. A request
+        # with a proxy header came through tailscale serve (which can carry any Host): it takes the tailnet path.
         req.local = True
         from . import app_api
         return app_api.route(req)
