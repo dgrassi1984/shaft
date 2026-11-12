@@ -1295,6 +1295,27 @@ def cmd_grok(action: str) -> int:
     return 0
 
 
+def cmd_claude(action: str) -> int:
+    from . import claudecli, planchannel
+    if action == "login":
+        try:
+            config_dir = claudecli.home()
+            env = claudecli.child_env(config_dir, config_dir)
+            return subprocess.run([str(Path(claudecli.BIN).expanduser()), "auth", "login"], env=env).returncode
+        except OSError as e:
+            print(f"Claude login failed: {e}", file=sys.stderr)
+            return 1
+    status = claudecli.login_status()
+    print("Claude login: " + (f"present ({status.get('authMethod', 'unknown')})" if status.get("loggedIn")
+                              else "missing; run shaft claude login"))
+    rate = planchannel.saved_rate("claudecode")
+    print("Weekly allowance: " + (f"{rate['used_percent']}% used" if rate is not None else "not observed yet"))
+    print("Models: " + ", ".join(claudecli.models()))
+    if (fault := planchannel.outage("claudecode")):
+        print(("Claude security event: " if fault.get("security") else "Claude unavailable: ") + fault["reason"])
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1375,6 +1396,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("grok", help="Grok plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
+    p.add_argument("action", choices=["login", "status"])
+    p = sub.add_parser("claude", help="Claude plan (claude -p on your own subscription) login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("migrate", help="move a SHAFT setup to a new Mac (docs/migration.md): source --to HOST [--check], "
                                        "or target [--check]")
@@ -1717,6 +1740,8 @@ def main(argv: list[str]) -> int:
         return cmd_grok(args.action)
     if args.cmd == "codex":
         return cmd_codex(args.action)
+    if args.cmd == "claude":
+        return cmd_claude(args.action)
     if args.cmd == "migrate":
         from . import migrate
         return migrate.command(args.role, args.to, args.check)
