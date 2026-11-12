@@ -23,10 +23,12 @@ class Stub:
     """A loopback endpoint: records each request, answers with `reply` (JSON) or `sse` (stream lines)."""
 
     def __init__(self):
-        self.requests, self.reply, self.sse, self.status = [], None, None, 200
+        self.requests, self.reply, self.sse, self.status, self.drop = [], None, None, 200, False
         stub = self
 
         class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 stub.requests.append({"path": self.path, "headers": dict(self.headers), "body": json.loads(raw)})
@@ -34,6 +36,19 @@ class Stub:
                     self.send_response(stub.status)
                     self.end_headers()
                     self.wfile.write(b'{"error": "nope"}')
+                    return
+                if stub.drop:    # chunked, one whole chunk, then the connection is reset
+                    self.send_response(200)
+                    self.send_header("content-type", "text/event-stream")
+                    self.send_header("transfer-encoding", "chunked")
+                    self.end_headers()
+                    part = b'data: {"choices": [{"index": 0, "delta": {"content": "abc"}}]}\n\n'
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(part), part))
+                    self.wfile.flush()
+                    import socket, struct
+                    self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                    self.connection.close()    # a reset, not a clean end
+                    self.close_connection = True
                     return
                 if stub.sse is not None:
                     self.send_response(200)
@@ -227,6 +242,43 @@ class StreamTest(Case):
                 self.drain()
         self.assertEqual(ctx.exception.status, 429)
         self.assertEqual(self.stub.requests, [])
+
+
+class BugRegressionTest(Case):
+    def test_a_stream_dropped_midway_raises_and_is_still_recorded_estimated(self):
+        # Bug: a `return` in _relay's finally swallowed the exception, so Broker._llm_stream logged a good stream.
+        self.stub.drop = True
+        with self.assertRaises(cloudllm.NETWORK_ERRORS):
+            list(cloudllm.custom_stream("demo", self.body(stream=True, max_tokens=50),
+                                        {"SHAFT_CUSTOM_API_KEY": KEY}))
+        (row,) = self.rows()
+        self.assertIs(row["estimated"], True)
+        self.assertEqual(row["output_tokens"], 50)
+        self.assertIn("stream broken", row["error"])
+        self.assertGreater(row["usd"], 0)
+
+    def test_a_tool_call_only_reply_without_usage_is_not_free(self):
+        # Bug: only message.content was counted, so 300 chars of tool arguments cost $0.
+        with mock.patch.object(cloudllm, "CUSTOM_PRICES", {"my-model": (0.0, 8.0)}):
+            msg = {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c", "type": "function", "function": {"name": "f", "arguments": "x" * 300}}]}
+            self.stub.reply = {"choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls"}]}
+            self.complete()
+        (row,) = self.rows()
+        self.assertEqual(row["output_tokens"], 100)
+        self.assertGreater(row["usd"], 0)
+        self.assertIs(row["estimated"], True)
+
+    def test_bad_usage_counts_fall_back_to_the_estimate(self):
+        # Bug: negative or non-finite counts passed through, booking negative dollars.
+        for bad in (-5, float("nan"), float("inf"), "7", None, True, 1.5):
+            with self.subTest(bad=bad):
+                tin, tout, cost, extra = cloudllm._custom_counts(
+                    (2.0, 8.0), self.body(max_tokens=10), {"prompt_tokens": bad, "completion_tokens": 3}, 0)
+                self.assertEqual(tout, 10)
+                self.assertGreater(cost, 0)
+                self.assertIs(extra["estimated"], True)
+        self.assertEqual(cloudllm._custom_counts((2.0, 8.0), self.body(), {"prompt_tokens": 4, "completion_tokens": 3}, 0)[3], {})
 
 
 class BrokerRouteTest(Case):

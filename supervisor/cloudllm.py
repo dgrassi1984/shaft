@@ -494,24 +494,33 @@ def _relay(instance: str, model: str, resp, started: float, custom: dict | None 
         error = f"stream broken: {e!r}"
         raise
     finally:
-        if custom:
+        if custom:   # accounted on every exit; no return here: it would swallow a stream error being raised
             tin, tout, cost, extra = _custom_counts(custom["price"], custom["body"], usage, said)
             _record(instance, model, tin, tout, cost, started, finish, error, extra=extra)
-            return
-        from . import selfhosted
-        hosted = not _fallback_label.get() and selfhosted.serves(model.split(" (", 1)[0])
-        cost = None if hosted else usage.get("cost")
-        details = usage.get("prompt_tokens_details") or {}
-        _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
-                float(cost) if cost is not None else None, started, finish,
-                error or _unsaid({} if hosted else usage, finish),
-                cache={"cache_read_tokens": details.get("cached_tokens"),
-                       "cache_write_tokens": details.get("cache_write_tokens", details.get("cache_write"))})
+        else:
+            from . import selfhosted
+            hosted = not _fallback_label.get() and selfhosted.serves(model.split(" (", 1)[0])
+            cost = None if hosted else usage.get("cost")
+            details = usage.get("prompt_tokens_details") or {}
+            _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                    float(cost) if cost is not None else None, started, finish,
+                    error or _unsaid({} if hosted else usage, finish),
+                    cache={"cache_read_tokens": details.get("cached_tokens"),
+                           "cache_write_tokens": details.get("cache_write_tokens", details.get("cache_write"))})
 
 
 def _delta_chars(delta: dict) -> int:
     n = sum(len(delta.get(k) or "") for k in ("content", "reasoning", "reasoning_content"))
     return n + sum(len(((c.get("function") or {}).get("arguments")) or "") for c in delta.get("tool_calls") or [])
+
+
+def _message_chars(message: dict) -> int:
+    """The characters a buffered reply generated: its text, reasoning and tool-call arguments (as _delta_chars)."""
+    n = sum(len(message.get(k) or "") for k in ("content", "reasoning", "reasoning_content"))
+    for c in message.get("tool_calls") or []:
+        args = (c.get("function") or {}).get("arguments")
+        n += len(args if isinstance(args, str) else json.dumps(args or {}))
+    return n
 
 
 def _custom_price_or_refuse(model: str) -> tuple[float, float]:
@@ -546,7 +555,7 @@ def _custom_counts(price: tuple[float, float], body: dict, usage: dict, said: in
     characters / 3 when the request set none), marked `estimated`."""
     pin, pout = usage.get("prompt_tokens"), usage.get("completion_tokens")
     extra = {}
-    if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in (pin, pout)):
+    if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in (pin, pout)):   # NaN, inf, -1, "7"
         chars = len(json.dumps(body.get("messages") or [])) + (len(json.dumps(body["tools"])) if body.get("tools") else 0)
         cap = body.get("max_tokens") or body.get("max_completion_tokens")
         pin = math.ceil(chars / 3)
@@ -585,7 +594,7 @@ def _custom(instance: str, body: dict, key: str, price: tuple[float, float]) -> 
     if data is None:   # nothing was generated: no charge
         tin, tout, cost, extra = None, None, 0.0, {}
     else:
-        tin, tout, cost, extra = _custom_counts(price, body, usage, len(message.get("content") or ""))
+        tin, tout, cost, extra = _custom_counts(price, body, usage, _message_chars(message))
     _record(instance, model, tin, tout, cost, started, finish, error, extra=extra)
     if data is None:
         raise CloudError(502, f"custom endpoint call for {model} failed: {error}")
