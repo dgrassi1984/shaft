@@ -17,7 +17,7 @@ a command you run from a shell that sets it.
 - **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
   file when they start. A long-running service (api, scheduler, telegram, web, model, embed) holds what it read at its start;
   each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
-  Settings page say "not live yet: restart api (`shaft api on`), …" until the services holding another value
+  Settings page say "not live yet: restart api (`shaft api restart`), …" until the services holding another value
   restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
   A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
 - Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
@@ -160,9 +160,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_RUN_CONFINED` | `0` | 1: the broker's `run` inside a scheduled job writes only where the job may (`.jobs/<plugin>/`, `.tmp/`, `.browser/`); 0: where a cycle's `run` may (notes/, code). Turn it on once every instance's scheduled plugins publish through `publishes` | [jobs.py](../supervisor/jobs.py) |
-| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash` | the judge pool: picks at random, excluding the instance's model and the second judge; each any model the supervisor calls (claude-…, openrouter/…, a priced custom/… or a codex/… plan model) | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash` | the judge pool: picks at random, excluding the instance's model and the second judge; each any model the supervisor calls (claude-…, openrouter/…, a priced custom/… or a codex/… plan model). Two exceptions: a pool of one model that is the instance's own (one provider with one model, e.g. the custom preset) judges with it, and the verdict records `"independence": "same-model"`; a pool whose only other model is the second judge uses it, and that run gets no second judgment. A pool of several models, all the instance's, has no judge for it | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
-| `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement (any model the supervisor calls, as for the pool) | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement (any model the supervisor calls, as for the pool); never on a cycle its own model graded first; when it is the instance's own model, its verdict records `"independence": "same-model"` | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_EVERY` | `4` | the second judge grades one cycle in this many (0: never) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_MODEL_IDLE_MINUTES` | `15` | minutes SHAFT's own model server stays up unused before it exits (it starts again on demand); 0 = never exits | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_MODEL_START_TIMEOUT_S` | `300` | seconds to wait for the model server to start on demand | [localmodel.py](../supervisor/localmodel.py) |
@@ -479,12 +479,16 @@ calls itself (`SHAFT_CLOUD_MODELS`, `SHAFT_JUDGE_MODELS`, `SHAFT_JUDGE2_MODEL`, 
 |---|---|
 | `openrouter` | Every model on OpenRouter: the OpenRouter defaults, with the `claude-…` defaults (coder, describe, recap) replaced by their OpenRouter equivalents, and `SHAFT_CLOUD_MODELS` set to three OpenRouter instance models (plus `--model openrouter/…` when given) |
 | `codex` | The ChatGPT plan (`shaft codex login` first): judges, coder, consults, recap and trial fallback on `SHAFT_CODEX_MODELS` (`--model` the instance's, default `codex/gpt-6-astra`; the judges are the others). `SHAFT_CODEX_FALLBACK_MODEL=none`; describe is `none` when the model cannot read images. `SHAFT_CLOUD_MODELS` is left as it is |
-| `custom` | Every function on `custom/<--model>` (judges on `--judge-model` when given). Needs `--base-url` (unless set already), `--price-in` and `--price-out` (and `--judge-price-in`/`--judge-price-out` for a different judge); `--vision` declares the model able to read images. Writes `SHAFT_CUSTOM_BASE_URL`, `SHAFT_CUSTOM_PRICES` and `SHAFT_CUSTOM_VISION` with the preset; the fallbacks are `none` |
+| `custom` | Every function on `custom/<--model>` (judges on `--judge-model` when given). Needs `--base-url` (unless set already), `--price-in` and `--price-out` (and `--judge-price-in`/`--judge-price-out` for a different judge); `--vision` declares the model able to read images. Writes `SHAFT_CUSTOM_BASE_URL`, `SHAFT_CUSTOM_PRICES` and `SHAFT_CUSTOM_VISION` with the preset; the Codex and trial fallbacks are `none`, and describe is `none` unless the model or the judge model reads images |
 
-A function whose models the provider cannot serve (no key, no login, no price, no endpoint, no image reading) is left
-off and named with the reason, never filled with a model you have no access to. The answer lists what it `covers`,
+The preset is written whole. A function whose models cannot be used yet (no key, no login, no price, no endpoint, a
+describe model that cannot read images) keeps the preset's model: it is listed under `off` with the reason, and its
+calls are refused with that same reason until you add what is missing (`shaft secrets set`, `shaft codex login`). The
+preset itself switches a function off only by writing `none`: image descriptions (codex, custom: when no model of the
+preset reads images) and the plan-channel and trial fallbacks named in the table. The answer lists what it `covers`,
 what is `off` and why, and the settings a running service picks up only after a restart. `shaft provider check
-PROVIDER [--json]` makes one minimal call per configured model of that provider and prints each answer or error.
+PROVIDER [--json]` makes one minimal call per configured model of that provider and prints, per model, `ok` or the
+provider's error.
 Source: [provider.py](../supervisor/provider.py).
 
 ### Codex plan channel

@@ -86,7 +86,7 @@ For the terminal path:
   web and Telegram services record the absolute path of the Python that installed them; the model and embedding
   services run `.venv-bonsai`'s Python. If either moves, run that service's `on` command again.
 - Git `user.name` and `user.email` set: creating an instance makes commits.
-- For the cloud-only quickstart: an Anthropic API key and an OpenRouter API key.
+- For the [cloud-only quickstart](#quickstart-cloud-only): an Anthropic API key and an OpenRouter API key.
 
 Optional either way: Apple Silicon and an MLX model pack for [local models](docs/local-model.md) (the defaults assume
 64 GB of memory); Tailscale for the [web UI and API](docs/web-and-api.md) and the iPhone and iPad apps; Google OAuth
@@ -99,8 +99,12 @@ day. What a cycle costs depends mostly on the model. [Configuration](docs/config
 
 ## Quickstart: download the Mac app
 
-1. Download `SHAFT-<version>.dmg` from a [release](https://github.com/dgrassi1984/shaft/releases) (a Developer ID
-   signed, notarized build), open it and drag SHAFT to Applications.
+The Mac app installs and runs SHAFT for you. Its download is a Developer ID signed, notarized `SHAFT-<version>.dmg`,
+attached to the [releases](https://github.com/dgrassi1984/shaft/releases) cut after the Mac app's installer landed;
+until a release carries one, use the [terminal quickstart](#quickstart-cloud-only) below, or build the app yourself
+([native apps](apps/shaft/README.md)).
+
+1. Download `SHAFT-<version>.dmg` from a release that has one, open it and drag SHAFT to Applications.
 2. Open SHAFT. With no SHAFT installed in `~/SHAFT`, it opens its setup wizard. Read the Welcome page: it states what
    the agents can do and the risks above.
 3. **Install** runs and shows each step:
@@ -129,9 +133,9 @@ The server stays in `~/SHAFT`; Settings → Services → **Update server** moves
 ([deploying a release](docs/deploy.md)). Tailscale is optional: Settings → Services → **Use SHAFT from iPhone/iPad**
 sets it up later, for the iPhone and iPad apps and the web UI. The app keeps working without it.
 
-## Quickstart for developers: from a terminal
+## Quickstart: cloud-only
 
-This path needs no local model, only cloud API keys.
+The developer path, from a terminal. It needs no local model, only cloud API keys.
 
 1. Clone the repository with its `template` branch, and restore the worktrees:
 

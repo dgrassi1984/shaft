@@ -112,11 +112,11 @@ web UI pages keep every tailnet check, and answer no one until `shaft web on` re
   and logins, Google clients and Telegram tokens cannot be written there. A key or token travels on the verb's stdin,
   never in its arguments, a log line or an answer. The Google client's JSON goes on the stdin of `shaft google client`,
   which the app runs as a local process.
-- **One restart barrier.** A restart of the api or web service (`shaft api on`, `shaft web on`, the app's API restart,
-  `shaft deploy`) first looks at the open conversations and restarts nothing while one is open. From that look until
-  the restart it holds `.supervisor/restarting.lock`, and a conversation that tries to open meanwhile is refused with
-  "the server is restarting, try again in a moment". The app's restart routes and the web panel's share one lock per
-  service, so two restarts of the same service never overlap.
+- **One restart barrier.** A restart of the api or web service (`shaft api on`, `shaft api restart`, `shaft web on`, the
+  app's API restart, `shaft deploy`) first looks at the open conversations and restarts nothing while one is open. From
+  that look until the restart it holds `.supervisor/restarting.lock`, and a conversation that tries to open meanwhile is
+  refused with "the server is restarting, try again in a moment". The app's restart routes and the web panel's share one
+  lock per service, so two restarts of the same service never overlap.
 - **The Mac app runs outside the App Sandbox.** Its setup runs `git`, `uv` and the server's CLI and writes `~/SHAFT`,
   which the App Sandbox forbids. It keeps the hardened runtime, and its notification extension stays sandboxed. It
   allows plain `http` to local addresses only (`NSAllowsLocalNetworking`), which it uses for 127.0.0.1. The iPhone and

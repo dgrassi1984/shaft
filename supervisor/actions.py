@@ -287,11 +287,13 @@ GUARDED_CLI = ("api", "model", "embed", "autonomy")   # the shaft verbs whose on
 
 
 def cli_guard(cmd: str, action: str, force: bool) -> str:
-    """The same guard for `shaft <cmd> on|off` typed in a terminal, which both panels also run: empty to go ahead,
-    else why it is refused. Only a running service can hurt a run; a forced one is logged, like the panels'."""
+    """The same guard for `shaft <cmd> on|off` (and `shaft api restart`) typed in a terminal, which both panels also run:
+    empty to go ahead, else why it is refused. Only a running service can hurt a run; a forced one is logged, like the
+    panels'."""
     from .autonomy import running
     service = "scheduler" if cmd == "autonomy" else cmd
-    if action not in ("on", "off") or not running(service):
+    guarded = ("on", "off", "restart") if cmd == "api" else ("on", "off")   # `autonomy restart` drains: never guarded
+    if action not in guarded or not running(service):
         return ""
     why = service_guard(cmd, "off" if action == "off" else "restart")
     if why and force:

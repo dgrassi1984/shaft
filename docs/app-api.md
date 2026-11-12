@@ -1262,7 +1262,9 @@ Only the scheduler also has `drain`, either null or `{"state": str, "waiting": [
 A pending restart request appears as `draining` before the first drain tick only when its PID matches the running scheduler. Leftover requests for dead processes are ignored.
 
 API restart refuses with `409 busy` when its guard is nonempty. There is no force option. Otherwise it runs
-`api on` with `actions.SLOW_S`, as the web service action does. Scheduler restart runs `autonomy restart`.
+`api restart` with `actions.SLOW_S`, as the web service action does for an installed API: it restarts the service in the
+mode it runs in (never `tailscale serve`, no login or key change, so a local-only Mac needs no Tailscale), and is
+refused while a conversation is open (`409 refused`, "a conversation is open with <n>: try again when it ends"). Scheduler restart runs `autonomy restart`.
 A pending drain is returned without requesting it again, preserving its deadline. Cancel runs
 `autonomy restart --cancel`. A second restart while the same service's command runs gives `409 restarting`. The web service action shares this lock.
 A failed command gives `409 refused` with the command's message. Successful commands return the fresh service list;

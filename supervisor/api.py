@@ -1032,6 +1032,23 @@ def service_on(name: str) -> int:
         return autonomy.service(name, "on")
 
 
+def restart() -> int:
+    """`shaft api restart`: restart the installed com.shaft.api in its current mode — tailnet, local or both, as `api on`
+    left it. It never runs `tailscale serve` and changes no login and no key, so a local-only Mac's restart needs no
+    Tailscale and a restart never exposes the API on the tailnet. Under the same barrier as `api on` (service_on): with
+    a conversation open, nothing is restarted. Not installed: refused, naming the verb that installs it."""
+    from . import autonomy
+    if not autonomy.installed("api"):
+        print(say("the api service is not installed: run shaft api on (or shaft api on --local) first",
+                  "The API service is not installed on this Mac, so there is nothing to restart."))
+        return 1
+    if service_on("api"):
+        return 1
+    log("api restarted in its current mode (no tailscale serve; logins and keys unchanged)")
+    print("API restarted")
+    return 0
+
+
 def json_verb(fn) -> int:
     """Run a CLI verb with its prints captured and answer with one JSON line, the Mac app's contract: {"ok": true} (exit
     0) or {"ok": false, "error": <what the verb said>} (exit 1); a crash is an error too, never a traceback."""
@@ -1081,11 +1098,12 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
     SHAFT_API_LOGINS, installs the service and exposes it with `tailscale serve`. `shaft api on --local` does the same
     without Tailscale: it adds LOCAL_LOGIN instead and exposes nothing (the Mac app on this Mac pairs with
     `shaft web pair --local`). Logins are merged, never replaced. `on --json` (the Mac app's "Use SHAFT from iPhone/iPad")
-    answers with one JSON line instead of the prose."""
+    answers with one JSON line instead of the prose. `shaft api restart` restarts the installed service as it is
+    (restart())."""
     from . import autonomy
     if as_json:
-        if action != "on":
-            print(f"--json goes with on, not {action}", file=sys.stderr)
+        if action not in ("on", "restart"):
+            print(f"--json goes with on or restart, not {action}", file=sys.stderr)
             return 2
         return json_verb(lambda: command(action, local))
     if local and action != "on":
@@ -1093,6 +1111,8 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
         return 2
     if action == "serve":
         return serve()
+    if action == "restart":
+        return restart()
     if action == "key":
         key = secrets_env().get("SHAFT_API_KEY")
         print(key or "no key yet — run: shaft api on")

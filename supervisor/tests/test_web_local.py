@@ -505,6 +505,51 @@ class LocalInstallTest(LocalTest):
         self.assertIn("Try again", got["error"])
         self.assertIn("tailscale status", human[1])
 
+    # -- shaft api restart (bug 2026-11-12: the app's and the panel's Restart API ran `api on`, which on a local-only Mac
+    # failed without Tailscale and on a tailnet-ready one turned on `tailscale serve`) ----------------------------------
+    def test_api_restart_on_a_local_only_install_never_calls_tailscale_nor_changes_logins_or_keys(self):
+        env = "SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n"
+        (self.project / ".env").write_text(env)
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch("supervisor.actions.cli_guard", return_value=""), \
+                mock.patch.object(api, "instance_names", return_value=["wisp"]):
+            code, out, err = self.cli("api", "restart", "--json")      # api._tailscale raises if called
+        self.assertEqual((code, self.only_json(out)), (0, {"ok": True}), out + err)
+        self.assertEqual(self.services, [("api", "on")])               # launchd reloads the same plist
+        self.assertEqual((self.project / ".env").read_text(), env)
+
+    def test_api_restart_restarts_nothing_while_a_conversation_is_open(self):
+        from supervisor import runner
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch("supervisor.actions.cli_guard", return_value=""), \
+                mock.patch.object(api, "instance_names", return_value=["wisp", "bard"]), \
+                mock.patch.object(runner, "open_conversations",
+                                  side_effect=lambda n: {"t1": "web"} if n == "bard" else {}):
+            code, out, err = self.cli("api", "restart", "--json")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.only_json(out), {"ok": False,
+                                               "error": "a conversation is open with bard: try again when it ends"})
+        self.assertEqual(self.services, [])
+
+    def test_api_restart_of_a_service_not_installed_is_refused(self):
+        with mock.patch("supervisor.autonomy.installed", return_value=False):
+            code, out, err = self.cli("api", "restart")
+            jcode, jout, _ = self.cli("api", "restart", "--json")
+        self.assertEqual((code, jcode), (1, 1))
+        self.assertIn("not installed: run shaft api on (or shaft api on --local) first", out)
+        got = self.only_json(jout)
+        self.assertIs(got["ok"], False)
+        self.assertIn("not installed", got["error"])
+        self.assertEqual(self.services, [])
+
+    def test_api_restart_is_guarded_like_on(self):
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch("supervisor.actions.service_guard", return_value="2 replies are running."):
+            code, out, err = self.cli("api", "restart")
+        self.assertEqual(code, 1)
+        self.assertIn("2 replies are running", err)
+        self.assertEqual(self.services, [])
+
     def test_json_goes_with_the_tailnet_on_only(self):
         self.assertEqual(self.cli("api", "status", "--json")[0], 2)
         self.assertEqual(self.cli("web", "on", "--local", "--json")[0], 2)

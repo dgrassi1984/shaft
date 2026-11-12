@@ -102,7 +102,7 @@ shaft web on [--local|--json]|off|status|pair [--name N] [--local] [--json]|unpa
 shaft grok login|status
 shaft codex login [--json]|status
 shaft model on|off|status
-shaft api on [--local] [--json]|off|status|key|inbox-key
+shaft api on [--local] [--json]|restart [--json]|off|status|key|inbox-key
 shaft telegram token <name>|pair [--json]|unpair|on|off|status
 shaft embed on|off|status
 shaft secrets set|unset <NAME> [--json]
@@ -126,7 +126,10 @@ one JSON line, `{"ok": true}` (pair: `{"ok": true, "link": …, "expires_minutes
 naming Tailscale missing, signed out or switched off, and exits 0 or 1.
 
 `shaft api` controls the OpenAI-compatible API and inbox doorbell. `key` and `inbox-key` show their separate
-bearer keys. `shaft telegram` configures tokens and pairing and controls Telegram chat. `telegram pair --json` prints
+bearer keys. `shaft api restart` restarts the installed API service as it is: it never runs `tailscale serve` and
+changes no login or key, so it works on a local-only Mac and never exposes the API as a side effect. Like `on`, it
+restarts nothing while a conversation is open, is held back by running replies unless `--force`, and is refused when
+the service is not installed. The app's and the web panel's Restart API run it. `shaft telegram` configures tokens and pairing and controls Telegram chat. `telegram pair --json` prints
 `{"ok": true, "code", "minutes"}` (the code to send to a bot as `/pair <code>`) or `{"ok": false, "error"}`. See
 [integrations](integrations.md).
 

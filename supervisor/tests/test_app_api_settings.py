@@ -332,7 +332,8 @@ class SettingsTest(AppTest):
         self.error(self.api("/app/v1/version", bearer=False), 401, "unpaired")
 
     def test_service_restart_and_cancel_use_existing_commands_and_timeouts(self):
-        for path, args, timeout in (("api/restart", ["api", "on"], actions.SLOW_S),
+        # `api restart`, never `api on` (bug 2026-11-12: a local-only Mac's restart needed Tailscale, or exposed the API)
+        for path, args, timeout in (("api/restart", ["api", "restart"], actions.SLOW_S),
                                     ("scheduler/restart", ["autonomy", "restart"], actions.RUN_NOW_S),
                                     ("scheduler/cancel", ["autonomy", "restart", "--cancel"], actions.RUN_NOW_S)):
             r = self.api("/app/v1/services/" + path, "POST")

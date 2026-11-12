@@ -1540,11 +1540,13 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("wake", help="one scheduled wake of an instance (run by the scheduler; skipped if awake)")
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
-    p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
-    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p.add_argument("action", choices=["on", "off", "restart", "status", "key", "inbox-key", "serve"])
+    p.add_argument("--force", action="store_true",
+                   help="on/off/restart even if it would kill or cut off runs in progress")
     p.add_argument("--local", action="store_true", help="on: without Tailscale — allow the Mac app's local login, "
                                                         "expose nothing")
-    p.add_argument("--json", action="store_true", help="on: one JSON object on stdout ({ok} or {ok: false, error})")
+    p.add_argument("--json", action="store_true",
+                   help="on, restart: one JSON object on stdout ({ok} or {ok: false, error})")
     p = sub.add_parser("secrets", help="the supervisor's .env secrets: set NAME (value on stdin), unset NAME, list "
                                        "(names only)")
     p.add_argument("action", choices=["set", "unset", "list"])

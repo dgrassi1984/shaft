@@ -6,9 +6,10 @@ its knob's own parser — and says which functions the provider covers and which
 `check PROVIDER` makes one minimal modelcall.ask per distinct configured model of that provider and says what the
 provider really answered. Neither verb touches the project .env: keys are set by `shaft secrets`.
 
-A preset covers a function when every model it runs on passes modelcall.available (key, login, price, endpoint). A
-function the provider cannot serve is left off — its knob unset, so it falls back to the default — and named in `off`
-with the reason, never papered over with a model the operator has no key for.
+A preset covers a function when every model it runs on passes modelcall.available (key, login, price, endpoint). The
+preset is written whole: a function whose models fail that check keeps them, and is named in `off` with the reason —
+its calls are refused with that reason until the key, login, price or endpoint is there. The preset turns a function
+off itself only by writing `none` (describe_image and the fallbacks, where the provider has no model for them).
 """
 from __future__ import annotations
 

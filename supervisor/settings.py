@@ -31,7 +31,7 @@ VALUE_MAX = 4000
 HEADER = ("# SHAFT's supervisor settings — written by `shaft settings set|unset` (and the web UI's Settings page).\n"
           "# KEY=value, the value verbatim to the end of its line (no quotes, no comments after it).\n"
           "# A process's environment wins over this file; a service reads it when it starts.\n")
-RESTART = {"api": "shaft api on", "scheduler": "shaft autonomy on", "telegram": "shaft telegram on",
+RESTART = {"api": "shaft api restart", "scheduler": "shaft autonomy on", "telegram": "shaft telegram on",
            "web": "shaft web on", "model": "shaft model on", "embed": "shaft embed on"}
 
 

@@ -1078,7 +1078,9 @@ def _service_action(req: Request, service: str, act: str) -> Response:
         if act == "restart" and service == "api":
             if why := actions.service_guard("api", "restart"):
                 raise Refusal(409, "busy", why)
-            args, timeout = ["api", "on"], actions.SLOW_S
+            # `api restart`, never `api on`: on a local-only Mac that would need Tailscale, and on a tailnet-ready one
+            # it would expose the API (tailscale serve) as a side effect of a restart
+            args, timeout = ["api", "restart"], actions.SLOW_S
         else:
             if act == "restart" and (_pending_drain() or autonomy.draining_now()):
                 return _services_response()
