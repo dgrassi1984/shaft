@@ -13,7 +13,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `apps/shaft/DevServer/test_fixture_threads.py` | `FixtureThreadRepliesTest` | — |
 | `apps/shaft/DevServer/test_fixture_voice.py` | `FixtureVoiceTest` | — |
 | `apps/shaft/Shared/make_icons.py` | — | `main` |
-| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_gauges`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_gchat`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `main` |
+| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_gauges`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_gchat`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `cmd_claude`, `main` |
 | `supervisor/actions.py` | — | `restart_lock`, `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
 | `supervisor/api.py` | `ReplyQueue`, `Conversations`, `Answered`, `Live`, `VoiceSessions`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
@@ -32,6 +32,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/calendar_proposals.py` | — | `create`, `listing`, `expire`, `decide`, `reject` |
 | `supervisor/channel.py` | — | `preference`, `set_preference`, `talks`, `can_alert`, `route`, `describe` |
 | `supervisor/claimlint.py` | — | `lint`, `records`, `run`, `head_lines` |
+| `supervisor/claudecli.py` | `Channel` | `serves`, `models`, `home`, `child_env`, `login_status` |
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `as_sse` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel` | `serves`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success` |
@@ -82,13 +83,13 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/order.py` | `Refused` | `threads`, `add_thread`, `move_thread`, `instances`, `move_instance`, `thread_rev`, `instance_rev` |
 | `supervisor/orders.py` | — | `path`, `checks_path`, `listing`, `clean`, `in_force`, `add`, `added`, `drop`, `drop_own`, `line`, `corrections`, `case`, `check`, `log_check`, `refusal`, `shown`, `violations`, `stats_lines` |
 | `supervisor/outcomes.py` | — | `records`, `lines` |
-| `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `codex_rate`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `provider_alerts`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
+| `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `codex_rate`, `claude_rate`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `provider_alerts`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
 | `supervisor/perturbation.py` | — | `enabled_path`, `check`, `request`, `chat`, `detection`, `run`, `adapter_swap`, `scores` |
 | `supervisor/planbridge.py` | — | `relay`, `serve`, `main` |
 | `supervisor/planchannel.py` | `ChannelFailure`, `ChannelClosed`, `ChannelSecurity`, `ProviderState`, `Step`, `Channel` | `provider`, `prefix`, `serves`, `models`, `channel_for`, `label`, `fallback_model`, `sees_images`, `vendor`, `unprefix`, `outage`, `rate_limit`, `saved_rate`, `report_failure`, `report_success`, `save_rate` |
 | `supervisor/predictions.py` | — | `fold`, `made`, `add`, `add_built`, `report_built`, `reported`, `report`, `score`, `due_lines`, `stats_lines`, `record_text`, `last_made` |
 | `supervisor/privileged.py` | `Unanswered` | `mind_ablated_copy`, `rows`, `item_id`, `prediction`, `outcome`, `scores`, `comparison`, `recognition_scores`, `recognition_prompt`, `run`, `report` |
-| `supervisor/projects.py` | — | `lines`, `section` |
+| `supervisor/projects.py` | — | `assess`, `lines`, `section`, `panel` |
 | `supervisor/protected.py` | — | `remove`, `sweep`, `make`, `importable`, `copy` |
 | `supervisor/provenance.py` | — | `facts`, `check`, `checked`, `reliance`, `section`, `report` |
 | `supervisor/pushback.py` | — | `outcome`, `annoyance`, `lines` |
@@ -140,6 +141,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_chat_threads_appapi.py` | `ThreadsAppTest` | — |
 | `supervisor/tests/test_chat_threads_server.py` | `ServerThreadsTest` | — |
 | `supervisor/tests/test_claimlint.py` | `ClaimlintTest` | `call`, `episode` |
+| `supervisor/tests/test_claudecli.py` | `DummyBridge`, `ChannelTest`, `MappingTest`, `WiringTest` | `body` |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
 | `supervisor/tests/test_codexcli.py` | `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |

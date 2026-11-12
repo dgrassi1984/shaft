@@ -58,7 +58,7 @@ SETTING_KEY = re.compile(r"^SHAFT_[A-Z0-9_]{1,60}$")
 # restarts; "runs" — cycles, sleeps, trials, batteries, write-ups, CLI commands — are fresh processes that read it
 # when they start.
 SERVICE_NAMES = ("api", "scheduler", "telegram", "web", "model", "embed")
-KNOB_GROUPS = ("Judging", "Models and spend", "Codex", "Grok", "Trials", "Runs and conversations", "Inbox and benchmarks",
+KNOB_GROUPS = ("Judging", "Models and spend", "Codex", "Grok", "Claude", "Trials", "Runs and conversations", "Inbox and benchmarks",
                "Local model", "Ports and paths")
 
 
