@@ -466,8 +466,12 @@ def render_costs(snap, ui, width, height):
     lines.append(jt)
     if c.get("grok_api_equivalent"):
         lines.append(Text(f"   Grok plan: ${c['grok_api_equivalent']:.6f} API equivalent (not money spent)"))
+    if c.get("claude_api_equivalent"):
+        lines.append(Text(f"   Claude plan: ${c['claude_api_equivalent']:.6f} API equivalent (not money spent)"))
     if (rate := c.get("codex_rate")) is not None:
         lines.append(Text(f"   Codex plan: {rate['used_percent']}% of weekly allowance used"))
+    if (rate := c.get("claude_rate")) is not None:
+        lines.append(Text(f"   Claude plan: {rate['used_percent']}% of weekly allowance used"))
     if c["unpriced"]:
         lines.append(Text(f"   {c['unpriced']} unpriced model call(s) are not counted in dollar totals", style="yellow"))
     lines.append(Text(""))

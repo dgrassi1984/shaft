@@ -174,7 +174,7 @@ This path needs no local model, only cloud API keys.
 
 ## Optional features
 
-- **Local and self-hosted models**, and routing through a Codex or Grok plan: [local models](docs/local-model.md).
+- **Local and self-hosted models**, and routing through a Codex, Grok or Claude plan: [local models](docs/local-model.md).
 - **Access grants**: Gmail labels (read, and optionally drafts you review and send yourself), calendars (changes that involve other people wait for your approval),
   Drive and Google Chat; instance-owned Google accounts; scheduled jobs; images; a shared Chromium: [integrations](docs/integrations.md).
 - **Evaluation**: trials, the capability battery, model bake-offs and measurement reports:
@@ -205,7 +205,7 @@ services, as [moving SHAFT to a new Mac](docs/migration.md) describes, including
 | [App API](docs/app-api.md) | The `/app/v1` contract the native apps use |
 | [Native apps](apps/shaft/README.md) | Building, signing and installing the iOS and macOS apps |
 | [Integrations](docs/integrations.md) | Telegram, Google mail/calendar/Drive/Chat, jobs, images, browser |
-| [Local models](docs/local-model.md) | Local MLX model, self-hosted servers, Codex and Grok plans |
+| [Local models](docs/local-model.md) | Local MLX model, self-hosted servers, Codex, Grok and Claude plans |
 | [Moving to a new Mac](docs/migration.md) | Backup and migration |
 | [Deploying a release](docs/deploy.md) | Moving a running setup onto a new release |
 | [Model bake-offs](docs/bakeoffs/README.md) | How models are compared for an instance |

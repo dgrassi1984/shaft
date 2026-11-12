@@ -178,3 +178,38 @@ Plan rows spend no API dollars (`usd=null`). Costs views show Grok's reported
 `costUsdTicks / 10^10` as **API equivalent**, not money spent; fallback calls are
 charged normally. Grok's own session files have best-effort 24-hour retention,
 at most once every ten minutes. See [configuration](configuration.md).
+
+## Claude plan routing
+
+Install Claude Code first. The default executable is `~/.local/bin/claude`;
+`SHAFT_CLAUDE_BIN` overrides it. Run `bin/shaft claude login`, then
+`bin/shaft config <name> set LLM_MODEL=claudecode/claude-opus-5-5`.
+`bin/shaft claude status` shows login, offered models, any outage and the last
+observed weekly percentage.
+
+The channel runs the unmodified `claude` binary in headless stream-json mode
+with the operator's own Claude subscription for personal use. Claude Code handles
+login and authentication. SHAFT never reads, copies, stores or passes the credential,
+and never calls Anthropic's API with subscription credentials.
+
+Each retained session has one process. Native tools, imported settings and slash
+commands are disabled. Only SHAFT tools are allowed through the standalone MCP
+bridge. The channel checks the advertised tools each turn and refuses other tool
+use. Changing the system prompt, tools, model or effort restarts the process and
+replays the transcript. Text and images are accepted; images smaller than 8×8 are refused.
+Held tool calls receive results through the bridge. Interrupts end the current turn.
+
+The child's sandbox denies the operator's home except for its configuration
+directory, required executable files and read access to the literal
+`~/Library/Keychains/login.keychain-db`. The CLI needs that keychain file and the
+operator's real `HOME` to find its login. SHAFT does not open the keychain file.
+The child can write its run folder and configuration directory. Its run folder has
+an empty `.git` directory to stop upward project instruction discovery.
+
+At the weekly ceiling, 85% by default, or after a channel failure, a live run uses
+`SHAFT_CLAUDE_FALLBACK_MODEL` for the rest of the run. Trials and bake-offs fail
+without fallback. Plan rows record `usd=null`; costs views show Claude's reported
+`total_cost_usd` as API equivalent, not money spent. Fallback calls cost API dollars.
+See [configuration](configuration.md#claude-plan-channel) for the `SHAFT_CLAUDE_*` settings.
+Source: [claudecli.py](../supervisor/claudecli.py), `Channel` and `_seatbelt`;
+[planbridge.py](../supervisor/planbridge.py), `serve`.
