@@ -16,13 +16,15 @@ SHAFT runs from the primary checkout (the clone you installed from, on `main`) a
 Settings → Services → Update server runs it, after `shaft deploy --check --json` found a newer release). Each release
 tag `vX.Y.Z` has a lightweight tag `template-vX.Y.Z` on the template commit shipped with it (see [Cutting a
 release](#cutting-a-release)). A release without its `template-vX.Y.Z` cannot be installed or deployed by the app, nor by
-`shaft deploy`, which refuses it. `shaft deploy vX.Y.Z` does steps 1 to 3 below and the app's Update server runs it;
-resolve the template commit by hand with `git rev-parse template-vX.Y.Z^{commit}`. It
+`shaft deploy`, which refuses it. `shaft deploy vX.Y.Z` does steps 1 to 3 below, and the app's Update server runs
+it; by hand, resolve the template commit with `git rev-parse template-vX.Y.Z^{commit}`. The command
 stops where these steps say to stop, never forces a service, and restarts api, web and telegram only when no
 conversation is open: otherwise its services step says who it waits for, and `shaft deploy TAG --json
 --services-only` does that part later. `model` and `embed` stay manual (step 3). From its look at the open conversations until the old
 processes are gone it holds `.supervisor/restarting.lock`: a conversation that tries to open meanwhile (API, web, Telegram
 or a terminal talk) is refused with "the server is restarting, try again in a moment", so the restart never cuts one.
+`shaft api on` and `shaft web on` (also run by the Mac app) restart a running service under the same lock, and restart
+nothing while a conversation is open.
 Each step's outcome is kept in `.supervisor/deploy-state.json`; `shaft deploy --check --json` names a deploy left
 unfinished, and running the same command again finishes it from the step it stopped at: what it recorded done and the
 checkout still shows (main and the template at the tags' commits) is not repeated, and origin is not asked
@@ -36,6 +38,7 @@ accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards 
 Besides the annotated release tag `vX.Y.Z`, every release records its template commit as a lightweight tag:
 
 ```bash
+git rev-parse template                  # the template commit: the tip of the template branch that passed the gate
 git tag template-vX.Y.Z <template commit>
 git push origin vX.Y.Z template-vX.Y.Z
 ```

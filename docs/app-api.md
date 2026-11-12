@@ -129,6 +129,11 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 QR pairing is dropped: the app takes the pairing link, pasted. On the Mac the operator copies it from the terminal and
 Universal Clipboard carries it to the phone or iPad.
 
+The Mac app on the same Mac as the server pairs without a link, over loopback (§1.2): its setup (or, with an install
+already there, its first launch) runs `shaft web pair --local --name <name> --json` from `~/SHAFT` and keeps the
+printed `base_url`, `device` and `secret` (the bearer) in its Keychain. A loopback pairing the server no longer knows
+(`401 unpaired`) is paired again once on its own. The pasted link below is its "Connect to an existing SHAFT".
+
 1. On the Mac: `shaft web pair --name iphone-app` prints the link, as for a browser:
    `https://<mac>.<tailnet>.ts.net:8444/pair?t=<token>`. It works once, for 10 minutes.
 2. The app takes the pasted link: the base URL is everything before `/pair`.
@@ -1193,7 +1198,7 @@ plugin grants or global settings.
 | POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
-| GET | `/version` | 200, `{"server": str, "api": int}` (§19) |
+| GET | `/version` | 200, `{"server": str, "api": int}`, plus `project` on loopback (§19) |
 | GET | `/services` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
@@ -1529,7 +1534,7 @@ needs --model"). Keys are set first with `/setup/secret`. Success:
 | `provider` | str | the provider |
 | `model` | str | the instance model it suggests: a new instance's `LLM_MODEL` (`--model` when given; else OpenRouter's first instance model, or Codex's default) |
 | `changed` | [str] | the settings it changed |
-| `covers` | [str] | what the provider now runs: `instances`, `judges`, … |
+| `covers` | [str] | what the provider now runs, of `instances`, `judge`, `judge2`, `coder`, `consult`, `describe`, `recap`, `trial` (`supervisor/provider.py` `FUNCTIONS`) |
 | `off` | [{`function`, `why`}] | what stays off with this provider, and why |
 | `not_live` | [str] | changed settings a running service picks up only when restarted |
 

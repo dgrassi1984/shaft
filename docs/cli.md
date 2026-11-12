@@ -7,8 +7,9 @@ Use `bin/shaft` from the repository root, or install the symlink below and add `
 ```text
 mkdir -p ~/.local/bin
 ln -s "$PWD/bin/shaft" ~/.local/bin/shaft
+shaft install --operator <name> [--email <addr>] --json
 shaft update [names…|--all]
-shaft new <name> [--from <i>]
+shaft new <name> [--from <i>] [--json]
 shaft new <name> --from <i> --seed
 shaft new <name> --paused-until-first-reply resume|stay [--json]
 shaft first-reply <name> resume|stay [--json]
@@ -19,9 +20,16 @@ shaft setup
 `shaft setup` recreates missing template and instance worktrees from local or origin branches. It installs the
 pre-push guard and exits with status 1 if another tool's hook is in the way. See [migration](migration.md).
 
+`shaft install --operator <name> --json` is the Mac app installer's step after it cloned the server into `~/SHAFT`:
+the git identity (kept when git already has one, else set for this repository only, never globally), `shaft setup`,
+`shaft api on --local`, `shaft web on --local` and `shaft autonomy on`, one JSON line per step, `{"step", "ok",
+"detail"}` (with `"error"` on the failed one, which stops the run: exit 1). A step whose result already holds is
+skipped, so a rerun after success changes nothing. It needs no Tailscale.
+
 `shaft new` creates an instance from the template. `--from` copies another instance's genes without its
 memories. Adding `--seed` copies its people file and facts.md as that instance's beliefs, without its self,
-journal, or episodes. `--paused-until-first-reply` creates it paused until you have answered its welcome: `resume`
+journal, or episodes. `--json` prints one JSON line, `{"ok", "name", "branch", "worktree", "paused"}` or `{"ok":
+false, "error"}`. `--paused-until-first-reply` creates it paused until you have answered its welcome: `resume`
 then lets it work on its own, `stay` keeps it paused, answering only when you talk to it. `shaft first-reply` changes
 that choice while it is still waiting (refused once the first reply has happened). `shaft breed` recombines two
 instances' genes with judge selection and starts a fresh mind.
@@ -97,6 +105,11 @@ shaft model on|off|status
 shaft api on [--local] [--json]|off|status|key|inbox-key
 shaft telegram token <name>|pair [--json]|unpair|on|off|status
 shaft embed on|off|status
+shaft secrets set|unset <NAME> [--json]
+shaft secrets list [--json]
+shaft provider use openrouter|codex|custom [--model M] [--judge-model M] [--base-url URL]
+                   [--price-in X --price-out Y] [--judge-price-in X --judge-price-out Y] [--vision] [--json]
+shaft provider check openrouter|codex|custom [--json]
 ```
 
 `shaft web` controls the tailnet browser panel, chat, configuration, Drive, and access. `pair` registers a
@@ -113,8 +126,17 @@ one JSON line, `{"ok": true}` (pair: `{"ok": true, "link": …, "expires_minutes
 naming Tailscale missing, signed out or switched off, and exits 0 or 1.
 
 `shaft api` controls the OpenAI-compatible API and inbox doorbell. `key` and `inbox-key` show their separate
-bearer keys. `shaft telegram` configures tokens and pairing and controls Telegram chat. See
+bearer keys. `shaft telegram` configures tokens and pairing and controls Telegram chat. `telegram pair --json` prints
+`{"ok": true, "code", "minutes"}` (the code to send to a bot as `/pair <code>`) or `{"ok": false, "error"}`. See
 [integrations](integrations.md).
+
+`shaft secrets set NAME` stores one of the supervisor's own keys in `.env`, the value read from stdin (one line), never
+from argv and never printed; `unset` removes it and `list` prints the names only. `shaft provider use` writes one
+consistent preset of every model the supervisor calls (judges, coder, consults, image descriptions, recaps, fallbacks)
+for OpenRouter, a ChatGPT plan through Codex, or a priced OpenAI-compatible `custom/` endpoint, and says what it covers
+and what stays off and why; `shaft provider check` makes one minimal call per configured model of that provider. Both
+are what the Mac app's Model step runs. See [secrets](configuration.md#supervisor-secrets-and-identity) and
+[provider presets](configuration.md#provider-presets-shaft-provider).
 
 `shaft model` controls SHAFT's Bonsai 2 server on port 8780. It starts on demand and exits when idle. `shaft
 embed` controls the optional memory-search service.
@@ -149,7 +171,8 @@ weekly pool is unavailable.
 ## Access grants
 
 ```text
-shaft google login <alias> <address> [--client <name>]
+shaft google client <name> [--json] < client.json
+shaft google login <alias> <address> [--client <name>] [--json]
 shaft google [migrate]
 shaft mail <name> grant|revoke <alias> <label>
 shaft mail <name> grant-draft|revoke-draft <alias> <label>
@@ -174,8 +197,13 @@ shaft secret <name> list|delete [<key>]
 shaft secret <name> google <key> <address> --client <client> [--scope gmail.modify|drive]
 ```
 
-`shaft google login` authorizes an account for Gmail read and drafts, Calendar read and write, and Drive read. `shaft
-google` lists accounts, clients, and scopes. `migrate` moves older mail-account files.
+`shaft google client <name>` keeps a Desktop app OAuth client from the JSON Google Cloud downloads, read on stdin
+(`--json`: one line, `{"ok": true, "client", "login_again": [aliases]}`, naming accounts logged in with the client's
+earlier ID). `shaft google login` authorizes an account for Gmail read and drafts, Calendar read and write, and Drive
+read; with `--json` it opens no browser and prints `{"url"}` (the consent page) and then `{"ok": true, "alias",
+"address", "client", "granted", "missing"}` or `{"ok": false, "error"}`. The Mac app's "Set up Google…" runs both.
+`shaft google` lists accounts, clients, and scopes. `migrate` moves older mail-account files. See
+[integrations](integrations.md).
 
 Mail grants select labels whose threads an instance may read. `grant-draft` also permits drafts, never sending.
 It checks that the label exists and the login includes `gmail.compose`. It adds read access if missing.
@@ -524,7 +552,7 @@ shaft migrate source --to HOST [--check]
 shaft migrate target [--check]
 shaft browser [install [--playwright X.Y.Z]]
 shaft deploy TAG --json [--services-only]
-shaft deploy --check --json
+shaft deploy --check [--local] --json
 shaft recover [name|--all]
 shaft finetune <name> --evaluate <adapter>
 shaft mind backfill|check [names…] --project PATH
@@ -544,8 +572,9 @@ recover` writes up unfinished conversations.
 it fast-forwards main and the template worktree to `TAG` and `template-TAG` (refusing a dirty tree or a
 non-fast-forward), updates the instances, asks the scheduler for a drain-restart, and restarts api, web and telegram
 only when no conversation is open (otherwise it ends with a `waiting` step; `--services-only` retries that part).
-`shaft deploy --check --json` names the newest release on origin it could move to. The Mac app's Update server runs
-both.
+`shaft deploy --check --json` names the newest release on origin it could move to, and a deploy left unfinished;
+`--local` names only the unfinished deploy, without asking origin. Run again, `shaft deploy TAG --json` finishes an
+unfinished deploy from the step it stopped at. The Mac app's Update server runs both.
 
 `shaft migrate source --to HOST` guides migration to another Mac over SSH. Enter runs each step, `q` stops,
 and completed steps resume later. There is no `--yes`. On the new Mac, `migrate target` repairs paths,

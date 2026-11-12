@@ -37,8 +37,9 @@ Source: [supervisor/core.py](../supervisor/core.py).
 
 | Key | Purpose | Source |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Claude instance models, judges, coding, recaps, image descriptions | [cloudllm.py](../supervisor/cloudllm.py) |
-| `OPENROUTER_API_KEY` | OpenRouter chat, decision models, judges | [cloudllm.py](../supervisor/cloudllm.py), [judge.py](../supervisor/judge.py) |
+| `ANTHROPIC_API_KEY` | Every `claude-…` model: instance models, and the supervisor's judges, coding, recaps and image descriptions when their knobs name one | [cloudllm.py](../supervisor/cloudllm.py), [modelcall.py](../supervisor/modelcall.py) |
+| `OPENROUTER_API_KEY` | Every `openrouter/…` model: instance models, decision models, consultations, and judges, coding, recaps and image descriptions when their knobs name one | [cloudllm.py](../supervisor/cloudllm.py), [modelcall.py](../supervisor/modelcall.py) |
+| `SHAFT_CUSTOM_API_KEY` | The bearer for the `custom/` endpoint (`SHAFT_CUSTOM_BASE_URL`); a `custom/` model is refused without it, so a server that checks none still needs a placeholder value | [cloudllm.py](../supervisor/cloudllm.py), [modelcall.py](../supervisor/modelcall.py) |
 | `SCRAPEBADGER_API_KEY` | Web search | [broker.py](../supervisor/broker.py) |
 | `SHAFT_API_KEY` | API bearer key, created by `shaft api on` | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_KEY` | Separate delivery-only inbox bearer key | [api.py](../supervisor/api.py) |
@@ -46,9 +47,17 @@ Source: [supervisor/core.py](../supervisor/core.py).
 | `TELEGRAM_TOKEN_<NAME>` | One bot token per instance; hyphens become underscores | [telegram.py](../supervisor/telegram.py) |
 | `GMAIL_<CLIENT>_CLIENT_ID` / `GMAIL_<CLIENT>_CLIENT_SECRET` | Named Google Desktop OAuth clients | [google.py](../supervisor/google.py) |
 
-`SHAFT_API_LOGINS` can also come from the process environment. Integration refresh
+`SHAFT_API_LOGINS` can also come from the process environment. The login `operator@local` in it (added by `shaft api
+on --local`) is the one the Mac app's devices paired with `shaft web pair --local` act as. Integration refresh
 tokens and instance-owned keys are stored by their setup commands, not in instance
 `config.env`. See [integrations](integrations.md).
+
+`shaft secrets set NAME` writes one of the keys above to `.env` without a terminal editor: the value is read from stdin
+(one line), never from argv, and never printed or logged; `unset NAME` removes it and `list` prints the names only
+(`--json`: one JSON line). It writes only `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `SCRAPEBADGER_API_KEY`,
+`SHAFT_CUSTOM_API_KEY`, `SHAFT_API_KEY`, `SHAFT_INBOX_KEY`, `SHAFT_API_LOGINS`, `TELEGRAM_TOKEN_<NAME>` and
+`GMAIL_<CLIENT>_CLIENT_ID`/`_SECRET`, through the one atomic `.env` writer (mode 600). The Mac app's setup writes
+only the first four, through `/app/v1/setup/secret`. Source: [opsecrets.py](../supervisor/opsecrets.py).
 
 Native push needs all three `SHAFT_APNS_*` settings and the operator-provided key at
 `.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`). A missing setting or unreadable key disables native push;
@@ -96,7 +105,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_QUIET_HOURS` | `22-07` | local quiet hours, may wrap midnight; empty disables | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DIGEST_AT` | `07:15` | local digest time, or quiet hours' end if later | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_PUSH_BUDGET` | `6` | operator pushes per instance per day before holding for a digest (0: unlimited, count hidden) | [pushes.py](../supervisor/pushes.py) |
-| `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images (a custom/ model only when SHAFT_CUSTOM_VISION lists it) | [broker.py](../supervisor/broker.py) |
+| `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images: claude-…, openrouter/…, a codex/… plan model, or a custom/ model only when SHAFT_CUSTOM_VISION lists it; or `none`: image description is off and no image is sent anywhere | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CODEX_HOME` | `.supervisor/codex-home` | private Codex login and configuration directory, mode 700 | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_MODELS` | `codex/gpt-6-astra,codex/gpt-6.1-sol` | Codex models offered to instances, comma separated | [codexcli.py](../supervisor/codexcli.py) |
@@ -151,9 +160,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_RUN_CONFINED` | `0` | 1: the broker's `run` inside a scheduled job writes only where the job may (`.jobs/<plugin>/`, `.tmp/`, `.browser/`); 0: where a cycle's `run` may (notes/, code). Turn it on once every instance's scheduled plugins publish through `publishes` | [jobs.py](../supervisor/jobs.py) |
-| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash` | the judge pool: picks at random, excluding the instance's model and the second judge | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash` | the judge pool: picks at random, excluding the instance's model and the second judge; each any model the supervisor calls (claude-…, openrouter/…, a priced custom/… or a codex/… plan model) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
-| `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement (any model the supervisor calls, as for the pool) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_EVERY` | `4` | the second judge grades one cycle in this many (0: never) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_MODEL_IDLE_MINUTES` | `15` | minutes SHAFT's own model server stays up unused before it exits (it starts again on demand); 0 = never exits | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_MODEL_START_TIMEOUT_S` | `300` | seconds to wait for the model server to start on demand | [localmodel.py](../supervisor/localmodel.py) |
@@ -164,7 +173,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CORRECTION_PASSES` | `3` | messages to the operator that must pass the order check against a correction before it stops being checked (0: corrections are not checked) | [orders.py](../supervisor/orders.py) |
 | `SHAFT_CORRECTION_ALERT_CYCLES` | `6` | alert when an operator correction remains open for more than this many live cycles; 0 disables | [panel.py](../supervisor/panel.py) |
 | `SHAFT_JUDGE_ALERT_USD` | `3` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
-| `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance | [recap.py](../supervisor/recap.py) |
+| `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance (any model the supervisor calls: claude-…, openrouter/…, a priced custom/… or a codex/… plan model) | [recap.py](../supervisor/recap.py) |
 | `SHAFT_SELF_HOSTED` | `{}` | self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget) | [selfhosted.py](../supervisor/selfhosted.py) |
 | `SHAFT_SELF_HOSTED_FALLBACK` | `f"http://127.0.0.1:{LLM_PORTS[0]}/v1"` | the server a self-hosted model's calls fall back to when it is unreachable (empty: none) | [selfhosted.py](../supervisor/selfhosted.py) |
 | `SHAFT_SELF_HOSTED_TIMEOUT_S` | `1800` | seconds a self-hosted server may take to answer one call | [selfhosted.py](../supervisor/selfhosted.py) |
@@ -446,6 +455,37 @@ is configured in `SHAFT_SELF_HOSTED`. Its fallback defaults to `:8780`; set
 `SHAFT_SELF_HOSTED_FALLBACK` to an empty value to fail instead of using local Bonsai.
 Trial replays disable fallback. Sources: [cloudllm.py](../supervisor/cloudllm.py),
 [selfhosted.py](../supervisor/selfhosted.py).
+
+### Custom OpenAI-compatible endpoint (`custom/`)
+
+`custom/<model>` calls `<model>` on any OpenAI-compatible server: `SHAFT_CUSTOM_BASE_URL` + `/chat/completions`, with
+`SHAFT_CUSTOM_API_KEY` from `.env` as its bearer (required; the supervisor and broker attach it, an instance never holds
+it). A
+`custom/` model is accepted anywhere only when `SHAFT_CUSTOM_PRICES` declares its price (0 is allowed, for a server of
+your own), so every daily cap counts it; a reply without usage is booked at the worst case. It can be an instance's
+model (`LLM_BASE_URL=broker`, the name in `SHAFT_CLOUD_MODELS`), a judge, the coder, a consult menu entry, the recap
+model, a plan channel's fallback, or `SHAFT_DESCRIBE_MODEL` when `SHAFT_CUSTOM_VISION` lists it as able to read images.
+Source: [cloudllm.py](../supervisor/cloudllm.py).
+
+### Provider presets (`shaft provider`)
+
+`shaft provider use openrouter|codex|custom [--json]` writes one consistent set of every model knob the supervisor
+calls itself (`SHAFT_CLOUD_MODELS`, `SHAFT_JUDGE_MODELS`, `SHAFT_JUDGE2_MODEL`, `SHAFT_CODER_MODEL`,
+`SHAFT_CONSULT_MODELS`, `SHAFT_DESCRIBE_MODEL`, `SHAFT_RECAP_MODEL`, `SHAFT_CODEX_FALLBACK_MODEL`,
+`SHAFT_TRIAL_FALLBACK_MODEL`) in one `settings.env` write, each value checked by its knob's parser. It never touches
+`.env`: set the provider's key first with `shaft secrets set`. The Mac app's Model step runs it.
+
+| Provider | What it writes |
+|---|---|
+| `openrouter` | Every model on OpenRouter: the OpenRouter defaults, with the `claude-…` defaults (coder, describe, recap) replaced by their OpenRouter equivalents, and `SHAFT_CLOUD_MODELS` set to three OpenRouter instance models (plus `--model openrouter/…` when given) |
+| `codex` | The ChatGPT plan (`shaft codex login` first): judges, coder, consults, recap and trial fallback on `SHAFT_CODEX_MODELS` (`--model` the instance's, default `codex/gpt-6-astra`; the judges are the others). `SHAFT_CODEX_FALLBACK_MODEL=none`; describe is `none` when the model cannot read images. `SHAFT_CLOUD_MODELS` is left as it is |
+| `custom` | Every function on `custom/<--model>` (judges on `--judge-model` when given). Needs `--base-url` (unless set already), `--price-in` and `--price-out` (and `--judge-price-in`/`--judge-price-out` for a different judge); `--vision` declares the model able to read images. Writes `SHAFT_CUSTOM_BASE_URL`, `SHAFT_CUSTOM_PRICES` and `SHAFT_CUSTOM_VISION` with the preset; the fallbacks are `none` |
+
+A function whose models the provider cannot serve (no key, no login, no price, no endpoint, no image reading) is left
+off and named with the reason, never filled with a model you have no access to. The answer lists what it `covers`,
+what is `off` and why, and the settings a running service picks up only after a restart. `shaft provider check
+PROVIDER [--json]` makes one minimal call per configured model of that provider and prints each answer or error.
+Source: [provider.py](../supervisor/provider.py).
 
 ### Codex plan channel
 

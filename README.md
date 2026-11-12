@@ -74,22 +74,62 @@ apart. The rules the supervisor enforces are in [safety](docs/safety.md).
 
 ## Requirements
 
-- macOS with `sandbox-exec` and a logged-in user session (the services are `launchd` agents).
+- macOS with `sandbox-exec` and a logged-in user session (the services are `launchd` agents). The Mac app needs macOS
+  26 or later and installs everything else it needs (below).
+- One model provider. The Mac app offers three: an OpenRouter API key, a ChatGPT plan through the ChatGPT app for Mac
+  (Codex comes with it), or an OpenAI-compatible endpoint whose prices you know. The terminal path below uses an
+  Anthropic and an OpenRouter key; `bin/shaft provider` switches to the others.
+
+For the terminal path:
+
 - Python 3.12 or later as `python3`, git, and `uv` on your PATH (`brew install python@3.12 uv`). The scheduler, API,
   web and Telegram services record the absolute path of the Python that installed them; the model and embedding
   services run `.venv-bonsai`'s Python. If either moves, run that service's `on` command again.
 - Git `user.name` and `user.email` set: creating an instance makes commits.
 - For the cloud-only quickstart: an Anthropic API key and an OpenRouter API key.
-- Optional: Apple Silicon and an MLX model pack for [local models](docs/local-model.md) (the defaults assume 64 GB of
-  memory); Tailscale for the [web UI and API](docs/web-and-api.md); Google OAuth clients, a Telegram bot or the shared
-  Chromium for [integrations](docs/integrations.md); Xcode and your own Apple Developer team for the
-  [native apps](apps/shaft/README.md).
+
+Optional either way: Apple Silicon and an MLX model pack for [local models](docs/local-model.md) (the defaults assume
+64 GB of memory); Tailscale for the [web UI and API](docs/web-and-api.md) and the iPhone and iPad apps; Google OAuth
+clients, a Telegram bot or the shared Chromium for [integrations](docs/integrations.md); Xcode and your own Apple
+Developer team to build the [native apps](apps/shaft/README.md) yourself.
 
 **Costs.** Each instance has daily checks per category: $8 for its cloud model, $5 for coding hand-offs, $3 for
 consultations and $3 for its own trials (`bin/shaft settings` changes them). Judging has no cap, only an alert at $3 a
 day. What a cycle costs depends mostly on the model. [Configuration](docs/configuration.md) lists every limit.
 
-## Quickstart: cloud-only
+## Quickstart: download the Mac app
+
+1. Download `SHAFT-<version>.dmg` from a [release](https://github.com/dgrassi1984/shaft/releases) (a Developer ID
+   signed, notarized build), open it and drag SHAFT to Applications.
+2. Open SHAFT. With no SHAFT installed in `~/SHAFT`, it opens its setup wizard. Read the Welcome page: it states what
+   the agents can do and the risks above.
+3. **Install** runs and shows each step:
+   - git, from Apple's Command Line Tools: macOS asks you to install them in its own dialog when they are missing;
+   - the server, cloned into `~/SHAFT` at the newest release that has its template tag;
+   - `uv` (a pinned, checksum-verified download) and Python 3.12, both into `~/SHAFT/.runtime`;
+   - `shaft install`: a git identity for that clone if you have none, the worktrees, and the API, web and scheduler
+     services, installed for this Mac only (local mode: no Tailscale, nothing exposed);
+   - the app paired with that server over `127.0.0.1` (`shaft web pair --local`), no link to paste.
+4. **Model**: choose a provider. OpenRouter takes its API key; ChatGPT signs in to your plan through Codex, which comes
+   with the ChatGPT app for Mac (a code shown in the app, entered on ChatGPT's page); a custom OpenAI-compatible
+   endpoint takes its URL, key, model name and its prices in dollars per million tokens (0 for a server of your own),
+   so the daily budgets can count it. The app points every model SHAFT uses at that provider (`shaft provider use`) and
+   tests each one; what the provider cannot serve, such as image descriptions on a model that cannot see, stays off
+   and the app says why.
+5. **Your instance**: its name, your name, and its drive (what it is for), started from one of four presets you can
+   edit. It is created paused.
+6. **Access**: what it may read, each optional: a folder, the browser, web search (a ScrapeBadger key), a Telegram bot,
+   and your Gmail labels, calendars, Drive and Google Chat (a guided Google Cloud setup).
+7. **How it works alone**: whether your first reply lets it work on its own on the scheduler or keeps it paused,
+   talking only when you talk to it, and its daily budgets.
+8. **Say hello** opens its chat: it introduces itself and asks a few questions. Your first answer applies the choice of
+   step 7.
+
+The server stays in `~/SHAFT`; Settings → Services → **Update server** moves it to a newer release
+([deploying a release](docs/deploy.md)). Tailscale is optional: Settings → Services → **Use SHAFT from iPhone/iPad**
+sets it up later, for the iPhone and iPad apps and the web UI. The app keeps working without it.
+
+## Quickstart for developers: from a terminal
 
 This path needs no local model, only cloud API keys.
 
@@ -168,8 +208,8 @@ This path needs no local model, only cloud API keys.
 - **Terminal:** `bin/shaft talk <name>`, and the `bin/shaft top` control panel.
 - **Web UI and PWA** for iPhone and iPad, an OpenAI-compatible chat API and an inbox endpoint, all on your tailnet
   only: [web UI and API](docs/web-and-api.md).
-- **Native iOS, iPadOS and macOS apps** over the same tailnet: [apps](apps/shaft/README.md), with the
-  [app API contract](docs/app-api.md).
+- **Native iOS, iPadOS and macOS apps**: the Mac app on the same Mac without Tailscale, the iPhone and iPad apps over
+  your tailnet: [apps](apps/shaft/README.md), with the [app API contract](docs/app-api.md).
 - **Telegram:** [integrations](docs/integrations.md).
 
 ## Optional features
