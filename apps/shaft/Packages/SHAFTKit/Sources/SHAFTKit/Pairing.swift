@@ -167,6 +167,11 @@ public struct PairingStore: Sendable {
         return credential
     }
 
+    /// Keep a credential made without a link: the Mac app's local pairing (`shaft web pair --local`).
+    public func save(_ credential: ServerCredential) throws {
+        try store.save(credential)
+    }
+
     /// Unpair: tell the server (best effort: a device it already forgot answers `401`), then forget it here.
     public func unpair() async throws {
         if let credential = try store.load() {

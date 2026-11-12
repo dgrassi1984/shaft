@@ -62,6 +62,11 @@ public struct SetupStateStore: @unchecked Sendable {
         return try JSONDecoder().decode(SetupState.self, from: data)
     }
 
+    /// Whether a wizard's progress is kept: the wizard was started and not finished.
+    public var hasSaved: Bool {
+        defaults.object(forKey: Self.key) != nil
+    }
+
     public func save(_ state: SetupState) throws {
         defaults.set(try JSONEncoder().encode(state), forKey: Self.key)
     }

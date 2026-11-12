@@ -181,7 +181,7 @@ let uvBytes = Data("pretend uv tarball".utf8)
 func hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
 @MainActor
-func makeInstaller(_ machine: Machine, runner: FakeRunner, downloader: FakeDownloader, store: any CredentialStore,
+func makeInstaller(_ machine: Machine, runner: any ProcessRunning, downloader: FakeDownloader, store: any CredentialStore,
                    pinnedHash: String? = nil, source: ServerSource? = nil) -> Installer {
     let pin = UVPin(version: UVPin.current.version, sha256: ["aarch64-apple-darwin": pinnedHash ?? hex(uvBytes)])
     let config = Installer.Configuration(home: machine.home, uv: pin, arch: "aarch64-apple-darwin",
@@ -622,6 +622,10 @@ struct SetupTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("welcome", forKey: SetupStateStore.key)
         #expect(throws: (any Error).self) { try SetupStateStore(defaults: defaults).load() }
+        // Kept progress, readable or not, is a wizard started and not finished; clear() ends it.
+        #expect(SetupStateStore(defaults: defaults).hasSaved)
+        SetupStateStore(defaults: defaults).clear()
+        #expect(!SetupStateStore(defaults: defaults).hasSaved)
     }
 
     @Test func cancellingReturnsWhileADescendantHoldsThePipes() async throws {

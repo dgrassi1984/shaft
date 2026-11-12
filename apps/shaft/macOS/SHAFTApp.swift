@@ -13,7 +13,7 @@ struct SHAFTApp: App {
 
     var body: some Scene {
         Window("SHAFT", id: MacRoot.windowID) {
-            MacRoot(model: delegate.model, state: delegate.state)
+            MacRoot(model: delegate.model, state: delegate.state, setup: delegate.setup)
                 .modifier(MacAppearance())
         }
         .defaultSize(width: 1100, height: 760)
@@ -30,6 +30,8 @@ struct SHAFTApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = MacDevSession.model() ?? AppModel()
     let state = MacState()
+    /// The setup gate: the wizard, or pairing with this Mac's SHAFT without a link.
+    let setup = MacSetup()
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 

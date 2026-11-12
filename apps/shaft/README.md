@@ -162,6 +162,24 @@ A process started directly stays behind other apps: start the app with `open -n`
 for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
 `capture`, since another app may take it back; `capture` logs whether the window has the keys and where the pointer is.
 
+### The setup wizard in a dev run
+
+An unpaired Mac app chooses its first screen from `~/SHAFT` (`macOS/Setup/SetupGate.swift`): no `~/SHAFT/.git` opens
+the setup wizard (Welcome, then Install; its Welcome's "Connect to an existing SHAFT" is the pasted-link pairing),
+and an install that is there is paired with on its own (`shaft web pair --local`, no link). A loopback pairing the
+server no longer knows (`401 unpaired`) is deleted and paired again once on its own; a second loss shows the error.
+
+Debug builds only, these move the install away from the real `~/SHAFT` and the newest release:
+
+| Variable | Effect |
+|---|---|
+| `SHAFT_DEV_HOME=<absolute path>` | the home the server goes into (`<path>/SHAFT`). With `SHAFT_DEV_DIR` and without this, `<SHAFT_DEV_DIR>/home`: a dev run never reaches the real `~/SHAFT` |
+| `SHAFT_DEV_SERVER_REPO`, `SHAFT_DEV_SERVER_REF`, `SHAFT_DEV_TEMPLATE_REF` | clone that origin at that branch or tag, and make that ref the `template` branch, instead of the newest tagged release. All three or none: a partial set stops the app at launch, naming what is missing |
+
+The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
+which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step a
+Debug build stays in the wizard on Model's slot while the server has no instance; a Release build opens the app.
+
 ### Voice against the fixture server
 
 Voice mode asks for the microphone and speech recognition the first time it opens, and needs the
@@ -290,7 +308,8 @@ the app normally keeps its preferences as well as its Keychain item, so this ins
 On the Mac: `shaft web pair --name iphone-app` prints a link that works once, for 10 minutes. Paste it into the app
 (Universal Clipboard carries it from the Mac). The app takes the server's address from the link and keeps the bearer
 in the Keychain. `shaft web status` lists the device; `shaft web unpair <device>` revokes it, and the app then shows
-its pairing screen again.
+its pairing screen again. The Mac app pairs with the SHAFT installed on the same Mac without a link (above, "The setup
+wizard in a dev run"); its pasted-link pairing is the wizard's "Connect to an existing SHAFT".
 
 ### Push
 

@@ -197,18 +197,34 @@ public final class Installer {
         isRunning = true
         defer { isRunning = false }
         for step in InstallStep.allCases where steps[step] != .done {
-            steps[step] = .running
-            do {
-                try await perform(step)
-                steps[step] = .done
-            } catch {
-                if error is CancellationError || Task.isCancelled {   // the window closed: not a failure, rerun later
-                    steps[step] = .pending
-                    return
-                }
-                steps[step] = .failed(Self.message(error))
-                return
+            guard await attempt(step) else { return }
+        }
+    }
+
+    /// Run `step` alone, whatever the others' state: the Mac app's root gate pairs with an install that already exists
+    /// (`.pair`) without running the rest. Running it again is its Try again.
+    public func run(only step: InstallStep) async {
+        guard !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
+        details[step] = nil
+        _ = await attempt(step)
+    }
+
+    /// True when `step` finished.
+    private func attempt(_ step: InstallStep) async -> Bool {
+        steps[step] = .running
+        do {
+            try await perform(step)
+            steps[step] = .done
+            return true
+        } catch {
+            if error is CancellationError || Task.isCancelled {   // the window closed: not a failure, rerun later
+                steps[step] = .pending
+                return false
             }
+            steps[step] = .failed(Self.message(error))
+            return false
         }
     }
 
@@ -670,7 +686,7 @@ public final class Installer {
     }
 
     static func isLoopback(_ url: URL) -> Bool {
-        ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
+        PairingLoss.isLoopback(url)
     }
 
     /// The path with every symlink resolved (realpath(3)), nil when it does not exist.
