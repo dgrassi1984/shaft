@@ -61,6 +61,51 @@ struct PersistenceSafetyTests {
         #expect(throws: (any Error).self) { try drafts.load("c.from-sandbox") }
     }
 
+    @Test func aPreservedCopyIsNeverDeleted() throws {
+        let (base, container, root) = adoptionFolders()
+        defer { try? FileManager.default.removeItem(at: base) }
+        try LocalFiles.write(Data("A".utf8), to: root.appending(path: "drafts/c.json"))
+        try LocalFiles.write(Data("B".utf8), to: root.appending(path: "drafts/c.from-sandbox.json"))
+        try LocalFiles.write(Data("C".utf8), to: container.appending(path: "drafts/c.json"))
+
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(try text(root.appending(path: "drafts/c.json")) == "A")
+        #expect(try text(root.appending(path: "drafts/c.from-sandbox.json")) == "B")
+        #expect(try text(root.appending(path: "drafts/c.from-sandbox-2.json")) == "C")
+
+        // The same conflict again is absorbed by the copy already kept.
+        try LocalFiles.write(Data("C".utf8), to: container.appending(path: "drafts/c.json"))
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "drafts/c.from-sandbox-3.json").path))
+        #expect(!FileManager.default.fileExists(atPath: container.appending(path: "drafts/c.json").path))
+    }
+
+    @MainActor
+    @Test func aContainerBehindADeniedFolderIsAStartupErrorNotAnEmptyStart() throws {
+        let (base, _, root) = adoptionFolders()
+        let locked = base.appending(path: "locked")
+        let container = locked.appending(path: "inner/SHAFT")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        try LocalFiles.write(Data("b".utf8), to: container.appending(path: "drafts/b.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: base)
+        }
+        var started = 0
+        let model = AppModel(start: {
+            try LocalFiles.adoptSandboxContainer(container, into: root)
+            started += 1
+            return SHAFTSession(pairing: PairingStore(store: MemoryCredentialStore()),
+                                outbox: try Outbox(directory: root.appending(path: "outbox")),
+                                drafts: DraftStore(directory: root.appending(path: "drafts")))
+        })
+        #expect(model.session == nil)
+        #expect(started == 0)
+        #expect(try #require(model.startupError).contains(container.path))
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+    }
+
     @MainActor
     @Test func aFailedMoveIsAStartupErrorAndTryAgainMigratesAndStarts() throws {
         let (base, container, root) = adoptionFolders()
