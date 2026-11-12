@@ -194,16 +194,16 @@ class DescribeTest(Case):
         return broker.Broker("wisp", self.root.parent, {}, self.root / "b.log", root=self.root, **kw)
 
     def test_describe_image_confined_and_billed(self):
-        b = self.broker(usage_name="wisp")
+        b = self.broker(usage_name="example")
         r = b.call("describe_image", {"path": "attachments/from-operator/20261016-091200/photo-1.png",
                                       "question": "what colour?"})
         self.assertTrue(r["ok"], r)
         self.assertIn("[described by claude-haiku-5-5, not seen by you", r["result"])
         self.assertIn("A red rectangle.", r["result"])
         purpose, body = self.calls[0]
-        self.assertEqual(purpose, "describe_image wisp")
+        self.assertEqual(purpose, "describe_image example")
         self.assertEqual([(a[0], a[1], a[2], a[3], a[4]) for a in self.billed],      # billed to the instance, in
-                         [("wisp", broker.DESCRIBE_MODEL, 900, 40, 0.0001)])          # its cloud ledger and cap
+                         [("example", broker.DESCRIBE_MODEL, 900, 40, 0.0001)])          # its cloud ledger and cap
         self.assertEqual(body["model"], broker.DESCRIBE_MODEL)
         self.assertIn("what colour?", body["messages"][0]["content"][1]["text"])
         outside = Path(tempfile.mkdtemp(prefix="shaft-vision-out-")) / "o.png"
@@ -256,12 +256,12 @@ class DescribeTest(Case):
             (state / "a" / "p.png").write_bytes(self.photo.read_bytes())
             return broker.ReplayBroker("wisp", self.root.parent, {}, state / "b.log", state_root=state,
                                        start_commit="0", as_of=datetime.now(), cache=cache, cache_lock=lock,
-                                       billed="wisp@trial:t", tools_log=state / "t.log")
+                                       billed="example@trial:t", tools_log=state / "t.log")
         a, b = replay(), replay()
         self.assertEqual(a.call("describe_image", {"path": "a/p.png"})["result"],
                          b.call("describe_image", {"path": "a/p.png"})["result"])
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.billed[0][0], "wisp@trial:t")
+        self.assertEqual(self.billed[0][0], "example@trial:t")
 
     def test_battery_has_no_image_tools(self):
         self.assertIn("describe_image", battery.EXAM_OFF)

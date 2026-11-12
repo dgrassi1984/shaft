@@ -885,7 +885,7 @@ def judge_pending(name: str) -> int:
                     if vendor(judge.JUDGE2_MODEL) in consulted_vendors(name, ep):   # it saw this cycle's work
                         log(f"{name}: no second judge on {ep['ts']}: it consulted {vendor(judge.JUDGE2_MODEL)}")
                     else:
-                        stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
+                        stash_second(name, ep["ts"], case, own)   # judged after the run lets go of the instance
             except judge.NoJudgeLeft as e:   # this run's own models cover the pool: the runs after it still get judged
                 log(f"{name}: judging {ep['ts']} skipped for now: {e}")
                 continue
@@ -941,14 +941,14 @@ def _seconds_path(name: str) -> Path:
     return SUP_DIR / "judgments" / f"{name}-second.jsonl"
 
 
-def stash_second(name: str, episode_ts: str, case: str) -> None:
+def stash_second(name: str, episode_ts: str, case: str, own=()) -> None:
     """Keep the exact case the main judge saw, for the second judge to grade once the run has let go of the
     instance: it takes minutes (GLM 5.3 Flash: 128 s on a real case), and a message from the operator must not wait
-    for it."""
+    for it. `own`, the instance's models for that cycle, lets the verdict say when the second judge is one of them."""
     d = _second_cases()
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{name}@{episode_ts.replace(':', '-')}.json").write_text(json.dumps({"name": name, "episode_ts": episode_ts,
-                                                                               "case": case}))
+                                                                               "case": case, "own": list(own)}))
 
 
 def second_pending(names: list[str] | None = None) -> int:
@@ -971,7 +971,7 @@ def second_pending(names: list[str] | None = None) -> int:
             continue                                     # another process took it
         job = json.loads(claimed.read_text())
         out = {"episode_ts": job["episode_ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
-               **second_opinion(name, job["case"])}
+               **second_opinion(name, job["case"], job.get("own") or ())}
         with _seconds_path(name).open("a") as f:
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
         claimed.unlink()
@@ -982,12 +982,13 @@ def second_pending(names: list[str] | None = None) -> int:
     return done
 
 
-def second_opinion(name: str, case: str) -> dict:
-    """The second judge's blind verdict on the same case; a failure is recorded, never blocks the main verdict."""
+def second_opinion(name: str, case: str, own=()) -> dict:
+    """The second judge's blind verdict on the same case; a failure is recorded, never blocks the main verdict. It
+    records independence: same-model when the second judge is one of the instance's own models (`own`)."""
     try:
         out = judge.ask_second(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"second {name}")
         _check_ratings(out)
-        return {"judge": judge.JUDGE2_MODEL, **out}
+        return {"judge": judge.JUDGE2_MODEL, **judge.independence(judge.JUDGE2_MODEL, own), **out}
     except judge.JudgeError as e:
         log(f"{name}: second judge failed: {e}")
         return {"judge": judge.JUDGE2_MODEL, "error": str(e)[:300]}
@@ -1048,7 +1049,8 @@ def backfill(name: str, limit: int | None = None) -> int:
                 + f"\n\n## The verdict and ratings already given (keep them; give only the fields asked for)\n"
                 + json.dumps(given, indent=1, ensure_ascii=False))
         try:
-            by = judge.pick(exclude=own_models(name, ep))
+            own = own_models(name, ep)
+            by = judge.pick(exclude=own)
             out = judge.ask(JUDGE_SYSTEM, case, backfill_schema(missing), purpose=f"backfill {name}", model=by)
             _check_ratings(out, missing)
         except judge.JudgeError as e:
@@ -1058,7 +1060,8 @@ def backfill(name: str, limit: int | None = None) -> int:
         if "origin_supported" in out and not (ep.get("intent") or {}).get("origin"):
             out["origin_supported"] = None       # declared nothing: before origins existed
         now = datetime.now().isoformat(timespec="seconds")
-        rec = {**out, "model": j.get("model") or cycle_model(name, ep)}
+        rec = {**out, "model": j.get("model") or cycle_model(name, ep),
+               **judge.independence(by, own)}   # fields given by the instance's own model mark the whole verdict
         if any(k in missing for k in RATINGS):
             rec.update(rated_by=by, rated_at=now)
         if any(k in missing for k in VALUES):
@@ -1221,7 +1224,7 @@ def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False
             log(f"{name}: surprise baseline of {ep['ts']} failed: {e}")
             break
         row = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
-               "judge": by, "model": cycle_model(name, ep), **verdict}
+               "judge": by, "model": cycle_model(name, ep), **judge.independence(by, own_models(name, ep)), **verdict}
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -1297,7 +1300,7 @@ def surprise_control(name: str, dry_run: bool = False) -> dict:
             log(f"{name}: surprise control of {ep['ts']} failed: {e}")
             break
         row = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
-               "judge": by, "model": cycle_model(name, ep), **verdict}
+               "judge": by, "model": cycle_model(name, ep), **judge.independence(by, own_models(name, ep)), **verdict}
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

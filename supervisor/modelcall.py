@@ -96,6 +96,17 @@ def available(model: str) -> str | None:
     return f"{model!r} is not a model the supervisor can call (claude-…, openrouter/…, custom/… or codex/…)"
 
 
+def reads_images(model: str) -> str | None:
+    """None when `model` can be sent images (describe_image), else why not. A custom/ model reads them only when the
+    operator declares it in SHAFT_CUSTOM_VISION: nothing else tells what an arbitrary endpoint's model accepts."""
+    if str(model or "").startswith("custom/"):
+        if model.removeprefix("custom/") in cloudllm.CUSTOM_VISION:
+            return None
+        return f"{model} is not declared able to read images: add it to SHAFT_CUSTOM_VISION"
+    from . import vision
+    return None if vision.sees_images(model) else f"{model} cannot see images"
+
+
 def ask(model: str, system: str, messages: list[dict], *, max_tokens: int, effort: str | None = "medium",
         schema: dict | None = None, purpose: str, check: Callable[[object, dict], str] | None = None,
         log: Callable[[Call], None] | None = None) -> Answer:
@@ -356,10 +367,12 @@ def _codex_channel_class():
 
 class _Codex:
     """codex/: one short-lived app-server per ask(); its first send opens the thread with the system text as the base
-    instructions, and a re-ask is that thread's next turn (Codex sees its own answer there)."""
+    instructions and every message of the conversation, and a re-ask is that thread's next turn with only the newest
+    message, the correction (Codex holds its own earlier answers in the thread). _instructed rebuilds the conversation
+    from the question, the latest unusable answer and its correction, so the newest message is the one to send."""
 
     def __init__(self, model: str):
-        self.model, self.sent = model, 0
+        self.model, self.opened = model, False
         self.channel = _codex_channel_class()("supervisor", "supervisor", supervisor_log)
 
     def __enter__(self):
@@ -371,15 +384,15 @@ class _Codex:
 
     def send(self, convo, max_tokens, effort, think) -> _Reply:
         system = "\n\n".join(planchannel._text(m.get("content")) for m in convo if m["role"] == "system")
-        turns = [m for m in convo if m["role"] != "system"][self.sent:]
-        if self.sent:                                     # the thread holds the earlier turns: only the new message
-            turns = [m for m in turns if m["role"] == "user"]
+        turns = [m for m in convo if m["role"] != "system"]
+        if self.opened:                                   # the thread holds the earlier turns: only the new message
+            turns = turns[-1:]
         texts, images = [], []
         for m in turns:
             text, more = planchannel._split(m.get("content"))
             texts.append(text)
             images += more
-        self.sent = len([m for m in convo if m["role"] != "system"])
+        self.opened = True
         try:
             step = self.channel.turn(self.model, system, "\n\n".join(texts), images, effort)
         except planchannel.ChannelFailure as e:

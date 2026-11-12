@@ -829,7 +829,7 @@ SPECS["describe_image"] = _spec(
     ["path"])
 DESCRIBE_MODEL, _ = knob(
     "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", any_model, "the model describe_image uses for an instance whose "
-    "own model cannot see images (a custom/ model named here is taken to see them)", group="Models and spend",
+    "own model cannot see images (a custom/ model only when SHAFT_CUSTOM_VISION lists it)", group="Models and spend",
     services=("runs", "api"))
 DESCRIBE_CALLS_PER_RUN = 10
 DESCRIBE_TOKENS = 4000          # a description's first ceiling; a cut one is asked once more with twice the room
@@ -3849,8 +3849,8 @@ class Broker:
         instance under its daily cloud cap. A reply cut by its token ceiling is no answer: modelcall asks again once
         with twice the room, then it is refused."""
         from . import cloudllm, modelcall, vision
-        if not (DESCRIBE_MODEL.startswith("custom/") or vision.sees_images(DESCRIBE_MODEL)):
-            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} cannot see images")
+        if (reason := modelcall.reads_images(DESCRIBE_MODEL)):
+            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL}: {reason}")
         if (reason := modelcall.available(DESCRIBE_MODEL)):
             raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} is unavailable: {reason}")
         spent = cloudllm.spent_today(self.usage_name)

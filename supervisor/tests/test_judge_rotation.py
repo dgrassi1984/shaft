@@ -13,7 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, judge, metrics, modelcall
+from supervisor import battery, cloudllm, judge, metrics, modelcall
+from supervisor.tests import test_measurement as measurement
 from supervisor.tests.test_openrouter import FakeOpenRouter
 
 POOL = ["openrouter/xiaomi/mimo-v2.6-pro", "claude-haiku-5-5", "claude-sonnet-5-5"]
@@ -203,14 +204,17 @@ class CycleVerdictTest(unittest.TestCase):
         self.assertEqual(set(used), {"claude-haiku-5-5", "claude-sonnet-5-5"})   # rotated, MiMo never
         recorded = sorted(j["judge"] for j in metrics.judgments("wisp", self.tmp / "sup"))
         self.assertEqual(recorded, sorted(used))
-        self.assertFalse(any("independence" in j for j in metrics.judgments("wisp", self.tmp / "sup")))
 
     def test_a_single_model_provider_judges_with_the_same_model_and_marks_it(self):
         """An operator whose one provider offers one model (a custom endpoint, say): the instance and its judge run
         on it. That is the operator's configuration, not a missing key: the cycle is judged, and the verdict says the
         judge was the instance's own model. same_model() is the comparison, whatever the spelling."""
         own = "custom/My-Model"
-        (self.tmp / "instances" / "wisp" / "config.env").write_text(f'LLM_MODEL="{own}"\n')
+        instances = self.tmp / "instances"
+        (fixture,) = instances.iterdir()                                  # setUp's instance, its 40 cycles
+        for name, model in (("example", own), ("example-other", "openrouter/xiaomi/mimo-v2.6-pro")):
+            shutil.copytree(fixture, instances / name)
+            (instances / name / "config.env").write_text(f'LLM_MODEL="{model}"\n')
         used = []
 
         def ask(system, case, schema, purpose, model=None, **kw):
@@ -220,10 +224,13 @@ class CycleVerdictTest(unittest.TestCase):
                 mock.patch.object(judge, "JUDGE2_MODEL", "custom/my-model"), \
                 mock.patch.object(judge, "same_model", wraps=judge.same_model) as same, \
                 mock.patch.object(judge, "ask", ask):
-            self.assertEqual(metrics.judge_pending("wisp"), 40)
+            self.assertEqual(metrics.judge_pending("example"), 40)
             self.assertTrue(any(c.args[1] == own for c in same.call_args_list))
+            self.assertEqual(metrics.judge_pending("example-other"), 40)
         self.assertEqual(set(used), {"custom/my-model"})
-        rows = metrics.judgments("wisp", self.tmp / "sup")
+        other = metrics.judgments("example-other", self.tmp / "sup")       # another model's instance: independent
+        self.assertEqual({(j["judge"], j.get("independence")) for j in other}, {("custom/my-model", None)})
+        rows = metrics.judgments("example", self.tmp / "sup")
         self.assertEqual({(j["judge"], j.get("independence")) for j in rows}, {("custom/my-model", "same-model")})
 
     @staticmethod
@@ -236,6 +243,51 @@ class CycleVerdictTest(unittest.TestCase):
                 "deliverable_met": "yes", "self_imposed_clauses": "none", "self_audit": False,
                 "should_have_waited": "na", "pushback": "none", "first_error_step": 0,
                 "first_error": "No step is at fault.", "followup_useful": "na"}
+
+
+class IndependenceWritersTest(measurement.InstanceDirCase):
+    """Every writer of a verdict that a one-model pool can grade with the instance's own model says so."""
+
+    OWN = "custom/my-model"
+
+    def test_backfill_marks_fields_given_by_the_instances_own_model(self):
+        ts = "2026-10-13T12:00:00"
+        self.episode({"ts": ts, "kind": "live", "intent": {"goal": "output"}, "tools": []})
+        (self.root / "config.env").write_text(f'LLM_MODEL="{self.OWN}"\n')
+        path = metrics._judgments_path("m")
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"episode_ts": ts, "judge": self.OWN, "criterion_met": "yes"}) + "\n")
+        with mock.patch.object(judge, "JUDGE_MODELS", [self.OWN]), \
+                mock.patch.object(judge, "ask", return_value=dict(measurement.JudgingTest.VERDICT)), \
+                mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "_written_files", return_value=""), \
+                mock.patch.object(metrics, "_provenance_evidence", return_value=""):
+            self.assertEqual(metrics.backfill("m"), 1)
+        row, = metrics.judgments("m")
+        self.assertEqual(row["independence"], "same-model")
+
+    def test_battery_item_rows_mark_a_grader_that_is_the_instances_own_model(self):
+        item = {"id": "research/test", "category": "research", "prompt": "question", "key": "key"}
+        era = {"version": "test", "checksum": "abc", "model": "model", "judge": "rotation:test"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
+                mock.patch.object(battery, "secrets_env", return_value={}), \
+                mock.patch.object(battery, "Broker") as broker, \
+                mock.patch.object(battery, "_exam", return_value={"answer": "a", "steps": 1}), \
+                mock.patch.object(battery, "grade", return_value={"effectiveness": 8}):
+            broker.return_value.counts = {}
+            root = Path(tmp)
+            same = battery._one_in("m", item, "control", root, root, "m-control", era, None, lambda: None,
+                                   self.OWN, [self.OWN])
+            other = battery._one_in("m", {**item, "id": "research/other"}, "control", root, root, "m-control", era,
+                                    None, lambda: None, "openrouter/x/y", [self.OWN])
+        self.assertEqual((same["status"], same["grader"], same.get("independence")), ("scored", self.OWN, "same-model"))
+        self.assertEqual((other["status"], other.get("independence")), ("scored", None))
+
+    def test_the_second_judge_marks_itself_when_it_is_the_instances_own_model(self):
+        verdict = dict(measurement.JudgingTest.VERDICT)
+        with mock.patch.object(judge, "JUDGE2_MODEL", self.OWN), \
+                mock.patch.object(judge, "ask_second", side_effect=lambda *a, **k: dict(verdict)):
+            self.assertEqual(metrics.second_opinion("m", "case", [self.OWN])["independence"], "same-model")
+            self.assertNotIn("independence", metrics.second_opinion("m", "case", ["openrouter/x/y"]))
 
 
 if __name__ == "__main__":

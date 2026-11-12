@@ -140,6 +140,18 @@ class RoutingTest(Case):
         self.assertIn("exactly these fields", self.codex.requests("thread/start")[0]["params"]["baseInstructions"])
         self.assertIn("verdict='maybe'", turns[-1]["params"]["input"][0]["text"])
 
+    def test_codex_third_answer_is_asked_with_the_second_correction(self):
+        """Bug (fix round 1): the third Codex turn sent an empty prompt — the re-asked conversation holds only the
+        latest unusable answer and its correction, while the turns already sent were counted cumulatively."""
+        self.codex.say(json.dumps({"verdict": "yes"}), json.dumps({**ANSWER, "score": "high"}), json.dumps(ANSWER))
+        self.assertEqual(json.loads(self.ask("codex/gpt-6-astra", schema=SCHEMA).text), ANSWER)
+        turns = [t["params"]["input"] for t in self.codex.requests("turn/start")]
+        self.assertEqual(len(turns), 3)
+        self.assertEqual(turns[0], [{"type": "text", "text": "hi"}])
+        self.assertIn("missing score", turns[1][0]["text"])
+        self.assertTrue(turns[2][0]["text"].startswith("That answer is not usable: score is not a number."), turns[2])
+        self.assertEqual(len(self.codex.requests("thread/start")), 1)
+
     def test_claude_keeps_structured_output(self):
         self.assertEqual(json.loads(self.ask("claude-sonnet-5-5", schema=SCHEMA).text), ANSWER)
         self.assertEqual(self.claude.requests[-1]["output_config"]["format"], {"type": "json_schema", "schema": SCHEMA})
@@ -209,9 +221,9 @@ class CallersTest(Case):
         self.assertAlmostEqual(row["usd"], (100 * 2.0 + 10 * 8.0) / 1e6)
 
         self.codex.say("A red rectangle.")
-        inst = self.root / "wisp"
+        inst = self.root / "example"
         inst.mkdir()
-        b = broker.Broker("wisp", self.root, {}, self.root / "b.log", root=inst, usage_name="wisp")
+        b = broker.Broker("example", self.root, {}, self.root / "b.log", root=inst, usage_name="example")
         with mock.patch.object(broker, "DESCRIBE_MODEL", "codex/gpt-6-astra"), \
                 mock.patch.object(cloudllm, "spent_today", return_value=0.0):
             said = b._describe("image/png", PNG, "what colour?")
@@ -220,15 +232,48 @@ class CallersTest(Case):
         self.assertEqual(sent[1], {"type": "image", "url": IMAGE})
         self.assertIn("what colour?", sent[0]["text"])
         (args, _), = self.record.call_args_list                  # billed to the instance, in its cloud ledger
-        self.assertEqual((args[0], args[1], args[4]), ("wisp", "codex/gpt-6-astra", 0.0))
+        self.assertEqual((args[0], args[1], args[4]), ("example", "codex/gpt-6-astra", 0.0))
 
     def test_describe_refuses_with_the_reason_when_its_model_is_unavailable(self):
-        b = broker.Broker("wisp", self.root, {}, self.root / "b.log", root=self.root, usage_name="wisp")
+        b = broker.Broker("example", self.root, {}, self.root / "b.log", root=self.root, usage_name="example")
         (self.codex.home / "auth.json").unlink()
         with mock.patch.object(broker, "DESCRIBE_MODEL", "codex/gpt-6-astra"), \
                 self.assertRaisesRegex(RuntimeError, "Codex login missing"):
             b._describe("image/png", PNG, "what?")
         self.assertEqual(self.codex.requests("thread/start"), [])
+
+    def test_a_custom_describe_model_must_be_declared_able_to_read_images(self):
+        b = broker.Broker("example", self.root, {}, self.root / "b.log", root=self.root, usage_name="example")
+        with mock.patch.object(broker, "DESCRIBE_MODEL", "custom/my-model"), \
+                mock.patch.object(cloudllm, "spent_today", return_value=0.0):
+            with mock.patch.object(cloudllm, "CUSTOM_VISION", []), self.assertRaisesRegex(
+                    RuntimeError, "custom/my-model is not declared able to read images: add it to SHAFT_CUSTOM_VISION"):
+                b._describe("image/png", PNG, "what?")
+            self.assertEqual(self.custom.requests, [])                   # refused before any request
+            self.custom.reply = chat("A pixel.", usage={"prompt_tokens": 10, "completion_tokens": 3})
+            with mock.patch.object(cloudllm, "CUSTOM_VISION", ["my-model"]):
+                self.assertEqual(b._describe("image/png", PNG, "what?"), "A pixel.")
+        self.assertEqual(self.custom.requests[-1]["body"]["messages"][0]["content"][0]["image_url"]["url"], IMAGE)
+        self.assertIn("SHAFT_CUSTOM_VISION", core.KNOBS)
+        self.assertEqual(core.KNOBS["SHAFT_CUSTOM_VISION"].parse("a, b"), ["a", "b"])
+
+    def test_an_empty_recap_is_logged_as_a_failed_recap(self):
+        usage = self.root / "recap_usage.jsonl"
+        with mock.patch.object(recap, "MODEL", "claude-haiku-5-5"), mock.patch.object(recap, "USAGE", usage), \
+                mock.patch.object(recap, "SUP_DIR", self.root), \
+                mock.patch.object(modelcall, "_claude", return_value=modelcall.Answer(
+                    json.dumps({"now": " ", "last_hour": "x"}), {}, 0.0001, "claude-haiku-5-5")) as claude:
+            claude.side_effect = lambda *a: (a[-1](modelcall.Call("claude-haiku-5-5", {}, 0.0001, 0.1, None)),
+                                             claude.return_value)[1]
+            with self.assertRaisesRegex(recap.RecapError, "empty recap"):
+                recap.ask("records")
+        row = json.loads(usage.read_text())
+        self.assertTrue(row["error"].startswith("unusable recap: empty recap"), row)
+        self.custom.reply = chat(json.dumps({"now": "", "last_hour": "x"}))     # off Anthropic: asked again
+        with mock.patch.object(recap, "MODEL", "custom/my-model"), mock.patch.object(recap, "USAGE", usage), \
+                mock.patch.object(recap, "SUP_DIR", self.root), self.assertRaisesRegex(recap.RecapError, "empty recap"):
+            recap.ask("records")
+        self.assertEqual(len(self.custom.requests), 3)
 
 
 if __name__ == "__main__":

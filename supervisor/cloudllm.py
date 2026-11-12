@@ -73,6 +73,10 @@ CUSTOM_PRICES, _ = knob(
     "SHAFT_CUSTOM_PRICES", "{}", custom_prices, "what each custom/<model> costs, in dollars per million tokens, as "
     'JSON {"<model>": [input, output]} (0 is allowed): a custom model with no price is refused, so the daily cap '
     "counts every call", group="Models and spend", services=("runs", "api", "web"))
+CUSTOM_VISION, _ = knob(
+    "SHAFT_CUSTOM_VISION", "", model_names, "the custom/<model> names (without the custom/ prefix, comma separated) "
+    "the operator declares able to read images: only these may be SHAFT_DESCRIBE_MODEL", group="Models and spend",
+    services=("runs", "api"))
 
 
 def custom_price(model: str) -> tuple[float, float] | None:

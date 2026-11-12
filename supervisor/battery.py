@@ -605,7 +605,8 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
             arms = ([] if control_only else ["instance"]) + \
                 (["control"] if (control or control_only) and item["category"] in CONTROLLED else [])
             # One grader for both arms of an item, so instance and control are compared under the same judge.
-            grader = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
+            own = [instance_config(name).get("LLM_MODEL")]
+            grader = judge.pick(exclude=own)
             for arm in arms:
                 why = interrupt()
                 from .autonomy import parent_draining
@@ -613,7 +614,7 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
                     why = "the scheduler is draining for a restart"
                 if why:
                     raise Interrupted(why)
-                row = _one(name, item, arm, root, e, until, interrupt, grader)
+                row = _one(name, item, arm, root, e, until, interrupt, grader, own)
                 summary["items"].append({k: row.get(k) for k in ("item", "arm", "status", "score")})
                 scored += row["status"] == "scored"
     except Interrupted as stop:
@@ -636,7 +637,7 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
 
 
 def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | None, interrupt,
-         grader: str | None = None) -> dict:
+         grader: str | None = None, own=()) -> dict:
     """One item for one arm, in a folder made for it and deleted after it: a copy of the instance (`real`, never
     written), or a fresh control."""
     for previous in reversed(results(name)):
@@ -664,7 +665,7 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
             _append(name, row)
             log(f"{name}: battery item {item['id']} ({arm}) not run: {row['error']}")
             return row
-        return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader)
+        return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader, own)
     finally:
         if root is not None:
             from . import kill
@@ -694,14 +695,15 @@ def _clean_left(name: str, control_only: bool) -> None:
 
 
 def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
-            interrupt, grader: str | None) -> dict:
+            interrupt, grader: str | None, own=()) -> dict:
+    """`own`: the instance's models, so a grader that is one of them (a one-model pool) is marked on the row."""
     from .runner import RunRefused, _refused
     if item["category"] == "perturbation":
         from . import perturbation
         row = {**_row(item, arm, e), "probe_protocol": "temperature-v1", "base_temperature": localmodel.TEMP}
         try:
             row["probes"] = perturbation.run(name, root, until, interrupt, grader)
-            row.update(status="scored", grader=grader)
+            row.update(status="scored", grader=grader, **judge.independence(grader, own))
         except Interrupted as stop:
             row.update(status="interrupted", why=str(stop))
             _append(name, row)
@@ -745,6 +747,7 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
     row["truth"] = truth(name, item["truth"]) if item["category"] == "self" else None
     row["tests"] = tests
     row["grader"] = grader
+    row.update(judge.independence(grader, own) if grader else {})
     row["grading_case"] = {"item": item, "result": res}
     row["status"] = "unjudged"
     return _grade_saved(name, row)

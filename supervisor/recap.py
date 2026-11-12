@@ -160,21 +160,48 @@ def _log(call: modelcall.Call) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
-def _call(system: str, prompt: str) -> tuple[str, str]:
-    """One call: (now, last_hour). Raises RecapError with the reason (no key, HTTP error, refusal, length, bad JSON)."""
+def _parts(out: object) -> tuple[str, str]:
+    """(now, last_hour) of an answer, each one line; ValueError when either is missing or empty."""
     try:
-        answer = modelcall.ask(MODEL, system, [{"role": "user", "content": prompt}], max_tokens=MAX_TOKENS,
-                               effort="low", schema=SCHEMA, purpose="recap", log=_log)
-    except modelcall.ModelCallError as e:   # no answer yet (max_tokens) is never shown as a recap
-        raise RecapError(f"{e} (SHAFT_RECAP_MODEL={MODEL})") from e
-    try:
-        out = json.loads(answer.text)
         now, hour = (" ".join(str(out[k]).split()).rstrip(".") for k in ("now", "last_hour"))
-    except (ValueError, KeyError, TypeError) as e:
-        raise RecapError(f"{MODEL} returned no recap: {answer.text[:120]!r}") from e
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"no recap: {e!r}") from e
     if not (now and hour):
-        raise RecapError(f"{MODEL} returned an empty recap")
+        raise ValueError("empty recap")
     return now, hour
+
+
+def _check(out: object, schema: dict) -> str:
+    """modelcall's check off Anthropic: the schema, then both parts present and not empty (else asked again)."""
+    if (problem := modelcall.valid(out, schema)):
+        return problem
+    try:
+        _parts(out)
+    except ValueError as e:
+        return str(e)
+    return ""
+
+
+def _call(system: str, prompt: str) -> tuple[str, str]:
+    """One call: (now, last_hour). Raises RecapError with the reason (no key, HTTP error, refusal, length, bad JSON,
+    an empty recap). Every attempt is logged once the answer is judged, so a transport success whose recap is unusable
+    is logged as a failed recap, with the reason."""
+    calls: list[modelcall.Call] = []
+    try:
+        try:
+            answer = modelcall.ask(MODEL, system, [{"role": "user", "content": prompt}], max_tokens=MAX_TOKENS,
+                                   effort="low", schema=SCHEMA, purpose="recap", check=_check, log=calls.append)
+        except modelcall.ModelCallError as e:   # no answer yet (max_tokens) is never shown as a recap
+            raise RecapError(f"{e} (SHAFT_RECAP_MODEL={MODEL})") from e
+        try:
+            return _parts(json.loads(answer.text))
+        except ValueError as e:
+            if calls and calls[-1].error is None:
+                calls[-1] = calls[-1]._replace(error=f"unusable recap: {e}: {answer.text[:200]}")
+            raise RecapError(f"{MODEL} returned no usable recap ({e}): {answer.text[:120]!r}") from e
+    finally:
+        for call in calls:
+            _log(call)
 
 
 def ask(prompt: str) -> str:

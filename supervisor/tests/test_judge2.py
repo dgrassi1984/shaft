@@ -168,7 +168,7 @@ class SecondJudgeTest(unittest.TestCase):
             answer = modelcall.Answer(json.dumps(VERDICT), {}, 0.0, model)
             with mock.patch.object(judge, "JUDGE2_MODEL", model), \
                     mock.patch.object(modelcall, "ask", return_value=answer) as ask:
-                self.assertEqual(judge.ask_second("sys", "case", metrics.JUDGE_SCHEMA, "second wisp"), VERDICT)
+                self.assertEqual(judge.ask_second("sys", "case", metrics.JUDGE_SCHEMA, "second example"), VERDICT)
             self.assertEqual(ask.call_args.args[0], model)
             self.assertEqual(ask.call_args.kwargs["max_tokens"], judge.JUDGE2_MAX_TOKENS)
         with mock.patch.object(judge, "JUDGE2_MODEL", "codex/gpt-6-astra"), mock.patch.object(judge, "JUDGE2_EVERY", 4):
