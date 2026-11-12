@@ -66,12 +66,24 @@ local_setting() {
 }
 
 # ---------------------------------------------------------------- entitlement helpers
-# plist_value FILE KEYPATH -> prints the value; exit 0 found, 3 key absent, 2 FILE is not a valid plist (message on
-# stderr). Dots inside one key (com.apple.security.app-sandbox) must be escaped in KEYPATH: com\.apple\.…
+# plist_value FILE KEYPATH -> prints a scalar value; exit 0 found, 3 key absent (only plutil's "No value at that key
+# path" means that), 2 FILE is not a valid plist, 4 any other failure, e.g. the key holds a dictionary or array, or
+# plutil failed otherwise (the real message on stderr). Dots inside one key (com.apple.security.app-sandbox) must be escaped in KEYPATH: com\.apple\.…
 plist_value() {
-  local lint
+  local lint kind out
   lint=$(plutil -lint "$1" 2>&1) || { echo "not a valid plist ($1): $lint" >&2; return 2; }
-  plutil -extract "$2" raw -o - "$1" 2>/dev/null || return 3
+  kind=$(plutil -type "$2" "$1" 2>&1) || {
+    case $kind in
+      *"No value at that key path"*) return 3 ;;
+      *) echo "plutil could not read $2 in $1: $kind" >&2; return 4 ;;
+    esac
+  }
+  case $kind in
+    string|bool|integer|real) ;;
+    *) echo "$2 in $1 holds a $kind, not a scalar" >&2; return 4 ;;
+  esac
+  out=$(plutil -extract "$2" raw -o - "$1" 2>&1) || { echo "plutil could not extract $2 from $1: $out" >&2; return 4; }
+  printf '%s\n' "$out"
 }
 
 # ent_of BUNDLE KEY -> the signed entitlement's value, "absent" if the key is missing; dies on any other failure.
@@ -123,6 +135,14 @@ P
 </dict></dict></plist>
 P
   echo 'this is not a plist' >"$t/bad.plist"
+  cat >"$t/nested.plist" <<'P'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.app-sandbox</key><dict><key>x</key><true/></dict>
+<key>list</key><array><string>q</string></array>
+</dict></plist>
+P
   expect "app without sandbox: key absent (status 3)" "3" "$(plist_value "$t/app.plist" 'com\.apple\.security\.app-sandbox' >/dev/null 2>&1; echo $?)"
   expect "app: aps-environment read" "production" "$(plist_value "$t/app.plist" 'com\.apple\.developer\.aps-environment')"
   expect "extension with sandbox: true" "true" "$(plist_value "$t/ext.plist" 'com\.apple\.security\.app-sandbox')"
@@ -130,6 +150,11 @@ P
   expect "the escaping used by ent_of" 'com\.apple\.security\.app-sandbox' "$(k=com.apple.security.app-sandbox; echo "${k//./\\.}")"
   expect "profile: nested Entitlements key" "production" "$(plist_value "$t/profile.plist" 'Entitlements.com\.apple\.developer\.aps-environment')"
   expect "malformed plist: status 2, not 'absent'" "2" "$(plist_value "$t/bad.plist" 'com\.apple\.security\.app-sandbox' >/dev/null 2>&1; echo $?)"
+  expect "key holding a dictionary: status 4, not 'absent'" "4" "$(plist_value "$t/nested.plist" 'com\.apple\.security\.app-sandbox' >/dev/null 2>&1; echo $?)"
+  expect "key holding an array: status 4" "4" "$(plist_value "$t/nested.plist" 'list' >/dev/null 2>&1; echo $?)"
+  m=$(plist_value "$t/nested.plist" 'com\.apple\.security\.app-sandbox' 2>&1 || true)
+  if [[ $m == *"holds a dictionary"* ]]; then ok=yes; else ok=no; fi
+  expect "dictionary failure carries the real message" "yes" "$ok"
   m=$(plist_value "$t/bad.plist" x 2>&1 || true)
   if [[ $m == *"not a valid plist"* ]]; then ok=yes; else ok=no; fi
   expect "malformed plist: message says so" "yes" "$ok"
