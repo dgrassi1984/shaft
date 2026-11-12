@@ -49,7 +49,7 @@ final class GoogleSetup {
     var pickedCalendars: Set<String> = []
     var writableCalendars: Set<String> = []
     var driveAll = false
-    var chatOn = true
+    var chatOn = false
     private(set) var applying: Work = .idle
     /// The change being sent now, and the one the last failure stopped at.
     private(set) var sending: AccessGrant?
@@ -92,7 +92,7 @@ final class GoogleSetup {
         tasks = [:]
         (savingClient, signingIn, loadingLabels, loadingCalendars, applying) = (.idle, .idle, .idle, .idle, .idle)
         (loginURL, signedInAs, granted, missing, labels, calendars) = (nil, nil, [], [], nil, nil)
-        (pickedLabels, pickedCalendars, writableCalendars, driveAll, chatOn) = ([], [], [], false, true)
+        (pickedLabels, pickedCalendars, writableCalendars, driveAll, chatOn) = ([], [], [], false, false)
         (sending, failed) = (nil, nil)
     }
 
@@ -106,7 +106,7 @@ final class GoogleSetup {
             state.google.adopt(signedIn: account != nil)
             if state.google.address.isEmpty { state.google.address = email }
         }
-        sync(access, opening: true)
+        sync(access)
     }
 
     /// A card marked done (or reopened) by the operator: the app cannot see Google Cloud.
@@ -316,9 +316,10 @@ final class GoogleSetup {
         }
     }
 
-    /// The pickers as the server's grants for the account say now. `opening`: the sheet opened, so a Chat not granted
-    /// yet starts on (it was ticked on Access); after an Apply every control is exactly what the server holds.
-    func sync(_ access: AccessResponse?, opening: Bool) {
+    /// The pickers as the server's grants for the account say now, on opening and after an Apply: a control is on
+    /// only for a grant in force (Chat among them). The one default is the primary calendar, ticked when the lists
+    /// arrive and no calendar is granted yet.
+    func sync(_ access: AccessResponse?) {
         guard let access else { return }
         let mine = { (account: String) in account == Self.alias }
         pickedLabels = Set(access.mail.filter { mine($0.account) }.map(\.label))
@@ -326,8 +327,7 @@ final class GoogleSetup {
         pickedCalendars = Set(cals.map(\.calendar))
         writableCalendars = Set(cals.filter(\.write).map(\.calendar))
         driveAll = access.drive.first { mine($0.account) }?.reach == "all"
-        let chat = access.chat.contains { mine($0.account) }
-        chatOn = chat || opening
+        chatOn = access.chat.contains { mine($0.account) }
     }
 
     // MARK: - Apply
@@ -356,22 +356,18 @@ final class GoogleSetup {
                 latest = try await client.access(name)
                 guard let self, self.generation == mine, let now = latest else { return }
                 steps.received(access: now)
-                switch GoogleGrants.plan(alias: Self.alias, chosen: chosen, current: now, picks: picks) {
-                case .failure(let problem): outcome = .failed(problem.message)
-                case .success(let changes):
-                    for change in changes {
-                        self.sending = change
-                        do {
-                            let answer = try await client.grantAccess(name, change)
-                            guard self.generation == mine else { return }
-                            latest = answer
-                            steps.received(access: answer)
-                        } catch {
-                            guard self.generation == mine else { return }
-                            self.failed = change
-                            outcome = .failed(APIError.from(error)?.message ?? error.localizedDescription)
-                            break
-                        }
+                for change in GoogleGrants.plan(alias: Self.alias, chosen: chosen, current: now, picks: picks) {
+                    self.sending = change
+                    do {
+                        let answer = try await client.grantAccess(name, change)
+                        guard self.generation == mine else { return }
+                        latest = answer
+                        steps.received(access: answer)
+                    } catch {
+                        guard self.generation == mine else { return }
+                        self.failed = change
+                        outcome = .failed(APIError.from(error)?.message ?? error.localizedDescription)
+                        break
                     }
                 }
             } catch {
@@ -385,7 +381,7 @@ final class GoogleSetup {
                 for row in AccessRow.google where chosen.contains(row) && !on.contains(row) {
                     steps.accessChecked.remove(row)
                 }
-                self.sync(latest, opening: false)
+                self.sync(latest)
                 setup.edit { $0.google.finish(.grants) }
             }
             self.applying = outcome
@@ -516,7 +512,8 @@ enum GoogleScopes {
 
 /// The pickers against the grants the server holds now, as the changes that make them agree, in order: the labels (as
 /// listed), the calendars (as listed: a grant, an upgrade to "can change events", a downgrade, or a revocation), Drive's
-/// reach, Chat. Only the chosen rows; a label or calendar not in the lists (renamed, removed) is left as it is.
+/// reach, Chat. Only the chosen rows; a label or calendar not in the lists (renamed, removed) is left as it is. Nothing
+/// picked and nothing held is a state already reached (no change); nothing picked with grants held revokes them all.
 enum GoogleGrants {
     struct Picks: Equatable {
         var labels: [String]
@@ -529,14 +526,11 @@ enum GoogleGrants {
     }
 
     static func plan(alias: String, chosen: Set<AccessRow>, current: AccessResponse,
-                     picks p: Picks) -> Result<[AccessGrant], FormProblem> {
+                     picks p: Picks) -> [AccessGrant] {
         var out: [AccessGrant] = []
         if chosen.contains(.mail) {
             let held = Set(current.mail.filter { $0.account == alias }.map(\.label))
             let wanted = Set(p.labels.filter(p.picked.contains))
-            guard !wanted.isEmpty || !held.isEmpty else {
-                return .failure(FormProblem("Pick at least one mail label, or untick Mail labels on Access."))
-            }
             for label in p.labels {
                 if wanted.contains(label), !held.contains(label) { out.append(.mail(alias: alias, label: label)) }
                 if !wanted.contains(label), held.contains(label) {
@@ -548,9 +542,6 @@ enum GoogleGrants {
             var held: [String: Bool] = [:]
             for g in current.calendar where g.account == alias { held[g.calendar] = g.write }
             let wanted = Set(p.calendars.filter(p.pickedCalendars.contains))
-            guard !wanted.isEmpty || !held.isEmpty else {
-                return .failure(FormProblem("Pick at least one calendar, or untick Calendars on Access."))
-            }
             for id in p.calendars {
                 let write = p.writable.contains(id)
                 switch (wanted.contains(id), held[id]) {
@@ -571,6 +562,6 @@ enum GoogleGrants {
             if p.chat, !held { out.append(.chat(alias: alias)) }
             if !p.chat, held { out.append(.chat(alias: alias, action: "revoke")) }
         }
-        return .success(out)
+        return out
     }
 }

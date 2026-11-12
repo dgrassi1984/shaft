@@ -74,8 +74,8 @@ struct GoogleSetupTests {
         let picks = GoogleGrants.Picks(labels: ["Assistant", "Receipts", "Travel"], picked: ["Assistant"],
                                        calendars: ["a@x", "team", "home"], pickedCalendars: ["a@x", "home"],
                                        writable: ["home"], driveAll: false, chat: false)
-        let plan = try GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
-                                         picks: picks).get()
+        let plan = GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
+                                     picks: picks)
         #expect(plan == [.mail(alias: "google", label: "Assistant"),
                          .mail(alias: "google", label: "Receipts", action: "revoke"),
                          .calendarWriteRevoked(alias: "google", id: "a@x"),
@@ -86,16 +86,63 @@ struct GoogleSetupTests {
         // What the server holds already is never sent again; a row not chosen is left alone.
         let same = GoogleGrants.Picks(labels: ["Receipts"], picked: ["Receipts"], calendars: ["a@x", "team"],
                                       pickedCalendars: ["a@x", "team"], writable: ["a@x"], driveAll: true, chat: true)
-        #expect(try GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
-                                      picks: same).get().isEmpty)
-        #expect(try GoogleGrants.plan(alias: "google", chosen: [.drive], current: current, picks: picks).get()
+        #expect(GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
+                                  picks: same).isEmpty)
+        #expect(GoogleGrants.plan(alias: "google", chosen: [.drive], current: current, picks: picks)
                 == [.drive(alias: "google", all: false)])
-        // Nothing picked and nothing held is the operator's to fix, before anything is sent.
-        let empty = try GrantsFake().access()
-        let none = GoogleGrants.plan(alias: "google", chosen: [.mail], current: empty,
-                                     picks: .init(labels: ["Assistant"], picked: [], calendars: [], pickedCalendars: [],
-                                                  writable: [], driveAll: false, chat: true))
-        #expect(none == .failure(FormProblem("Pick at least one mail label, or untick Mail labels on Access.")))
+        // Fix round 2: nothing picked and nothing held is reached already (no change), never a refusal; nothing picked
+        // with labels held revokes them all.
+        let nothing = GoogleGrants.Picks(labels: ["Assistant", "Receipts"], picked: [], calendars: ["a@x"],
+                                         pickedCalendars: [], writable: [], driveAll: false, chat: false)
+        #expect(GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar], current: try GrantsFake().access(),
+                                  picks: nothing).isEmpty)
+        #expect(GoogleGrants.plan(alias: "google", chosen: [.mail], current: current, picks: nothing)
+                == [.mail(alias: "google", label: "Receipts", action: "revoke")])
+    }
+
+    /// Fix round 2: after the last label was taken back, a calendar refusal made every Try again fail ("Pick at least
+    /// one mail label"): the plan refused an empty choice with nothing held. Now that is no change, and the retry
+    /// sends only the calendar.
+    @Test func clearingTheLastLabelThenARefusalRetriesOnlyWhatIsLeft() async throws {
+        let f = try signedInFixture()
+        let fake = GrantsFake(mail: ["Receipts"], calendars: [Self.me: false])
+        fake.refuse = ["calendar team"]
+        f.server.answer { fake.handle($0) }
+        let steps = f.setup.steps, google = steps.google
+        steps.received(access: try fake.access())
+        steps.accessChecked = [.mail, .calendar]
+        google.prepare(access: try fake.access(), setup: f.setup)
+        google.loadPickers(chosen: steps.googleChosen, store: f.store)
+        await until { google.labels != nil && google.calendars != nil }
+        google.pickedLabels = []                                         // the last label cleared
+        google.pickedCalendars.insert("team")
+        google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
+        await until { !google.applying.running }
+        #expect(google.applying == .failed("not granted: Google answered HTTP 403: no access"))
+        #expect(fake.mail.isEmpty)                                       // the revoke went through first
+        #expect(fake.posts.map { $0["grant"] ?? "" } == ["mail", "calendar"])
+
+        fake.refuse = []
+        google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
+        await until { !google.applying.running }
+        #expect(google.applying == .idle)
+        #expect(fake.posts.map { $0["grant"] ?? "" } == ["mail", "calendar", "calendar"])   // no Mail change again
+        #expect(fake.calendars == [Self.me: false, "team": false])
+        #expect(f.setup.state.google.isDone(.grants))
+        #expect(!steps.accessChecked.contains(.mail))                    // no label left: off on Access
+    }
+
+    /// Fix round 2: Chat showed on at opening without a Chat grant. Every control starts from the server's grants.
+    @Test func chatStartsAsTheServerHasIt() async throws {
+        let f = try signedInFixture()
+        let google = f.setup.steps.google
+        google.prepare(access: try GrantsFake(drive: "own").access(), setup: f.setup)
+        #expect(!google.chatOn)
+        #expect(!google.driveAll)
+        #expect(google.pickedLabels.isEmpty)
+        google.prepare(access: try GrantsFake(drive: "all", chat: true).access(), setup: f.setup)
+        #expect(google.chatOn)
+        #expect(google.driveAll)
     }
 
     /// Fix round 1: Apply remembered what it had sent, so Drive own → all → own left "all" in force while saying done.
@@ -168,6 +215,7 @@ struct GoogleSetupTests {
         #expect(google.pickedCalendars == [Self.me])                    // nothing granted: the primary to start
         google.pickedLabels = ["Receipts"]
         google.pickedCalendars.insert("team")
+        google.chatOn = true                                             // ticked in the sheet (off to start)
 
         google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
         await until { !google.applying.running }
