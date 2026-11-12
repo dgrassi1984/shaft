@@ -77,8 +77,23 @@ class UseTest(Case):
         self.assertEqual(json.loads(self.written()["SHAFT_CUSTOM_PRICES"]), {"my-model": [2.0, 8.0]})
         self.assertEqual(self.written()["SHAFT_CLOUD_MODELS"], "custom/my-model")
         self.assertEqual(self.written()["SHAFT_TRIAL_FALLBACK_MODEL"], "none")
-        self.assertNotIn("SHAFT_DESCRIBE_MODEL", self.written())    # off: unset, not pointed at a model that cannot see
+        self.assertEqual(self.written()["SHAFT_DESCRIBE_MODEL"], "none")   # off for real: unset would be claude-haiku
         self.assert_consistent(r)
+
+    def test_openrouter_is_openrouter_alone_and_covers_everything_with_only_its_key(self):
+        with mock.patch.object(modelcall, "secrets_env", return_value={"OPENROUTER_API_KEY": "o"}):
+            code, (r,), _ = self.run_cli("use", "openrouter", "--model", "openrouter/z-ai/glm-5.3")
+        self.assertEqual(code, 0)
+        self.assertEqual(r["off"], {})
+        w = self.written()
+        self.assertEqual(w["SHAFT_CODER_MODEL"], "openrouter/anthropic/claude-opus-5.5")
+        self.assertEqual((w["SHAFT_DESCRIBE_MODEL"], w["SHAFT_RECAP_MODEL"]), ("openrouter/anthropic/claude-sonnet-5.5",) * 2)
+        self.assertEqual(w["SHAFT_CLOUD_MODELS"], "openrouter/xiaomi/mimo-v2.6-pro,openrouter/anthropic/claude-sonnet-5.5,"
+                                                  "openrouter/anthropic/claude-opus-5.5,openrouter/z-ai/glm-5.3")
+        for knob in MODEL_KNOBS:
+            self.assertTrue(w[knob], knob)
+            for m in w[knob].split(","):
+                self.assertTrue(m.startswith("openrouter/"), f"{knob}={m} is not on OpenRouter")
 
     def test_openrouter_without_its_key_is_off_with_the_missing_key(self):
         with mock.patch.object(modelcall, "secrets_env", return_value={}):
@@ -86,7 +101,24 @@ class UseTest(Case):
         self.assertEqual(code, 0)
         self.assertEqual(r["covers"], [])
         self.assertIn("OPENROUTER_API_KEY", r["off"]["judge"])
-        self.assertEqual(self.written(), {})                         # the defaults need no file entries
+
+    def test_describe_none_sends_nothing_even_with_an_anthropic_key(self):
+        from supervisor import broker
+        self.assertEqual(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse("none"), "none")
+        b = broker.Broker("example", self.root, {}, self.root / "b.log", root=self.root, usage_name="example")
+        with mock.patch.object(broker, "DESCRIBE_MODEL", "none"), \
+                self.assertRaisesRegex(RuntimeError, r"image description is off \(SHAFT_DESCRIBE_MODEL=none\)"):
+            b._describe("image/png", b"x", "what?")
+        self.assertEqual(self.claude.requests, [])
+        self.assertEqual(self.router.requests, [])
+
+    def test_a_failed_settings_write_is_one_json_line_with_the_real_error(self):
+        with mock.patch.object(settings.os, "replace", side_effect=OSError(28, "No space left on device")):
+            code, lines, _ = self.run_cli("use", "codex")
+        self.assertEqual(code, 1)
+        (r,) = lines
+        self.assertFalse(r["ok"])
+        self.assertIn("No space left on device", r["error"])
 
     def test_a_single_codex_model_judges_itself(self):
         with mock.patch.object(codexcli, "MODELS", ["codex/gpt-6-astra"]):
@@ -129,6 +161,8 @@ class UseTest(Case):
         self.assertEqual(self.run_cli("use", "custom")[0], 2)       # no --model: usage
         self.assertEqual(self.run_cli("use", "custom", "--model", "x", "--base-url", self.custom.url)[0], 2)  # no price
         self.assertEqual(self.run_cli("use", "openrouter", "--model", "x")[0], 2)
+        self.assertEqual(self.run_cli("use", "openrouter", "--judge-price-in", "1")[0], 2)
+        self.assertEqual(self.run_cli("use", "codex", "--judge-price-out", "1")[0], 2)
         self.assertEqual(self.run_cli("use", "codex", "--model", "codex/gpt-9")[0], 1)          # refused by any_model
         self.assertFalse(self.file.exists())
         env = self.root / ".env"

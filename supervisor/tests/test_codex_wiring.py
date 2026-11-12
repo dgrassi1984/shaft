@@ -460,9 +460,11 @@ class ModelsTest(Case):
     def test_supervisor_side_calls_accept_codex_models(self):
         """modelcall runs judges, recaps and describe_image on a Codex plan too (a standalone app-server), and the
         coder runs a hand-off there."""
-        for name in ("SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL", "SHAFT_DESCRIBE_MODEL"):
+        for name in ("SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL"):
             self.assertIs(core.KNOBS[name].parse, core.any_model, name)
             self.assertEqual(core.KNOBS[name].parse(MODEL), MODEL)
+        self.assertIs(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse, core.fallback_model)    # any_model, or none: off
+        self.assertEqual(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse(MODEL), MODEL)
         self.assertEqual(core.KNOBS["SHAFT_CODER_MODEL"].parse(MODEL), MODEL)
         self.assertEqual(core.KNOBS["SHAFT_JUDGE_MODELS"].parse(MODEL), [MODEL])
         with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS"):

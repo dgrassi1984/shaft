@@ -45,8 +45,22 @@ def _say(as_json: bool, ok: bool, text: str = "", **extra) -> int:
 
 
 # -- the presets: {knob: value}, None = unset (the default) -----------------------------------------------------------
-def _openrouter() -> dict:
-    return {k: None for k in MODEL_KNOBS}
+OPENROUTER_INSTANCES = ("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/anthropic/claude-sonnet-5.5",
+                        "openrouter/anthropic/claude-opus-5.5")
+OPENROUTER_CODER = "openrouter/anthropic/claude-opus-5.5"
+OPENROUTER_SEEING = "openrouter/anthropic/claude-sonnet-5.5"       # describe and recap
+
+
+def _openrouter(model: str | None) -> dict:
+    """Every model on OpenRouter alone (an operator with only its key): the knobs' OpenRouter defaults are written
+    out, and the ones whose default is a claude-… model (Anthropic's own API) get their OpenRouter equivalent."""
+    default = lambda k: core.KNOBS[k].default
+    return {"SHAFT_CLOUD_MODELS": ",".join(dict.fromkeys([*OPENROUTER_INSTANCES, *([model] if model else [])])),
+            "SHAFT_JUDGE_MODELS": default("SHAFT_JUDGE_MODELS"), "SHAFT_JUDGE2_MODEL": default("SHAFT_JUDGE2_MODEL"),
+            "SHAFT_CODER_MODEL": OPENROUTER_CODER, "SHAFT_CONSULT_MODELS": default("SHAFT_CONSULT_MODELS"),
+            "SHAFT_DESCRIBE_MODEL": OPENROUTER_SEEING, "SHAFT_RECAP_MODEL": OPENROUTER_SEEING,
+            "SHAFT_CODEX_FALLBACK_MODEL": default("SHAFT_CODEX_FALLBACK_MODEL"),
+            "SHAFT_TRIAL_FALLBACK_MODEL": default("SHAFT_TRIAL_FALLBACK_MODEL")}
 
 
 def _codex(model: str | None) -> tuple[dict, dict]:
@@ -58,7 +72,7 @@ def _codex(model: str | None) -> tuple[dict, dict]:
            "SHAFT_CODEX_FALLBACK_MODEL": NO_FALLBACK, "SHAFT_TRIAL_FALLBACK_MODEL": model,
            }
     why = _reads_images(model)
-    out["SHAFT_DESCRIBE_MODEL"] = None if why else model
+    out["SHAFT_DESCRIBE_MODEL"] = NO_FALLBACK if why else model
     return out, ({"describe": why} if why else {})
 
 
@@ -75,7 +89,7 @@ def _custom(model: str, judge: str | None) -> tuple[dict, dict]:
     forced = {} if seeing else {"describe": modelcall.reads_images(model)}
     return {"SHAFT_CLOUD_MODELS": model, "SHAFT_JUDGE_MODELS": judge, "SHAFT_JUDGE2_MODEL": judge,
             "SHAFT_CODER_MODEL": model, "SHAFT_CONSULT_MODELS": ",".join(dict.fromkeys((model, judge))),
-            "SHAFT_RECAP_MODEL": model, "SHAFT_DESCRIBE_MODEL": seeing, "SHAFT_CODEX_FALLBACK_MODEL": NO_FALLBACK,
+            "SHAFT_RECAP_MODEL": model, "SHAFT_DESCRIBE_MODEL": seeing or NO_FALLBACK, "SHAFT_CODEX_FALLBACK_MODEL": NO_FALLBACK,
             "SHAFT_TRIAL_FALLBACK_MODEL": NO_FALLBACK}, forced
 
 
@@ -88,9 +102,9 @@ def _models(knob: str, value: str | None) -> list[str]:
 ANY_OF = ("instances", "consult")
 
 
-def _coverage(preset: dict, forced: dict[str, str], skip: tuple = ()) -> tuple[list[str], dict[str, str]]:
+def _coverage(preset: dict, forced: dict[str, str], skip: tuple = (), trusted_vision: bool = False) -> tuple[list[str], dict[str, str]]:
     """(covered functions, {function: reason}) for the models the preset leaves in force; `forced` are the functions
-    the preset itself leaves off (their knob is unset, the default model is not what the provider serves)."""
+    the preset itself leaves off (their knob is `none` or unset)."""
     covers, off = [], dict(forced)
     for fn, knobs in FUNCTIONS.items():
         if fn in forced or fn in skip:
@@ -100,7 +114,7 @@ def _coverage(preset: dict, forced: dict[str, str], skip: tuple = ()) -> tuple[l
             continue                                   # `none`: a choice, not a gap
         why = [r for m in models if (r := modelcall.available(m))]
         reason = (why[0] if len(why) == len(models) else None) if fn in ANY_OF else (why[0] if why else None)
-        if reason is None and fn == "describe":
+        if reason is None and fn == "describe" and not trusted_vision:
             reason = next((r for m in models if (r := _reads_images(m))), None)
         (off.__setitem__(fn, reason) if reason else covers.append(fn))
     return covers, off
@@ -167,19 +181,20 @@ def use(provider: str, model: str | None = None, judge_model: str | None = None,
         with _Declared(url, parsed, seeing):
             preset, forced = _custom(model, judge)
             return _write(provider, {**extra, **preset}, forced)
-    if judge_model or any(v is not None for v in (price_in, price_out, base_url)) or vision:
+    if judge_model or vision or any(v is not None for v in (price_in, price_out, base_url, judge_price_in,
+                                                          judge_price_out)):
         raise Usage(f"--judge-model, --base-url, --price-* and --vision are for custom, not {provider}")
     if provider == "codex":
         return _write(provider, *_codex(model))
-    if model:
-        raise Usage("--model is for codex and custom: openrouter keeps today's defaults")
-    return _write(provider, _openrouter())
+    if model and not model.startswith("openrouter/"):
+        raise Usage(f"--model for openrouter is an openrouter/… model, not {model!r}")
+    return _write(provider, _openrouter(model), trusted_vision=True)
 
 
-def _write(provider: str, changes: dict, forced: dict | None = None) -> dict:
+def _write(provider: str, changes: dict, forced: dict | None = None, trusted_vision: bool = False) -> dict:
     preset = {k: v for k, v in changes.items() if k in MODEL_KNOBS}
     # codex: the instance's own model is chosen per instance, not by SHAFT_CLOUD_MODELS, which stays as it is
-    covers, off = _coverage(preset, forced or {}, ("instances",) if provider == "codex" else ())
+    covers, off = _coverage(preset, forced or {}, ("instances",) if provider == "codex" else (), trusted_vision)
     r = settings.set_values(changes)
     return {"provider": provider, "changed": r["changed"], "written": changes, "covers": covers, "off": off,
             "not_live": r["not_live"]}
@@ -235,8 +250,8 @@ def command(args) -> int:
     except Usage as e:
         _say(as_json, False, str(e))
         return 2
-    except settings.Refused as e:
-        return _say(as_json, False, str(e))
+    except (settings.Refused, OSError, ValueError) as e:
+        return _say(as_json, False, str(e) or type(e).__name__)
     for row in rows:
         print(json.dumps(row) if as_json else (f"{'ok  ' if row['ok'] else 'FAIL'} {row['model']}"
                                                 + (f": {row['error']}" if row["error"] else "")))

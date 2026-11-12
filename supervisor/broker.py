@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import judge
-from .core import NETWORK_ERRORS, NO_FALLBACK, any_model, jsonl_lines, knob, whole
+from .core import NETWORK_ERRORS, NO_FALLBACK, any_model, fallback_model, jsonl_lines, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
@@ -828,8 +828,9 @@ SPECS["describe_image"] = _spec(
      "question": {"type": "string", "description": "what you want to know (optional: a full description)"}},
     ["path"])
 DESCRIBE_MODEL, _ = knob(
-    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", any_model, "the model describe_image uses for an instance whose "
-    "own model cannot see images (a custom/ model only when SHAFT_CUSTOM_VISION lists it)", group="Models and spend",
+    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", fallback_model, "the model describe_image uses for an instance whose "
+    "own model cannot see images (a custom/ model only when SHAFT_CUSTOM_VISION lists it), or none: image "
+    "description is off and no image is sent anywhere", group="Models and spend",
     services=("runs", "api"))
 DESCRIBE_CALLS_PER_RUN = 10
 DESCRIBE_TOKENS = 4000          # a description's first ceiling; a cut one is asked once more with twice the room
@@ -3856,6 +3857,8 @@ class Broker:
         instance under its daily cloud cap. A reply cut by its token ceiling is no answer: modelcall asks again once
         with twice the room, then it is refused."""
         from . import cloudllm, modelcall, vision
+        if DESCRIBE_MODEL == NO_FALLBACK:
+            raise RuntimeError(f"image description is off (SHAFT_DESCRIBE_MODEL={NO_FALLBACK})")
         if (reason := modelcall.reads_images(DESCRIBE_MODEL)):
             raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL}: {reason}")
         if (reason := modelcall.available(DESCRIBE_MODEL)):

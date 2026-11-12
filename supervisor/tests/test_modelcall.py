@@ -204,8 +204,9 @@ class AvailableTest(Case):
             with self.assertRaisesRegex(ValueError, said):
                 core.any_model(model)
         self.assertEqual(core.any_models("codex/gpt-6-astra, custom/my-model"), ["codex/gpt-6-astra", "custom/my-model"])
-        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL", "SHAFT_DESCRIBE_MODEL"):
+        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL"):
             self.assertIn(core.KNOBS[name].parse, (core.any_model, core.any_models), name)
+        self.assertIs(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse, core.fallback_model)    # any_model, or none: off
 
 
 class CallersTest(Case):
