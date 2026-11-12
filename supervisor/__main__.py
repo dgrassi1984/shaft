@@ -70,20 +70,61 @@ def _git_identity_problem() -> str | None:
     return None
 
 
-def _write_first_reply(name: str, then: str) -> None:
+def _write_first_reply(name: str, then: str, created: str | None = None) -> None:
     """`.supervisor/first-reply-<name>`: what to do once the operator has answered the welcome (atomic, 0600)."""
     SUP_DIR.mkdir(exist_ok=True)
     path = SUP_DIR / f"first-reply-{name}"
     fd, tmp = tempfile.mkstemp(prefix=f".first-reply-{name}.", dir=SUP_DIR)     # exclusive, 0600
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(json.dumps({"then": then, "created": datetime.now().astimezone().isoformat(timespec="seconds")}))
+            f.write(json.dumps({"then": then,
+                                "created": created or datetime.now().astimezone().isoformat(timespec="seconds")}))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def cmd_first_reply(name: str, then: str, as_json: bool = False) -> int:
+    """`shaft first-reply NAME resume|stay`: change what the operator's first answered reply does to an instance made
+    with `new --paused-until-first-reply` (the Mac app's "How it works alone" step). The marker is claimed by a rename
+    before it is rewritten, so a first reply that took it meanwhile leaves nothing to claim and the verb refuses rather
+    than leave a marker after the fact (which would resume the instance at some later reply). Refused (exit 1) when
+    there is no marker: the first reply has happened already, or the instance was not created waiting for one."""
+    def say(ok: bool, message: str, code: int) -> int:
+        if as_json:
+            print(json.dumps({"ok": True, "name": name, "then": then} if ok else {"ok": False, "error": message}))
+        else:
+            print(message, file=sys.stdout if ok else sys.stderr)
+        return code
+
+    if not NAME_RE.match(name) or name == "operator":
+        return say(False, f"no instance named {name!r}", 2)
+    path, held = SUP_DIR / f"first-reply-{name}", SUP_DIR / f".first-reply-{name}.changing"
+    try:
+        os.rename(path, held)
+    except FileNotFoundError:
+        return say(False, f"{name} is not waiting for its first reply (it was answered already, or {name} was not "
+                          f"created waiting for one): use shaft pause {name} or shaft resume {name} instead", 1)
+    except OSError as e:
+        return say(False, f"could not change {name}'s first-reply marker: {e}", 1)
+    try:
+        try:
+            created = json.loads(held.read_text()).get("created")
+        except (OSError, ValueError, AttributeError):
+            created = None
+        _write_first_reply(name, then, created if isinstance(created, str) else None)
+    except OSError as e:
+        try:
+            os.rename(held, path)              # put the old one back: the instance keeps waiting as it was
+        except OSError:
+            pass
+        return say(False, f"could not change {name}'s first-reply marker: {e}", 1)
+    held.unlink(missing_ok=True)
+    return say(True, f"{name}: after your first reply it will "
+                     + ("work on its own" if then == "resume" else "stay paused, answering only when you talk to it"), 0)
 
 
 def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = False,
@@ -1648,6 +1689,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--json", action="store_true", help="one JSON object on stdout: ok, name, branch, worktree, paused")
     p.add_argument("--paused-until-first-reply", choices=["resume", "stay"], metavar="{resume,stay}",
                    help="create it paused, with a marker saying what to do once you have answered its welcome")
+    p = sub.add_parser("first-reply", help="for an instance created with --paused-until-first-reply: what your first "
+                                           "answered reply does (resume: it works on its own; stay: it stays paused)")
+    p.add_argument("name")
+    p.add_argument("then", choices=["resume", "stay"])
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout: ok, name, then (or error)")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -2215,6 +2261,8 @@ def main(argv: list[str]) -> int:
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
         return cmd_new(args.name, args.source, args.seed, args.json, args.paused_until_first_reply)
+    if args.cmd == "first-reply":
+        return cmd_first_reply(args.name, args.then, args.json)
     if args.cmd == "kill":
         from . import kill
         if not (INSTANCES / args.name / "shaft").is_dir():

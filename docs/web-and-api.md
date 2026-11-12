@@ -749,7 +749,8 @@ set by `SHAFT_APP_API_FIXTURES`.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
   and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
 - **Setup.** The Mac app's setup wizard creates an instance (`POST /app/v1/setup/instance`: `shaft new`, `config`,
-  `drive`, created paused until your first answered reply), offers four starting drives, stores the provider and
+  `drive`, created paused until your first answered reply; `/setup/autonomy/<name>` then sets whether that reply lets it
+  work on its own, `shaft first-reply`), offers four starting drives, stores the provider and
   web-search keys (`/setup/secret`, on the verb's stdin), switches and checks the provider, grants a folder, the
   browser, Gmail labels, calendars, Drive and Chat (`/app/v1/access/<name>`), sets a Telegram bot, and last asks the
   instance for its welcome (`/setup/hello/<name>`). Each runs the CLI verb as the device. See

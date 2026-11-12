@@ -70,8 +70,10 @@ class SetupTest(AppTest):
                         "paused": "--paused-until-first-reply" in args}]
         if args[:2] == ["secrets", "set"]:
             return 0, [{"ok": True, "name": args[2]}]
+        if args[0] == "first-reply":
+            return 0, [{"ok": True, "name": args[1], "then": args[2]}]
         if args[:2] == ["provider", "use"]:
-            return 0, [{"ok": True, "provider": args[2], "changed": ["SHAFT_JUDGE_MODELS"],
+            return 0, [{"ok": True, "provider": args[2], "model": "openrouter/a", "changed": ["SHAFT_JUDGE_MODELS"],
                         "written": {"SHAFT_JUDGE_MODELS": "openrouter/a"}, "covers": ["instances", "judges"],
                         "off": {"coding": "no openrouter coder is configured"}, "not_live": []}]
         if args[:2] == ["provider", "check"]:
@@ -292,7 +294,7 @@ class ProviderTest(SetupTest):
                                        "--judge-price-in", "0", "--judge-price-out", "0.25", "--vision"]])
         self.assertEqual(self.calls[0]["timeout"], actions.SLOW_S)
         self.assertEqual(json.loads(r.body), {
-            "provider": "custom", "changed": ["SHAFT_JUDGE_MODELS"], "covers": ["instances", "judges"],
+            "provider": "custom", "model": "openrouter/a", "changed": ["SHAFT_JUDGE_MODELS"], "covers": ["instances", "judges"],
             "off": [{"function": "coding", "why": "no openrouter coder is configured"}], "not_live": []})
 
     def test_use_refusal_and_bad_fields(self):
@@ -317,6 +319,31 @@ class ProviderTest(SetupTest):
         self.refuse["provider"] = (1, [{"ok": False, "error": "cannot read settings: denied"}])
         err = self.error(self.api("/app/v1/setup/provider/check", "POST", {"provider": "codex"}), 409, "refused")
         self.assertEqual(err["message"], "cannot read settings: denied")
+
+
+# -- how it works alone (POST /setup/autonomy/<n>) --------------------------------------------------------------------
+class AutonomyTest(SetupTest):
+    def test_the_choice_runs_first_reply_as_the_device(self):
+        for then in ("stay", "resume"):
+            with self.subTest(then=then):
+                self.calls.clear()
+                r = self.api("/app/v1/setup/autonomy/wisp", "POST", {"then": then})
+                self.assertEqual(r.status, 200, r.body)
+                self.assertEqual(json.loads(r.body), {"instance": "wisp", "then": then})
+                self.assertEqual(self.calls, [{"args": ["first-reply", "wisp", then, "--json"],
+                                               "timeout": actions.RUN_NOW_S, "who": "app iphone-app", "input": None}])
+
+    def test_after_the_first_reply_it_is_refused_in_the_verbs_words(self):
+        self.refuse["first-reply"] = (1, [{"ok": False, "error": "wisp is not waiting for its first reply"}])
+        err = self.error(self.api("/app/v1/setup/autonomy/wisp", "POST", {"then": "stay"}), 409, "refused")
+        self.assertEqual(err["message"], "wisp is not waiting for its first reply")
+
+    def test_bad_bodies_and_unknown_instances_run_nothing(self):
+        for body in ({}, {"then": "own"}, {"then": "talk"}, {"then": True}, {"then": "stay", "extra": 1}):
+            with self.subTest(body=body):
+                self.error(self.api("/app/v1/setup/autonomy/wisp", "POST", body), 400, "bad_request")
+        self.error(self.api("/app/v1/setup/autonomy/nobody", "POST", {"then": "stay"}), 404, "not_found")
+        self.assertEqual(self.calls, [])
 
 
 # -- access ------------------------------------------------------------------------------------------------------------
@@ -510,7 +537,8 @@ class HelloTest(SetupTest):
 # -- who may call them ------------------------------------------------------------------------------------------------
 ROUTES = [("POST", "/app/v1/setup/instance"), ("GET", "/app/v1/setup/drives"), ("POST", "/app/v1/setup/secret"),
           ("POST", "/app/v1/setup/provider"), ("POST", "/app/v1/setup/provider/check"),
-          ("POST", "/app/v1/setup/telegram"), ("POST", "/app/v1/setup/hello/wisp"), ("GET", "/app/v1/access/wisp"),
+          ("POST", "/app/v1/setup/telegram"), ("POST", "/app/v1/setup/hello/wisp"),
+          ("POST", "/app/v1/setup/autonomy/wisp"), ("GET", "/app/v1/access/wisp"),
           ("POST", "/app/v1/access/wisp"), ("GET", "/app/v1/google/work/labels"),
           ("GET", "/app/v1/google/work/calendars")]
 
@@ -538,6 +566,7 @@ class SetupFixturesTest(SetupTest):
         out["setup-drives"] = self.get("/app/v1/setup/drives")         # the template's drive.md is this test's
         out["setup-provider"] = self.get("/app/v1/setup/provider", method="POST", data={"provider": "openrouter"})
         out["setup-check"] = self.get("/app/v1/setup/provider/check", method="POST", data={"provider": "openrouter"})
+        out["setup-autonomy"] = self.get("/app/v1/setup/autonomy/wisp", method="POST", data={"then": "stay"})
         with mock.patch.object(web_chat.secrets, "token_hex", return_value="00000000000000a1"):      # its chat id
             out["setup-hello"] = self.get("/app/v1/setup/hello/wisp", method="POST", data={})
         google._save_account("work", {"address": "me@example.com", "refresh_token": "r", "client": "work",

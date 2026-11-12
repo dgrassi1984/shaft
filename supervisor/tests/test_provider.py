@@ -55,6 +55,7 @@ class UseTest(Case):
         code, (r,), _ = self.run_cli("use", "openrouter")
         self.assertEqual(code, 0)
         self.assertEqual(r["off"].keys() & {"judge", "judge2", "consult", "trial", "instances"}, set())
+        self.assertEqual(r["model"], "openrouter/xiaomi/mimo-v2.6-pro")   # a new instance's model (the Mac app)
         self.assert_consistent(r)
 
         code, (r,), _ = self.run_cli("use", "codex")
@@ -67,6 +68,7 @@ class UseTest(Case):
         self.assertEqual(self.written()["SHAFT_TRIAL_FALLBACK_MODEL"], "codex/gpt-6-astra")
         self.assertEqual(self.written()["SHAFT_CONSULT_MODELS"], ",".join(codexcli.MODELS))
         self.assertEqual(sorted(r["covers"]), sorted(set(provider.FUNCTIONS) - {"instances"}))
+        self.assertEqual(r["model"], "codex/gpt-6-astra")
         self.assert_consistent(r)
 
         code, (r,), _ = self.run_cli("use", "custom", "--model", "my-model", "--base-url", self.custom.url,
@@ -76,6 +78,7 @@ class UseTest(Case):
         self.assertIn("SHAFT_CUSTOM_VISION", r["off"]["describe"])
         self.assertEqual(json.loads(self.written()["SHAFT_CUSTOM_PRICES"]), {"my-model": [2.0, 8.0]})
         self.assertEqual(self.written()["SHAFT_CLOUD_MODELS"], "custom/my-model")
+        self.assertEqual(r["model"], "custom/my-model")
         self.assertEqual(self.written()["SHAFT_TRIAL_FALLBACK_MODEL"], "none")
         self.assertEqual(self.written()["SHAFT_DESCRIBE_MODEL"], "none")   # off for real: unset would be claude-haiku
         self.assert_consistent(r)
@@ -84,6 +87,7 @@ class UseTest(Case):
         with mock.patch.object(modelcall, "secrets_env", return_value={"OPENROUTER_API_KEY": "o"}):
             code, (r,), _ = self.run_cli("use", "openrouter", "--model", "openrouter/z-ai/glm-5.3")
         self.assertEqual(code, 0)
+        self.assertEqual(r["model"], "openrouter/z-ai/glm-5.3")          # the model asked for, not the first default
         self.assertEqual(r["off"], {})
         w = self.written()
         self.assertEqual(w["SHAFT_CODER_MODEL"], "openrouter/anthropic/claude-opus-5.5")

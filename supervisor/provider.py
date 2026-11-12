@@ -148,7 +148,8 @@ def _custom_name(m: str) -> str:
 def use(provider: str, model: str | None = None, judge_model: str | None = None, base_url: str | None = None,
         price_in: float | None = None, price_out: float | None = None, judge_price_in: float | None = None,
         judge_price_out: float | None = None, vision: bool = False) -> dict:
-    """Write the preset; returns {"provider", "changed", "written", "covers", "off", "not_live"}. Raises
+    """Write the preset; returns {"provider", "model", "changed", "written", "covers", "off", "not_live"} (`model`:
+    the instance model it suggests). Raises
     settings.Refused (a value its knob refuses) or Usage."""
     settings.load_all()
     declared: dict = {}
@@ -180,24 +181,25 @@ def use(provider: str, model: str | None = None, judge_model: str | None = None,
             raise settings.Refused(str(e)) from None
         with _Declared(url, parsed, seeing):
             preset, forced = _custom(model, judge)
-            return _write(provider, {**extra, **preset}, forced)
+            return _write(provider, model, {**extra, **preset}, forced)
     if judge_model or vision or any(v is not None for v in (price_in, price_out, base_url, judge_price_in,
                                                           judge_price_out)):
         raise Usage(f"--judge-model, --base-url, --price-* and --vision are for custom, not {provider}")
     if provider == "codex":
-        return _write(provider, *_codex(model))
+        return _write(provider, model or CODEX_DEFAULT, *_codex(model))
     if model and not model.startswith("openrouter/"):
         raise Usage(f"--model for openrouter is an openrouter/… model, not {model!r}")
-    return _write(provider, _openrouter(model), trusted_vision=True)
+    return _write(provider, model or OPENROUTER_INSTANCES[0], _openrouter(model), trusted_vision=True)
 
 
-def _write(provider: str, changes: dict, forced: dict | None = None, trusted_vision: bool = False) -> dict:
+def _write(provider: str, model: str, changes: dict, forced: dict | None = None, trusted_vision: bool = False) -> dict:
+    """`model`: the instance model this provider suggests (a new instance's LLM_MODEL in the Mac app's wizard)."""
     preset = {k: v for k, v in changes.items() if k in MODEL_KNOBS}
     # codex: the instance's own model is chosen per instance, not by SHAFT_CLOUD_MODELS, which stays as it is
     covers, off = _coverage(preset, forced or {}, ("instances",) if provider == "codex" else (), trusted_vision)
     r = settings.set_values(changes)
-    return {"provider": provider, "changed": r["changed"], "written": changes, "covers": covers, "off": off,
-            "not_live": r["not_live"]}
+    return {"provider": provider, "model": model, "changed": r["changed"], "written": changes, "covers": covers,
+            "off": off, "not_live": r["not_live"]}
 
 
 # -- check ------------------------------------------------------------------------------------------------------------

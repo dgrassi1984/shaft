@@ -1452,6 +1452,7 @@ verb's **stdin**, never into its arguments, a log line or an answer.
 | GET | `/google/<alias>/labels` | | 200, `{"alias", "labels": [str]}` (§18.7) |
 | GET | `/google/<alias>/calendars` | | 200, `{"alias", "calendars": [{id, title, primary, access}]}` (§18.7) |
 | POST | `/setup/hello/<n>` | (empty) | 200, `{"said", "chat": {"id", "title"}}` (§18.8) |
+| POST | `/setup/autonomy/<n>` | `{then}` | 200, `{"instance", "then"}` (§18.9) |
 
 A missing or extra field, or a field of the wrong type: `400 bad_request`, and nothing runs. A verb that refuses:
 `409 refused` with the verb's own words.
@@ -1519,6 +1520,7 @@ needs --model"). Keys are set first with `/setup/secret`. Success:
 | Field | Type | |
 |---|---|---|
 | `provider` | str | the provider |
+| `model` | str | the instance model it suggests: a new instance's `LLM_MODEL` (`--model` when given; else OpenRouter's first instance model, or Codex's default) |
 | `changed` | [str] | the settings it changed |
 | `covers` | [str] | what the provider now runs: `instances`, `judges`, … |
 | `off` | [{`function`, `why`}] | what stays off with this provider, and why |
@@ -1585,6 +1587,16 @@ questions to start. The operator never sees it in the feed; the instance's reply
 operator's first answered reply resumes the instance or leaves it paused, as `autonomy` said (§18.1). Success:
 `{"said": "<n> is writing its welcome", "chat": {"id": <Main's id>, "title": <n>}}`. Once Main has any turn:
 `409 refused` ("… has a conversation already").
+
+### 18.9 `POST /setup/autonomy/<n>`
+
+`{"then": "resume"|"stay"}`: `first-reply <n> <then> --json`, the wizard's "How it works alone" choice. The wizard
+creates the instance when it leaves "Your instance" (with `autonomy` `"own"`, so the Access step has an instance to
+grant to), and this route changes what the operator's first answered reply does: `resume` (the scheduler takes it from
+there) or `stay` (it stays paused, talking only when talked to). The verb rewrites `.supervisor/first-reply-<n>`
+atomically, keeping when it was made; it claims the marker by a rename first, so when there is none (the first reply
+has happened already, or `<n>` was not created waiting for one) it is `409 refused` in the verb's words and nothing is
+written. An unknown instance: `404 not_found`. Success: `{"instance": <n>, "then": <then>}`.
 
 ## Appendix A. Implementation notes
 
@@ -1688,7 +1700,7 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
   `feedback-response`, `retried`, `plan`, `cycles`, `cycle`, `stream` (the events of §6.1, as a list).
   `supervisor/tests/test_app_api_setup.py` writes the setup ones (§18) the same way (`write_or_check_fixtures`):
-  `setup-instance`, `setup-drives`, `setup-provider`, `setup-check`, `setup-hello`, `setup-errors`, `access`,
+  `setup-instance`, `setup-drives`, `setup-provider`, `setup-check`, `setup-autonomy`, `setup-hello`, `setup-errors`, `access`,
   `google-labels`, `google-calendars`. SHAFTKit reads only this folder, or
   `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.

@@ -1203,7 +1203,7 @@ def _setup_provider(req: Request) -> Response:
     if code != 0 or not rows[-1].get("ok"):
         raise Refusal(409, "refused", _verb_said(rows))
     r = rows[-1]
-    return _json(200, {"provider": r["provider"], "changed": r["changed"], "covers": r["covers"],
+    return _json(200, {"provider": r["provider"], "model": r["model"], "changed": r["changed"], "covers": r["covers"],
                        "off": [{"function": f, "why": why} for f, why in r["off"].items()], "not_live": r["not_live"]})
 
 
@@ -1234,6 +1234,19 @@ def _setup_telegram(req: Request) -> Response:
     if not ok:
         raise Refusal(409, "refused", said)
     return _said(said)
+
+
+def _setup_autonomy(req: Request, n: str) -> Response:
+    """`first-reply <n> resume|stay --json`: the wizard's "How it works alone" choice, after the instance was created
+    (with "own", i.e. resume). Refused once the first reply has happened (no marker left)."""
+    from . import actions
+    data = _body(req)
+    if set(data) != {"then"} or data["then"] not in AUTONOMY.values():
+        raise Refusal(400, "bad_request", "Send then: resume or stay.")
+    code, rows = actions.run_json(["first-reply", n, data["then"], "--json"], who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {"instance": n, "then": data["then"]})
 
 
 def _setup_hello(req: Request, n: str) -> Response:
@@ -1394,6 +1407,7 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/setup/provider/check", {"POST": _setup_check}),
     (r"/setup/telegram", {"POST": _setup_telegram}),
     (rf"/setup/hello/{N}", {"POST": _setup_hello}),
+    (rf"/setup/autonomy/{N}", {"POST": _setup_autonomy}),
     (rf"/access/{N}", {"GET": _get_access, "POST": _set_access}),
     (rf"/google/{ALIAS}/labels", {"GET": _google_labels}),
     (rf"/google/{ALIAS}/calendars", {"GET": _google_calendars}),

@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import __main__ as cli
-from supervisor import core, mind
+from supervisor import actions, core, mind
 
 IDENTITY = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
@@ -23,7 +23,7 @@ def git(cwd, *a):
     return subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, text=True, check=True).stdout
 
 
-class NewInstanceTest(unittest.TestCase):
+class NewInstanceCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-new-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -58,6 +58,8 @@ class NewInstanceTest(unittest.TestCase):
             code = cli.main(["new", *args])
         return code, out.getvalue(), err.getvalue()
 
+
+class NewInstanceTest(NewInstanceCase):
     def drop_identity(self):
         p = mock.patch.dict(os.environ, {}, clear=False)
         p.start()
@@ -223,6 +225,66 @@ class NewInstanceTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("disk full", json.loads(out)["error"])
         self.assertFalse(core.paused("ada"))      # and nothing half-made was left
+
+
+class FirstReplyTest(NewInstanceCase):
+    """`shaft first-reply NAME resume|stay`: the wizard's "How it works alone" choice after the instance exists."""
+
+    def first_reply(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["first-reply", *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_it_rewrites_the_marker_keeping_when_it_was_made(self):
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        marker = self.sup / "first-reply-ada"
+        made = json.loads(marker.read_text())["created"]
+        code, out, err = self.first_reply("ada", "stay", "--json")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), {"ok": True, "name": "ada", "then": "stay"})
+        self.assertEqual(json.loads(marker.read_text()), {"then": "stay", "created": made})
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(core.paused("ada"))                            # still waiting: only the choice changed
+        self.assertEqual(sorted(p.name for p in self.sup.iterdir() if "first-reply" in p.name), ["first-reply-ada"])
+        self.assertEqual(self.first_reply("ada", "resume", "--json")[0], 0)
+        self.assertEqual(json.loads(marker.read_text())["then"], "resume")
+
+    def test_the_first_reply_then_does_what_was_chosen(self):
+        from supervisor import web_chat
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        self.assertEqual(self.first_reply("ada", "stay")[0], 0)
+        with mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(actions, "run_now") as run_now:
+            web_chat._first_reply("ada")
+        run_now.assert_not_called()                                    # "stay": no shaft resume
+        self.assertFalse((self.sup / "first-reply-ada").exists())
+
+    def test_refused_once_the_first_reply_has_happened(self):
+        # Bug class: rewriting a consumed marker would resume the instance at some later reply, after the fact.
+        self.assertEqual(self.run_new("ada")[0], 0)                    # not created waiting for a first reply
+        code, out, err = self.first_reply("ada", "resume", "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertFalse(json.loads(out)["ok"])
+        self.assertIn("not waiting for its first reply", json.loads(out)["error"])
+        self.assertFalse((self.sup / "first-reply-ada").exists(), "no marker is made after the fact")
+
+    def test_a_failed_write_puts_the_old_marker_back(self):
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        with mock.patch.object(cli, "_write_first_reply", side_effect=OSError("disk full")):
+            code, out, _ = self.first_reply("ada", "stay", "--json")
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", json.loads(out)["error"])
+        self.assertEqual(json.loads((self.sup / "first-reply-ada").read_text())["then"], "resume")
+
+    def test_a_name_that_is_not_an_instance_name_is_a_usage_refusal(self):
+        for name in ("operator", "../x", "Ada"):
+            with self.subTest(name=name):
+                code, out, _ = self.first_reply(name, "stay", "--json")
+                self.assertEqual(code, 2)
+                self.assertFalse(json.loads(out)["ok"])
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(io.StringIO()):
+            self.first_reply("ada", "maybe")
+        self.assertEqual(e.exception.code, 2)
 
 
 if __name__ == "__main__":

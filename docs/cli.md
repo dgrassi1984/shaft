@@ -10,6 +10,8 @@ ln -s "$PWD/bin/shaft" ~/.local/bin/shaft
 shaft update [names…|--all]
 shaft new <name> [--from <i>]
 shaft new <name> --from <i> --seed
+shaft new <name> --paused-until-first-reply resume|stay [--json]
+shaft first-reply <name> resume|stay [--json]
 shaft breed <a> <b> <child>
 shaft setup
 ```
@@ -19,8 +21,10 @@ pre-push guard and exits with status 1 if another tool's hook is in the way. See
 
 `shaft new` creates an instance from the template. `--from` copies another instance's genes without its
 memories. Adding `--seed` copies its people file and facts.md as that instance's beliefs, without its self,
-journal, or episodes. `shaft breed` recombines two instances' genes with judge selection and starts a fresh
-mind.
+journal, or episodes. `--paused-until-first-reply` creates it paused until you have answered its welcome: `resume`
+then lets it work on its own, `stay` keeps it paused, answering only when you talk to it. `shaft first-reply` changes
+that choice while it is still waiting (refused once the first reply has happened). `shaft breed` recombines two
+instances' genes with judge selection and starts a fresh mind.
 
 `shaft update` merges template fixes into instances and runs the gate. Busy instances are queued only when the
 scheduler is installed. Otherwise it refuses the busy update with exit status 3. The scheduler applies queued
