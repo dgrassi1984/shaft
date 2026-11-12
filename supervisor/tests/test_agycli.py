@@ -205,12 +205,19 @@ class ChannelTest(unittest.TestCase):
                 c.close()
 
     def test_native_and_client_requests_are_security_failures(self):
-        for mode in ('native', 'fs/readTextFile', 'terminal/create', 'unknown', 'server', 'tool'):
+        # A refusal names what was refused (tool, server/tool or method), as the Claude channel does since a bake-off
+        # failure read only "native tool forbidden" and could not be told apart from a slip (2026-11-12).
+        named = {'native': 'native tool forbidden: run_command', 'fs/readTextFile': 'client request forbidden: fs/readTextFile',
+                 'terminal/create': 'client request forbidden: terminal/create', 'unknown': 'client request forbidden: unknown',
+                 'server': 'native tool forbidden: call_mcp_tool other/echo',
+                 'tool': 'native tool forbidden: call_mcp_tool shaft/unknown'}
+        for mode, reason in named.items():
             self.scenario(mode=mode)
             c = agy.Channel('example', 'example', mock.Mock())
             try:
-                with self.subTest(mode=mode), self.assertRaises(planchannel.ChannelSecurity):
+                with self.subTest(mode=mode), self.assertRaises(planchannel.ChannelSecurity) as caught:
                     c.complete(body())
+                self.assertIn('Antigravity ' + reason, str(caught.exception))
             finally:
                 c.close()
 

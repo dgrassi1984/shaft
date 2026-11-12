@@ -303,6 +303,18 @@ class Channel(claudecli.Channel):
                 and raw.get('ServerName') == 'shaft' and raw.get('ToolName') in self._tool_names
                 and isinstance(raw.get('Arguments'), dict))
 
+    @staticmethod
+    def _shown(value):
+        # A tool or method name is not message content: name it, so an event can be told apart from a slip.
+        return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_./-]{1,64}', value) else '<invalid name>'
+
+    def _refused(self, tool):
+        raw = tool.get('rawInput') if isinstance(tool.get('rawInput'), dict) else {}
+        name = self._shown(tool.get('name'))
+        if tool.get('name') == 'call_mcp_tool':
+            name += f" {self._shown(raw.get('ServerName'))}/{self._shown(raw.get('ToolName'))}"
+        return planchannel.ChannelSecurity('Antigravity native tool forbidden: ' + name)
+
     def _dispatch(self, message):
         if message.get('jsonrpc') != '2.0':
             raise self.failure('malformed Antigravity protocol')
@@ -326,7 +338,7 @@ class Channel(claudecli.Channel):
         method, params = message['method'], message.get('params') or {}
         if 'id' in message:
             if method != 'session/request_permission':
-                raise planchannel.ChannelSecurity('Antigravity client request forbidden')
+                raise planchannel.ChannelSecurity('Antigravity client request forbidden: ' + self._shown(method))
             allowed = params.get('sessionId') == self._session and self._shaft_tool(params.get('toolCall') or {})
             option = next((o['optionId'] for o in params.get('options', [])
                            if o.get('kind') == ('allow_once' if allowed else 'reject_once')), None)
@@ -341,7 +353,7 @@ class Channel(claudecli.Channel):
                 with self._write_lock:
                     self._process.stdin.write(json.dumps(response).encode() + b'\n')
                     self._process.stdin.flush()
-                raise planchannel.ChannelSecurity('Antigravity native tool forbidden')
+                raise self._refused(params.get('toolCall') or {})
             return
         if method != 'session/update' or params.get('sessionId') != self._session:
             return
@@ -358,7 +370,7 @@ class Channel(claudecli.Channel):
                     self.stats['inert_tools'] += 1
                     self._inert.add(ident)
             elif not self._shaft_tool(tool):
-                raise planchannel.ChannelSecurity('Antigravity native tool forbidden')
+                raise self._refused(tool)
             else:
                 now = time.monotonic()
                 if first and self._turn and (self._last_completed is None
