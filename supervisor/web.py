@@ -1837,7 +1837,7 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
     the service, reachable at 127.0.0.1 for /app/v1 only. `pair` prints a one-time link for a browser or an app;
     `pair --local` pairs the Mac app on this Mac directly (_pair_local), `--json` for its setup."""
     from . import autonomy
-    from .api import _tailscale
+    from .api import _tailscale, say, service_on
     if local and action not in ("on", "pair"):
         print(f"--local goes with on or pair, not {action}", file=sys.stderr)
         return 2
@@ -1857,6 +1857,8 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
     if action == "pair":
         if not allowed_logins():
             message = "no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)"
+            if as_json:
+                message = "This Mac has no tailnet login yet: set up Tailscale again from the start."
             print(json.dumps({"ok": False, "error": message}) if as_json else message)
             return 1
         if as_json and not allowed_hosts():     # a tailnet link needs the name `shaft web on` recorded
@@ -1884,7 +1886,7 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
         except (settings.Refused, OSError, ValueError) as e:     # e.g. .supervisor/settings.env not writable
             print(f"cannot set SHAFT_WEB_LOCAL=on: {e}", file=sys.stderr)
             return 1
-        if autonomy.service("web", "on"):
+        if service_on("web"):
             return 1
         log(f"web on, local: /app/v1 at http://127.0.0.1:{PORT} for the Mac app (no tailscale serve)")
         print(f"\nSHAFT web service on this Mac: http://127.0.0.1:{PORT} (/app/v1 for the Mac app; the pages stay "
@@ -1899,17 +1901,20 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
         return 0 if n else 1
     if action == "on":
         if not allowed_logins():
-            print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
+            print(say("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)",
+                      "This Mac has no tailnet login yet: set up Tailscale again from the start."))
             return 1
         from .api import tailnet_problem
         if problem := tailnet_problem():
             print(problem)
             return 1
         if not record_hosts():              # the service cannot ask tailscale itself (launchd): it reads this
-            print("cannot read this Mac's tailnet name: is Tailscale running? (tailscale status)")
+            print(say("cannot read this Mac's tailnet name: is Tailscale running? (tailscale status)",
+                      "Tailscale did not answer from this session: open the Tailscale app, make sure you are logged in "
+                      "and connected, then Try again."))
             return 1
         _hosts["at"] = 0.0
-        if autonomy.service("web", "on"):
+        if service_on("web"):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
         if r.returncode != 0:

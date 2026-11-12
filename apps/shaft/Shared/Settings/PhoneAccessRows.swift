@@ -46,6 +46,7 @@ struct PhoneAccessRows: View {
                 }
             }
         }
+        .onDisappear { access.stop() }      // leaving Settings or closing its window ends what runs
     }
 }
 #endif

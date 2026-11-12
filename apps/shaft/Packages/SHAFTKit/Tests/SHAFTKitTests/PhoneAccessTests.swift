@@ -12,8 +12,9 @@ struct PhoneAccessTests {
     static let okLine = ScriptedShaft.lines(0, #"{"ok": true}"#)
     static let linkLine = ScriptedShaft.lines(0, #"{"ok": true, "link": "\#(link)", "expires_minutes": 10}"#)
 
-    func access(_ shaft: ScriptedShaft, installed: Bool = true) -> PhoneAccess {
-        PhoneAccess(run: { try await shaft.run($0, nil) }, hasTailscale: { installed })
+    func access(_ shaft: ScriptedShaft, installed: Bool = true, reachable: @escaping @MainActor () async -> Bool = { true },
+                sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in }) -> PhoneAccess {
+        PhoneAccess(run: { try await shaft.run($0, nil) }, reachable: reachable, hasTailscale: { installed }, sleep: sleep)
     }
 
     @Test func withoutTheTailscaleAppItSaysSoAndRunsNothing() async {
@@ -28,7 +29,7 @@ struct PhoneAccessTests {
     @Test func checkingAgainAfterInstallingGoesOn() async {
         let shaft = ScriptedShaft([Self.okLine, Self.okLine, Self.linkLine])
         var installed = false
-        let phone = PhoneAccess(run: { try await shaft.run($0, nil) }, hasTailscale: { installed })
+        let phone = PhoneAccess(run: { try await shaft.run($0, nil) }, reachable: { true }, hasTailscale: { installed })
         phone.start()
         #expect(phone.state == .missingApp)
         installed = true
@@ -96,6 +97,56 @@ struct PhoneAccessTests {
         phone.stop()
         await Task.yield()
         #expect(phone.state == .idle)
+    }
+
+    /// A box the tests flip: whether the restarted web service answers.
+    @MainActor final class Service { var up = false; var asked = 0 }
+
+    @Test func theLinkIsAskedForOnlyOnceTheRestartedServiceAnswers() async {
+        let service = Service()
+        let shaft = ScriptedShaft([Self.okLine, Self.okLine, Self.linkLine])
+        let phone = access(shaft, reachable: { service.asked += 1; return service.asked >= 3 },
+                           sleep: { _ in })
+        phone.start()
+        await phone.finished()
+        #expect(service.asked == 3)                    // it polled until the service answered
+        #expect(phone.state == .link(Self.link, expiresMinutes: 10))
+        #expect(shaft.calls.map { $0[0] + " " + $0[1] } == ["api on", "web on", "web pair"])
+    }
+
+    @Test func aServiceThatNeverAnswersFailsAndTryAgainOnlyWaitsAgain() async {
+        let service = Service()
+        let shaft = ScriptedShaft([Self.okLine, Self.okLine, Self.linkLine])
+        let phone = access(shaft, reachable: { service.asked += 1; return service.up })
+        phone.start()
+        await phone.finished()
+        guard case .failed(let message) = phone.state else { Issue.record("expected a failure, got \(phone.state)"); return }
+        #expect(message.contains("not answered"))
+        #expect(!message.contains("shaft "))
+        #expect(shaft.calls.count == 2)                // no link asked for while the service is down
+        service.up = true
+        phone.start()                                  // Try again: nothing is restarted a second time
+        await phone.finished()
+        #expect(phone.state == .link(Self.link, expiresMinutes: 10))
+        #expect(shaft.calls.count == 3)
+        #expect(shaft.calls.last?[0] == "web" && shaft.calls.last?[1] == "pair")
+    }
+
+    @Test func leavingTheSessionWhileReconnectingEndsTheRun() async {
+        let service = Service()
+        let shaft = ScriptedShaft([Self.okLine, Self.okLine, Self.linkLine])
+        // the wait never ends by itself: a sleep that only a cancel breaks
+        let phone = access(shaft, reachable: { false }, sleep: { _ in try await Task.sleep(for: .seconds(60)) })
+        phone.start()
+        for _ in 0..<400 where shaft.calls.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<400 where phone.state != .working("Reconnecting…") { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(phone.state == .working("Reconnecting…"))
+        phone.stop()
+        #expect(phone.state == .idle)
+        await phone.finished()
+        #expect(phone.state == .idle)                  // the cancelled wait did not turn into a failure or a link
+        #expect(shaft.calls.count == 2)
+        _ = service
     }
 }
 #endif

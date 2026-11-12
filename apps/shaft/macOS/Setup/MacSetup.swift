@@ -95,6 +95,7 @@ final class MacSetup {
     /// Decide again what the window shows: the session opened or changed, a pairing came or went.
     func update(_ session: SHAFTSession?) {
         guard let session, let configuration else {
+            stopPhoneAccess()
             route = .session        // SessionRoot shows why the session did not open; MacRoot shows a bad environment
             return
         }
@@ -136,17 +137,7 @@ final class MacSetup {
         // The paired server must say it runs from the checkout `shaft deploy` would run in (its loopback `project`).
         let updater = ServerUpdater(installer: installer, locate: { [weak session] in
             await ServerLocation.of(session?.store?.client)
-        }, reachable: { [weak session] in
-            guard let client = session?.store?.client else { return false }
-            do {
-                _ = try await client.version()
-                return true
-            } catch {
-                // The web service answered (a refusal is an answer); a 5xx is whatever stands in for it meanwhile.
-                guard let status = APIError.from(error)?.status else { return false }
-                return status < 500
-            }
-        })
+        }, reachable: Self.reachability(of: session))
         updater.onFinished = { [weak session] in
             guard let store = session?.store else { return }
             await store.checkCompatibility()
@@ -156,14 +147,39 @@ final class MacSetup {
         return updater
     }
 
+    /// Whether the paired server's web service answers: a refusal is an answer, a 5xx is whatever stands in for it while
+    /// it restarts.
+    private static func reachability(of session: SHAFTSession) -> @MainActor () async -> Bool {
+        { [weak session] in
+            guard let client = session?.store?.client else { return false }
+            do {
+                _ = try await client.version()
+                return true
+            } catch {
+                guard let status = APIError.from(error)?.status else { return false }
+                return status < 500
+            }
+        }
+    }
+
+    /// Leaving the session (closed, unpaired, another one): what "Use SHAFT from iPhone/iPad" runs is cancelled.
+    func stopPhoneAccess() {
+        sharedPhoneAccess?.access.stop()
+        sharedPhoneAccess = nil
+    }
+
     /// "Use SHAFT from iPhone/iPad" for this session (Settings → Services): offered under the same conditions as the
-    /// updater, on this Mac's own install. Kept per session, so closing Settings never cuts it halfway.
+    /// updater, on this Mac's own install. Kept per session; it ends with the session (stopPhoneAccess) or when its rows go away.
     func phoneAccess(for session: SHAFTSession) -> PhoneAccess? {
         guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
-              !SetupGate.setupNeeded(home: configuration.home) else { return nil }
+              !SetupGate.setupNeeded(home: configuration.home) else {
+            stopPhoneAccess()               // unpaired, or not this Mac's own install any more
+            return nil
+        }
         if let sharedPhoneAccess, sharedPhoneAccess.session == ObjectIdentifier(session) { return sharedPhoneAccess.access }
+        stopPhoneAccess()                   // another session's
         guard let installer = installer(for: session) else { return nil }
-        let access = PhoneAccess(installer: installer)
+        let access = PhoneAccess(installer: installer, reachable: Self.reachability(of: session))
         access.onConnected = { [weak session] in await session?.store?.services.load() }
         sharedPhoneAccess = (ObjectIdentifier(session), access)
         return access
@@ -300,6 +316,7 @@ final class MacSetup {
     func stopInstall() {
         generation &+= 1
         if let shared { shared.installer.stop() }
+        stopPhoneAccess()
         installTask?.cancel()
         installTask = nil
         completeTask?.cancel()

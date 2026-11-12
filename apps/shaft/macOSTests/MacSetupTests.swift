@@ -154,6 +154,14 @@ extension MacSetupTests {
             return
         }
         #expect(runner.shaftCalls.isEmpty)
+        // Use SHAFT from iPhone/iPad: one per session, and it ends with the session (closed window, unpairing).
+        let phone = try #require(setup.phoneAccess(for: local))
+        #expect(setup.phoneAccess(for: local) === phone)
+        setup.update(nil)
+        #expect(setup.phoneAccess(for: local) !== phone)
+        let other = try #require(setup.phoneAccess(for: local))
+        #expect(setup.phoneAccess(for: try session("https://other-mac.example.ts.net:8444")) == nil)   // not this Mac's
+        #expect(setup.phoneAccess(for: local) !== other)       // and leaving the session dropped the old one
     }
 }
 

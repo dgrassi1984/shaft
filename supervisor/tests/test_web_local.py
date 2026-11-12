@@ -427,6 +427,84 @@ class LocalInstallTest(LocalTest):
         self.assertNotIn("--force", got["error"])
         self.assertEqual(self.services, [])
 
+    def running_services(self):
+        """Both services already running: `on` is a restart, which the open conversations must hold back."""
+        return mock.patch("supervisor.autonomy.running", return_value=True)
+
+    def test_on_json_restarts_nothing_while_a_conversation_is_open(self):
+        from supervisor import runner
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        for verb in ("api", "web"):
+            with self.subTest(verb=verb), self.fake_tailscale(), self.running_services(), \
+                    mock.patch("supervisor.actions.cli_guard", return_value=""), \
+                    mock.patch.object(api, "instance_names", return_value=["wisp", "bard"]), \
+                    mock.patch.object(runner, "open_conversations",
+                                      side_effect=lambda n: {"t1": "web"} if n == "bard" else {}):
+                code, out, err = self.cli(verb, "on", "--json")
+            got = self.only_json(out)
+            self.assertEqual(code, 1)
+            self.assertEqual(got, {"ok": False, "error": "a conversation is open with bard: try again when it ends"})
+        self.assertEqual(self.services, [])
+
+    def test_no_conversation_opens_between_the_look_and_the_restart_of_on(self):
+        """As deploy's: the check and the restart happen under core.restart_barrier, so a conversation trying to open in
+        between is refused ("restarting, try again") rather than cut by the restart."""
+        from supervisor import runner
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        tried = []
+
+        def try_open():
+            try:
+                with core.admitting():
+                    tried.append("admitted")
+            except core.Restarting as e:
+                tried.append(str(e))
+
+        def looked(name):
+            try_open()                       # right after the look at the open conversations
+            return {}
+
+        def restart(*a):
+            try_open()                       # and right at the restart
+            self.services.append(a)
+            return 0
+        with self.fake_tailscale(), self.running_services(), mock.patch("supervisor.actions.cli_guard", return_value=""), \
+                mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                mock.patch.object(runner, "open_conversations", looked), \
+                mock.patch("supervisor.autonomy.service", side_effect=restart):
+            code, out, err = self.cli("api", "on", "--json")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.services, [("api", "on")])
+        self.assertEqual(tried, [core.RESTARTING_SAID] * 2)
+        with core.admitting():               # the barrier is released afterwards
+            pass
+
+    def test_json_errors_name_no_terminal_command(self):
+        # outside the GUI session (a launchd job): the human message says "run shaft api on in a terminal"
+        gui = "Tailscale GUI failed to start"
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local,me@x\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        with mock.patch.object(api, "_tailscale", side_effect=lambda *a: subprocess.CompletedProcess(
+                a, 0, stdout=gui, stderr="")):
+            code, out, _ = self.cli("api", "on", "--json")
+            human = self.cli("api", "on")
+        got = self.only_json(out)
+        self.assertEqual(code, 1)
+        self.assertNotIn("terminal", got["error"] + "shaft ")
+        self.assertIn("Try again", got["error"])
+        self.assertIn("terminal", human[1] + human[2])          # the terminal's own wording stays
+        # web: Tailscale answers nothing about this Mac's name
+        self.services.clear()
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local,me@x\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        with mock.patch.object(api, "_tailscale", side_effect=lambda *a: subprocess.CompletedProcess(
+                a, 0, stdout="{}", stderr="")):
+            code, out, _ = self.cli("web", "on", "--json")
+            human = self.cli("web", "on")
+        got = self.only_json(out)
+        self.assertEqual(code, 1)
+        self.assertNotIn("tailscale status", got["error"])
+        self.assertIn("Try again", got["error"])
+        self.assertIn("tailscale status", human[1])
+
     def test_json_goes_with_the_tailnet_on_only(self):
         self.assertEqual(self.cli("api", "status", "--json")[0], 2)
         self.assertEqual(self.cli("web", "on", "--local", "--json")[0], 2)

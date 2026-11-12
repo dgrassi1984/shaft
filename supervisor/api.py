@@ -1003,18 +1003,51 @@ def tailnet_problem() -> str | None:
     return None
 
 
+APP_MODE = False     # set while json_verb runs: the message names no terminal command (the Mac app shows it as is)
+
+
+def say(human: str, app: str) -> str:
+    """The wording for whoever reads it: the terminal's, or (--json) the Mac app's, which has no terminal to point at."""
+    return app if APP_MODE else human
+
+
+def service_on(name: str) -> int:
+    """`autonomy.service(name, "on")` for a service conversations run through (api, web): a running one is restarted, and
+    a restart cuts the conversations through it. So, as `shaft deploy` does, the open conversations are looked at and the
+    restart done under core.restart_barrier (none can open in between); with one open, nothing is restarted. A service
+    that is not running yet has nothing to cut."""
+    import contextlib
+    from . import autonomy, runner
+    with contextlib.ExitStack() as stack:
+        if autonomy.running(name):
+            try:
+                stack.enter_context(core.restart_barrier())
+            except TimeoutError as e:
+                print(e)
+                return 1
+            for instance in instance_names():
+                if runner.open_conversations(instance):
+                    print(f"a conversation is open with {instance}: try again when it ends")
+                    return 1
+        return autonomy.service(name, "on")
+
+
 def json_verb(fn) -> int:
     """Run a CLI verb with its prints captured and answer with one JSON line, the Mac app's contract: {"ok": true} (exit
     0) or {"ok": false, "error": <what the verb said>} (exit 1); a crash is an error too, never a traceback."""
     import contextlib
     import io
+    global APP_MODE
     out, err = io.StringIO(), io.StringIO()
+    APP_MODE = True
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = fn()
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e) or type(e).__name__}))
         return 1
+    finally:
+        APP_MODE = False
     said = " ".join(t for t in (err.getvalue().strip(), out.getvalue().strip()) if t)
     if code:
         print(json.dumps({"ok": False, "error": said or f"exit {code}"}))
@@ -1083,7 +1116,7 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
             set_secret_env("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
         if local:
             _add_login(LOCAL_LOGIN)
-            if autonomy.service("api", "on"):
+            if service_on("api"):
                 return 1
             log(f"api on, local only: 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}; no tailscale serve)")
             print(f"\nSHAFT API running on this Mac only (127.0.0.1:{PORT}, not exposed: no Tailscale)\n"
@@ -1098,10 +1131,12 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
         if me:
             _add_login(me)
         elif not allowed_logins() - {LOCAL_LOGIN}:  # no tailnet login yet, and none can be read now
-            print("cannot read your Tailscale login (is Tailscale running?)")
+            print(say("cannot read your Tailscale login (is Tailscale running?)",
+                      "Tailscale did not say who is logged in: open the Tailscale app, make sure you are logged in, "
+                      "then Try again."))
             return 1
         was_running = autonomy.running("api")
-        if autonomy.service("api", "on"):
+        if service_on("api"):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
         if _outside_gui(r):
@@ -1109,8 +1144,11 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
                 log("api restarted; tailscale serve left as it was (its CLI refuses to run outside the GUI session)")
                 print("API restarted; tailscale serve left as it was (its CLI refuses to run outside the GUI session)")
                 return 0
-            message = ("API started but is not exposed on the tailnet because Tailscale's CLI refuses to run "
-                       "outside the GUI session; run shaft api on in a terminal of the logged-in session.")
+            message = say(
+                "API started but is not exposed on the tailnet because Tailscale's CLI refuses to run "
+                "outside the GUI session; run shaft api on in a terminal of the logged-in session.",
+                "The API started but is not on your tailnet yet: Tailscale did not answer from this session. Open the "
+                "Tailscale app, make sure you are logged in, then Try again.")
             print(message, file=sys.stderr)
             log(message)
             return 1

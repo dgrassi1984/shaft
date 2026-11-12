@@ -9,6 +9,7 @@ import Observation
 ///   1. Tailscale's app is in /Applications, else the row says where to get it;
 ///   2. `api on --json`, then `web on --json` (tailnet mode): they add the tailnet login next to the Mac's own and keep
 ///      the Mac's loopback pairing as it is. A refusal shows the server's real message (Tailscale signed out…);
+///      (the web service restarts under the app: it waits, "Reconnecting…", until the service answers again);
 ///   3. `web pair --name iphone --json`: the link, its expiry, and a new one on request.
 /// The work is owned, so closing Settings never cuts it halfway; `stop()` does.
 @MainActor
@@ -38,25 +39,36 @@ public final class PhoneAccess {
 
     @ObservationIgnored private let run: Run
     @ObservationIgnored private let hasTailscale: @MainActor () -> Bool
+    @ObservationIgnored private let reachable: @MainActor () async -> Bool
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     /// Set once the tailnet steps went through: a new link then runs the pairing step alone.
     @ObservationIgnored private var connected = false
+    /// `web on` went through but the restarted web service has not answered yet: Try again waits for it, it does not
+    /// restart anything a second time.
+    @ObservationIgnored private var awaitingService = false
+    /// How long (in 1 s tries) the app waits for the restarted web service to answer.
+    public static let reconnectTries = 90
 
     public init(run: @escaping Run,
+                reachable: @escaping @MainActor () async -> Bool,
                 hasTailscale: @escaping @MainActor () -> Bool = {
                     FileManager.default.fileExists(atPath: PhoneAccess.tailscaleApp.path)
-                }) {
+                },
+                sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.run = run
+        self.reachable = reachable
         self.hasTailscale = hasTailscale
+        self.sleep = sleep
     }
 
     /// The installed server's `shaft`, through the Installer (its Python, its environment).
-    public convenience init(installer: Installer) {
+    public convenience init(installer: Installer, reachable: @escaping @MainActor () async -> Bool) {
         self.init(run: { [weak installer] args in
             guard let installer else { throw CancellationError() }
             return try await installer.shaft(args)
-        })
+        }, reachable: reachable)
     }
 
     public var isBusy: Bool {
@@ -82,9 +94,10 @@ public final class PhoneAccess {
             state = .missingApp
             return
         }
-        begin("Connecting this Mac to your tailnet…") { [weak self] run in
+        begin(awaitingService ? "Reconnecting…" : "Connecting this Mac to your tailnet…") { [weak self] run in
             guard let self else { return }
-            try await self.tailnet(run: run)
+            if !self.awaitingService { try await self.tailnet(run: run) }
+            try await self.reconnect(run: run)
             try await self.makeLink(run: run)
         }
     }
@@ -123,7 +136,25 @@ public final class PhoneAccess {
             _ = try await answer(["\(verb)", "on", "--json"], run: run)
         }
         connected = true
-        await onConnected?()
+        awaitingService = true
+    }
+
+    /// Until the restarted web service answers again; only then is the link asked for.
+    private func reconnect(run: Int) async throws {
+        state = .working("Reconnecting…")
+        for _ in 0..<Self.reconnectTries {
+            if await reachable() {
+                try Task.checkCancellation()
+                guard generation == run else { throw CancellationError() }
+                awaitingService = false
+                await onConnected?()
+                return
+            }
+            try await sleep(.seconds(1))
+            guard generation == run else { throw CancellationError() }
+        }
+        throw Refused(message: "The SHAFT server has not answered since it was set up for Tailscale "
+                      + "(\(Self.reconnectTries) s). Try again; if it keeps failing, restart SHAFT.")
     }
 
     private func makeLink(run: Int) async throws {
