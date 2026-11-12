@@ -128,16 +128,42 @@ class OpenAIToolsTest(Case):
         self.assertEqual(told["role"], "tool")
         self.assertIn("files must be a list", told["content"])
 
-    def test_an_openrouter_reply_without_a_cost_stops_the_hand_off(self):
-        api = Loopback([openai_reply([("list_files", {})], usage={"prompt_tokens": 5, "completion_tokens": 5})])
+    def openrouter(self, *replies):
+        api = Loopback(list(replies))
         self.addCleanup(api.close)
         self.enterContext(mock.patch.object(cloudllm, "OPENROUTER_API", api.url + "/api/v1/chat/completions"))
         self.secrets = {"OPENROUTER_API_KEY": "o"}
         self.use("openrouter/z-ai/glm-5.3")
-        with self.assertRaisesRegex(coder.CoderError, "unpriced"):
-            coder.write(self.root, "kiln", "x")
-        self.assertEqual(len(api.requests), 1)
-        self.assertEqual(self.rows()[-1]["turns"], 1)
+        return api
+
+    def test_an_openrouter_reply_without_a_cost_is_booked_at_the_dearest_catalogue_price(self):
+        """Bug guarded: a reply without usage.cost was booked at nothing ($0), so the daily cap never saw it."""
+        self.openrouter(openai_reply([("list_files", {})], usage={"prompt_tokens": 1000, "completion_tokens": 100}),
+                        openai_reply([("submit", {"files": NEW, "summary": "s"})], usage={"cost": 0.001}))
+        catalogue = {"models": [{"id": "z-ai/glm-5.3", "pricing": {"prompt": "0.000001", "completion": "0.000002"}}],
+                     "endpoints": [{"model_id": "z-ai/glm-5.3", "tag": "novita",
+                                    "pricing": {"prompt": "0.000003", "completion": "0.000004"}}]}
+        from supervisor import consult
+        with mock.patch.object(consult, "_catalogue", return_value=catalogue):
+            files, _, usage = coder.write(self.root, "kiln", "x")
+        self.assertEqual(files, NEW)
+        booked = (1000 * 3.0 + 100 * 4.0) / 1e6                  # the dearest qualifying provider (novita)
+        self.assertGreater(usage["usd"], 0.001)
+        self.assertEqual(usage["usd"], round(booked + 0.001, 4))
+        self.assertEqual(self.rows()[-1]["estimated"], "catalogue price")
+
+    def test_an_unpriceable_reply_books_the_rest_of_the_allowance_and_the_next_hand_off_is_refused(self):
+        """No cost and no price to be had: the rest of today's allowance is booked, so the cap still holds."""
+        api = self.openrouter(openai_reply([("list_files", {})], usage={"prompt_tokens": 5, "completion_tokens": 5}))
+        from supervisor import consult
+        with mock.patch.object(consult, "_catalogue", side_effect=consult.ConsultError(503, "offline")):
+            with self.assertRaisesRegex(coder.CoderError, "rest of today's coding allowance"):
+                coder.write(self.root, "kiln", "x")
+            self.assertEqual(len(api.requests), 1)
+            self.assertGreaterEqual(coder.spent_today("kiln"), coder.DAILY_USD)
+            with self.assertRaisesRegex(coder.CoderError, "already spent"):
+                coder.write(self.root, "kiln", "again")
+        self.assertEqual(len(api.requests), 1)                   # refused before any call
 
     def test_coder_on_custom_is_priced_at_the_declared_price(self):
         api = Loopback([openai_reply([("submit", {"files": NEW, "summary": "s"})],

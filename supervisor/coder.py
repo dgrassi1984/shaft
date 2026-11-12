@@ -16,6 +16,7 @@ Budgets: per run and per day.
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import tempfile
 import time
@@ -198,8 +199,13 @@ def _openai(key: str, messages: list) -> _Turn:
         tin, tout, usd, _ = cloudllm._custom_counts(cloudllm.custom_price(CODER_MODEL), body, usage,
                                                      cloudllm._message_chars(message))
     else:
-        tin, tout = usage.get("prompt_tokens") or 0, usage.get("completion_tokens") or 0
+        tin, tout = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        known = lambda n: isinstance(n, int) and not isinstance(n, bool) and n >= 0
         usd = float(usage["cost"]) if usage.get("cost") is not None else None
+        if usd is None:                                  # the counts an estimate is priced at: the worst when absent
+            tin = tin if known(tin) else math.ceil(len(json.dumps(messages) + json.dumps(TOOLS)) / 3)
+            tout = tout if known(tout) else MAX_OUTPUT
+        tin, tout = (tin if known(tin) else 0), (tout if known(tout) else 0)
     for c in message.get("tool_calls") or []:
         fn = c.get("function") or {}
         if not isinstance(fn.get("arguments"), str):
@@ -218,6 +224,20 @@ def _codex(channel, messages: list) -> _Turn:
         raise CoderError(f"coder call failed: {e.reason}") from None
     choice = reply["choices"][0]
     return _Turn(message=choice["message"], finish=choice["finish_reason"], counts={}, usd=0.0)
+
+
+def _estimate(instance: str, counts: dict, usage: dict) -> float:
+    """What an OpenRouter reply without a cost is booked at, conservatively: its token counts (else the prompt's
+    characters / 3 and the whole output room) at the dearest qualifying provider's catalogue price; with no price
+    to be had, the rest of today's allowance, so no further hand-off is admitted today (the cap still holds)."""
+    from . import consult
+    price = consult.worst_price(CODER_MODEL, cloudllm.OPENROUTER_PROVIDER)
+    if price is not None:
+        usage["estimated"] = usage.get("estimated") or "catalogue price"
+        return (counts["input_tokens"] * price[0] + counts["output_tokens"] * price[1]) / 1e6
+    usage["estimated"] = "rest of the allowance"
+    # one ledger unit (the row keeps 4 places) over the rest: rounding can never leave the day just under the cap
+    return max(DAILY_USD - spent_today(instance) - usage["usd"], 0.0) + 0.0001
 
 
 def _arguments(call: dict) -> dict | None:
@@ -277,10 +297,13 @@ def write(root: Path, instance: str, task: str) -> tuple[list[dict], str, dict]:
             usage["turns"] += 1
             for k, v in turn["counts"].items():
                 usage[k] += v
-            if turn["usd"] is None:                # spent money nobody knows: the cap could not count it
-                raise CoderError(f"{CODER_MODEL} gave no cost for the coder's call: unpriced, so the daily cap "
-                                 f"could not count it; stopped")
+            if turn["usd"] is None:                # OpenRouter gave no cost: never booked as $0
+                turn["usd"] = _estimate(instance, turn["counts"], usage)
             usage["usd"] += turn["usd"]
+            if usage.get("estimated") == "rest of the allowance":
+                raise CoderError(f"{CODER_MODEL} gave no cost for the coder's call and its price is unknown: booked "
+                                 f"the rest of today's coding allowance (${turn['usd']:.4f}) so the cap still holds; "
+                                 f"stopped")
             if turn.get("error"):
                 raise CoderError(turn["error"])
             if turn["finish"] == "refusal":

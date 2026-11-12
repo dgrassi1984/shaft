@@ -293,6 +293,38 @@ class BrokerTest(Case):
                 logged = [c.args[0] for c in self.b._log.call_args_list]
                 self.assertTrue(any("ERROR" in line and "Codex failed: offline" in line for line in logged), logged)
 
+    def test_fallback_none_reaches_the_instance_as_its_model_calls_error(self):
+        """The same, one level up: the instance's own model client (template shaft/llm.py) talking to the real broker
+        handler over loopback. Its retries of the 502 end with the channel failure as the error it raises — what ends
+        the run — and its usage log records it on every attempt. (No harness drives a whole live run on a plan
+        channel; this is the highest level the wiring tests reach.)"""
+        import sys
+        from http.server import ThreadingHTTPServer
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
+        self.addCleanup(sys.path.remove, sys.path[0])
+        from shaft import llm as instance_llm
+        self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", "none"))
+        self.enterContext(mock.patch.object(instance_llm.time, "sleep"))
+        self.b.token, self.b._project_charges = "tok", []
+        self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        usage = self.root / "llm_usage.jsonl"
+        client = instance_llm.Client(f"http://127.0.0.1:{server.server_address[1]}/llm/v1", MODEL, "", 30, usage,
+                                     broker_token="tok")
+        with mock.patch.object(cloudllm, "complete") as cloud:
+            with self.assertRaises(instance_llm.LLMError) as caught:
+                client.complete([{"role": "user", "content": "hi"}], 100, "step")
+        cloud.assert_not_called()
+        self.assertIn("Codex failed: offline", str(caught.exception))
+        self.assertIn("SHAFT_CODEX_FALLBACK_MODEL=none", str(caught.exception))
+        rows = [json.loads(line) for line in usage.read_text().splitlines()]
+        self.assertEqual(len(rows), 3)                                   # the first try and both retries
+        self.assertTrue(all("Codex failed: offline" in r["error"] for r in rows))
+        self.channel.complete.assert_called_once()                       # the channel stays down after the first
+
     def test_codex_closed_is_shutdown_without_false_outage_or_paid_fallback(self):
         for streaming in (False, True):
             with self.subTest(stream=streaming):

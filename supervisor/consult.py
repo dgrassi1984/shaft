@@ -162,55 +162,77 @@ def _direct(name: str, secrets: dict | None) -> dict:
 def menu(instance: str, fetch: bool = True, secrets: dict | None = None) -> list[dict]:
     """The instance's consult menu: SHAFT_CONSULT_MODELS, each routed by its own prefix — openrouter/… priced from
     OpenRouter's catalogue, custom/… from SHAFT_CUSTOM_PRICES, codex/… on the ChatGPT plan (no dollars) — less the
-    instance's own custom/ or codex/ model. `secrets`: the keys the caller holds (the broker's; default the .env)."""
+    instance's own custom/ or codex/ model. `secrets`: the keys the caller holds (the broker's; default the .env).
+    The catalogue is OpenRouter's alone: when it cannot be had, only the openrouter/ entries are off (with why);
+    custom/ and codex/ entries never wait on it nor fail with it."""
     from . import planchannel
     own = _own_model(instance) if any(n.startswith(DIRECT) for n in MODELS) else None
     names = [n for n in MODELS if not (n.startswith(DIRECT) and n == own)]
-    # The catalogue is OpenRouter's: an install whose menu has no OpenRouter model never waits on it (nor fails on it).
-    catalogue = _catalogue(fetch) if any(not n.startswith(DIRECT) and not planchannel.prefix(n) for n in names) else {}
-    if catalogue is None:   # the envelope before the first catalogue has loaded
-        return [_direct(name, secrets) if name.startswith(DIRECT) else
-                {"model": name, "in_per_m": None, "out_per_m": None, "available": False,
-                 "why": "prices not loaded yet (they load in the background; ask again in a minute)"} for name in names]
-    models = {m["id"]: m for m in catalogue.get("models", [])}
+    catalogue, missing = {}, ""
+    if any(not n.startswith(DIRECT) and not planchannel.prefix(n) for n in names):
+        try:
+            catalogue = _catalogue(fetch)
+        except ConsultError as e:
+            catalogue, missing = None, str(e)
+        if catalogue is None and not missing:   # the envelope before the first catalogue has loaded
+            missing = "prices not loaded yet (they load in the background; ask again in a minute)"
     result = []
     for name in names:
         if name.startswith(DIRECT):
             result.append(_direct(name, secrets))
-            continue
-        if planchannel.prefix(name):
+        elif planchannel.prefix(name):
             result.append({"model": name, "in_per_m": None, "out_per_m": None, "available": False,
                            "why": f"consults require an OpenRouter, custom/ or codex/ model; "
                                   f"{name.partition('/')[0]}/ is not supported"})
-            continue
-        model = models.get(name.removeprefix("openrouter/"), {})
-        ids = {model.get("id"), model.get("canonical_slug")} - {None}
-        endpoints = [e for e in catalogue.get("endpoints", []) if e.get("model_id") in ids]
-        if PROVIDER.get("only"):
-            endpoints = [e for e in endpoints if e.get("tag") in PROVIDER["only"]
-                         or e.get("provider_name") in PROVIDER["only"]]
-        endpoints = [e for e in endpoints if e.get("tag") not in PROVIDER.get("ignore", [])
-                     and e.get("provider_name") not in PROVIDER.get("ignore", [])]
-        pricing = model.get("pricing") or {}
-        pin, pout = _price(pricing.get("prompt")), _price(pricing.get("completion"))
-        # The menu shows the model's list price (what a call usually costs); the reservation takes the most
-        # expensive qualifying provider, since OpenRouter may route to any of them. Showing that worst price made
-        # z-ai/glm-5.3 look as dear as Opus (7.43/8.14 against 0.07/1.40; a real call cost $0.000024, 2026-10-27).
-        rin, rout = pin, pout
-        for endpoint in endpoints:
-            prices = endpoint.get("pricing") or {}
-            a, b = _price(prices.get("prompt")), _price(prices.get("completion"))
-            if a is None or b is None:
-                rin = rout = None
-                break
-            if rin is not None and rout is not None:
-                rin, rout = max(rin, a), max(rout, b)
-        why = "no qualifying zero-retention provider under SHAFT_CONSULT_PROVIDER" if not endpoints else ""
-        if None in (pin, pout, rin, rout):
-            why = "unknown price; the daily cap cannot count this model"
-        result.append({"model": name, "in_per_m": pin, "out_per_m": pout, "reserve_in_per_m": rin,
-                       "reserve_out_per_m": rout, "available": not why, "why": why})
+        elif catalogue is None:
+            result.append({"model": name, "in_per_m": None, "out_per_m": None, "available": False, "why": missing})
+        else:
+            result.append(_openrouter_item(name, catalogue))
     return result
+
+
+def _openrouter_item(name: str, catalogue: dict, policy: dict | None = None) -> dict:
+    """An openrouter/ menu item from OpenRouter's catalogue, under `policy` (default SHAFT_CONSULT_PROVIDER)."""
+    policy = PROVIDER if policy is None else policy
+    models = {m["id"]: m for m in catalogue.get("models", [])}
+    model = models.get(name.removeprefix("openrouter/"), {})
+    ids = {model.get("id"), model.get("canonical_slug")} - {None}
+    endpoints = [e for e in catalogue.get("endpoints", []) if e.get("model_id") in ids]
+    if policy.get("only"):
+        endpoints = [e for e in endpoints if e.get("tag") in policy["only"]
+                     or e.get("provider_name") in policy["only"]]
+    endpoints = [e for e in endpoints if e.get("tag") not in policy.get("ignore", [])
+                 and e.get("provider_name") not in policy.get("ignore", [])]
+    pricing = model.get("pricing") or {}
+    pin, pout = _price(pricing.get("prompt")), _price(pricing.get("completion"))
+    # The menu shows the model's list price (what a call usually costs); the reservation takes the most
+    # expensive qualifying provider, since OpenRouter may route to any of them. Showing that worst price made
+    # z-ai/glm-5.3 look as dear as Opus (7.43/8.14 against 0.07/1.40; a real call cost $0.000024, 2026-10-27).
+    rin, rout = pin, pout
+    for endpoint in endpoints:
+        prices = endpoint.get("pricing") or {}
+        a, b = _price(prices.get("prompt")), _price(prices.get("completion"))
+        if a is None or b is None:
+            rin = rout = None
+            break
+        if rin is not None and rout is not None:
+            rin, rout = max(rin, a), max(rout, b)
+    why = "no qualifying zero-retention provider under SHAFT_CONSULT_PROVIDER" if not endpoints else ""
+    if None in (pin, pout, rin, rout):
+        why = "unknown price; the daily cap cannot count this model"
+    return {"model": name, "in_per_m": pin, "out_per_m": pout, "reserve_in_per_m": rin,
+            "reserve_out_per_m": rout, "available": not why, "why": why}
+
+
+def worst_price(name: str, policy: dict) -> tuple[float, float] | None:
+    """The dearest qualifying provider's (input, output) dollars per million tokens for an openrouter/ model under
+    `policy`, from OpenRouter's catalogue — what a reservation takes; None when it cannot be known."""
+    try:
+        item = _openrouter_item(name, _catalogue(), policy)
+    except ConsultError:
+        return None
+    rin, rout = item["reserve_in_per_m"], item["reserve_out_per_m"]
+    return None if rin is None or rout is None else (rin, rout)
 
 
 def envelope(instance: str, secrets: dict | None = None) -> dict:
@@ -269,9 +291,12 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     if body.get("modalities"):
         raise ConsultError(400, "consults answer in text only (no modalities)")
     _text_only(body.get("messages"))
-    item = next((m for m in menu(instance, secrets=secrets) if m["model"] == model), None)
-    if item is None:
-        raise ConsultError(403, f"{model} is this instance's own model: a consult asks another model")
+    if str(model).startswith(DIRECT):          # resolved on its own: never waits on OpenRouter's catalogue
+        if model == _own_model(instance):
+            raise ConsultError(403, f"{model} is this instance's own model: a consult asks another model")
+        item = _direct(model, secrets)
+    else:                                      # a missing catalogue refuses an OpenRouter consult (503), as before
+        item = _openrouter_item(model, _catalogue())
     if not item["available"]:
         raise ConsultError(403, f"{model}: {item['why']}")
     provider = "codex" if model.startswith("codex/") else "custom" if model.startswith("custom/") else "openrouter"

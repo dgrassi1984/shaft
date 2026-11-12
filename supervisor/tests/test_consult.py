@@ -384,6 +384,28 @@ class ConsultTest(unittest.TestCase):
         with self.assertRaisesRegex(consult.ConsultError, "SHAFT_CUSTOM_PRICES"):
             self.complete({**body, "model": "custom/unpriced"})
 
+    def test_a_mixed_menu_keeps_custom_consults_when_openrouters_catalogue_fails(self):
+        """custom/ and codex/ consults never depend on OpenRouter: with its catalogue unreachable (no cache, offline),
+        only the openrouter/ entries are off, with the reason, and a custom/ consult still answers."""
+        stub = self.custom()
+        self.enterContext(mock.patch.object(consult, "MODELS", [self.model, "custom/other"]))
+
+        def offline(req, *a, **k):
+            if getattr(req, "full_url", req).startswith(stub.url):
+                return REAL_URLOPEN(req, *a, **k)
+            raise OSError("offline")
+        self.urlopen.side_effect = offline
+        menu = {m["model"]: m for m in consult.menu("wisp", secrets=self.b.secrets)}
+        self.assertTrue(menu["custom/other"]["available"])
+        self.assertFalse(menu[self.model]["available"])
+        self.assertIn("no cached prices", menu[self.model]["why"])
+        reply = self.complete({"model": "custom/other", "messages": [{"role": "user", "content": "hi"}],
+                               "max_tokens": 100})
+        self.assertEqual(reply["choices"][0]["message"]["content"], "from custom")
+        with self.assertRaisesRegex(consult.ConsultError, "no cached prices") as caught:   # OpenRouter's own: 503
+            self.complete(self.body)
+        self.assertEqual(caught.exception.status, 503)
+
     def test_custom_consult_reserves_the_declared_worst_case(self):
         self.custom()
         with mock.patch.object(consult, "daily_cap", return_value=0.0001):

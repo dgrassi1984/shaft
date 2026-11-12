@@ -169,7 +169,8 @@ claude-…, openrouter/…, a priced custom/… or a codex/… plan model) reads
 read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
 the gate passes; code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
 `SHAFT_CODER_DAILY_USD` (5) per instance per day. Admission blocks new tasks once
-recorded daily spend reaches the allowance. An admitted task can make up to 16 model calls
+recorded daily spend reaches the allowance. An OpenRouter reply without a cost is booked at the dearest
+qualifying provider's catalogue price; with no price to be had, at the rest of the day's allowance. An admitted task can make up to 16 model calls
 and can exceed that allowance (`supervisor/coder.py`, `MAX_TURNS`, `write`).
 Commits and `self/stats.md` record what was delegated.
 
