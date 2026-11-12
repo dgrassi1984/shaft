@@ -24,6 +24,9 @@ __pycache__/
 /.browsers.new/
 /.browsers.old/
 
+# uv and the Python 3.12 the Mac app's setup installs for the server (~/SHAFT/.runtime)
+/.runtime/
+
 # BEGIN agent-workflows
 # Generated skill wrappers — do not commit. Refresh with:
 #   python3 ~/Development/agent-workflows/scripts/gen_agent_wrappers.py --repo .
