@@ -32,6 +32,25 @@ INSTANCES = PROJECT / "instances"
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
+# The Mac app reads a --json verb's errors as they are and shows them: there is no terminal to point at, so they name
+# what to do in the app. A verb answering --json runs under app_wording(); say() picks the wording for its reader.
+APP_MODE = False
+
+
+def say(human: str, app: str) -> str:
+    """The wording for whoever reads it: the terminal's, or (a --json verb, the Mac app) the app's."""
+    return app if APP_MODE else human
+
+
+@contextlib.contextmanager
+def app_wording(on: bool = True):
+    """Messages said inside it use the app's wording (say) when `on`: a --json verb's whole run."""
+    global APP_MODE
+    before, APP_MODE = APP_MODE, APP_MODE or bool(on)
+    try:
+        yield
+    finally:
+        APP_MODE = before
 # The mind: what an instance remembers and writes for itself. Never in the project's git (which can be pushed):
 # versioned in its private mind store (supervisor/mind.py).
 MIND_PATHS = ("self", "memory", "notes", "inbox")

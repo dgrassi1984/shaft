@@ -89,7 +89,7 @@ class LoopbackAppTest(LocalTest):
                 mock.patch.object(web_chat, "send", wraps=web_chat.send) as send:
             r = self.send_local()
         err = self.error(r, 401, "unpaired")
-        self.assertIn("shaft web pair --local", err["message"])
+        self.assertIn("pair it again on the screen SHAFT shows", err["message"])   # the app's terms (final review I6)
         self.assertEqual(send.call_count, 0)
         self.assertNotIn(self.dev, web.devices())
 
@@ -107,7 +107,8 @@ class LoopbackAppTest(LocalTest):
         link = web.new_pairing("other")
         r = self.local_api("/app/v1/pair", "POST", data={"link": link, "platform": "macos"}, bearer=False)
         err = self.error(r, 403, "local_pair")
-        self.assertIn("shaft web pair --local", err["message"])
+        self.assertIn("it pairs itself", err["message"])
+        self.assertNotIn("shaft ", err["message"])
         self.assertIsNotNone(web._pairing(link.split("t=")[1]), "a refused local pair must not spend the link")
 
     def test_tailnet_requests_still_need_the_login_with_the_switch_on(self):
@@ -262,8 +263,10 @@ class LocalInstallTest(LocalTest):
         with mock.patch.object(web, "allowed_logins", return_value={ME}):
             code, out, _ = self.cli("web", "pair", "--local", "--json")
         self.assertEqual(code, 1)
-        self.assertIn("shaft api on --local", json.loads(out)["error"])
+        self.assertEqual(json.loads(out)["error"], "The API on this Mac is not set up for this app yet: run Install again.")
         self.assertEqual(set(web.devices()), before)
+        with mock.patch.object(web, "allowed_logins", return_value={ME}):
+            self.assertIn("shaft api on --local", self.cli("web", "pair", "--local")[2])     # the terminal's words
 
     # -- shaft web pair --local --------------------------------------------------------------------------------------
     def test_pair_local_json_prints_a_working_bearer(self):
@@ -292,7 +295,8 @@ class LocalInstallTest(LocalTest):
         self.assertEqual(code, 1)
         lines = out.splitlines()
         self.assertEqual(len(lines), 1, out)
-        self.assertIn("shaft web on --local", json.loads(lines[0])["error"])
+        self.assertIn("run Install again", json.loads(lines[0])["error"])
+        self.assertNotIn("shaft ", json.loads(lines[0])["error"])
         self.assertEqual(set(web.devices()), before)
 
     def test_pair_local_storage_failure_is_a_json_refusal_not_a_traceback(self):
@@ -431,20 +435,140 @@ class LocalInstallTest(LocalTest):
         """Both services already running: `on` is a restart, which the open conversations must hold back."""
         return mock.patch("supervisor.autonomy.running", return_value=True)
 
-    def test_on_json_restarts_nothing_while_a_conversation_is_open(self):
+    def test_on_json_restarts_nothing_while_an_instance_is_replying(self):
+        """Final review I2: refused only while a reply is being written (runner.replying), naming the instance and when
+        it ends; the app's wording names no --force."""
         from supervisor import runner
         (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
         for verb in ("api", "web"):
             with self.subTest(verb=verb), self.fake_tailscale(), self.running_services(), \
                     mock.patch("supervisor.actions.cli_guard", return_value=""), \
                     mock.patch.object(api, "instance_names", return_value=["wisp", "bard"]), \
-                    mock.patch.object(runner, "open_conversations",
-                                      side_effect=lambda n: {"t1": "web"} if n == "bard" else {}):
+                    mock.patch.object(runner, "replying", side_effect=lambda n: ["api-1-2"] if n == "bard" else []):
                 code, out, err = self.cli(verb, "on", "--json")
             got = self.only_json(out)
             self.assertEqual(code, 1)
-            self.assertEqual(got, {"ok": False, "error": "a conversation is open with bard: try again when it ends"})
+            self.assertEqual(got, {"ok": False, "error": "bard is replying in a conversation right now: try again when "
+                                                         "that reply finishes."})
         self.assertEqual(self.services, [])
+
+    def test_an_open_but_quiet_conversation_holds_no_restart(self):
+        """Final review I2 (bug on aa5a7b51): `api on`, `api restart` and `web on` refused whenever a conversation was
+        open — which lasts SHAFT_IDLE_MINUTES after any chat — so every restart was refused for minutes after a chat.
+        Open but not replying: the restart goes ahead."""
+        from supervisor import runner
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        for argv in (("api", "on", "--local"), ("api", "restart"), ("web", "on", "--local"), ("web", "restart")):
+            self.services.clear()
+            with self.subTest(argv=argv), self.running_services(), \
+                    mock.patch("supervisor.autonomy.installed", return_value=True), \
+                    mock.patch("supervisor.actions.cli_guard", return_value=""), \
+                    mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                    mock.patch.object(runner, "open_conversations", return_value={"t1": "api"}), \
+                    mock.patch.object(runner, "replying", return_value=[]):
+                code, out, err = self.cli(*argv)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.services, [(argv[0], "on")])
+
+    def test_force_restarts_while_replying_but_still_holds_the_barrier(self):
+        """Final review I2 (bug on aa5a7b51): --force was accepted and ignored. Forced, the replying check is skipped;
+        the restart still happens under core.restart_barrier (no conversation opens meanwhile)."""
+        from supervisor import runner
+        admitted = []
+
+        def restart(*a):
+            try:
+                with core.admitting():
+                    admitted.append("admitted")
+            except core.Restarting:
+                admitted.append("held")
+            self.services.append(a)
+            return 0
+        for argv in (("api", "restart", "--force"), ("web", "restart", "--force"), ("api", "restart", "--force", "--json"),
+                     ("web", "restart", "--force", "--json")):
+            self.services.clear()
+            admitted.clear()
+            with self.subTest(argv=argv), self.running_services(), \
+                    mock.patch("supervisor.autonomy.installed", return_value=True), \
+                    mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                    mock.patch.object(runner, "replying", return_value=["api-1-2"]), \
+                    mock.patch("supervisor.autonomy.service", side_effect=restart):
+                code, out, err = self.cli(*argv)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(self.services, [(argv[0], "on")])
+                self.assertEqual(admitted, ["held"])
+
+    def test_web_restart_keeps_its_mode_and_refuses_when_not_installed(self):
+        """Final review C2: `shaft web restart` restarts the installed service as it is (no Tailscale, no setting
+        written), refused while replying and when the service is not installed."""
+        from supervisor import runner
+        settings_before = (self.sup / "settings.env").read_text() if (self.sup / "settings.env").exists() else None
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                mock.patch.object(runner, "replying", return_value=[]):
+            code, out, err = self.cli("web", "restart", "--json")             # api._tailscale raises if called
+        self.assertEqual((code, self.only_json(out)), (0, {"ok": True}), out + err)
+        self.assertEqual(self.services, [("web", "on")])
+        self.assertEqual((self.sup / "settings.env").read_text() if (self.sup / "settings.env").exists() else None,
+                         settings_before)
+        self.services.clear()
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                mock.patch.object(runner, "replying", return_value=["web-1"]):
+            code, out, err = self.cli("web", "restart")
+        self.assertEqual(code, 1)
+        self.assertIn("wisp is replying in a conversation: try again when that reply finishes, or add --force", out)
+        with mock.patch("supervisor.autonomy.installed", return_value=False):
+            code, out, err = self.cli("web", "restart")
+            jcode, jout, _ = self.cli("web", "restart", "--json")
+        self.assertEqual((code, jcode), (1, 1))
+        self.assertIn("not installed: run shaft web on (or shaft web on --local) first", out)
+        self.assertNotIn("shaft ", self.only_json(jout)["error"])
+        self.assertEqual(self.services, [])
+
+    def test_telegram_on_and_restart_go_through_the_restart_barrier(self):
+        """Final review I4 (bug on aa5a7b51): `telegram on` restarted its service outside the barrier, cutting a reply
+        Telegram was relaying. Now refused while replying, forced past it, and always under the barrier."""
+        from supervisor import runner, telegram
+        admitted = []
+
+        def restart(*a):
+            try:
+                with core.admitting():
+                    admitted.append("admitted")
+            except core.Restarting:
+                admitted.append("held")
+            self.services.append(a)
+            return 0
+        with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch.object(telegram, "tokens", return_value={"wisp": "t"}), \
+                mock.patch.object(api, "instance_names", return_value=["wisp"]), \
+                mock.patch("supervisor.autonomy.service", side_effect=restart):
+            with mock.patch.object(runner, "replying", return_value=["telegram-1"]):
+                code, out, _ = self.cli("telegram", "on")
+                self.assertEqual(code, 1)
+                self.assertIn("wisp is replying", out)
+                self.assertEqual(self.services, [])
+                self.assertEqual(self.cli("telegram", "restart", "--force")[0], 0)
+            with mock.patch.object(runner, "replying", return_value=[]):
+                self.assertEqual(self.cli("telegram", "on")[0], 0)
+        self.assertEqual(self.services, [("telegram", "on"), ("telegram", "on")])
+        self.assertEqual(admitted, ["held", "held"])
+
+    def test_api_on_adds_no_second_tailnet_login(self):
+        """Final review M3 (bug on aa5a7b51): `shaft api on` on an existing install added whichever Tailscale login was
+        current to SHAFT_API_LOGINS. A login is added only when the list has no tailnet login yet."""
+        from supervisor import runner
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local,owner@x\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        with self.fake_tailscale(login="someone-else@y"), mock.patch.object(runner, "replying", return_value=[]):
+            code, out, err = self.cli("api", "on")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("SHAFT_API_LOGINS=operator@local,owner@x\n", (self.project / ".env").read_text())
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        with self.fake_tailscale(login="owner@x"), mock.patch.object(runner, "replying", return_value=[]):
+            code, out, err = self.cli("api", "on")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("SHAFT_API_LOGINS=operator@local,owner@x\n", (self.project / ".env").read_text())
 
     def test_no_conversation_opens_between_the_look_and_the_restart_of_on(self):
         """As deploy's: the check and the restart happen under core.restart_barrier, so a conversation trying to open in
@@ -461,8 +585,8 @@ class LocalInstallTest(LocalTest):
                 tried.append(str(e))
 
         def looked(name):
-            try_open()                       # right after the look at the open conversations
-            return {}
+            try_open()                       # right after the look at the replies running
+            return []
 
         def restart(*a):
             try_open()                       # and right at the restart
@@ -470,7 +594,7 @@ class LocalInstallTest(LocalTest):
             return 0
         with self.fake_tailscale(), self.running_services(), mock.patch("supervisor.actions.cli_guard", return_value=""), \
                 mock.patch.object(api, "instance_names", return_value=["wisp"]), \
-                mock.patch.object(runner, "open_conversations", looked), \
+                mock.patch.object(runner, "replying", looked), \
                 mock.patch("supervisor.autonomy.service", side_effect=restart):
             code, out, err = self.cli("api", "on", "--json")
         self.assertEqual(code, 0, out + err)
@@ -518,17 +642,16 @@ class LocalInstallTest(LocalTest):
         self.assertEqual(self.services, [("api", "on")])               # launchd reloads the same plist
         self.assertEqual((self.project / ".env").read_text(), env)
 
-    def test_api_restart_restarts_nothing_while_a_conversation_is_open(self):
+    def test_api_restart_restarts_nothing_while_an_instance_is_replying(self):
         from supervisor import runner
         with self.running_services(), mock.patch("supervisor.autonomy.installed", return_value=True), \
                 mock.patch("supervisor.actions.cli_guard", return_value=""), \
                 mock.patch.object(api, "instance_names", return_value=["wisp", "bard"]), \
-                mock.patch.object(runner, "open_conversations",
-                                  side_effect=lambda n: {"t1": "web"} if n == "bard" else {}):
+                mock.patch.object(runner, "replying", side_effect=lambda n: ["web-1"] if n == "bard" else []):
             code, out, err = self.cli("api", "restart", "--json")
         self.assertEqual(code, 1)
-        self.assertEqual(self.only_json(out), {"ok": False,
-                                               "error": "a conversation is open with bard: try again when it ends"})
+        self.assertEqual(self.only_json(out), {"ok": False, "error": "bard is replying in a conversation right now: try "
+                                                                     "again when that reply finishes."})
         self.assertEqual(self.services, [])
 
     def test_api_restart_of_a_service_not_installed_is_refused(self):

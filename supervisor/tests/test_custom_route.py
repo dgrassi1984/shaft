@@ -359,3 +359,31 @@ class SecretTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WholeJSONStreamTest(Case):
+    """Final review I5 (bug on aa5a7b51): an endpoint that ignores `stream` and answers application/json passed the
+    provider Test (a buffered call), then every instance reply read as an empty stream — the welcome failed "empty
+    answer twice" — and was charged as an estimate. The JSON reply is now the whole stream, priced from its usage."""
+
+    def test_a_json_answer_to_a_stream_request_is_one_complete_chunk_priced_from_its_usage(self):
+        self.stub.reply = chat("hello world", {"prompt_tokens": 40, "completion_tokens": 7})
+        lines = list(cloudllm.custom_stream("demo", self.body(stream=True, max_tokens=300), {"SHAFT_CUSTOM_API_KEY": KEY}))
+        chunks = [json.loads(line[5:]) for line in lines if line.startswith(b"data:") and b"[DONE]" not in line]
+        said = "".join((c.get("delta") or {}).get("content") or "" for chunk in chunks for c in chunk.get("choices") or [])
+        self.assertEqual(said, "hello world")
+        self.assertIn(b"data: [DONE]\n", lines)
+        self.assertEqual([c["choices"][0]["finish_reason"] for c in chunks if c.get("choices")][-1], "stop")
+        (row,) = self.rows()
+        self.assertEqual((row["input_tokens"], row["output_tokens"]), (40, 7))
+        self.assertAlmostEqual(row["usd"], (40 * 2.0 + 7 * 8.0) / 1e6)
+        self.assertFalse(row.get("estimated"))
+
+    def test_a_json_answer_without_a_reply_is_an_error_chunk_and_costs_nothing(self):
+        self.stub.reply = {"error": {"message": "model not loaded"}}
+        lines = list(cloudllm.custom_stream("demo", self.body(stream=True), {"SHAFT_CUSTOM_API_KEY": KEY}))
+        text = b"".join(lines).decode()
+        self.assertIn("model not loaded", json.loads(text.split("data:", 1)[1])["error"]["message"])
+        (row,) = self.rows()
+        self.assertEqual(row["usd"], 0.0)
+        self.assertIn("model not loaded", row["error"])

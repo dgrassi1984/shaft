@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from . import cloudllm, planchannel
+from . import cloudllm, core, planchannel
 from .core import NETWORK_ERRORS, log as supervisor_log, secrets_env
 
 API = "https://api.anthropic.com/v1/messages"
@@ -91,7 +91,8 @@ def available(model: str, secrets: dict | None = None) -> str | None:
         if model not in codexcli.MODELS:
             return f"{model} is not one of SHAFT_CODEX_MODELS ({', '.join(codexcli.MODELS)})"
         if not (Path(codexcli.HOME).expanduser() / "auth.json").is_file():
-            return "Codex login missing: run shaft codex login"
+            return core.say("Codex login missing: run shaft codex login",
+                            "Codex is not signed in: sign in with ChatGPT on the Model step")
         if not os.access(codexcli.BIN, os.X_OK):
             return f"no Codex CLI at {codexcli.BIN} (SHAFT_CODEX_BIN)"
         return None
@@ -174,6 +175,11 @@ def _claude(model, system, messages, max_tokens, effort, schema, log) -> Answer:
     usage, stop = data.get("usage") or {}, data.get("stop_reason")
     said = data.get("model") or model
     usd = cloudllm.usd(said, cloudllm.billed(usage))
+    if usd is None and said != model and (usd := cloudllm.usd(model, cloudllm.billed(usage))) is not None:
+        # A server-side fallback answered under an id PRICES does not know: priced as the model asked for, and marked,
+        # never left unpriced (an unpriced call is one the daily budgets cannot count).
+        usage = {**usage, "priced_as": model}
+        supervisor_log(f"modelcall: {said} (answering for {model}) has no price: priced as {model}")
     seconds = time.monotonic() - started
     if stop == "refusal":
         log(Call(said, usage, usd, seconds, "refusal", stop))

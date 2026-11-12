@@ -27,6 +27,7 @@ ANSWER = {"verdict": "yes", "score": 3.5, "notes": ["fine"]}
 class FakeClaude:
     def __init__(self):
         self.requests = []
+        self.answer_model = None      # the model id the answer names (a server-side fallback's), else the one asked
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -36,7 +37,7 @@ class FakeClaude:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append(body)
-                out = json.dumps({"model": body["model"], "stop_reason": "end_turn",
+                out = json.dumps({"model": fake.answer_model or body["model"], "stop_reason": "end_turn",
                                   "content": [{"type": "text", "text": json.dumps(ANSWER)}],
                                   "usage": {"input_tokens": 1000, "output_tokens": 100}}).encode()
                 self.send_response(200)

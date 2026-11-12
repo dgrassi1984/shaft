@@ -1003,19 +1003,17 @@ def tailnet_problem() -> str | None:
     return None
 
 
-APP_MODE = False     # set while json_verb runs: the message names no terminal command (the Mac app shows it as is)
+say = core.say      # the terminal's wording, or (json_verb: the Mac app) the app's; core.app_wording sets which
 
 
-def say(human: str, app: str) -> str:
-    """The wording for whoever reads it: the terminal's, or (--json) the Mac app's, which has no terminal to point at."""
-    return app if APP_MODE else human
-
-
-def service_on(name: str) -> int:
-    """`autonomy.service(name, "on")` for a service conversations run through (api, web): a running one is restarted, and
-    a restart cuts the conversations through it. So, as `shaft deploy` does, the open conversations are looked at and the
-    restart done under core.restart_barrier (none can open in between); with one open, nothing is restarted. A service
-    that is not running yet has nothing to cut."""
+def service_on(name: str, force: bool = False) -> int:
+    """`autonomy.service(name, "on")` for a service conversations reply through (api, web, telegram): a running one is
+    restarted, which cuts a reply still being written. So, as `shaft deploy` does, the restart is done under
+    core.restart_barrier (no conversation opens in between), and while an instance is replying (runner.replying: the
+    reply the API, the web chat or Telegram registered while it waits for or holds the instance) nothing is restarted.
+    A conversation that is open but quiet is not held: it lasts SHAFT_IDLE_MINUTES after its last message, and its next
+    message simply reaches the restarted service. `force` (--force, the panels' Force) skips the replying check, never
+    the barrier. A service that is not running yet has nothing to cut."""
     import contextlib
     from . import autonomy, runner
     with contextlib.ExitStack() as stack:
@@ -1025,24 +1023,28 @@ def service_on(name: str) -> int:
             except TimeoutError as e:
                 print(e)
                 return 1
-            for instance in instance_names():
-                if runner.open_conversations(instance):
-                    print(f"a conversation is open with {instance}: try again when it ends")
+            for instance in [] if force else instance_names():
+                if runner.replying(instance):
+                    print(say(f"{instance} is replying in a conversation: try again when that reply finishes, or add "
+                              f"--force (the reply is cut off)",
+                              f"{instance} is replying in a conversation right now: try again when that reply "
+                              f"finishes."))
                     return 1
         return autonomy.service(name, "on")
 
 
-def restart() -> int:
+def restart(force: bool = False) -> int:
     """`shaft api restart`: restart the installed com.shaft.api in its current mode — tailnet, local or both, as `api on`
     left it. It never runs `tailscale serve` and changes no login and no key, so a local-only Mac's restart needs no
-    Tailscale and a restart never exposes the API on the tailnet. Under the same barrier as `api on` (service_on): with
-    a conversation open, nothing is restarted. Not installed: refused, naming the verb that installs it."""
+    Tailscale and a restart never exposes the API on the tailnet. Under the same barrier as `api on` (service_on): while
+    an instance is replying, nothing is restarted unless forced. Not installed: refused, naming the verb that installs
+    it."""
     from . import autonomy
     if not autonomy.installed("api"):
         print(say("the api service is not installed: run shaft api on (or shaft api on --local) first",
                   "The API service is not installed on this Mac, so there is nothing to restart."))
         return 1
-    if service_on("api"):
+    if service_on("api", force):
         return 1
     log("api restarted in its current mode (no tailscale serve; logins and keys unchanged)")
     print("API restarted")
@@ -1054,17 +1056,13 @@ def json_verb(fn) -> int:
     0) or {"ok": false, "error": <what the verb said>} (exit 1); a crash is an error too, never a traceback."""
     import contextlib
     import io
-    global APP_MODE
     out, err = io.StringIO(), io.StringIO()
-    APP_MODE = True
     try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with core.app_wording(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = fn()
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e) or type(e).__name__}))
         return 1
-    finally:
-        APP_MODE = False
     said = " ".join(t for t in (err.getvalue().strip(), out.getvalue().strip()) if t)
     if code:
         print(json.dumps({"ok": False, "error": said or f"exit {code}"}))
@@ -1093,9 +1091,9 @@ def _add_login(login: str) -> None:
         set_secret_env("SHAFT_API_LOGINS", ",".join([*logins, login]))
 
 
-def command(action: str, local: bool = False, as_json: bool = False) -> int:
+def command(action: str, local: bool = False, as_json: bool = False, force: bool = False) -> int:
     """`shaft api on` creates the keys (SHAFT_API_KEY, SHAFT_INBOX_KEY) if missing, adds your Tailscale login to
-    SHAFT_API_LOGINS, installs the service and exposes it with `tailscale serve`. `shaft api on --local` does the same
+    SHAFT_API_LOGINS when it has no tailnet login yet, installs the service and exposes it with `tailscale serve`. `shaft api on --local` does the same
     without Tailscale: it adds LOCAL_LOGIN instead and exposes nothing (the Mac app on this Mac pairs with
     `shaft web pair --local`). Logins are merged, never replaced. `on --json` (the Mac app's "Use SHAFT from iPhone/iPad")
     answers with one JSON line instead of the prose. `shaft api restart` restarts the installed service as it is
@@ -1105,14 +1103,14 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
         if action not in ("on", "restart"):
             print(f"--json goes with on or restart, not {action}", file=sys.stderr)
             return 2
-        return json_verb(lambda: command(action, local))
+        return json_verb(lambda: command(action, local, force=force))
     if local and action != "on":
         print(f"--local goes with on only (shaft api on --local), not {action}", file=sys.stderr)
         return 2
     if action == "serve":
         return serve()
     if action == "restart":
-        return restart()
+        return restart(force)
     if action == "key":
         key = secrets_env().get("SHAFT_API_KEY")
         print(key or "no key yet — run: shaft api on")
@@ -1136,27 +1134,31 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
             set_secret_env("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
         if local:
             _add_login(LOCAL_LOGIN)
-            if service_on("api"):
+            if service_on("api", force):
                 return 1
             log(f"api on, local only: 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}; no tailscale serve)")
-            print(f"\nSHAFT API running on this Mac only (127.0.0.1:{PORT}, not exposed: no Tailscale)\n"
-                  f"  allowed: {', '.join(sorted(allowed_logins()))}\n"
-                  f"  next: shaft web on --local, then shaft web pair --local --name <this mac>")
+            print(say(f"\nSHAFT API running on this Mac only (127.0.0.1:{PORT}, not exposed: no Tailscale)\n"
+                      f"  allowed: {', '.join(sorted(allowed_logins()))}\n"
+                      f"  next: shaft web on --local, then shaft web pair --local --name <this mac>",
+                      f"API running on this Mac only (127.0.0.1:{PORT}, not on any network)"))
             return 0
         if problem := tailnet_problem():
             print(problem)
             return 1
-        st = _tailscale_status() or {}
-        me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
-        if me:
+        # The tailnet login is added once, when the list has none yet (a fresh install, or a local-only Mac getting
+        # Tailscale): an existing install keeps the logins it has, and whoever is logged in to Tailscale now is never
+        # added silently next to them (`shaft api on` rerun under another Tailscale account).
+        if not allowed_logins() - {LOCAL_LOGIN}:
+            st = _tailscale_status() or {}
+            me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
+            if not me:
+                print(say("cannot read your Tailscale login (is Tailscale running?)",
+                          "Tailscale did not say who is logged in: open the Tailscale app, make sure you are logged "
+                          "in, then Try again."))
+                return 1
             _add_login(me)
-        elif not allowed_logins() - {LOCAL_LOGIN}:  # no tailnet login yet, and none can be read now
-            print(say("cannot read your Tailscale login (is Tailscale running?)",
-                      "Tailscale did not say who is logged in: open the Tailscale app, make sure you are logged in, "
-                      "then Try again."))
-            return 1
         was_running = autonomy.running("api")
-        if service_on("api"):
+        if service_on("api", force):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
         if _outside_gui(r):
@@ -1173,7 +1175,8 @@ def command(action: str, local: bool = False, as_json: bool = False) -> int:
             log(message)
             return 1
         if r.returncode != 0:
-            print(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}")
+            print(say(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}",
+                      f"Tailscale could not put SHAFT on your tailnet: {(r.stderr or r.stdout).strip()}"))
             return 1
         log(f"api exposed on the tailnet at {url()} (tailscale serve, tailnet only)")
         print(f"\nSHAFT API (tailnet only): {url()}\n  models: {', '.join(instance_names())}\n"

@@ -83,7 +83,9 @@ class NewInstanceTest(NewInstanceCase):
         self.assertEqual(code, 2)
         self.assertEqual(out.count("\n"), 1)
         self.assertFalse(json.loads(out)["ok"])
-        self.assertIn("user.name", json.loads(out)["error"])
+        # --json is the Mac app's wizard: its own terms, no git config or shaft command (final review I6)
+        self.assertEqual(json.loads(out)["error"], "SHAFT has no name to sign the instance's first commit with: go back "
+                                                   "to Install and run it again (it sets one), then Try again.")
 
     def test_new_with_a_repo_local_identity_succeeds(self):
         self.drop_identity()
@@ -150,12 +152,28 @@ class NewInstanceTest(NewInstanceCase):
             code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
         self.assertEqual(code, 1)
         error = json.loads(out)["error"]
-        self.assertIn("shaft delete ada", error)
-        self.assertIn("half-created and paused", error)
-        self.assertIn("mind store unwritable", error)
+        # --json is the Mac app's setup: what to do there, never a terminal command (final review I6)
+        self.assertEqual(error, "ada was only partly created (mind store unwritable). Choose another name: ada stays "
+                                "paused and never runs.")
         self.assertTrue(core.paused("ada"))
         self.assertTrue((self.sup / "first-reply-ada").exists())
         self.assertTrue((self.project / "instances" / "ada").exists())
+        shutil.rmtree(self.project / "instances" / "ada")
+        git(self.project, "worktree", "prune")
+        git(self.project, "branch", "-D", "instance/ada")
+        with mock.patch.object(cli.mind, "init", side_effect=OSError("mind store unwritable")):
+            code, out, err = self.run_new("ada", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        self.assertIn("half-created and paused (mind store unwritable); remove it with `shaft delete ada`", err)
+
+    def test_a_mind_store_failure_is_a_half_created_answer_not_a_traceback(self):
+        """Final review M1: mind.init/mind.commit raise MindError (a RuntimeError), which `new` did not catch: the
+        verb crashed after the worktree existed and the app's JSON contract broke."""
+        with mock.patch.object(cli.mind, "commit", side_effect=cli.mind.MindError("git commit on the store: locked")):
+            code, out, err = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual((code, out.count("\n")), (1, 1), err)
+        self.assertIn("ada was only partly created (git commit on the store: locked)", json.loads(out)["error"])
+        self.assertTrue(core.paused("ada"))
 
     def test_git_failing_after_it_made_the_worktree_keeps_the_instance_paused(self):
         real = cli.git
@@ -168,7 +186,8 @@ class NewInstanceTest(NewInstanceCase):
         with mock.patch.object(cli, "git", fake):
             code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
         self.assertEqual(code, 1)
-        self.assertIn("shaft delete ada", json.loads(out)["error"])
+        self.assertIn("Choose another name", json.loads(out)["error"])
+        self.assertNotIn("shaft ", json.loads(out)["error"])
         self.assertIn("post-checkout hook failed", json.loads(out)["error"])
         self.assertTrue(core.paused("ada"))
         self.assertTrue((self.sup / "first-reply-ada").exists())

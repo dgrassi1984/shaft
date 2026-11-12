@@ -20,7 +20,7 @@ WHO = "web"
 TEXT_MAX = 8000                       # a message to an instance, at most (it goes into its inbox as a file)
 KILL_WAIT_S = 20                      # a kill from here waits this long for its runs to settle (the page waits 30 s)
 DELETABLE = ("idle", "paused by you")
-NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web on|off in a terminal"}
+NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web restart (or off) in a terminal"}
 
 
 class Refused(Exception):

@@ -150,7 +150,8 @@ def use(provider: str, model: str | None = None, judge_model: str | None = None,
         price_in: float | None = None, price_out: float | None = None, judge_price_in: float | None = None,
         judge_price_out: float | None = None, vision: bool = False) -> dict:
     """Write the preset; returns {"provider", "model", "changed", "written", "covers", "off", "not_live"} (`model`:
-    the instance model it suggests). Raises
+    the instance model it suggests; `not_live`: {knob: [running services holding another value]} for every knob the
+    preset wrote). Raises
     settings.Refused (a value its knob refuses) or Usage."""
     settings.load_all()
     declared: dict = {}
@@ -199,8 +200,12 @@ def _write(provider: str, model: str, changes: dict, forced: dict | None = None,
     # codex: the instance's own model is chosen per instance, not by SHAFT_CLOUD_MODELS, which stays as it is
     covers, off = _coverage(preset, forced or {}, ("instances",) if provider == "codex" else (), trusted_vision)
     r = settings.set_values(changes)
+    # Every knob of the preset a running service holds another value of, changed now or by an earlier save: a Save
+    # repeated after a failed restart changes nothing, and its services still need the restart (the Mac app restarts
+    # them before Test: a running API keeps the models it read when it started).
+    late = settings.not_live()
     return {"provider": provider, "model": model, "changed": r["changed"], "written": changes, "covers": covers,
-            "off": off, "not_live": r["not_live"]}
+            "off": off, "not_live": {k: late[k] for k in changes if k in late}}
 
 
 # -- check ------------------------------------------------------------------------------------------------------------
@@ -218,17 +223,52 @@ def configured_models(provider: str) -> list[str]:
     return out
 
 
+PROBE_USAGE = "provider check"      # the stream probe's spend is recorded under this name, no instance's budget
+
+
+def _stream_probe(model: str) -> None:
+    """An instance reaches a custom/ model as a stream (the broker's cloudllm.custom_stream), never as the buffered call
+    modelcall makes: a server whose stream yields nothing usable passed that call, then failed every reply. So an
+    instance model of custom/ is also asked once that way, and read as an instance's reply is. Raises with why."""
+    body = {"model": model, "max_tokens": 16, "stream": True,
+            "messages": [{"role": "system", "content": "Reply with the single word: ok."},
+                         {"role": "user", "content": "ok?"}]}
+    said, error = [], None
+    for line in cloudllm.custom_stream(PROBE_USAGE, body, modelcall.secrets_env()):
+        if not line.startswith(b"data:") or line[5:].strip() in (b"", b"[DONE]"):
+            continue
+        try:
+            chunk = json.loads(line[5:])
+        except ValueError:
+            continue
+        if chunk.get("error"):
+            error = (chunk["error"] or {}).get("message") if isinstance(chunk["error"], dict) else str(chunk["error"])
+        for c in chunk.get("choices") or []:
+            delta = c.get("delta") or {}
+            said += [delta.get(k) or "" for k in ("content", "reasoning", "reasoning_content")]
+    if error:
+        raise RuntimeError(f"as a stream (how instances call it): {error}")
+    if not "".join(said).strip():
+        raise RuntimeError(f"{cloudllm.CUSTOM_BASE_URL} answered a stream request (how instances call it) with no "
+                           "text: it must stream server-sent events or answer one JSON reply")
+
+
 def check(provider: str) -> list[dict]:
-    """One minimal live call per configured model of the provider: [{"ok", "model", "error"}]."""
+    """One minimal live call per configured model of the provider: [{"ok", "model", "error"}]. A custom/ model the
+    instances run on is also asked as a stream (_stream_probe)."""
     models = configured_models(provider)
     if not models:
-        return [{"ok": False, "model": None, "error": f"no {provider}/ model is configured: run shaft provider use "
-                                                      f"{provider}" + (" --model M" if provider != "openrouter" else "")}]
+        return [{"ok": False, "model": None, "error": core.say(
+            f"no {provider}/ model is configured: run shaft provider use {provider}"
+            + (" --model M" if provider != "openrouter" else ""),
+            f"no {provider}/ model is configured yet: Save the provider first")}]
     rows = []
     for m in models:
         try:
             modelcall.ask(m, "Reply with the single word: ok.", [{"role": "user", "content": "ok?"}], max_tokens=16,
                           effort=None, purpose="provider check")
+            if m.startswith("custom/") and m in cloudllm.CLOUD_MODELS:
+                _stream_probe(m)
             rows.append({"ok": True, "model": m, "error": None})
         except Exception as e:                         # the provider's own words: ModelCallError, CloudError, network
             rows.append({"ok": False, "model": m, "error": str(e) or type(e).__name__})
@@ -248,6 +288,9 @@ def command(args) -> int:
                 print("covers: " + (", ".join(r["covers"]) or "nothing"))
                 for fn, why in r["off"].items():
                     print(f"off: {fn} — {why}")
+                late = sorted({svc for svcs in r["not_live"].values() for svc in svcs})
+                if late:
+                    print(f"not live yet: restart {settings._restart_text(late)}")
             return 0
         rows = check(args.provider)
     except Usage as e:

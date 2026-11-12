@@ -98,8 +98,10 @@ class OpeningTest(ChatTest):
         with self.assertRaisesRegex(web_chat.Refused, "empty"):
             web_chat.opening("wisp", ME, "   ")
         c = self.open_and_wait()
-        with self.assertRaisesRegex(web_chat.Refused, "already"):
+        # asked again (the app's Try again, final review M2): that chat, nothing asked twice
+        with self.assertRaises(web_chat.AlreadyOpened) as again:
             web_chat.opening("wisp", ME, OPENING)
+        self.assertEqual(again.exception.chat["id"], c["id"])
         self.assertEqual(len(web_chat.load(c["id"])["turns"]), 2)
         self.assertEqual(len(self.api.chats()), 1)
 

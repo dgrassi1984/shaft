@@ -3,6 +3,8 @@ browser, for the tailnet only. Stdlib only, run by the system Python like every 
 
   shaft web on       install the service (com.shaft.web) and expose it with `tailscale serve` (never Funnel)
   shaft web on --local             install it without Tailscale: sets SHAFT_WEB_LOCAL=on, exposes nothing
+  shaft web restart [--force] [--json]   restart it in its current mode (no tailscale serve; it picks up saved
+                                   settings); refused while an instance is replying unless forced
   shaft web off      stop it and remove it from the tailnet
   shaft web status   the service, the URL, the paired browsers
   shaft web pair [--name NAME]     a one-time link that pairs the browser you open it in
@@ -1811,14 +1813,17 @@ def _pair_local(name: str | None, as_json: bool) -> int:
         print(json.dumps({"ok": False, "error": message}) if as_json else message,
               file=sys.stdout if as_json else sys.stderr)
         return 1
+    from .core import say
     if not LOCAL:
-        return refuse("local pairing is off (SHAFT_WEB_LOCAL): run shaft web on --local first")
+        return refuse(say("local pairing is off (SHAFT_WEB_LOCAL): run shaft web on --local first",
+                          "The web service on this Mac is not set up for this app yet: run Install again."))
     try:                                       # an unreadable .env or unwritable devices.json is a refusal, never a
         logins = allowed_logins()              # traceback with nothing on stdout (the --json contract)
     except (OSError, ValueError) as e:
         return refuse(f"cannot read SHAFT_API_LOGINS from the .env file: {e}")
     if LOCAL_LOGIN not in logins:              # the app's chats reach the API as this login (web_chat): refused there
-        return refuse(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS: run shaft api on --local first")
+        return refuse(say(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS: run shaft api on --local first",
+                          "The API on this Mac is not set up for this app yet: run Install again."))
     name = name or f"mac {datetime.now():%Y-%m-%d %H:%M}"
     try:
         dev, secret = add_device(name, LOCAL_LOGIN, "macos")
@@ -1830,28 +1835,54 @@ def _pair_local(name: str | None, as_json: bool) -> int:
     return 0
 
 
+def restart(force: bool = False) -> int:
+    """`shaft web restart`: restart the installed com.shaft.web in its current mode — tailnet, local or both, as
+    `web on` left it (SHAFT_WEB_LOCAL in the settings file, the tailnet name in hosts.json). It never runs `tailscale
+    serve` nor changes a setting, so a local-only Mac's restart needs no Tailscale. Under the same barrier as `api
+    restart` (api.service_on): while an instance is replying, nothing is restarted unless forced. Not installed:
+    refused, naming the verb that installs it. What picks up a saved setting the running service holds another value
+    of (settings.not_live)."""
+    from . import autonomy
+    from .api import say, service_on
+    if not autonomy.installed("web"):
+        print(say("the web service is not installed: run shaft web on (or shaft web on --local) first",
+                  "The web service is not installed on this Mac, so there is nothing to restart."))
+        return 1
+    if service_on("web", force):
+        return 1
+    log("web restarted in its current mode (no tailscale serve; settings unchanged)")
+    print("web service restarted")
+    return 0
+
+
 def command(action: str, name: str | None = None, everything: bool = False, local: bool = False,
-            as_json: bool = False) -> int:
+            as_json: bool = False, force: bool = False) -> int:
     """`shaft web on` needs SHAFT_API_LOGINS, records this Mac's tailnet name, installs the service and exposes it with
     `tailscale serve`; `on --local` never runs Tailscale: it sets SHAFT_WEB_LOCAL=on (the settings file) and installs
-    the service, reachable at 127.0.0.1 for /app/v1 only. `pair` prints a one-time link for a browser or an app;
-    `pair --local` pairs the Mac app on this Mac directly (_pair_local), `--json` for its setup."""
+    the service, reachable at 127.0.0.1 for /app/v1 only. `restart` restarts the installed service in its current mode
+    (restart()). `pair` prints a one-time link for a browser or an app; `pair --local` pairs the Mac app on this Mac
+    directly (_pair_local), `--json` for its setup."""
     from . import autonomy
     from .api import _tailscale, say, service_on
     if local and action not in ("on", "pair"):
         print(f"--local goes with on or pair, not {action}", file=sys.stderr)
         return 2
-    if as_json and action not in ("pair", "on"):
-        print(f"--json goes with pair or on, not {action}", file=sys.stderr)
+    if as_json and action not in ("pair", "on", "restart"):
+        print(f"--json goes with pair, on or restart, not {action}", file=sys.stderr)
         return 2
-    if as_json and action == "on":
+    if force and action not in ("on", "restart"):
+        print(f"--force goes with on or restart, not {action}", file=sys.stderr)
+        return 2
+    if as_json and action in ("on", "restart"):
         if local:
             print("--json goes with on for the tailnet install, not on --local", file=sys.stderr)
             return 2
         from .api import json_verb
-        return json_verb(lambda: command("on"))
+        return json_verb(lambda: command(action, force=force))
     if action == "serve":
         return serve()
+    if action == "restart":
+        return restart(force)
     if action == "pair" and local:
         return _pair_local(name, as_json)
     if action == "pair":
@@ -1879,18 +1910,20 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
             print(f"cannot read SHAFT_API_LOGINS from the .env file: {e}", file=sys.stderr)
             return 1
         if LOCAL_LOGIN not in logins:              # the Mac app's chats reach the API as this login (web_chat)
-            print(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS — run: shaft api on --local first")
+            print(say(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS — run: shaft api on --local first",
+                      "The API on this Mac is not set up for this app yet: run Install again."))
             return 1
         try:
             settings.set_values({"SHAFT_WEB_LOCAL": "on"})
         except (settings.Refused, OSError, ValueError) as e:     # e.g. .supervisor/settings.env not writable
             print(f"cannot set SHAFT_WEB_LOCAL=on: {e}", file=sys.stderr)
             return 1
-        if service_on("web"):
+        if service_on("web", force):
             return 1
         log(f"web on, local: /app/v1 at http://127.0.0.1:{PORT} for the Mac app (no tailscale serve)")
-        print(f"\nSHAFT web service on this Mac: http://127.0.0.1:{PORT} (/app/v1 for the Mac app; the pages stay "
-              f"tailnet-only)\n  pair the Mac app: shaft web pair --local --name <this mac>")
+        print(say(f"\nSHAFT web service on this Mac: http://127.0.0.1:{PORT} (/app/v1 for the Mac app; the pages stay "
+                  f"tailnet-only)\n  pair the Mac app: shaft web pair --local --name <this mac>",
+                  f"web service running on this Mac (127.0.0.1:{PORT}, for this app only)"))
         return 0
     if action == "unpair":
         if not name and not everything:
@@ -1914,11 +1947,12 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
                       "and connected, then Try again."))
             return 1
         _hosts["at"] = 0.0
-        if service_on("web"):
+        if service_on("web", force):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
         if r.returncode != 0:
-            print(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}")
+            print(say(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}",
+                      f"Tailscale could not put SHAFT on your tailnet: {(r.stderr or r.stdout).strip()}"))
             return 1
         log(f"web exposed on the tailnet at {url()} (tailscale serve, tailnet only)")
         print(f"\nSHAFT web UI (tailnet only): {url()}\n  pair a browser: shaft web pair --name <laptop|phone>")

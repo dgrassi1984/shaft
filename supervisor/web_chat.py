@@ -1724,11 +1724,20 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
         raise
 
 
+class AlreadyOpened(Exception):
+    """opening() asked again once the opening was sent: nothing is asked twice; `chat` is Main, with that opening."""
+
+    def __init__(self, chat: dict):
+        super().__init__(f"{chat['instance']} was asked for its welcome already")
+        self.chat = chat
+
+
 def opening(name: str, login: str, text: str) -> dict:
     """A new instance's opening: setup asks it for its welcome in Main (from_chat), as a user turn the operator never
     sees (`hidden`: no feed, title, excerpt or count shows it; the instance reads it as any message, with the docs
-    note of a conversation's first message). Its reply is the first thing in Main. Refused once Main has any turn:
-    only a new instance opens. Returns the chat."""
+    note of a conversation's first message). Its reply is the first thing in Main. Asked again once its opening was
+    sent: AlreadyOpened (never a second opening); refused once Main has any other turn: only a new instance opens.
+    Returns the chat."""
     text = text.replace("\r\n", "\n").strip()
     if not text:
         raise Refused("an empty opening is not sent")
@@ -1738,6 +1747,8 @@ def opening(name: str, login: str, text: str) -> dict:
         chat = from_chat(name, login, create=True)
         with _lock(chat["id"]):
             chat = load(chat["id"])
+            if chat["turns"] and chat["turns"][0].get("role") == "user" and chat["turns"][0].get("hidden"):
+                raise AlreadyOpened(chat)          # asked before (the app's Try again after it lost the answer)
             if chat["turns"] or chat.get("queued") or chat["state"] == "replying":
                 raise Refused(f"{name} has a conversation already: the opening is only for a new instance")
             chat["login"] = login

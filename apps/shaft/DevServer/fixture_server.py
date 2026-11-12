@@ -5,7 +5,9 @@ It runs the real `/app/v1` (supervisor/app_api.py, web_chat, docs, comments, fee
 over a temporary SUP_DIR and instances folder it seeds itself, never the real `.supervisor/` or `instances/`. What it
 fakes is what lies outside the web service, as supervisor/tests/test_app_api.py does:
 
-- the tailnet: every request gets the login `tailscale serve` would add, and the host is 127.0.0.1:<port>;
+- the tailnet: every request gets the login `tailscale serve` would add, and the host is 127.0.0.1:<port>; but a
+  request of a device paired as a Mac app (platform `macos`) to /app/v1 comes as the Mac app on the server's own Mac
+  does, on loopback without that header: the setup routes that only loopback may use (docs/app-api.md §18) answer it;
 - the API a reply streams from: a send starts a scripted reply here (activity, an answer streamed in pieces, then the
   real `web_chat._finish`); a message containing "fail" fails as a model 502 does, "slow" streams for a minute,
   "wide" answers with a 12-column table and a 400-character line of code;
@@ -14,7 +16,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 - the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json;
 - settings: config and tool settings belong to the fixture's instances, and writes run in process;
 - services: fake records start with this process's live pid; restarts change only those records. No CLI or launchd
-  is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub;
+  is called. Only docs, limits, channel, pause, resume, api on, api restart, web restart and autonomy restart are
+  allowed by the command stub;
 - the setup verbs behind /app/v1/setup/* (docs/app-api.md §18) the Mac app's wizard calls: `new` makes the instance's
   folders here (paused, with its first-reply marker), `config set` and `drive set` write them, `first-reply` is the real
   verb on this folder, `secrets set` keeps only the key's name in <dir>/setup.json (never its value), and `provider use`
@@ -133,8 +136,18 @@ def setup(base: Path, port: int):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     real_respond = web.respond
 
+    mock.patch.object(web, "LOCAL", True).start()     # the Mac app's loopback path (SHAFT_WEB_LOCAL=on), on this port
+    mock.patch.object(web, "local_hosts", return_value=hosts).start()
+
+    def mac_app(req) -> bool:
+        """A request of a device paired as the Mac app, to /app/v1: it comes on loopback, as on the server's own Mac."""
+        _, _, cred = (req.headers.get("authorization") or "").partition(" ")
+        dev = cred.strip().partition(".")[0]
+        return req.path.startswith("/app/v1/") and (web.devices().get(dev) or {}).get("platform") == "macos"
+
     def respond(req):                                  # what `tailscale serve` adds to every request
-        req.headers = {**req.headers, "tailscale-user-login": ME}
+        if not mac_app(req):
+            req.headers = {**req.headers, "tailscale-user-login": ME}
         response = real_respond(req)
         # `act version`: answer as an older server would (§19), once the real route has checked the device.
         old = _read_json(base / "version.json")
@@ -146,6 +159,11 @@ def setup(base: Path, port: int):
         return response
 
     setup_state = base / "setup.json"            # the key names set (never their values) and the provider in use
+    from supervisor import app_api
+    # The instances `new` finished (the real check reads the mind store's creation commit, which the fake `new` makes
+    # no git store for): a retry of the wizard finishes those, and refuses one `new` left halfway.
+    mock.patch.object(app_api, "_unfinished", side_effect=lambda name: None if name in _read_json(setup_state).get(
+        "created", []) else "its memory store was never made").start()
 
     def run_json(args, timeout=60, who="top", input=None):
         # The setup verbs (docs/app-api.md §18), faked over this folder: never the real subprocess runner, which would
@@ -166,6 +184,8 @@ def setup(base: Path, port: int):
                 shaft_cli._write_first_reply(name, then)
             root = make_instance(name)
             (root / "drive.md").write_text((template / "drive.md").read_text())
+            state["created"] = sorted({*state.get("created", []), name})      # `new` finished: its mind store's commit
+            _write_json(setup_state, state)
             return 0, [{"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
                         "paused": bool(then)}]
         if args[0] == "first-reply" and len(args) >= 3:
@@ -225,7 +245,7 @@ def setup(base: Path, port: int):
         state["provider"] = {"name": provider, "models": [m for m in (model, judge) if m]}
         _write_json(setup_state, state)
         return 0, [{"ok": True, "provider": provider, "model": model, "changed": ["SHAFT_JUDGE_MODELS"], "written": {},
-                    "covers": [fn for fn in functions if fn not in off], "off": off, "not_live": []}]
+                    "covers": [fn for fn in functions if fn not in off], "off": off, "not_live": {}}]
 
     def provider_check(provider: str, state: dict):
         used = state.get("provider") or {}
@@ -328,10 +348,13 @@ def setup(base: Path, port: int):
             else:
                 core.set_paused(name, verb == "pause", reason=who)
             return True, "saved in fixture"
-        if args == ["api", "on"]:
+        if args in (["api", "on"], ["api", "restart"]):
             time.sleep(0.2)
             _restart_service(base, "api")
             return True, "fixture API restarted"
+        if args == ["web", "restart"]:
+            _restart_service(base, "web")
+            return True, "fixture web service restarted"
         if args in (["autonomy", "restart"], ["autonomy", "restart", "--cancel"]):
             request = base / "sup" / "scheduler-restart.json"
             drain = base / "sup" / "scheduler-drain.json"

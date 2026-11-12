@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
+from .core import say as core_say
 from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_paused, set_update_queued, update_queued)
@@ -65,8 +66,11 @@ def _git_identity_problem() -> str | None:
     commit makes), else the message. Checked first, so `new` never fails at its commit with a worktree half made."""
     for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
         if git("var", var, check=False).returncode != 0:
-            return ("git has no identity here, so the instance's first commit would fail: run `shaft install` (it sets "
-                    "one for this project) or `git config user.name` and `git config user.email`, then try again")
+            return core_say("git has no identity here, so the instance's first commit would fail: run `shaft install` "
+                            "(it sets one for this project) or `git config user.name` and `git config user.email`, "
+                            "then try again",
+                            "SHAFT has no name to sign the instance's first commit with: go back to Install and run it "
+                            "again (it sets one), then Try again.")
     return None
 
 
@@ -111,9 +115,11 @@ def cmd_first_reply(name: str, then: str, as_json: bool = False) -> int:
             try:
                 created = json.loads(path.read_text()).get("created")
             except FileNotFoundError:
-                return say(False, f"{name} is not waiting for its first reply (it was answered already, or {name} "
-                                  f"was not created waiting for one): use shaft pause {name} or shaft resume {name} "
-                                  "instead", 1)
+                return say(False, core_say(
+                    f"{name} is not waiting for its first reply (it was answered already, or {name} was not created "
+                    f"waiting for one): use shaft pause {name} or shaft resume {name} instead",
+                    f"{name} is not waiting for its first reply any more (it was answered already): pause or resume it "
+                    f"from its settings instead."), 1)
             except (ValueError, AttributeError):
                 created = None                 # unreadable: replaced whole, as the consumer would have left it
             _write_first_reply(name, then, created if isinstance(created, str) else None)
@@ -199,11 +205,13 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
         mind.init(name)
         mind.commit(name, message, root)
         log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
-    except (subprocess.CalledProcessError, OSError) as e:
+    except (subprocess.CalledProcessError, OSError, mind.MindError) as e:
         detail = (getattr(e, "stderr", None) or "").strip() or str(e)
         if root.exists():     # by the filesystem, not git's return: a hook can fail after the worktree was made
-            return refuse(f"{name} is half-created{' and paused' if paused else ''} ({detail}); remove it with "
-                          f"`shaft delete {name}`", 1)
+            return refuse(core_say(f"{name} is half-created{' and paused' if paused else ''} ({detail}); remove it "
+                                   f"with `shaft delete {name}`",
+                                   f"{name} was only partly created ({detail}). Choose another name: {name} stays "
+                                   f"paused and never runs."), 1)
         for f in made:
             try:
                 f.unlink(missing_ok=True)
@@ -1615,17 +1623,21 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on [--local], off, "
                                    "status, pair [--name NAME] (a one-time link for a browser; --local: the Mac app on "
                                    "this Mac, directly), unpair DEVICE|--all")
-    p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
+    p.add_argument("action", choices=["on", "off", "restart", "status", "pair", "unpair", "serve"])
     p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
     p.add_argument("--name", help="pair: what to call this browser (e.g. laptop, phone)")
     p.add_argument("--all", action="store_true", help="unpair: every browser")
     p.add_argument("--local", action="store_true", help="on: without Tailscale (SHAFT_WEB_LOCAL=on, /app/v1 at "
                                                         "127.0.0.1); pair: the Mac app on this Mac, no link")
-    p.add_argument("--json", action="store_true", help="pair, on (tailnet): one JSON object on stdout")
+    p.add_argument("--json", action="store_true", help="pair, on (tailnet), restart: one JSON object on stdout")
+    p.add_argument("--force", action="store_true",
+                   help="on, restart: even while an instance is replying (the reply is cut off)")
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
-    p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
+    p.add_argument("action", choices=["on", "off", "restart", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
     p.add_argument("--json", action="store_true", help="pair: one JSON line with the code")
+    p.add_argument("--force", action="store_true",
+                   help="on, restart: even while an instance is replying (the reply is cut off)")
     p = sub.add_parser("grok", help="Grok plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
@@ -1996,6 +2008,14 @@ def main(argv: list[str]) -> int:
                                     "gate's baseline was red (the scheduler does it after a green warm-up)")
     p.add_argument("action", choices=["warm", "budget", "regate"])
     args = parser.parse_args(argv)
+    from .core import app_wording
+    # A --json verb answers the Mac app, and so does a verb an app's route runs (actions._run): the app shows its
+    # errors as they are, so they name what to do in the app, never a terminal command (core.say).
+    with app_wording(bool(getattr(args, "json", False)) or os.environ.get(actions.APP_WORDING) == "1"):
+        return _dispatch(args, parser)
+
+
+def _dispatch(args, parser) -> int:
     if args.cmd == "grok":
         return cmd_grok(args.action)
     if args.cmd == "codex":
@@ -2042,7 +2062,7 @@ def main(argv: list[str]) -> int:
         return 1
     if args.cmd == "api":
         from . import api
-        return api.command(args.action, local=args.local, as_json=args.json)
+        return api.command(args.action, local=args.local, as_json=args.json, force=args.force)
     if args.cmd == "secrets":
         from . import opsecrets
         return opsecrets.command(args.action, args.name, args.json)
@@ -2080,10 +2100,10 @@ def main(argv: list[str]) -> int:
     if args.cmd == "web":
         from . import web
         return web.command(args.action, args.name if args.action == "pair" else args.device, args.all,
-                           local=args.local, as_json=args.json)
+                           local=args.local, as_json=args.json, force=args.force)
     if args.cmd == "telegram":
         from . import telegram
-        return telegram.command(args.action, args.name, args.json)
+        return telegram.command(args.action, args.name, args.json, force=args.force)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
     if args.cmd == "embed":

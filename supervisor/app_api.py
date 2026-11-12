@@ -160,7 +160,8 @@ def _route(req: Request) -> Response:
     if path == "/pair":
         if req.local:                               # a loopback request has no tailnet login to pair as
             log(f"app api refused a loopback pairing ({req.method} {req.path})")
-            raise Refusal(403, "local_pair", "Pair this Mac's app with shaft web pair --local, not with a link.")
+            raise Refusal(403, "local_pair", "This Mac's app pairs with the server on this Mac directly, not with a "
+                                             "link: open SHAFT on this Mac and it pairs itself.")
         if req.method != "POST":
             raise Refusal(405, "method", f"{req.method} is not supported here: POST")
         return _pair(req)
@@ -198,9 +199,11 @@ def _str(data: dict, key: str, default: str | None = None) -> str:
 
 
 def _unpaired(req: Request) -> Refusal:
-    return Refusal(401, "unpaired", "This device is not paired: pair it again with "
-                                    + ("shaft web pair --local." if req.local
-                                       else "a link from shaft web pair --name <device>."))
+    """Only the apps read /app/v1, and an app has no terminal: what to do is said in the apps' own terms."""
+    return Refusal(401, "unpaired", "This app is no longer paired with the server on this Mac: pair it again on the "
+                                    "screen SHAFT shows." if req.local else
+                                    "This device is not paired: pair it again with a new link from SHAFT on your Mac "
+                                    "(Settings, Services, Use SHAFT from iPhone/iPad).")
 
 
 def _login(req: Request) -> str:
@@ -241,7 +244,8 @@ def _pair(req: Request) -> Response:
     got = web._use_pairing(token, _login(req), platform)
     if not got:
         raise Refusal(403, "pair_expired", "This pairing link is used, unknown or older than "
-                                           f"{web.PAIR_MINUTES} minutes: make a new one with shaft web pair.")
+                                           f"{web.PAIR_MINUTES} minutes: make a new one in SHAFT on your Mac "
+                                           "(Settings, Services, Use SHAFT from iPhone/iPad).")
     dev, secret = got
     return _json(200, {"device": dev, "secret": secret, "name": web.devices()[dev]["name"], "login": _login(req)})
 
@@ -837,7 +841,13 @@ CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
 
 
 def _who(req: Request) -> str:
-    return f"app {web.devices()[req.device]['name']}"
+    """The paired device acting, for the log and the CLI's `who`. A device unpaired since its bearer was checked is
+    refused as unpaired (401), not answered with a crash."""
+    record = web.devices().get(req.device) or {}
+    if not isinstance(record.get("name"), str) or not record["name"]:
+        log(f"app api refused a request: device {req.device} has no record now ({req.method} {req.path})")
+        raise _unpaired(req)
+    return f"app {record['name']}"
 
 
 def _settings(n: str, cfg: dict | None = None) -> dict:
@@ -1107,6 +1117,15 @@ PROVIDER_FLAGS = {"model": str, "judge_model": str, "base_url": str, "price_in":
 ALIAS = r"(?P<alias>[a-z][a-z0-9-]{0,30})"        # google.ALIAS_RE
 
 
+def _local_only(req: Request) -> None:
+    """The routes that change where every model call goes or what holds a key (the provider keys and preset, the
+    custom endpoint, a Telegram bot and its service) answer only the Mac app on the Mac that runs SHAFT (loopback): a
+    device paired over the tailnet could otherwise point every instance's model traffic at a server of its choosing."""
+    if not req.local:
+        log(f"app api refused a setup change from a tailnet device ({req.method} {req.path})")
+        raise Refusal(403, "local_only", "Do this on the Mac that runs SHAFT.")
+
+
 def _text(data: dict, key: str, most: int = 500) -> str:
     """A required, non-empty, single-line string field."""
     value = data.get(key)
@@ -1147,6 +1166,9 @@ def _setup_instance(req: Request) -> Response:
         return Refusal(409, "refused", said, done=list(done))
 
     if name in core.instance_names() and (core.SUP_DIR / f"first-reply-{name}").exists():
+        if (missing := _unfinished(name)):          # `new` stopped halfway: nothing to finish, the name is taken
+            raise refused(f"{name} was only partly created ({missing}), so the setup cannot finish it. Choose another "
+                          f"name: {name} stays paused and never runs.")
         paused = core.paused(name)                  # made by a setup, still waiting: finish it
     else:
         code, rows = actions.run_json(["new", name, "--json", "--paused-until-first-reply", AUTONOMY[data["autonomy"]]],
@@ -1175,6 +1197,18 @@ def _setup_instance(req: Request) -> Response:
     return _json(200, {"instance": name, "done": done, "paused": paused})
 
 
+def _unfinished(name: str) -> str | None:
+    """None when `shaft new` finished `name`, else what is missing. Its last step is the mind store's first commit,
+    with the creation's own message, made after the instance branch's creation commit and the store itself: a store
+    whose history starts with that commit proves all three. A worktree with a first-reply marker alone is a `new` that
+    failed halfway (its commit, a hook, the store), not an instance waiting for its remaining setup steps."""
+    from . import mind
+    if mind.head(name) is None:
+        return "its memory store was never made" if not mind.exists(name) else "its memory store has no first commit"
+    first = mind.git(name, "log", "--reverse", "--format=%s", mind.BRANCH, check=False).stdout.splitlines()
+    return None if first and first[0].startswith(f"{name}: created ") else "its memory store has no creation commit"
+
+
 def _setup_drives(req: Request) -> Response:
     from . import drive_presets
     try:
@@ -1186,6 +1220,7 @@ def _setup_drives(req: Request) -> Response:
 def _setup_secret(req: Request) -> Response:
     """`secrets set NAME --json`, the value on its stdin: only the provider and tool keys (SETUP_SECRETS) — the
     server's own auth, Google clients and Telegram tokens have their own verbs."""
+    _local_only(req)
     from . import actions
     data = _body(req)
     if set(data) != {"name", "value"} or data.get("name") not in SETUP_SECRETS:
@@ -1208,6 +1243,7 @@ def _provider(data: dict) -> str:
 
 def _setup_provider(req: Request) -> Response:
     """`provider use PROVIDER --json` with the given flags: the answer's coverage, `off` as a list."""
+    _local_only(req)
     from . import actions
     data = _body(req)
     provider = _provider(data)
@@ -1230,12 +1266,15 @@ def _setup_provider(req: Request) -> Response:
     if code != 0 or not rows[-1].get("ok"):
         raise Refusal(409, "refused", _verb_said(rows))
     r = rows[-1]
+    # The running services that still hold another value of the preset: the wizard restarts them before Test.
+    late = sorted({svc for svcs in r["not_live"].values() for svc in svcs})
     return _json(200, {"provider": r["provider"], "model": r["model"], "changed": r["changed"], "covers": r["covers"],
-                       "off": [{"function": f, "why": why} for f, why in r["off"].items()], "not_live": r["not_live"]})
+                       "off": [{"function": f, "why": why} for f, why in r["off"].items()], "not_live": late})
 
 
 def _setup_check(req: Request) -> Response:
     """`provider check PROVIDER --json`: one live call per configured model; a failed model is a row, not an error."""
+    _local_only(req)
     from . import actions
     data = _body(req)
     if set(data) != {"provider"}:
@@ -1250,6 +1289,7 @@ def _setup_check(req: Request) -> Response:
 
 def _setup_telegram(req: Request) -> Response:
     """`telegram token NAME`, the token on its stdin."""
+    _local_only(req)
     from . import actions
     data = _body(req)
     if set(data) != {"name", "token"}:
@@ -1295,6 +1335,7 @@ def _setup_telegram_pair(req: Request, n: str) -> Response:
 
 def _setup_telegram_service(req: Request) -> Response:
     """`telegram on`: installs (or restarts, to pick up a new bot) the Telegram service, through the verb."""
+    _local_only(req)
     from . import actions
     if _body(req):
         raise Refusal(400, "bad_request", "Send no fields.")
@@ -1319,11 +1360,14 @@ def _setup_autonomy(req: Request, n: str) -> Response:
 
 def _setup_hello(req: Request, n: str) -> Response:
     """The setup's last step: the hidden opening (setup.opening_text) to Main, which the instance answers with its
-    welcome. Refused once Main has a turn."""
+    welcome. Asked again once it was sent, it answers that chat (the app's Try again completes); refused once Main
+    has a turn of another kind."""
     from . import setup, web_chat
     log(f"{_who(req)}: operator asked {n} for its welcome")
     try:
         chat = web_chat.opening(n, _login(req), setup.opening_text(n))
+    except web_chat.AlreadyOpened as e:              # Try again after the answer was lost: done already, not refused
+        return _said(str(e), chat={"id": e.chat["id"], "title": web_chat.title(e.chat)})
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
     return _said(f"{n} is writing its welcome", chat={"id": chat["id"], "title": web_chat.title(chat)})
@@ -1385,8 +1429,8 @@ def _set_access(req: Request, n: str) -> Response:
     if data["grant"] == "browser":
         if data["action"] == "revoke":
             raise Refusal(409, "refused", "The browser is shared by every instance and reached from inside run: there "
-                                          f"is none to take back from {n} alone (shaft tools {n} off run would also "
-                                          "stop it running its own code).")
+                                          f"is none to take back from {n} alone (only turning off its run tool would, "
+                                          "which also stops it running its own code).")
         if not browser.version():
             ok, said = actions.run_now(["browser", "install"], BROWSER_INSTALL_S, who=who)
             if not ok:

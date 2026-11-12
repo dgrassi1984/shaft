@@ -191,7 +191,8 @@ class FixtureSetupTest(unittest.TestCase):
                 hello = api("/app/v1/setup/hello/ledger", "POST", {})
                 self.assertEqual(hello["said"], "ledger is writing its welcome")
                 self.assertTrue(hello["chat"]["id"].startswith("web-"))
-                api("/app/v1/setup/hello/ledger", "POST", {}, expected=409)
+                again = api("/app/v1/setup/hello/ledger", "POST", {})        # Try again: that chat, nothing asked twice
+                self.assertEqual(again, {"said": "ledger was asked for its welcome already", "chat": hello["chat"]})
                 api("/app/v1/setup/autonomy/nobody", "POST", {"then": "stay"}, expected=404)
 
                 with self.assertRaises(ValueError):

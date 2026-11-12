@@ -17,8 +17,8 @@ a command you run from a shell that sets it.
 - **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
   file when they start. A long-running service (api, scheduler, telegram, web, model, embed) holds what it read at its start;
   each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
-  Settings page say "not live yet: restart api (`shaft api restart`), …" until the services holding another value
-  restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
+  Settings page say "not live yet: restart api (`shaft api restart`), …" (web: `shaft web restart`) until the
+  services holding another value restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
   A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
 - Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
   not registered, and on a `SHAFT_` variable read straight from the environment.

@@ -98,12 +98,12 @@ run` runs one scheduled plugin now.
 ## Services
 
 ```text
-shaft web on [--local|--json]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
+shaft web on [--local|--json] [--force]|restart [--json] [--force]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
 shaft grok login|status
 shaft codex login [--json]|status
 shaft model on|off|status
-shaft api on [--local] [--json]|restart [--json]|off|status|key|inbox-key
-shaft telegram token <name>|pair [--json]|unpair|on|off|status
+shaft api on [--local] [--json] [--force]|restart [--json] [--force]|off|status|key|inbox-key
+shaft telegram token <name>|pair [--json]|unpair|on [--force]|restart [--force]|off|status
 shaft embed on|off|status
 shaft secrets set|unset <NAME> [--json]
 shaft secrets list [--json]
@@ -127,9 +127,13 @@ naming Tailscale missing, signed out or switched off, and exits 0 or 1.
 
 `shaft api` controls the OpenAI-compatible API and inbox doorbell. `key` and `inbox-key` show their separate
 bearer keys. `shaft api restart` restarts the installed API service as it is: it never runs `tailscale serve` and
-changes no login or key, so it works on a local-only Mac and never exposes the API as a side effect. Like `on`, it
-restarts nothing while a conversation is open, is held back by running replies unless `--force`, and is refused when
-the service is not installed. The app's and the web panel's Restart API run it. `shaft telegram` configures tokens and pairing and controls Telegram chat. `telegram pair --json` prints
+changes no login or key, so it works on a local-only Mac and never exposes the API as a side effect. `shaft web
+restart` does the same for the web service (it is what picks up a saved setting the web service holds, on a local-only
+Mac too). A restart of the api, web or Telegram service (`on` or `restart`) happens under the restart barrier (no
+conversation opens meanwhile) and restarts nothing while an instance is replying; a conversation that is open but
+quiet holds nothing back. `--force` skips the replying check (the reply is cut off), never the barrier; the panels'
+Force passes it. A restart of a service that is not installed is refused. `shaft api on` adds your tailnet login only
+while `SHAFT_API_LOGINS` has none, never a second one. The app's and the web panel's Restart API run `api restart`. `shaft telegram` configures tokens and pairing and controls Telegram chat. `telegram pair --json` prints
 `{"ok": true, "code", "minutes"}` (the code to send to a bot as `/pair <code>`) or `{"ok": false, "error"}`. See
 [integrations](integrations.md).
 

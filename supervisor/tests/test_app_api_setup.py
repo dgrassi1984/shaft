@@ -15,7 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import actions, app_api, calendar, core, drive_presets, google, mail, opconfig, setup, web_chat, web_config
+from supervisor import (actions, app_api, calendar, core, drive_presets, google, mail, mind, opconfig, setup, web_chat,
+                        web_config)
 from supervisor.tests.test_app_api import AppTest, write_or_check_fixtures
 from supervisor.tests.test_web import ME
 from supervisor.tests.test_web_local import LocalTest
@@ -30,13 +31,25 @@ KEY = "sk-or-v1-never-in-argv-or-a-log-91c3"
 TOKEN = "123456:never-in-argv-or-a-log-AAbb"
 
 
-class SetupTest(AppTest):
+# The routes only the Mac app on the Mac that runs SHAFT may use (app_api._local_only): the tests reach them on loopback
+# as that app, unless a test asks for the tailnet path (tailnet=True).
+LOCAL_ONLY = ("/app/v1/setup/secret", "/app/v1/setup/provider", "/app/v1/setup/provider/check", "/app/v1/setup/telegram",
+              "/app/v1/setup/telegram/service")
+
+
+class SetupTest(LocalTest):
+    def api(self, path, method="GET", data=None, bearer=True, body=None, headers=None, tailnet=False, **kw):
+        if path in LOCAL_ONLY and bearer is True and not tailnet:
+            return self.local_api(path, method, data=data, body=body, headers=headers, **kw)
+        return super().api(path, method, data, bearer, body, headers, **kw)
+
     def setUp(self):
         super().setUp()
         self.calls: list[dict] = []          # every CLI verb the routes ran, in order: args, timeout, who, input
         self.refuse: dict[str, tuple[int, list[dict]] | tuple[bool, str]] = {}    # verb -> its answer instead
         self.env: dict[str, str] = {}
         self.browser_version: str | None = "1.64.0"
+        self.half_created: str | None = None  # `new` answers this, leaving its worktree and marker, no mind store
         self.during_grant = None             # runs inside the next `calendar grant`: another request interleaving
         self.real_run_json = actions.run_json            # before the fake: the secret test runs the real one
         self.tmpl = Path(tempfile.mkdtemp(prefix="shaft-setup-tmpl-"))
@@ -69,6 +82,12 @@ class SetupTest(AppTest):
             if "--paused-until-first-reply" in args:                         # as `shaft new`: paused, with its marker
                 core.set_paused(name, True, reason="waiting for the operator's first reply", note=False)
                 (self.sup / f"first-reply-{name}").write_text(json.dumps({"then": args[-1], "created": "x"}))
+            if self.half_created:                                            # its commit or mind store failed
+                return 1, [{"ok": False, "error": self.half_created}]
+            (root / "self").mkdir()                                          # as `shaft new`'s last step: the mind
+            (root / "self" / "self.md").write_text("# Self-Model\n")       # store and its creation commit
+            mind.init(name)
+            mind.commit(name, f"{name}: created from the SHAFT template", root)
             return 0, [{"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
                         "paused": "--paused-until-first-reply" in args}]
         if args[:2] == ["secrets", "set"]:
@@ -78,7 +97,8 @@ class SetupTest(AppTest):
         if args[:2] == ["provider", "use"]:
             return 0, [{"ok": True, "provider": args[2], "model": "openrouter/a", "changed": ["SHAFT_JUDGE_MODELS"],
                         "written": {"SHAFT_JUDGE_MODELS": "openrouter/a"}, "covers": ["instances", "judges"],
-                        "off": {"coding": "no openrouter coder is configured"}, "not_live": []}]
+                        "off": {"coding": "no openrouter coder is configured"},
+                        "not_live": {"SHAFT_JUDGE_MODELS": ["web", "api"]}}]
         if args[:2] == ["provider", "check"]:
             return 1, [{"ok": True, "model": "openrouter/a", "error": None},
                        {"ok": False, "model": "openrouter/b", "error": "OpenRouter HTTP 401: no key"}]
@@ -192,6 +212,22 @@ class CreateTest(SetupTest):
         self.assertEqual((self.inst / "ledger" / "drive.md").read_text(), DRIVE + "\n")
         self.assertTrue((self.sup / "first-reply-ledger").exists())          # its choice is left as it was
 
+    def test_try_again_after_new_failed_halfway_is_refused_not_finished(self):
+        """Final review M1 (bug on aa5a7b51): `new` made the worktree and marker, then its commit or mind store
+        failed; Try again saw a name with a first-reply marker, skipped `new` and reported a broken instance as
+        created. Only a `new` that finished (its mind store's creation commit) is finished by a retry."""
+        self.half_created = ("ledger was only partly created (mind store unwritable). Choose another name: ledger "
+                             "stays paused and never runs.")
+        self.assertEqual(self.error(self.create(), 409, "refused")["message"], self.half_created)
+        self.half_created = None
+        self.calls.clear()
+        err = self.error(self.create(), 409, "refused")
+        self.assertEqual(err["message"], "ledger was only partly created (its memory store was never made), so the "
+                                         "setup cannot finish it. Choose another name: ledger stays paused and never "
+                                         "runs.")
+        self.assertEqual(err["done"], [])
+        self.assertEqual(self.calls, [])                                    # no config, no drive on a broken instance
+
     def test_the_app_quitting_before_it_heard_is_finished_on_the_next_attempt(self):
         self.assertEqual(self.create().status, 200)                        # the answer the app never read
         self.calls.clear()
@@ -275,7 +311,7 @@ class SecretTest(SetupTest):
         r = self.api("/app/v1/setup/secret", "POST", {"name": "SCRAPEBADGER_API_KEY", "value": KEY})
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(self.calls, [{"args": ["secrets", "set", "SCRAPEBADGER_API_KEY", "--json"],
-                                       "timeout": actions.RUN_NOW_S, "who": "app iphone-app", "input": KEY + "\n"}])
+                                       "timeout": actions.RUN_NOW_S, "who": "app mac-app", "input": KEY + "\n"}])
 
     def test_only_provider_and_tool_keys(self):
         for name in ("SHAFT_API_KEY", "SHAFT_INBOX_KEY", "SHAFT_API_LOGINS", "TELEGRAM_TOKEN_WISP",
@@ -305,7 +341,7 @@ class SecretTest(SetupTest):
         r = self.api("/app/v1/setup/telegram", "POST", {"name": "wisp", "token": TOKEN})
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(self.calls, [{"args": ["telegram", "token", "wisp"], "timeout": actions.RUN_NOW_S,
-                                       "who": "app iphone-app", "input": TOKEN + "\n"}])
+                                       "who": "app mac-app", "input": TOKEN + "\n"}])
         self.assertNotIn(TOKEN, repr(app_api.log.call_args_list))
         self.refuse["telegram"] = (False, "not saved: Telegram refused the token (getMe: HTTP 401 Unauthorized)")
         err = self.error(self.api("/app/v1/setup/telegram", "POST", {"name": "wisp", "token": TOKEN}), 409, "refused")
@@ -395,7 +431,7 @@ class TelegramTest(SetupTest):
     def test_service_runs_telegram_on_through_the_verb(self):
         said = self.get("/app/v1/setup/telegram/service", method="POST", data={})
         self.assertEqual(said, {"said": "done"})
-        self.assertEqual(self.calls, [{"args": ["telegram", "on"], "timeout": actions.SLOW_S, "who": "app iphone-app",
+        self.assertEqual(self.calls, [{"args": ["telegram", "on"], "timeout": actions.SLOW_S, "who": "app mac-app",
                                        "input": None}])
         self.refuse["telegram"] = (False, "no bot tokens yet: shaft telegram token <instance>")
         err = self.error(self.api("/app/v1/setup/telegram/service", "POST", {}), 409, "refused")
@@ -438,7 +474,7 @@ class ProviderTest(SetupTest):
         self.assertEqual(self.calls[0]["timeout"], actions.SLOW_S)
         self.assertEqual(json.loads(r.body), {
             "provider": "custom", "model": "openrouter/a", "changed": ["SHAFT_JUDGE_MODELS"], "covers": ["instances", "judges"],
-            "off": [{"function": "coding", "why": "no openrouter coder is configured"}], "not_live": []})
+            "off": [{"function": "coding", "why": "no openrouter coder is configured"}], "not_live": ["api", "web"]})
 
     def test_use_refusal_and_bad_fields(self):
         self.refuse["provider"] = (2, [{"ok": False, "error": "custom needs --model (the model name on the endpoint)"}])
@@ -672,9 +708,22 @@ class HelloTest(SetupTest):
         feed = self.get("/app/v1/from/wisp")                   # the operator never sees the opening in Main
         self.assertNotIn("SHAFT's setup", json.dumps(feed))
         self.assertEqual([i for i in feed["items"] if i["type"] == "user"], [])
+        self.error(self.api("/app/v1/setup/hello/nobody", "POST", {}), 404, "not_found")
+
+    def test_a_second_hello_after_the_opening_was_sent_answers_that_chat(self):
+        """Final review M2 (bug on aa5a7b51): the app's Try again after it lost the first answer got 409 forever."""
+        first = self.get("/app/v1/setup/hello/wisp", method="POST", data={})
+        again = self.get("/app/v1/setup/hello/wisp", method="POST", data={})
+        self.assertEqual(again, {"said": "wisp was asked for its welcome already", "chat": first["chat"]})
+        chat = web_chat.load(first["chat"]["id"])
+        self.assertEqual([t.get("hidden") for t in chat["turns"] if t["role"] == "user"], [True])   # asked once
+
+    def test_hello_is_refused_when_main_has_a_conversation_of_the_operator(self):
+        chat = web_chat.from_chat("wisp", ME.lower(), create=True)
+        chat["turns"].append({"role": "user", "content": "hi", "ts": "2026-11-12T10:00:00"})
+        web_chat.save(chat)
         err = self.error(self.api("/app/v1/setup/hello/wisp", "POST", {}), 409, "refused")
         self.assertIn("conversation already", err["message"])
-        self.error(self.api("/app/v1/setup/hello/nobody", "POST", {}), 404, "not_found")
 
 
 # -- who may call them ------------------------------------------------------------------------------------------------
@@ -700,6 +749,56 @@ class BearerTest(LocalTest):
             self.assertEqual((rj.call_count, rn.call_count), (0, 0))
         # with the bearer, on loopback, a route answers (as the device)
         self.assertEqual(self.local_api("/app/v1/setup/drives").status, 200)
+
+
+class LocalOnlyTest(SetupTest):
+    """Final review I3 (bug on aa5a7b51): a device paired over the tailnet could save provider keys, switch the preset
+    to a custom endpoint of its choosing (redirecting every model call), save a Telegram bot and restart its service.
+    Those routes answer only the Mac app on loopback; the tailnet gets 403 local_only and no verb runs."""
+
+    BODIES = {"/app/v1/setup/secret": {"name": "OPENROUTER_API_KEY", "value": KEY},
+              "/app/v1/setup/provider": {"provider": "custom", "model": "m", "base_url": "https://evil.example/v1",
+                                         "price_in": 0, "price_out": 0},
+              "/app/v1/setup/provider/check": {"provider": "openrouter"},
+              "/app/v1/setup/telegram": {"name": "wisp", "token": TOKEN},
+              "/app/v1/setup/telegram/service": {}}
+
+    def test_a_tailnet_device_is_refused_and_no_verb_runs(self):
+        self.assertEqual(set(self.BODIES), set(LOCAL_ONLY))
+        for path, body in self.BODIES.items():
+            with self.subTest(path=path):
+                err = self.error(self.api(path, "POST", body, tailnet=True), 403, "local_only")
+                self.assertEqual(err["message"], "Do this on the Mac that runs SHAFT.")
+        self.assertEqual(self.calls, [])
+
+    def test_the_mac_app_on_loopback_is_served(self):
+        for path, body in self.BODIES.items():
+            with self.subTest(path=path):
+                self.assertNotEqual(self.local_api(path, "POST", data=body).status, 403)
+        self.assertEqual([c["args"][:2] for c in self.calls],
+                         [["secrets", "set"], ["provider", "use"], ["provider", "check"], ["telegram", "token"],
+                          ["telegram", "on"]])
+
+    def test_the_custom_endpoint_is_never_set_from_the_web_ui(self):
+        from supervisor import settings
+        settings.load_all()
+        self.assertFalse(settings.KNOBS["SHAFT_CUSTOM_BASE_URL"].web)
+
+
+class UnpairedMeanwhileTest(SetupTest):
+    def test_a_device_unpaired_after_its_bearer_was_checked_is_401_not_500(self):
+        """Final review M4 (bug on aa5a7b51): app_api._who read web.devices()[device] and crashed with KeyError (a 500)
+        when the device was unpaired between the bearer check and the route."""
+        from supervisor import web
+        real = web.devices
+        calls = {"n": 0}
+
+        def devices():
+            calls["n"] += 1
+            return real() if calls["n"] == 1 else {}      # the bearer check sees it; the route no longer does
+        with mock.patch.object(web, "devices", side_effect=devices):
+            self.error(self.local_api("/app/v1/setup/provider", "POST", data={"provider": "openrouter"}), 401, "unpaired")
+        self.assertEqual(self.calls, [])
 
 
 # -- the fixtures the Swift side decodes -------------------------------------------------------------------------------

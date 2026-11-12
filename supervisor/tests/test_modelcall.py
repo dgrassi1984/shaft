@@ -78,6 +78,28 @@ class Case(unittest.TestCase):
                              max_tokens=kw.pop("max_tokens", 1000), purpose="test", **kw)
 
 
+class FallbackPriceTest(Case):
+    def test_an_answer_from_an_unpriced_fallback_id_is_priced_as_the_model_asked_and_marked(self):
+        """Final review M5 (bug on aa5a7b51): a Claude answer was priced by the answering model's id, so a server-side
+        fallback whose id is not in PRICES went unpriced (usd None) and the daily budgets could not count it."""
+        self.claude.answer_model = "claude-haiku-5-5-fallback-20261101"
+        self.assertNotIn(self.claude.answer_model, cloudllm.PRICES)
+        with mock.patch.object(modelcall, "supervisor_log") as said:
+            a = self.ask("claude-haiku-5-5")
+        self.assertIsNotNone(a.usd)
+        self.assertAlmostEqual(a.usd, (1000 * 0.10 + 100 * 0.50) / 1e6)
+        self.assertEqual(a.model, self.claude.answer_model)                 # who answered stays recorded
+        self.assertEqual(a.usage["priced_as"], "claude-haiku-5-5")
+        self.assertIn("priced as claude-haiku-5-5", said.call_args.args[0])
+        # the judges' ledger prices that answer too, rather than recording it unpriced
+        from supervisor import judge
+        with mock.patch.object(judge, "SUP_DIR", self.root):
+            judge._log("test", a.model, a.usage, 1.0, None, a.usd)
+        row = json.loads((self.root / "judge_usage.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((row["unpriced"], row["priced_as"]), (False, "claude-haiku-5-5"))
+        self.assertAlmostEqual(row["usd"], a.usd)
+
+
 class RoutingTest(Case):
     def test_each_prefix_reaches_its_endpoint(self):
         a = self.ask("claude-haiku-5-5")

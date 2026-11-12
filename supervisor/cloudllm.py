@@ -68,7 +68,7 @@ OPENROUTER_MANDATORY_REASONING = {"openai/gpt-6.1-sol"}
 CUSTOM_BASE_URL, _ = knob(
     "SHAFT_CUSTOM_BASE_URL", "", http_url, "the OpenAI-compatible endpoint (an http(s) URL, e.g. https://host/v1) "
     "that custom/<model> is called on: <url>/chat/completions, with the key SHAFT_CUSTOM_API_KEY",
-    group="Models and spend", services=("runs", "api"))
+    group="Models and spend", services=("runs", "api"), web=False)    # where model traffic goes: never from a browser
 CUSTOM_PRICES, _ = knob(
     "SHAFT_CUSTOM_PRICES", "{}", custom_prices, "what each custom/<model> costs, in dollars per million tokens, as "
     'JSON {"<model>": [input, output]} (0 is allowed): a custom model with no price is refused, so the daily cap '
@@ -584,7 +584,57 @@ def custom_stream(instance: str, body: dict, secrets: dict):
     if resp is None:
         _record(instance, model, None, None, 0.0, started, None, error)
         raise CloudError(502, f"custom endpoint call for {model} failed: {error}")
-    return _relay(instance, _fallback_label.get() or model, resp, started, custom={"price": price, "body": body})
+    label = _fallback_label.get() or model
+    if _content_type(resp) == "application/json":     # a server that ignores `stream` and answers the whole reply
+        return _relay_whole(instance, label, resp, started, price, body)
+    return _relay(instance, label, resp, started, custom={"price": price, "body": body})
+
+
+def _content_type(resp) -> str:
+    headers = getattr(resp, "headers", None)
+    return headers.get_content_type() if headers is not None and hasattr(headers, "get_content_type") else ""
+
+
+def _relay_whole(instance: str, model: str, resp, started: float, price: tuple[float, float], body: dict):
+    """A custom endpoint that answers a stream request with one `application/json` reply (some OpenAI-compatible
+    servers ignore `stream`): that reply is the whole stream, one complete chunk, priced from its own usage like a
+    buffered call (_custom). Read as SSE it held no `data:` line, so the instance saw an empty answer and the call was
+    charged as an estimate. A body that is no reply becomes an error chunk, as a broken stream does in the broker."""
+    data, error, finish, tin, tout, cost, extra = None, None, None, None, None, 0.0, {}
+    try:
+        with resp:
+            raw = resp.read()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            error = f"the endpoint answered a stream request with JSON that does not parse: {raw[:200]!r}"
+        if data is not None and not (isinstance(data, dict) and data.get("choices")):
+            error = f"no reply: {json.dumps(data.get('error') if isinstance(data, dict) else data)[:400]}"
+            data = None
+    except NETWORK_ERRORS as e:
+        error = f"stream broken: {e!r}"
+        _record(instance, model, None, None, 0.0, started, None, error)
+        raise
+    if data is not None:
+        choice = data["choices"][0] or {}
+        message = choice.get("message") or {}
+        finish = choice.get("finish_reason")
+        for c in message.get("tool_calls") or []:
+            fn = c.get("function") or {}
+            if not isinstance(fn.get("arguments"), str):
+                fn["arguments"] = json.dumps(fn.get("arguments") or {}, ensure_ascii=False)
+        tin, tout, cost, extra = _custom_counts(price, body, data.get("usage") or {}, _message_chars(message))
+    _record(instance, model, tin, tout, cost, started, finish, error, extra=extra)
+    if data is None:
+        yield b"data: " + json.dumps({"error": {"message": f"custom endpoint call for {model} failed: {error}"}}).encode()
+        yield b"\n\n"
+        return
+    said = {"content": message.get("content") or "", "tool_calls": message.get("tool_calls") or [],
+            "reasoning": message.get("reasoning") or message.get("reasoning_content") or ""}
+    reply = {"model": model, "choices": [{"index": 0, "message": said, "finish_reason": finish or "stop"}],
+             "usage": {"prompt_tokens": tin, "completion_tokens": tout, "cost": cost}}
+    for line in as_sse(reply).split(b"\n"):
+        yield line + b"\n"
 
 
 def _custom(instance: str, body: dict, key: str, price: tuple[float, float]) -> dict:

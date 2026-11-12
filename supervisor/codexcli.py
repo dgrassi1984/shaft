@@ -16,7 +16,7 @@ import tempfile
 import time
 from typing import Callable
 
-from . import planchannel, sandbox
+from . import core, planchannel, sandbox
 from .core import SUP_DIR, channel_fallback, knob, positive_int
 
 
@@ -213,7 +213,8 @@ class Channel(planchannel.Channel):
         (home / "config.toml").write_text("")
         auth = home / "auth.json"
         if not auth.is_file():
-            raise CodexFailure("Codex login missing; run shaft codex login")
+            raise CodexFailure(core.say("Codex login missing; run shaft codex login",
+                                        "Codex is not signed in: sign in with ChatGPT on the Model step"))
         _prune_logs(home)
         self._folder = Path(tempfile.mkdtemp(prefix="shaft-codex-")).resolve()
         argv = [BIN]

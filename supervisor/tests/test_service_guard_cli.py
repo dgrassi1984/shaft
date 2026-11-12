@@ -19,7 +19,7 @@ class CliGuardTest(unittest.TestCase):
         self.calls, self.logged = [], []
         for p in (mock.patch.object(autonomy, "autonomy", lambda action: self.calls.append(("autonomy", action)) or 0),
                   mock.patch.object(autonomy, "service", lambda name, action: self.calls.append((name, action)) or 0),
-                  mock.patch.object(api, "command", lambda action, local=False, as_json=False: self.calls.append(("api", action)) or 0),
+                  mock.patch.object(api, "command", lambda action, local=False, as_json=False, force=False: self.calls.append(("api", action)) or 0),
                   mock.patch.object(actions, "log", self.logged.append)):
             p.start()
             self.addCleanup(p.stop)

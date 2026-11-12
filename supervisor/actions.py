@@ -180,11 +180,18 @@ def log_name(who: str) -> str:
     return f"{who}-actions.log"
 
 
+APP_WORDING = "SHAFT_APP_WORDING"     # set for a verb an app's route runs: its messages in the app's words (core.say)
+
+
 def _run(args: list[str], timeout: float, who: str, input: str | None):
     """The subcommand run once, logged by its args alone: `input` (a secret, for the setup routes) goes to its stdin and
-    is never logged, never in argv. None leaves stdin as it always was. TimeoutExpired is the caller's."""
+    is never logged, never in argv. None leaves stdin as it always was. TimeoutExpired is the caller's. A verb run for
+    an app (`who` "app <device>", app_api) says what to do in the app, never a terminal command: the app shows its
+    words as they are."""
     log(f"{who}: operator ran {say(args)}")
     extra = {} if input is None else {"input": input}
+    if who.startswith("app "):
+        extra["env"] = {**os.environ, APP_WORDING: "1"}
     return subprocess.run(_cli(args), cwd=PROJECT, capture_output=True, text=True, timeout=timeout, **extra)
 
 

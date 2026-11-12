@@ -11,6 +11,7 @@ from unittest import mock
 
 from supervisor import __main__ as cli
 from supervisor import cloudllm, codexcli, core, modelcall, provider, settings
+from supervisor.tests.test_custom_route import chat
 from supervisor.tests.test_modelcall import ALL_KEYS, Case as ProviderCase
 
 MODEL_KNOBS = provider.MODEL_KNOBS
@@ -136,7 +137,12 @@ class UseTest(Case):
         code, (r,), _ = self.run_cli("use", "codex")
         self.assertEqual(code, 0)
         self.assertEqual(r["covers"], [])
-        self.assertIn("shaft codex login", r["off"]["judge"])
+        # --json is the Mac app's Model step: the sign-in is named there, not a terminal command (final review I6)
+        self.assertEqual(r["off"]["judge"], "Codex is not signed in: sign in with ChatGPT on the Model step")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["provider", "use", "codex"])
+        self.assertIn("shaft codex login", out.getvalue())                  # the terminal keeps its own words
 
     def test_custom_prices_and_the_models_that_need_them_go_in_one_write(self):
         """The custom/ validators read SHAFT_CUSTOM_PRICES as loaded at process start: a first `use custom` writes the
@@ -230,7 +236,97 @@ class CheckTest(Case):
     def test_check_with_nothing_configured_for_the_provider_fails_loudly(self):
         code, (row,), _ = self.run_cli("check", "custom")
         self.assertEqual((code, row["ok"], row["model"]), (1, False, None))
-        self.assertIn("shaft provider use custom", row["error"])
+        self.assertEqual(row["error"], "no custom/ model is configured yet: Save the provider first")
+
+
+class StaleServiceTest(Case):
+    """Final review C2 (bug on aa5a7b51): the running API reads its model knobs when it starts and runs conversations
+    in-process, so after the Model step saved the custom preset it still refused custom/ (403, SHAFT_CLOUD_MODELS) and
+    the welcome failed. `provider use` names every service holding another value of what it wrote (also when a repeated
+    Save changes nothing: the restart after a failed one is still due), and `api restart` / `web restart` are what pick
+    the preset up: a process started after the save accepts custom/."""
+
+    def held_defaults(self):
+        settings.load_all()
+        return {"knobs": {k.name: {"raw": k.default, "source": "default"} for k in settings.KNOBS.values()}}
+
+    def test_a_service_started_before_the_save_refuses_custom_until_it_restarts(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+        api_record = self.held_defaults()
+        args = ("use", "custom", "--model", "my-model", "--base-url", self.custom.url, "--price-in", "2", "--price-out", "8")
+        with mock.patch("supervisor.version.service", side_effect=lambda s, stale=False: api_record if s == "api" else None):
+            code, (first,), _ = self.run_cli(*args)
+            self.assertEqual(code, 0)
+            code, (again,), _ = self.run_cli(*args)           # Try again after a failed restart: nothing changes
+        self.assertIn("SHAFT_CLOUD_MODELS", first["changed"])
+        self.assertEqual(again["changed"], [])
+        for r in (first, again):
+            self.assertEqual(sorted({s for svcs in r["not_live"].values() for s in svcs}), ["api"])
+            self.assertIn("api", r["not_live"]["SHAFT_CLOUD_MODELS"])
+
+        # This process stands for the API started before the save: its knob is the default, and custom/ is refused.
+        with mock.patch.object(cloudllm, "CLOUD_MODELS", core.cloud_models(settings.KNOBS["SHAFT_CLOUD_MODELS"].default)):
+            with self.assertRaises(cloudllm.CloudError) as refused:
+                cloudllm.complete("wisp", {"model": "custom/my-model", "messages": []}, {}, {})
+        self.assertEqual(refused.exception.status, 403)
+
+        # The restart path the wizard runs is accepted (launchd stubbed) …
+        from supervisor import __main__ as main
+        from supervisor import runner
+        restarted = []
+        out = io.StringIO()
+        with mock.patch("supervisor.autonomy.installed", return_value=True), \
+                mock.patch("supervisor.autonomy.running", return_value=True), \
+                mock.patch("supervisor.autonomy.service", side_effect=lambda *a: restarted.append(a) or 0), \
+                mock.patch.object(runner, "replying", return_value=[]), \
+                mock.patch("supervisor.api.instance_names", return_value=["wisp"]), \
+                mock.patch("supervisor.actions.cli_guard", return_value=""), redirect_stdout(out):
+            self.assertEqual(main.main(["api", "restart", "--json"]), 0)
+            self.assertEqual(main.main(["web", "restart", "--json"]), 0)
+        self.assertEqual(restarted, [("api", "on"), ("web", "on")])
+        self.assertEqual([json.loads(line) for line in out.getvalue().splitlines()], [{"ok": True}, {"ok": True}])
+
+        # … and the process it starts reads the saved preset: custom/ is allowed and priced.
+        project = Path(__file__).resolve().parents[2]
+        probe = ("import json; from supervisor import cloudllm as c; "
+                 "print(json.dumps({'allowed': 'custom/my-model' in c.CLOUD_MODELS, "
+                 "'price': list(c._custom_price_or_refuse('custom/my-model'))}))")
+        r = subprocess.run([sys.executable, "-E", "-s", "-c", probe], cwd=project, capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.root), "SHAFT_SUPERVISOR_DIR": str(self.root)},
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), {"allowed": True, "price": [2.0, 8.0]})
+
+
+class StreamProbeTest(Case):
+    """Final review I5: `provider check custom` made only a buffered call, so an endpoint whose stream an instance
+    cannot read passed Test and the welcome failed. A custom/ model the instances run on is also asked as a stream."""
+
+    declare = CheckTest.declare
+
+    def instances_on(self):
+        return mock.patch.object(cloudllm, "CLOUD_MODELS", ["custom/my-model"])
+
+    def test_check_also_asks_the_instance_model_as_a_stream(self):
+        self.declare()
+        self.custom.reply = chat("ok", usage={"prompt_tokens": 5, "completion_tokens": 1})
+        with self.instances_on(), mock.patch.object(cloudllm, "USAGE", self.root / "cloud_usage.jsonl"):
+            code, rows, _ = self.run_cli("check", "custom")
+        self.assertEqual((code, rows), (0, [{"ok": True, "model": "custom/my-model", "error": None}]))
+        self.assertEqual([r["body"].get("stream") for r in self.custom.requests], [None, True])
+
+    def test_a_stream_with_no_text_fails_the_check(self):
+        self.declare()
+        self.custom.reply = chat("ok", usage={"prompt_tokens": 5, "completion_tokens": 1})
+        self.custom.sse = [{"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}, "[DONE]"]
+        # the buffered call answers (as it did on the endpoint this bug was found with); only the stream is empty
+        with self.instances_on(), mock.patch.object(cloudllm, "USAGE", self.root / "cloud_usage.jsonl"), \
+                mock.patch.object(modelcall, "ask"):
+            code, (row,), _ = self.run_cli("check", "custom")
+        self.assertEqual((code, row["ok"]), (1, False))
+        self.assertIn("answered a stream request (how instances call it) with no text", row["error"])
 
 
 if __name__ == "__main__":

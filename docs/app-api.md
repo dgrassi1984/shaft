@@ -1264,7 +1264,8 @@ A pending restart request appears as `draining` before the first drain tick only
 API restart refuses with `409 busy` when its guard is nonempty. There is no force option. Otherwise it runs
 `api restart` with `actions.SLOW_S`, as the web service action does for an installed API: it restarts the service in the
 mode it runs in (never `tailscale serve`, no login or key change, so a local-only Mac needs no Tailscale), and is
-refused while a conversation is open (`409 refused`, "a conversation is open with <n>: try again when it ends"). Scheduler restart runs `autonomy restart`.
+refused while an instance is replying (`409 refused`, "<n> is replying in a conversation right now: try again when that
+reply finishes"); a conversation that is open but quiet holds nothing back. Scheduler restart runs `autonomy restart`.
 A pending drain is returned without requesting it again, preserving its deadline. Cancel runs
 `autonomy restart --cancel`. A second restart while the same service's command runs gives `409 restarting`. The web service action shares this lock.
 A failed command gives `409 refused` with the command's message. Successful commands return the fresh service list;
@@ -1442,7 +1443,12 @@ the device, the app says so on screen and speaks with the system voice for that 
 
 The Mac app's setup wizard creates an instance, stores the provider keys, switches the provider, grants access and
 asks the new instance for its welcome. The routes need the bearer like every other route (§1.2), on the tailnet or
-on loopback; the wizard uses loopback (`shaft web pair --local`). Each state change runs the CLI verb an operator would
+on loopback; the wizard uses loopback (`shaft web pair --local`). The routes that decide where model calls go or what
+holds a key — `/setup/secret`, `/setup/provider`, `/setup/provider/check`, `/setup/telegram` and
+`/setup/telegram/service` — answer only loopback: from the tailnet they are `403 local_only` ("Do this on the Mac that
+runs SHAFT") and run nothing, so a device paired over the tailnet cannot point every instance's model traffic at an
+endpoint of its choosing (`SHAFT_CUSTOM_BASE_URL` is also terminal-only on the web Settings page). Each state change
+runs the CLI verb an operator would
 type (`supervisor/actions.py`: `run_json` for the verbs that answer in JSON, `run_now` for the others), logged as
 `app <device name>: operator ran shaft …`, so every verb's own checks and refusals apply. A key or a token goes to the
 verb's **stdin**, never into its arguments, a log line or an answer.
@@ -1466,7 +1472,9 @@ verb's **stdin**, never into its arguments, a log line or an answer.
 | POST | `/setup/autonomy/<n>` | `{then}` | 200, `{"instance", "then"}` (§18.9) |
 
 A missing or extra field, or a field of the wrong type: `400 bad_request`, and nothing runs. A verb that refuses:
-`409 refused` with the verb's own words.
+`409 refused` with the verb's own words. The app shows those words as they are, so every verb a route runs says what
+to do in the app, never a terminal command: a `--json` verb, and any verb run for an app (`SHAFT_APP_WORDING`,
+`actions._run`), uses the app's wording (`core.say`); the terminal keeps its own.
 
 ### 18.1 `POST /setup/instance`
 
@@ -1538,10 +1546,12 @@ needs --model"). Keys are set first with `/setup/secret`. Success:
 | `changed` | [str] | the settings it changed |
 | `covers` | [str] | what the provider now runs, of `instances`, `judge`, `judge2`, `coder`, `consult`, `describe`, `recap`, `trial` (`supervisor/provider.py` `FUNCTIONS`) |
 | `off` | [{`function`, `why`}] | what stays off with this provider, and why |
-| `not_live` | [str] | changed settings a running service picks up only when restarted |
+| `not_live` | [str] | the running services (`api`, `web`, `scheduler`, `telegram`) that still hold another value of a setting the preset wrote (changed now or by an earlier save): the wizard restarts each (`api restart --json`, `web restart --json`, `autonomy restart`, `telegram restart`, as local processes, web last), waits for the web service to answer again, and only then runs Test |
 
 `/setup/provider/check` (`{"provider"}` alone) runs `provider check <provider> --json` with `2 × actions.SLOW_S`: one
-minimal live call per configured model of the provider. `{"provider", "ok": bool, "models": [{ok, model, error}]}`:
+minimal live call per configured model of the provider; a `custom/` model the instances run on is also asked once as a
+stream, as the broker asks it (an endpoint that answers a stream request with one `application/json` reply is read as
+one complete chunk). `{"provider", "ok": bool, "models": [{ok, model, error}]}`:
 `ok` is true when every model answered; a model that failed is a row with the provider's own error, not a refusal.
 A check that could not run at all is `409 refused`.
 
@@ -1632,8 +1642,9 @@ login. Its text (`setup.opening_text`) says who the operator is (`OPERATOR_NAME`
 has been granted (§18.6, without any key's value), and asks it to introduce itself briefly and ask two or three
 questions to start. The operator never sees it in the feed; the instance's reply is the first thing in Main, and the
 operator's first answered reply resumes the instance or leaves it paused, as `autonomy` said (§18.1). Success:
-`{"said": "<n> is writing its welcome", "chat": {"id": <Main's id>, "title": <n>}}`. Once Main has any turn:
-`409 refused` ("… has a conversation already").
+`{"said": "<n> is writing its welcome", "chat": {"id": <Main's id>, "title": <n>}}`. Asked again once the opening
+was sent (the app's Try again after it lost the answer), nothing is asked twice: `{"said": "<n> was asked for its welcome
+already", "chat"}`. Once Main has a turn of the operator's: `409 refused` ("… has a conversation already").
 
 ### 18.9 `POST /setup/autonomy/<n>`
 
@@ -1659,9 +1670,11 @@ it (`v0.60.0`, or `v0.60.0-3-gabc1234` past a tag): its own service record when 
 removed or moved, a meaning changed); an added field or route is not a break. It needs the paired bearer, like every
 route but `/pair`.
 
-The app declares the lowest `api` it works with (SHAFTKit `ServerCompatibility.minimumServerAPI`, 1) and asks this once
-per session. A server whose `api` is lower, or one older than this route (`404 not_found`), gets "This app needs a newer
-SHAFT server" in place of the session, with the Mac app's Update server action, instead of calls failing one by one;
+The app declares the lowest `api` it works with (SHAFTKit `ServerCompatibility.minimumServerAPI`, 0) and asks this once
+per session; a server older than this route (`404 not_found`) is api 0, so every existing install keeps working. The
+Mac setup wizard needs api 1 (`ServerCompatibility.setupServerAPI`: its routes, §18, came with it) and asks once per
+wizard. A server whose `api` is lower than what is needed gets "This app needs a newer SHAFT server" in place of the
+session (or the wizard's step), with the Mac app's Update server action, instead of calls failing one by one;
 Check again asks once more, as coming back to the front does. Any other failure (the server unreachable, a 500) does
 not block: the calls report it themselves.
 

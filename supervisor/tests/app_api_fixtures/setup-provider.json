@@ -14,5 +14,8 @@
       "why": "no openrouter coder is configured"
     }
   ],
-  "not_live": []
+  "not_live": [
+    "api",
+    "web"
+  ]
 }

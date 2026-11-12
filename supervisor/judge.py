@@ -155,6 +155,8 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
         from . import cloudllm
         rec.update(cloudllm.billed(usage))
         usd = cloudllm.usd(model, rec)
+        if usd is None and usage.get("priced_as"):     # a server-side fallback's unpriced id (modelcall._claude)
+            usd, rec["priced_as"] = cloudllm.usd(usage["priced_as"], rec), usage["priced_as"]
     else:
         rec.update(provider=provider, reasoning_tokens=reasoning)   # kept when OpenRouter's usage had no cost too
         if usage.get("plan"):
