@@ -4,10 +4,17 @@ the switch off keep today's refusals, and the identity of a local request is the
 header any local process could forge."""
 from __future__ import annotations
 
+import io
 import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
 from unittest import mock
 
-from supervisor import core, web, web_chat
+from supervisor import api, core, web, web_chat
 from supervisor.tests.test_app_api import AppTest
 from supervisor.tests.test_web import HOST, ME
 
@@ -144,3 +151,197 @@ class AddDeviceTest(LocalTest):
     def test_pairing_through_a_link_still_works(self):
         dev, _ = self.pair_app("ipad-app", "ios")
         self.assertEqual(web.devices()[dev]["login"], ME)
+
+
+class LocalInstallTest(LocalTest):
+    """`shaft api on --local`, `shaft web on --local` and `shaft web pair --local`: the Mac app's setup installs the API
+    and web services and pairs itself on 127.0.0.1 without Tailscale. Tailscale and launchctl are never run: a call to
+    api._tailscale fails the test, autonomy.service is a stub."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-local-project-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        self.services = []
+        for p in (mock.patch.object(core, "PROJECT", self.project),
+                  mock.patch.object(core, "SETTINGS_FILE", self.sup / "settings.env"),
+                  mock.patch.dict(os.environ, {}),
+                  mock.patch.object(api, "_tailscale", side_effect=AssertionError("tailscale must not run")),
+                  mock.patch("supervisor.autonomy.service", side_effect=lambda *a: self.services.append(a) or 0),
+                  mock.patch("supervisor.autonomy.running", return_value=False),
+                  mock.patch.object(web, "allowed_logins", return_value={ME, "operator@local"})):
+            p.start()
+            self.addCleanup(p.stop)
+        os.environ.pop("SHAFT_API_LOGINS", None)
+        os.environ.pop("SHAFT_WEB_LOCAL", None)
+
+    def cli(self, *argv):
+        from supervisor import __main__ as m
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            code = m.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    # -- shaft api on --local ----------------------------------------------------------------------------------------
+    def test_api_on_local_sets_the_local_login_and_never_calls_tailscale(self):
+        code, out, err = self.cli("api", "on", "--local")
+        self.assertEqual(code, 0, out + err)
+        env = core.secrets_env()
+        self.assertEqual(env["SHAFT_API_LOGINS"], "operator@local")
+        self.assertEqual(api.LOCAL_LOGIN, "operator@local")
+        self.assertTrue(env["SHAFT_API_KEY"].startswith("sk-shaft-"))
+        self.assertTrue(env["SHAFT_INBOX_KEY"].startswith("sk-shaft-inbox-"))
+        self.assertEqual(self.services, [("api", "on")])
+        self.assertNotIn(env["SHAFT_API_KEY"], out + err)               # the key is shown by `shaft api key` only
+
+    def test_api_on_local_keeps_existing_logins(self):
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=me@x\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        self.assertEqual(self.cli("api", "on", "--local")[0], 0)
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "me@x,operator@local")
+        self.assertEqual(self.cli("api", "on", "--local")[0], 0)          # again: no duplicate
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "me@x,operator@local")
+        self.assertEqual(core.secrets_env()["SHAFT_API_KEY"], "k")       # existing keys are kept
+
+    def test_api_on_tailnet_adds_its_login_next_to_the_local_one(self):
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        status = json.dumps({"Self": {"UserID": 7, "DNSName": "mac.example.ts.net."},
+                             "User": {"7": {"LoginName": "me@x"}}})
+
+        def tailscale(*a):
+            return subprocess.CompletedProcess(a, 0, stdout=status if "status" in a else "", stderr="")
+        with mock.patch.object(api, "_tailscale", side_effect=tailscale), \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(api.command("on"), 0)
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "operator@local,me@x")
+
+    def test_api_on_tailnet_with_only_the_local_login_and_no_tailscale_refuses(self):
+        # plain `api on` is the tailnet install: operator@local is no tailnet login, so it cannot go ahead without one
+        (self.project / ".env").write_text("SHAFT_API_LOGINS=operator@local\nSHAFT_API_KEY=k\nSHAFT_INBOX_KEY=i\n")
+        with mock.patch.object(api, "_tailscale", side_effect=lambda *a: subprocess.CompletedProcess(
+                a, 0, stdout="{}", stderr="")), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(api.command("on"), 1)
+        self.assertIn("Tailscale login", out.getvalue())
+        self.assertEqual(self.services, [])
+        self.assertEqual(core.secrets_env()["SHAFT_API_LOGINS"], "operator@local")
+
+    def test_local_flag_on_another_api_action_is_a_usage_error(self):
+        self.assertEqual(self.cli("api", "status", "--local")[0], 2)
+        self.assertEqual(self.services, [])
+
+    # -- shaft web on --local ----------------------------------------------------------------------------------------
+    def test_web_on_local_sets_the_knob_and_never_calls_tailscale(self):
+        code, out, err = self.cli("web", "on", "--local")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("SHAFT_WEB_LOCAL=on", (self.sup / "settings.env").read_text().splitlines())
+        self.assertEqual(self.services, [("web", "on")])
+        self.assertFalse((self.sup / "web" / "hosts.json").exists())
+        self.assertIn(f"http://127.0.0.1:{web.PORT}", out)
+        self.assertIn("shaft web pair --local", out)
+
+    def test_web_on_local_without_the_local_login_names_api_on_local(self):
+        # a tailnet login alone is not enough: the app's chats reach the API as operator@local (web_chat's relay)
+        for logins in (set(), {ME}):
+            with self.subTest(logins=logins), mock.patch.object(web, "allowed_logins", return_value=logins):
+                code, out, err = self.cli("web", "on", "--local")
+            self.assertEqual(code, 1)
+            self.assertIn("shaft api on --local", out + err)
+        self.assertEqual(self.services, [])
+        self.assertFalse((self.sup / "settings.env").exists())
+
+    def test_pair_local_without_the_local_login_names_api_on_local(self):
+        before = set(web.devices())
+        with mock.patch.object(web, "allowed_logins", return_value={ME}):
+            code, out, _ = self.cli("web", "pair", "--local", "--json")
+        self.assertEqual(code, 1)
+        self.assertIn("shaft api on --local", json.loads(out)["error"])
+        self.assertEqual(set(web.devices()), before)
+
+    # -- shaft web pair --local --------------------------------------------------------------------------------------
+    def test_pair_local_json_prints_a_working_bearer(self):
+        code, out, err = self.cli("web", "pair", "--local", "--name", "my-mac", "--json")
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 1, out)
+        got = json.loads(lines[0])
+        self.assertEqual(got["base_url"], f"http://127.0.0.1:{web.PORT}")
+        self.assertEqual((got["name"], got["login"]), ("my-mac", "operator@local"))
+        r = self.local_api("/app/v1/instances", bearer=f"Bearer {got['device']}.{got['secret']}",
+                           host=got["base_url"].removeprefix("http://"))
+        self.assertEqual(r.status, 200, r.body)
+        rec = web.devices()[got["device"]]
+        self.assertEqual((rec["name"], rec["login"], rec["platform"]), ("my-mac", "operator@local", "macos"))
+        stored = (self.sup / "web" / "devices.json").read_text()
+        self.assertIn(rec["hash"], stored)
+        self.assertNotIn(got["secret"], stored)
+        log = self.sup / "supervisor.log"
+        self.assertNotIn(got["secret"], log.read_text() if log.exists() else "")
+
+    def test_pair_local_refuses_when_local_is_off(self):
+        before = set(web.devices())
+        with mock.patch.object(web, "LOCAL", False):
+            code, out, err = self.cli("web", "pair", "--local", "--name", "my-mac", "--json")
+        self.assertEqual(code, 1)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 1, out)
+        self.assertIn("shaft web on --local", json.loads(lines[0])["error"])
+        self.assertEqual(set(web.devices()), before)
+
+    def test_pair_local_without_json_prints_the_fields_as_lines(self):
+        code, out, _ = self.cli("web", "pair", "--local", "--name", "my-mac")
+        self.assertEqual(code, 0, out)
+        fields = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+        self.assertEqual(fields["base_url"], f"http://127.0.0.1:{web.PORT}")
+        self.assertTrue(web.paired_device(fields["device"], fields["secret"]))
+        self.assertEqual(fields["login"], "operator@local")
+
+    def test_json_and_local_on_other_web_actions_are_usage_errors(self):
+        self.assertEqual(self.cli("web", "status", "--json")[0], 2)
+        self.assertEqual(self.cli("web", "off", "--local")[0], 2)
+        self.assertEqual(self.services, [])
+
+
+class TailscaleMissingTest(unittest.TestCase):
+    """Local-only Macs may have no Tailscale at all: `shaft api off`/`shaft web off` still stop their service."""
+
+    def test_tailscale_not_installed_is_a_failed_call_not_a_crash(self):
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError("no such file")):
+            r = api._tailscale("status", "--json")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not installed", r.stderr)
+
+    def test_off_without_tailscale_still_stops_the_services(self):
+        calls = []
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError("no such file")), \
+                mock.patch("supervisor.autonomy.service", side_effect=lambda *a: calls.append(a) or 0), \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(api.command("off"), 0)
+            self.assertEqual(web.command("off"), 0)
+        self.assertEqual(calls, [("api", "off"), ("web", "off")])
+
+
+class LocalServeTest(LocalTest):
+    """web.serve() in local-only mode (no tailnet name recorded) does not say Tailscale is broken."""
+
+    def serve_logs(self):
+        said = []
+        server = mock.MagicMock()
+        with mock.patch.object(web, "ThreadingHTTPServer", return_value=server), \
+                mock.patch.object(web, "allowed_hosts", return_value=set()), \
+                mock.patch.object(web, "log", side_effect=said.append), \
+                mock.patch("supervisor.web_alerts.start"), mock.patch.object(web_chat, "reap"), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(web.serve(), 0)
+        server.serve_forever.assert_called_once()
+        return " ".join(said), out.getvalue()
+
+    def test_local_only_serve_says_local_not_tailscale_is_missing(self):
+        said, out = self.serve_logs()
+        self.assertNotIn("tailscale cannot be asked", said)
+        self.assertIn("local", said)
+        self.assertNotIn("tailscale is not running", out)
+        self.assertIn(f"http://127.0.0.1:{web.PORT}/app/v1", out)
+
+    def test_tailnet_serve_without_a_name_still_warns(self):
+        with mock.patch.object(web, "LOCAL", False):
+            said, _ = self.serve_logs()
+        self.assertIn("tailscale cannot be asked", said)

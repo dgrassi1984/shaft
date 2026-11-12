@@ -86,17 +86,23 @@ run` runs one scheduled plugin now.
 ## Services
 
 ```text
-shaft web on|off|status|pair [--name N]|unpair <id|name>|--all
+shaft web on [--local]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
 shaft grok login|status
 shaft codex login|status
 shaft model on|off|status
-shaft api on|off|status|key|inbox-key
+shaft api on [--local]|off|status|key|inbox-key
 shaft telegram token <name>|pair|unpair|on|off|status
 shaft embed on|off|status
 ```
 
 `shaft web` controls the tailnet browser panel, chat, configuration, Drive, and access. `pair` registers a
 device, and `unpair` removes one or all devices. See [web and API](web-and-api.md).
+
+`--local` sets up the Mac app on the same Mac without Tailscale. `shaft api on --local` adds the login
+`operator@local` to `SHAFT_API_LOGINS` and exposes nothing. `shaft web on --local` sets `SHAFT_WEB_LOCAL=on` and
+installs the web service, which then serves `/app/v1` at `127.0.0.1` (the pages stay tailnet-only). `shaft web pair
+--local --name N` pairs that app directly and prints its base URL, device id and secret once (`--json`: one JSON line).
+A later `shaft api on` adds your tailnet login next to the local one.
 
 `shaft api` controls the OpenAI-compatible API and inbox doorbell. `key` and `inbox-key` show their separate
 bearer keys. `shaft telegram` configures tokens and pairing and controls Telegram chat. See

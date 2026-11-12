@@ -32,7 +32,8 @@ SHAFT_VOICE_SESSION_IDLE_S without one, with its conversation, or when its insta
 
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
-header (set by `tailscale serve`) in SHAFT_API_LOGINS.
+header (set by `tailscale serve`) in SHAFT_API_LOGINS. `shaft api on --local` (no Tailscale) exposes nothing: it adds
+LOCAL_LOGIN to SHAFT_API_LOGINS, the login the Mac app's devices paired with `shaft web pair --local` act as.
 
 The inbox doorbell has its own, narrower key, SHAFT_INBOX_KEY (`shaft api inbox-key`): it can only drop a
 message, never chat with or drive an instance, and it needs no tailnet login (a script on this Mac, a tagged CI
@@ -915,7 +916,7 @@ def serve() -> int:
         print("no SHAFT_API_KEY in .env — run: shaft api on")
         return 2
     if not allowed_logins():
-        print("no SHAFT_API_LOGINS — run: shaft api on")
+        print("no SHAFT_API_LOGINS — run: shaft api on (or shaft api on --local, without Tailscale)")
         return 2
     from .version import record_service
     record_service("api", {"port": PORT, "idle_minutes": IDLE_MINUTES})
@@ -951,7 +952,10 @@ def _tailscale(*args: str) -> "subprocess.CompletedProcess":
     import shutil
     import subprocess
     exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-    return subprocess.run([exe, *args], capture_output=True, text=True)
+    try:
+        return subprocess.run([exe, *args], capture_output=True, text=True)
+    except FileNotFoundError:              # a local-only Mac (`--local`) may have no Tailscale: a failed call, no crash
+        return subprocess.CompletedProcess([exe, *args], 127, stdout="", stderr=f"tailscale is not installed ({exe})")
 
 
 def _outside_gui(r: "subprocess.CompletedProcess") -> bool:
@@ -976,8 +980,27 @@ def url() -> str:
     return f"https://{host}:{HTTPS_PORT}/v1" if host else "(tailscale is not running)"
 
 
-def command(action: str) -> int:
+LOCAL_LOGIN = "operator@local"   # the login `shaft api on --local` allows: the Mac app's devices act as it on loopback
+
+
+def _add_login(login: str) -> None:
+    """Merge `login` into SHAFT_API_LOGINS (kept in order, once): a later Tailscale install adds its login next to the
+    local one, and a local install keeps the tailnet's."""
+    raw = secrets_env().get("SHAFT_API_LOGINS", "")
+    logins = [x.strip() for x in raw.split(",") if x.strip()]
+    if login.lower() not in {x.lower() for x in logins}:
+        set_secret_env("SHAFT_API_LOGINS", ",".join([*logins, login]))
+
+
+def command(action: str, local: bool = False) -> int:
+    """`shaft api on` creates the keys (SHAFT_API_KEY, SHAFT_INBOX_KEY) if missing, adds your Tailscale login to
+    SHAFT_API_LOGINS, installs the service and exposes it with `tailscale serve`. `shaft api on --local` does the same
+    without Tailscale: it adds LOCAL_LOGIN instead and exposes nothing (the Mac app on this Mac pairs with
+    `shaft web pair --local`). Logins are merged, never replaced."""
     from . import autonomy
+    if local and action != "on":
+        print(f"--local goes with on only (shaft api on --local), not {action}", file=sys.stderr)
+        return 2
     if action == "serve":
         return serve()
     if action == "key":
@@ -1001,13 +1024,22 @@ def command(action: str) -> int:
             set_secret_env("SHAFT_API_KEY", "sk-shaft-" + secrets.token_urlsafe(32))
         if not env.get("SHAFT_INBOX_KEY"):
             set_secret_env("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
-        if not env.get("SHAFT_API_LOGINS"):
-            st = _tailscale_status() or {}
-            me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
-            if not me:
-                print("cannot read your Tailscale login (is Tailscale running?)")
+        if local:
+            _add_login(LOCAL_LOGIN)
+            if autonomy.service("api", "on"):
                 return 1
-            set_secret_env("SHAFT_API_LOGINS", me)
+            log(f"api on, local only: 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}; no tailscale serve)")
+            print(f"\nSHAFT API running on this Mac only (127.0.0.1:{PORT}, not exposed: no Tailscale)\n"
+                  f"  allowed: {', '.join(sorted(allowed_logins()))}\n"
+                  f"  next: shaft web on --local, then shaft web pair --local --name <this mac>")
+            return 0
+        st = _tailscale_status() or {}
+        me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
+        if me:
+            _add_login(me)
+        elif not allowed_logins() - {LOCAL_LOGIN}:  # no tailnet login yet, and none can be read now
+            print("cannot read your Tailscale login (is Tailscale running?)")
+            return 1
         was_running = autonomy.running("api")
         if autonomy.service("api", "on"):
             return 1

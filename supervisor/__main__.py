@@ -1317,6 +1317,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p.add_argument("--local", action="store_true", help="on: without Tailscale — allow the Mac app's local login, "
+                                                        "expose nothing")
     p = sub.add_parser("secrets", help="the supervisor's .env secrets: set NAME (value on stdin), unset NAME, list "
                                        "(names only)")
     p.add_argument("action", choices=["set", "unset", "list"])
@@ -1368,12 +1370,16 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("alerts", help="the control panel's open alerts with their ids; 'dismiss ID…' hides them")
     p.add_argument("action", nargs="?", choices=["dismiss"])
     p.add_argument("ids", nargs="*")
-    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on, off, "
-                                   "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
+    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on [--local], off, "
+                                   "status, pair [--name NAME] (a one-time link for a browser; --local: the Mac app on "
+                                   "this Mac, directly), unpair DEVICE|--all")
     p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
     p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
     p.add_argument("--name", help="pair: what to call this browser (e.g. laptop, phone)")
     p.add_argument("--all", action="store_true", help="unpair: every browser")
+    p.add_argument("--local", action="store_true", help="on: without Tailscale (SHAFT_WEB_LOCAL=on, /app/v1 at "
+                                                        "127.0.0.1); pair: the Mac app on this Mac, no link")
+    p.add_argument("--json", action="store_true", help="pair: one JSON object on stdout")
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
@@ -1760,7 +1766,7 @@ def main(argv: list[str]) -> int:
         return 1
     if args.cmd == "api":
         from . import api
-        return api.command(args.action)
+        return api.command(args.action, local=args.local)
     if args.cmd == "secrets":
         from . import opsecrets
         return opsecrets.command(args.action, args.name, args.json)
@@ -1794,7 +1800,8 @@ def main(argv: list[str]) -> int:
         return cmd_alerts(args.action, args.ids)
     if args.cmd == "web":
         from . import web
-        return web.command(args.action, args.name if args.action == "pair" else args.device, args.all)
+        return web.command(args.action, args.name if args.action == "pair" else args.device, args.all,
+                           local=args.local, as_json=args.json)
     if args.cmd == "telegram":
         from . import telegram
         return telegram.command(args.action, args.name)

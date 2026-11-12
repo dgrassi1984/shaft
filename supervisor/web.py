@@ -2,9 +2,12 @@
 browser, for the tailnet only. Stdlib only, run by the system Python like every launchd service (core.PYTHON).
 
   shaft web on       install the service (com.shaft.web) and expose it with `tailscale serve` (never Funnel)
+  shaft web on --local             install it without Tailscale: sets SHAFT_WEB_LOCAL=on, exposes nothing
   shaft web off      stop it and remove it from the tailnet
   shaft web status   the service, the URL, the paired browsers
   shaft web pair [--name NAME]     a one-time link that pairs the browser you open it in
+  shaft web pair --local [--name NAME] [--json]   pair the Mac app on this Mac directly: its base URL, device id and
+                                   secret (the bearer), shown once, acting as api.LOCAL_LOGIN
   shaft web unpair DEVICE | --all  revoke a paired browser
 
 Who may use it: a request needs BOTH
@@ -1775,7 +1778,7 @@ def serve() -> int:
         print(f"SHAFT_WEB_PORT={PORT} is a port every run may reach ({sorted(reachable)}): choose another")
         return 2
     if not allowed_logins():
-        print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
+        print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login), or shaft api on --local")
         return 2
     from . import web_chat
     from .version import record_service
@@ -1785,25 +1788,86 @@ def serve() -> int:
     web_alerts.start()                           # the instances' messages routed to the web: pushed (channel.py)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
-    if not allowed_hosts():                  # every request would be refused: say so where it is read
+    if not allowed_hosts() and LOCAL:        # local only (shaft web on --local): the pages wait for a tailnet name
+        log(f"web: local only — /app/v1 on 127.0.0.1:{PORT} for the Mac app; no tailnet name recorded, so the pages "
+            "answer no one until shaft web on runs in a terminal")
+    elif not allowed_hosts():                # every request would be refused: say so where it is read
         log("web: no tailnet name recorded and tailscale cannot be asked from here: run shaft web on in a terminal")
-    log(f"web listening on 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}, hosts {sorted(allowed_hosts())})")
-    print(f"SHAFT web UI on http://127.0.0.1:{PORT} (tailnet: {url()}) — {datetime.now():%H:%M}")
+    log(f"web listening on 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}, hosts {sorted(allowed_hosts())}, "
+        f"local {'on' if LOCAL else 'off'})")
+    tailnet = url() if allowed_hosts() or not LOCAL else "none (local only)"
+    print(f"SHAFT web UI on http://127.0.0.1:{PORT} (tailnet: {tailnet}"
+          + (f"; Mac app: http://127.0.0.1:{PORT}/app/v1" if LOCAL else "") + f") — {datetime.now():%H:%M}")
     server.serve_forever()
     return 0
 
 
-def command(action: str, name: str | None = None, everything: bool = False) -> int:
+def _pair_local(name: str | None, as_json: bool) -> int:
+    """`shaft web pair --local`: pair the Mac app on this Mac without a link — a device acting as api.LOCAL_LOGIN, its
+    bearer printed once (one JSON line with --json, for the app's setup; else key: value lines). Never logged."""
+    from .api import LOCAL_LOGIN
+
+    def refuse(message: str) -> int:
+        print(json.dumps({"ok": False, "error": message}) if as_json else message,
+              file=sys.stdout if as_json else sys.stderr)
+        return 1
+    if not LOCAL:
+        return refuse("local pairing is off (SHAFT_WEB_LOCAL): run shaft web on --local first")
+    if LOCAL_LOGIN not in allowed_logins():    # the app's chats reach the API as this login (web_chat): refused there
+        return refuse(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS: run shaft api on --local first")
+    name = name or f"mac {datetime.now():%Y-%m-%d %H:%M}"
+    dev, secret = add_device(name, LOCAL_LOGIN, "macos")
+    got = {"base_url": f"http://127.0.0.1:{PORT}", "device": dev, "secret": secret, "name": name,
+           "login": LOCAL_LOGIN}
+    print(json.dumps({"ok": True, **got}) if as_json else "\n".join(f"{k}: {v}" for k, v in got.items()))
+    return 0
+
+
+def command(action: str, name: str | None = None, everything: bool = False, local: bool = False,
+            as_json: bool = False) -> int:
+    """`shaft web on` needs SHAFT_API_LOGINS, records this Mac's tailnet name, installs the service and exposes it with
+    `tailscale serve`; `on --local` never runs Tailscale: it sets SHAFT_WEB_LOCAL=on (the settings file) and installs
+    the service, reachable at 127.0.0.1 for /app/v1 only. `pair` prints a one-time link for a browser or an app;
+    `pair --local` pairs the Mac app on this Mac directly (_pair_local), `--json` for its setup."""
     from . import autonomy
     from .api import _tailscale
+    if local and action not in ("on", "pair"):
+        print(f"--local goes with on or pair, not {action}", file=sys.stderr)
+        return 2
+    if as_json and action != "pair":
+        print(f"--json goes with pair, not {action}", file=sys.stderr)
+        return 2
     if action == "serve":
         return serve()
+    if action == "pair" and local:
+        return _pair_local(name, as_json)
     if action == "pair":
         if not allowed_logins():
-            print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
+            message = "no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)"
+            print(json.dumps({"ok": False, "error": message}) if as_json else message)
             return 1
         link = new_pairing(name or f"browser {datetime.now():%Y-%m-%d %H:%M}")
-        print(f"Open this link in the browser to pair (valid {PAIR_MINUTES} minutes, once):\n\n  {link}\n")
+        if as_json:
+            print(json.dumps({"ok": True, "link": link, "minutes": PAIR_MINUTES}))
+        else:
+            print(f"Open this link in the browser to pair (valid {PAIR_MINUTES} minutes, once):\n\n  {link}\n")
+        return 0
+    if action == "on" and local:
+        from . import settings
+        from .api import LOCAL_LOGIN
+        if LOCAL_LOGIN not in allowed_logins():    # the Mac app's chats reach the API as this login (web_chat)
+            print(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS — run: shaft api on --local first")
+            return 1
+        try:
+            settings.set_values({"SHAFT_WEB_LOCAL": "on"})
+        except settings.Refused as e:
+            print(f"cannot set SHAFT_WEB_LOCAL=on: {e}")
+            return 1
+        if autonomy.service("web", "on"):
+            return 1
+        log(f"web on, local: /app/v1 at http://127.0.0.1:{PORT} for the Mac app (no tailscale serve)")
+        print(f"\nSHAFT web service on this Mac: http://127.0.0.1:{PORT} (/app/v1 for the Mac app; the pages stay "
+              f"tailnet-only)\n  pair the Mac app: shaft web pair --local --name <this mac>")
         return 0
     if action == "unpair":
         if not name and not everything:
@@ -1836,6 +1900,8 @@ def command(action: str, name: str | None = None, everything: bool = False) -> i
         return 0
     autonomy.service("web", "status")
     print(f"url: {url()}  ·  allowed: {', '.join(sorted(allowed_logins())) or '(none)'}")
+    if LOCAL:
+        print(f"local: http://127.0.0.1:{PORT}/app/v1 for the Mac app (SHAFT_WEB_LOCAL on)")
     ds = devices()
     apps = {k for k, v in ds.items() if v.get("platform")}
     print(f"paired browsers: {len(ds) - len(apps)}")

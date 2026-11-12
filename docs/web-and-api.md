@@ -579,6 +579,10 @@ and chat design. The native chat apps talk to the same service through a JSON AP
 2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
    and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
 
+Without Tailscale, only the Mac app on the same Mac: `shaft api on --local`, then `shaft web on --local` (sets
+`SHAFT_WEB_LOCAL=on`, installs the service, exposes nothing), then `shaft web pair --local --name <mac>`, which prints
+the app's base URL (`http://127.0.0.1:8785`), device id and secret once. See [the app API](app-api.md).
+
 **On your iPhone**: open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
 paste it into the app's "not paired" page. Expired links show the same paste box for a new link. Pairing and notice

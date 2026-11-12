@@ -37,8 +37,11 @@ and none of the headers `tailscale serve` adds: `X-Forwarded-For`, `Forwarded`, 
 `Tailscale-User-Login`, `Tailscale-User-Name`), checks 1 and 2 are skipped and only `/app/v1` is served; the pages keep
 their refusals. The bearer (check 3) is then the only credential, and the request acts as the device's recorded
 `login`; a device unpaired meanwhile is `401 unpaired`. A request with any of those headers came through the tailnet,
-whatever `Host` it names, and must pass all three checks as above. Such a device is made by `shaft web pair --local`; `POST /app/v1/pair` on loopback
-is refused: `403 local_pair`.
+whatever `Host` it names, and must pass all three checks as above. Such a device is made by `shaft web pair --local`
+(after `shaft api on --local` and `shaft web on --local`); with `--json` it prints one line,
+`{"ok": true, "base_url": "http://127.0.0.1:8785", "device", "secret", "name", "login": "operator@local"}`, or
+`{"ok": false, "error": …}` and exit 1 when `SHAFT_WEB_LOCAL` is off. `POST /app/v1/pair` on loopback is refused:
+`403 local_pair`.
 
 - `/app/v1` reads no cookie, and the web UI's routes accept no bearer. A browser page can never reach the API with an
   ambient credential, so there is no CSRF token and no origin check. No route sends CORS headers.
