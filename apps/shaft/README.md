@@ -103,6 +103,10 @@ fake records only; no CLI or launchd runs. `act ... services busy "<name> replyi
 and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
 finishes a pending drain with a new fake pid. Cancel is available in the app. Run
 `python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
+The setup wizard's routes (`/app/v1/setup/*`, docs/app-api.md §18) answer as the real verbs would, over the fixture's
+folder: OpenRouter is off until a key is set (only the key's name is kept, in `<dir>/setup.json`), a model whose name
+contains "fail" fails its check, `new` makes the instance's folders here (paused until the first reply), and
+`first-reply` is the real verb; `test_fixture_setup.py` walks them from Model to Say hello.
 A Debug iOS build may load plain `http://` from this machine (`NSAllowsLocalNetworking`, added to the built
 Info.plist by a Debug-only build step in `project.yml`); a Release iOS build keeps App Transport Security whole. The
 Mac app gets `NSAllowsLocalNetworking` in every configuration (its setup wizard talks to the server on 127.0.0.1) and
@@ -165,8 +169,9 @@ for the log) when its window must be in front. The `activate` step then takes th
 ### The setup wizard in a dev run
 
 An unpaired Mac app chooses its first screen from `~/SHAFT` (`macOS/Setup/SetupGate.swift`): no `~/SHAFT/.git` opens
-the setup wizard (Welcome, then Install; its Welcome's "Connect to an existing SHAFT" is the pasted-link pairing),
-and an install that is there is paired with on its own (`shaft web pair --local`, no link). A loopback pairing the
+the setup wizard (Welcome, Install, then on the pairing Install made: Model, Your instance, Access, How it works alone
+and Say hello, which opens the new instance's chat; its Welcome's "Connect to an existing SHAFT" is the pasted-link
+pairing), and an install that is there is paired with on its own (`shaft web pair --local`, no link). A loopback pairing the
 server no longer knows (`401 unpaired`) is deleted and paired again once on its own; a second loss shows the error.
 
 Debug builds only, these move the install away from the real `~/SHAFT` and the newest release:
@@ -175,10 +180,13 @@ Debug builds only, these move the install away from the real `~/SHAFT` and the n
 |---|---|
 | `SHAFT_DEV_HOME=<absolute path>` | the home the server goes into (`<path>/SHAFT`). With `SHAFT_DEV_DIR` and without this, `<SHAFT_DEV_DIR>/home`: a dev run never reaches the real `~/SHAFT` |
 | `SHAFT_DEV_SERVER_REPO`, `SHAFT_DEV_SERVER_REF`, `SHAFT_DEV_TEMPLATE_REF` | clone that origin at that branch or tag, and make that ref the `template` branch, instead of the newest tagged release. All three or none: a partial set stops the app at launch, naming what is missing |
+| `SHAFT_DEV_SETUP=<step>` | open the wizard at a step after Install (`model`, `instance`, `access`, `alone`, `hello`) on the run's own pairing: with `SHAFT_DEV_DIR` and `SHAFT_DEV_PAIR` (a fixture server's link) its steps run against the fixture, with nothing installed |
 
 The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
-which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step a
-Debug build stays in the wizard on Model's slot while the server has no instance; a Release build opens the app.
+which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step the
+wizard goes on to Model while the server has no instance (or this wizard made one already); a server with instances
+opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install and shows what
+it prints, opening a `{"url": …}` line in the browser.
 
 ### Voice against the fixture server
 

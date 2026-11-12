@@ -101,6 +101,14 @@ enum SetupEnvironment {
         return configuration
     }
 
+    /// `SHAFT_DEV_SETUP=<step>`: open the wizard at that step after Install (`model` … `hello`), on the pairing the run
+    /// has (`SHAFT_DEV_PAIR` with a fixture server): its steps can be driven without installing anything.
+    static func devStep(env: [String: String] = ProcessInfo.processInfo.environment) -> SetupWizardStep? {
+        guard let raw = value("SHAFT_DEV_SETUP", env), let step = SetupWizardStep(rawValue: raw),
+              MacSetup.isAfterInstall(step) else { return nil }
+        return step
+    }
+
     private static func value(_ key: String, _ env: [String: String]) -> String? {
         guard let text = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         return text

@@ -39,6 +39,8 @@ final class MacSetup {
     private(set) var installError: String?
 
     @ObservationIgnored let states: SetupStateStore
+    /// The work of the steps after Install (SetupSteps): reset when the wizard ends or starts over.
+    @ObservationIgnored let steps: SetupSteps
     @ObservationIgnored private var automaticRepairs = 0
     @ObservationIgnored private var pairTask: Task<Void, Never>?
     @ObservationIgnored private var installTask: Task<Void, Never>?
@@ -54,18 +56,25 @@ final class MacSetup {
     /// `configure` and `runner` are the real ones in the app; tests give a temporary home and a scripted runner.
     init(states: SetupStateStore = SetupStateStore(),
          configure: @escaping () throws -> Installer.Configuration = SetupEnvironment.configuration,
-         runner: any ProcessRunning = ProcessRunner()) {
+         runner: any ProcessRunning = ProcessRunner(),
+         steps: SetupSteps = SetupSteps()) {
         self.states = states
         self.configure = configure
         self.runner = runner
+        self.steps = steps
         wizardOpen = states.hasSaved
         wizardContinues = false
         loadConfiguration()
         loadState()
         #if DEBUG
-        // Reopened past Install: the wizard goes on where it was. A Release build ends the wizard at its pairing.
-        wizardContinues = wizardOpen && stateError == nil && Self.isAfterInstall(state.step)
+        // A dev run may open the wizard at a step after Install, paired with a fixture server (SHAFT_DEV_SETUP).
+        if let step = SetupEnvironment.devStep(), stateError == nil {
+            wizardOpen = true
+            if !Self.isAfterInstall(state.step) { state.step = step }
+        }
         #endif
+        // Reopened past Install: the wizard goes on where it was, on the pairing it made.
+        wizardContinues = wizardOpen && stateError == nil && Self.isAfterInstall(state.step)
     }
 
     // MARK: - The gate
@@ -169,6 +178,7 @@ final class MacSetup {
     }
 
     private func endWizard() {
+        steps.reset()
         installTask?.cancel()
         installTask = nil
         wizardOpen = false
@@ -182,6 +192,12 @@ final class MacSetup {
         save()
     }
 
+    /// Change what the wizard keeps (`setup.state`) and save it.
+    func edit(_ change: (inout SetupState) -> Void) {
+        change(&state)
+        save()
+    }
+
     func setOperator(name: String, email: String) {
         state.operatorName = name
         state.email = email
@@ -190,6 +206,7 @@ final class MacSetup {
 
     /// Forget a saved progress that cannot be read, and start at Welcome.
     func startOver() {
+        steps.reset()
         states.clear()
         state = SetupState()
         stateError = nil
@@ -214,7 +231,7 @@ final class MacSetup {
         }
     }
 
-    static func isAfterInstall(_ step: SetupWizardStep) -> Bool {
+    nonisolated static func isAfterInstall(_ step: SetupWizardStep) -> Bool {
         let all = SetupWizardStep.allCases
         return all.firstIndex(of: step)! > all.firstIndex(of: .install)!
     }
@@ -262,7 +279,8 @@ final class MacSetup {
     }
 
     /// The session opens on the install's own pairing (no link), then the wizard goes on to Model when the server has
-    /// no instance yet (Debug: Model's own step comes in a later build) or ends in the app. After every suspension it
+    /// no instance yet, or this wizard created one already (Back to Install, then Continue), and otherwise ends in the
+    /// app (a server set up before). After every suspension it
     /// checks that it was not stopped (the window closed) before opening the session, moving the saved step or
     /// clearing the progress.
     private func completeInstall(_ session: SHAFTSession, generation mine: Int) async {
@@ -296,17 +314,15 @@ final class MacSetup {
             guard current() else { return }
         }
         wizardContinues = true
-        #if DEBUG
         if let store = session.store {
             await store.refresh()
             guard current() else { return }
-            if store.loaded, store.instances.isEmpty {
+            if store.loaded, store.instances.isEmpty || state.createdInstance != nil {
                 go(to: .model)
                 update(session)
                 return
             }
         }
-        #endif
         finishWizard(session)
     }
 }

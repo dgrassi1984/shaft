@@ -3,11 +3,13 @@ import SwiftUI
 
 /// The setup wizard (first launch with no SHAFT installed): the steps in a sidebar, each done, current or still to
 /// come, the step on screen beside it, and Back and Continue at the bottom right. Where it is persists in `setup.state`
-/// (MacSetup), so reopening the app resumes there. Welcome and Install are built; the steps after Install come with
-/// the next part of the setup: a Release build ends the wizard at Install's pairing, a Debug build shows Model's slot.
+/// (MacSetup), so reopening the app resumes there. After Install, on the pairing it made: Model, Your instance (created
+/// as Continue leaves it), Access, How it works alone, and Say hello, which opens the instance's chat and ends the
+/// wizard. The steps' work is SetupSteps'; what Continue waits for is SetupContinue's.
 struct SetupWizard: View {
     let setup: MacSetup
     let session: SHAFTSession
+    @Environment(AppModel.self) private var model
     @State private var understood = false
     /// Welcome's "Connect to an existing SHAFT": the pasted-link pairing in place of the steps.
     @State private var connecting = false
@@ -31,6 +33,8 @@ struct SetupWizard: View {
             }
             .background(Color.canvas.ignoresSafeArea())
             .onAppear(perform: resume)
+            // The window closed: the reads, the check and a sign-in stop; a write already sent finishes (SetupSteps).
+            .onDisappear { setup.steps.stop() }
         }
     }
 
@@ -52,26 +56,34 @@ struct SetupWizard: View {
                             .stepPage()
                     }
                 }
-            case .model, .instance, .access, .alone, .hello:
-                after
+            case .model:
+                page { ModelStepView(setup: setup, session: session, steps: setup.steps) }
+            case .instance:
+                page { InstanceStepView(setup: setup, session: session, steps: setup.steps) }
+            case .access:
+                page { AccessStepView(setup: setup) }
+            case .alone:
+                page { AloneStepView(setup: setup, session: session, steps: setup.steps) }
+            case .hello:
+                page { HelloStepView(setup: setup, steps: setup.steps, skip: openChat, retry: hello) }
             }
         }
     }
 
-    /// The steps after Install, which the next part of the setup builds.
-    @ViewBuilder
-    private var after: some View {
-        #if DEBUG
-        ContentUnavailableView {
-            Label("Model setup", systemImage: "cpu")
-        } description: {
-            Text("Debug build: SHAFT is installed and this app is paired. The model step is not built yet; Open SHAFT ends the setup here.")
-        } actions: {
-            Button("Open SHAFT") { setup.finishWizard(session) }.buttonStyle(ProminentAction())
+    private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView { content().stepPage() }
+    }
+
+    private func hello() {
+        setup.steps.sayHello(store: session.store, setup: setup, session: session) { name in
+            model.openChat = ChatTarget(instance: name)
         }
-        #else
-        Color.canvas.onAppear { setup.finishWizard(session) }
-        #endif
+    }
+
+    /// The chat without the welcome (Say hello failed and the operator goes on).
+    private func openChat() {
+        if let name = setup.state.createdInstance { model.openChat = ChatTarget(instance: name) }
+        setup.finishWizard(session)
     }
 
     private var footer: some View {
@@ -88,8 +100,10 @@ struct SetupWizard: View {
             if let next = continueAction {
                 Button(action: next.run) {
                     HStack(spacing: Design.Space.s8) {
-                        if setup.installing { ProgressView().controlSize(.small).tint(Color.onAccent) }
-                        Text("Continue")
+                        if setup.installing || setup.steps.busy {
+                            ProgressView().controlSize(.small).tint(Color.onAccent)
+                        }
+                        Text(next.title)
                     }
                 }
                 .buttonStyle(ProminentAction())
@@ -103,34 +117,49 @@ struct SetupWizard: View {
     }
 
     private var busy: Bool {
-        setup.installing || setup.installer(for: session)?.isRunning == true
+        setup.installing || setup.installer(for: session)?.isRunning == true || setup.steps.busy
     }
 
     private var backAction: (() -> Void)? {
         if connecting { return { connecting = false } }
-        switch setup.state.step {
-        case .welcome: return nil
-        case .install: return { setup.go(to: .welcome) }
-        case .model, .instance, .access, .alone, .hello: return { setup.go(to: .install) }
-        }
+        let all = SetupWizardStep.allCases
+        guard let index = all.firstIndex(of: setup.state.step), index > 0 else { return nil }
+        return { setup.go(to: all[index - 1]) }
     }
 
-    private var continueAction: (enabled: Bool, run: () -> Void)? {
+    private var continueAction: (title: String, enabled: Bool, run: () -> Void)? {
         guard !connecting else { return nil }
+        let steps = setup.steps
+        var context = SetupContinue.Context(understood: understood, busy: busy, state: setup.state)
+        context.installComplete = setup.installer(for: session)?.isComplete == true
+        context.saved = steps.saved
+        context.checked = steps.checked
+        context.checkPassed = steps.check?.ok == true
+        context.current = try? steps.form.request().get()
+        context.capText = steps.capText
+        let enabled = SetupContinue.enabled(setup.state.step, context)
+        let store = session.store
         switch setup.state.step {
-        case .welcome:
-            return (SetupGate.welcomeCanContinue(understood: understood), { setup.go(to: .install) })
-        case .install:
-            let done = setup.installer(for: session)?.isComplete == true
-            return (done && !busy, { setup.continueInstall(session) })
-        case .model, .instance, .access, .alone, .hello:
-            return nil
+        case .welcome: return ("Continue", enabled, { setup.go(to: .install) })
+        case .install: return ("Continue", enabled, { setup.continueInstall(session) })
+        case .model: return ("Continue", enabled, { setup.go(to: .instance) })
+        case .instance:
+            return (setup.state.createdInstance == nil ? "Create" : "Continue", enabled,
+                    { steps.createInstance(store: store, setup: setup) })
+        case .access: return ("Continue", enabled, { setup.go(to: .alone) })
+        case .alone: return ("Continue", enabled, { steps.saveAlone(store: store, setup: setup) })
+        case .hello: return ("Say hello", enabled, hello)
         }
     }
 
-    /// Resumed past Install without a pairing (it was dropped since): back to Install, which pairs again.
+    /// Resumed past Install without a pairing (it was dropped since): back to Install, which pairs again. A dev run
+    /// opened at a later step (SHAFT_DEV_SETUP) pairs at launch on its own and stays where it was opened.
     private func resume() {
-        if MacSetup.isAfterInstall(setup.state.step), session.store == nil { setup.go(to: .install) }
+        var devRun = false
+        #if DEBUG
+        devRun = SetupEnvironment.devStep() != nil
+        #endif
+        if MacSetup.isAfterInstall(setup.state.step), session.store == nil, !devRun { setup.go(to: .install) }
         if setup.state.step != .welcome { understood = true }   // Welcome was passed once already
     }
 }

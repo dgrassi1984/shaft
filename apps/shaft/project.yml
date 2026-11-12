@@ -178,8 +178,8 @@ targets:
         com.apple.developer.aps-environment: development
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
-  # The Mac app's own logic that needs no window: its Markdown text, its text views' menu items and the setup gate. A plain test
-  # bundle with no host app, run by the SHAFT-macOS scheme's test action.
+  # The Mac app's own logic that needs no window: its Markdown text, its text views' menu items, the setup gate and the
+  # setup wizard's rules and work. A plain test bundle with no host app, run by the SHAFT-macOS scheme's test action.
   SHAFTMacTests:
     type: bundle.unit-test
     platform: macOS
@@ -198,6 +198,8 @@ targets:
       - path: macOS/MacDevSession.swift
       - path: macOS/Setup/SetupGate.swift
       - path: macOS/Setup/MacSetup.swift
+      - path: macOS/Setup/SetupForms.swift
+      - path: macOS/Setup/SetupSteps.swift
       - path: Shared/Attachments/AttachmentViews.swift
     dependencies:
       - package: SHAFTKit
