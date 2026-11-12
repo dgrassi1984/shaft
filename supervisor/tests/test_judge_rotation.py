@@ -282,6 +282,44 @@ class IndependenceWritersTest(measurement.InstanceDirCase):
         self.assertEqual((same["status"], same["grader"], same.get("independence")), ("scored", self.OWN, "same-model"))
         self.assertEqual((other["status"], other.get("independence")), ("scored", None))
 
+    def test_a_battery_retry_under_the_instances_own_model_is_marked(self):
+        """A row saved unjudged without the mark (before rows carried it) is regraded by its saved grader; when that
+        grader is the instance's own model, the regraded row says so."""
+        item = {"id": "research/test", "category": "research", "prompt": "question", "key": "key"}
+        era = {"version": "test", "checksum": "abc", "model": "model", "judge": "rotation:test"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
+                mock.patch.object(battery, "secrets_env", return_value={}), \
+                mock.patch.object(battery, "Broker") as broker, \
+                mock.patch.object(battery, "_exam", return_value={"answer": "a", "steps": 1}), \
+                mock.patch.object(battery, "grade", side_effect=judge.JudgeError("offline")) as grade:
+            broker.return_value.counts = {}
+            root = Path(tmp)
+            legacy = battery._one_in("m", item, "control", root, root, "m-control", era, None, lambda: None, self.OWN)
+            self.assertEqual((legacy["status"], legacy.get("independence")), ("unjudged", None))
+            grade.side_effect, grade.return_value = None, {"effectiveness": 8}
+            with mock.patch.object(battery, "make_control", side_effect=AssertionError("exam reran")):
+                retried = battery._one("m", item, "control", root, era, None, lambda: None, "openrouter/x/y",
+                                       [self.OWN])
+        self.assertEqual((retried["status"], retried["grader"], retried.get("independence")),
+                         ("scored", self.OWN, "same-model"))
+
+    def test_a_second_judge_case_stashed_without_models_is_marked_from_the_instance(self):
+        ts = "2026-10-13T12:00:00"
+        self.episode({"ts": ts, "kind": "live", "intent": {"goal": "output"}, "tools": []})
+        (self.root / "config.env").write_text(f'LLM_MODEL="{self.OWN}"\n')
+        (self.root / "shaft").mkdir()
+        stash = metrics._second_cases()
+        stash.mkdir(parents=True)
+        (stash / f"m@{ts.replace(':', '-')}.json").write_text(json.dumps({"name": "m", "episode_ts": ts,
+                                                                           "case": "case"}))   # no "own": legacy
+        verdict = dict(measurement.JudgingTest.VERDICT)
+        with mock.patch.object(judge, "JUDGE_MODELS", [self.OWN]), mock.patch.object(judge, "JUDGE2_MODEL", self.OWN), \
+                mock.patch.object(judge, "ask_second", side_effect=lambda *a, **k: dict(verdict)), \
+                mock.patch.object(metrics, "write_stats"):
+            self.assertEqual(metrics.second_pending(["m"]), 1)
+        row = json.loads(metrics._seconds_path("m").read_text())
+        self.assertEqual((row["judge"], row["independence"]), (self.OWN, "same-model"))
+
     def test_the_second_judge_marks_itself_when_it_is_the_instances_own_model(self):
         verdict = dict(measurement.JudgingTest.VERDICT)
         with mock.patch.object(judge, "JUDGE2_MODEL", self.OWN), \

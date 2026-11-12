@@ -971,7 +971,7 @@ def second_pending(names: list[str] | None = None) -> int:
             continue                                     # another process took it
         job = json.loads(claimed.read_text())
         out = {"episode_ts": job["episode_ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
-               **second_opinion(name, job["case"], job.get("own") or ())}
+               **second_opinion(name, job["case"], job.get("own") or _stashed_own(name, job["episode_ts"]))}
         with _seconds_path(name).open("a") as f:
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
         claimed.unlink()
@@ -980,6 +980,13 @@ def second_pending(names: list[str] | None = None) -> int:
             + (f"no verdict ({out['error'][:120]})" if out.get("error") else out["criterion_met"]))
         done += 1
     return done
+
+
+def _stashed_own(name: str, episode_ts: str) -> list[str]:
+    """The instance's models for a stashed cycle whose case was stashed without them (before stashes carried them):
+    the same own_models the main judge excluded."""
+    ep = next((e for e in live_episodes(name) if e["ts"] == episode_ts), None)
+    return own_models(name, ep)
 
 
 def second_opinion(name: str, case: str, own=()) -> dict:

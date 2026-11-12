@@ -644,7 +644,7 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
         if previous.get("item") == item["id"] and previous.get("arm") == arm and _same_era(previous, e):
             if previous.get("status") == "unjudged" and previous.get("grading_case") and \
                     previous.get("grading_attempts", 1) < GRADE_ATTEMPTS:
-                return _grade_saved(name, previous)
+                return _grade_saved(name, previous, own)
             break
     label = name if arm == "instance" else f"{name}-control"
     deadline = min(time.time() + ITEM_TIMEOUT_S, until or float("inf"))
@@ -750,14 +750,19 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
     row.update(judge.independence(grader, own) if grader else {})
     row["grading_case"] = {"item": item, "result": res}
     row["status"] = "unjudged"
-    return _grade_saved(name, row)
+    return _grade_saved(name, row, own)
 
 
-def _grade_saved(name: str, saved: dict) -> dict:
+def _grade_saved(name: str, saved: dict, own=()) -> dict:
     """Grade a finished exam from its saved case: the whole exam result and the grader picked for it. A grading that
     fails keeps the case, and a later run grades it again without rerunning the exam (review C11), up to
-    GRADE_ATTEMPTS gradings; then the item's exam runs afresh."""
+    GRADE_ATTEMPTS gradings; then the item's exam runs afresh. With the instance's models (`own`), the row's
+    independence mark is set for its grader again: a row saved unmarked (before rows carried it) is marked when a
+    one-model pool's grader is the instance's own model."""
     row = {**saved, "grading_attempts": saved.get("grading_attempts", 0) + 1}
+    if own and row.get("grader"):
+        row.pop("independence", None)
+        row.update(judge.independence(row["grader"], own))
     case = row["grading_case"]
     try:
         row["grade"] = grade(case["item"], case["result"], row["truth"], row["tests"], model=row["grader"])
