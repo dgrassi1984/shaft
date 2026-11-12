@@ -548,7 +548,7 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
     from .broker import ReplayBroker
     from .core import BROKER_MAX_CALLS
     before, seen = _files_now(dest), _episode_lines(dest)
-    usage_before, usd_before = _llm_usage(dest), _cloud_usd(billed)
+    usage_before, usd_before, cloud_before = _llm_usage(dest), _cloud_usd(billed), _cloud_tokens(billed)
     broker = ReplayBroker(name, project, secrets_env(), SUP_DIR / "trials" / "broker.log", state_root=dest,
                           start_commit=state["start_commit"], as_of=clock,
                           cache=cache, cache_lock=cache_lock, billed=billed, tools_log=SUP_DIR / "broker.log",
@@ -602,6 +602,11 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
     episode = next((e for e in reversed(_new_episodes(dest, seen)) if e.get("kind") == kind), None)
     usage = {k: round(v - usage_before[k], 1) if isinstance(v, float) else v - usage_before[k]
              for k, v in _llm_usage(dest).items()}
+    # The supervisor's own usage rows are the full count. Plan channels that report a turn's usage only when the turn
+    # ends book it after the instance's last reply (a late_usage row), so the replies alone read 0 (2026-11-12).
+    cloud = [after - before for after, before in zip(_cloud_tokens(billed), cloud_before)]
+    if any(cloud):
+        usage["prompt_tokens"], usage["completion_tokens"] = cloud
     record = {"exit": code_, "ended": ended, "seconds": round(time.monotonic() - started, 1), "model": model,
               "episode": episode, "trace": broker.trace, "diff": file_diff(before, _files_now(dest)),
               "usage": usage, "usd": round(_cloud_usd(billed) - usd_before, 6),
@@ -648,6 +653,18 @@ def _llm_usage(root: Path) -> dict:
         tot["errors"] += 1 if r.get("error") else 0
     tot["model_seconds"] = round(tot["model_seconds"], 1)
     return tot
+
+
+def _cloud_tokens(billed: str) -> tuple[int, int]:
+    """Input and output tokens the supervisor booked for `billed`, late usage rows included."""
+    from .cloudllm import USAGE
+    total_in = total_out = 0
+    for line in jsonl_lines(USAGE.read_text()) if USAGE.exists() else []:
+        r = json.loads(line)
+        if r.get("instance") == billed:
+            total_in += r.get("input_tokens") or 0
+            total_out += r.get("output_tokens") or 0
+    return total_in, total_out
 
 
 def _cloud_usd(billed: str) -> float:

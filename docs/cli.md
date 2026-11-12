@@ -88,6 +88,7 @@ run` runs one scheduled plugin now.
 ```text
 shaft web on|off|status|pair [--name N]|unpair <id|name>|--all
 shaft claude login|status
+shaft antigravity login|status
 shaft grok login|status
 shaft codex login|status
 shaft model on|off|status
@@ -106,7 +107,8 @@ bearer keys. `shaft telegram` configures tokens and pairing and controls Telegra
 `shaft model` controls SHAFT's Bonsai 2 server on port 8780. It starts on demand and exits when idle. `shaft
 embed` controls the optional memory-search service.
 
-`shaft codex login`, `shaft grok login` and `shaft claude login` authenticate the plan channels. Their `status` commands show login,
+`shaft codex login`, `shaft grok login`, `shaft claude login` and `shaft antigravity login` authenticate the plan channels.
+Their `status` commands show login,
 offered models, and outages. Codex and Claude also show observed weekly usage.
 
 ### Service entry points
@@ -131,6 +133,12 @@ For a Claude plan model, run `shaft claude login`, then
 shows login, offered models, any outage and the last observed weekly allowance.
 Trial replays and bake-off arms accept `claudecode/` models and fail without fallback.
 See [Claude plan routing](local-model.md#claude-plan-routing).
+
+For an Antigravity plan model, run `shaft antigravity login`, then
+`shaft config <name> set LLM_MODEL=antigravity/gemini-4-argon`.
+`shaft antigravity status` shows login, offered models and any outage.
+ACP exposes no allowance percentage. See
+[Antigravity plan routing](local-model.md#antigravity-plan-routing).
 
 ## Access grants
 

@@ -213,3 +213,44 @@ without fallback. Plan rows record `usd=null`; costs views show Claude's reporte
 See [configuration](configuration.md#claude-plan-channel) for the `SHAFT_CLAUDE_*` settings.
 Source: [claudecli.py](../supervisor/claudecli.py), `Channel` and `_seatbelt`;
 [planbridge.py](../supervisor/planbridge.py), `serve`.
+
+
+## Antigravity plan routing
+
+Install Antigravity CLI first. The default executable is `~/.local/bin/agy`;
+`SHAFT_ANTIGRAVITY_BIN` overrides it. Run `bin/shaft antigravity login`, then
+`bin/shaft config <name> set LLM_MODEL=antigravity/gemini-4-argon`.
+`bin/shaft antigravity status` shows login, offered models and outages.
+
+The channel runs `agy acp --disable-telemetry --agent shaft` on the operator's
+subscription. The CLI handles Google sign-in under a private `HOME`. SHAFT checks
+only whether its token file exists. It never reads the credential or the operator's
+`~/.gemini` directory. The sandbox allows writes to the private home and run folder,
+with read access to executable dependencies and the MCP relay. Network access stays open.
+
+Each session writes a custom agent containing the system prompt and tool schemas.
+SHAFT owns the private home's MCP configuration and replaces it with the single
+`shaft` server on every session open. Permission requests allow only known SHAFT
+tools with object arguments. Native tools and client file or terminal requests cause
+a security failure. The inert `list_resources`, `read_resource` and `manage_task`
+notifications are counted without forwarding them to the broker.
+
+Model or effort changes restart the process. Low and medium effort map directly;
+high, xhigh and max map to high. Unspecified effort maps to medium. Text and images
+use ACP prompt blocks. Held calls receive their results through the MCP bridge.
+Cancellation waits for the turn's usage response and leaves the session reusable.
+Usage arrives once per turn; usage for an already recorded step gets a separate
+`late_usage` row. Because no usage marks where a model response starts, a tool call
+that begins less than half a second after the previous one completed counts as a
+parallel sibling of the same response; a later one opens a new response and counts
+against the instance's step budget. Text is buffered until completion to catch model
+errors reported as ordinary text. On close the session's brain folder, conversation
+database and annotation are deleted; the shared conversation summary database remains.
+
+ACP exposes no quota percentage. Live failures use `SHAFT_ANTIGRAVITY_FALLBACK_MODEL`;
+trials and bake-offs fail without fallback. Costs views show tokens unless
+`cloudllm.usd` has a model price, in which case they show API equivalent separately
+from money spent. The session log records the tier reported by ACP.
+See [configuration](configuration.md#antigravity-plan-channel).
+Source: [agycli.py](../supervisor/agycli.py), `Channel` and `_seatbelt`;
+[planbridge.py](../supervisor/planbridge.py), `serve`.

@@ -319,7 +319,7 @@ def run(b: dict, parallel: int = 3, project: Path = PROJECT, arm_parallel: int =
 # A model's name in a run's text (its config printed, its own logs) would tell the judge which run is which, or tilt
 # it: the arms' own ids, also as spelled out ("Claude Haiku 5.5" for claude-haiku-5-5), and these families are replaced
 # before a case is written. One DeepSeek run printed its config.
-_FAMILIES = (r"\b(?:(?:openrouter|codex|grok|claudecode)/)?(?:[\w.-]+/)?(?:codex|mimo|deepseek|haiku|sonnet|opus|minimax|nemotron|hy\d|hunyuan|"
+_FAMILIES = (r"\b(?:(?:openrouter|codex|grok|claudecode|antigravity)/)?(?:[\w.-]+/)?(?:codex|mimo|deepseek|haiku|sonnet|opus|minimax|nemotron|hy\d|hunyuan|"
              r"step-3[\w.-]*|glm-[\w.-]+|claude-[\w.-]+|gemini|gpt-[\w.-]+|"
              r"grok[\w.-]*|(?:Space)?xai\b|muse-spark[\w.-]*|Muse Spark|"
              r"kimi(?![a-z])[\w.-]*|moonshot(?:ai)?\b|mercury-\d[\w.-]*|Mercury \d|particle-\d[\w.-]*)[\w.@/-]*")

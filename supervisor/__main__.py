@@ -1316,6 +1316,24 @@ def cmd_claude(action: str) -> int:
     return 0
 
 
+def cmd_antigravity(action: str) -> int:
+    from . import agycli
+    if action == "login":
+        try:
+            home = agycli.home()
+            # agy's own Google sign-in (the ACP terminal login), with the private home: the operator's ~/.gemini stays out.
+            return subprocess.run([str(Path(agycli.BIN).expanduser()), "acp", "--login"],
+                                  env=agycli.child_env(home, home)).returncode
+        except OSError as e:
+            print(f"Antigravity login failed: {e}", file=sys.stderr)
+            return 1
+    print("Antigravity login: " + ("present" if agycli.logged_in() else "missing; run shaft antigravity login"))
+    print("Models: " + ", ".join(agycli.models()))
+    if (fault := agycli.STATE.outage()):
+        print(("Antigravity security event: " if fault.get("security") else "Antigravity unavailable: ") + fault["reason"])
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1398,6 +1416,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("codex", help="Codex plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("claude", help="Claude plan (claude -p on your own subscription) login and status")
+    p.add_argument("action", choices=["login", "status"])
+    p = sub.add_parser("antigravity", help="Antigravity plan (Gemini through agy on your own subscription) login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("migrate", help="move a SHAFT setup to a new Mac (docs/migration.md): source --to HOST [--check], "
                                        "or target [--check]")
@@ -1742,6 +1762,8 @@ def main(argv: list[str]) -> int:
         return cmd_codex(args.action)
     if args.cmd == "claude":
         return cmd_claude(args.action)
+    if args.cmd == "antigravity":
+        return cmd_antigravity(args.action)
     if args.cmd == "migrate":
         from . import migrate
         return migrate.command(args.role, args.to, args.check)
