@@ -1813,10 +1813,17 @@ def _pair_local(name: str | None, as_json: bool) -> int:
         return 1
     if not LOCAL:
         return refuse("local pairing is off (SHAFT_WEB_LOCAL): run shaft web on --local first")
-    if LOCAL_LOGIN not in allowed_logins():    # the app's chats reach the API as this login (web_chat): refused there
+    try:                                       # an unreadable .env or unwritable devices.json is a refusal, never a
+        logins = allowed_logins()              # traceback with nothing on stdout (the --json contract)
+    except (OSError, ValueError) as e:
+        return refuse(f"cannot read SHAFT_API_LOGINS from the .env file: {e}")
+    if LOCAL_LOGIN not in logins:              # the app's chats reach the API as this login (web_chat): refused there
         return refuse(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS: run shaft api on --local first")
     name = name or f"mac {datetime.now():%Y-%m-%d %H:%M}"
-    dev, secret = add_device(name, LOCAL_LOGIN, "macos")
+    try:
+        dev, secret = add_device(name, LOCAL_LOGIN, "macos")
+    except (OSError, ValueError) as e:
+        return refuse(f"cannot record the paired device in {_store('devices.json')}: {e}")
     got = {"base_url": f"http://127.0.0.1:{PORT}", "device": dev, "secret": secret, "name": name,
            "login": LOCAL_LOGIN}
     print(json.dumps({"ok": True, **got}) if as_json else "\n".join(f"{k}: {v}" for k, v in got.items()))
@@ -1855,13 +1862,18 @@ def command(action: str, name: str | None = None, everything: bool = False, loca
     if action == "on" and local:
         from . import settings
         from .api import LOCAL_LOGIN
-        if LOCAL_LOGIN not in allowed_logins():    # the Mac app's chats reach the API as this login (web_chat)
+        try:
+            logins = allowed_logins()
+        except (OSError, ValueError) as e:
+            print(f"cannot read SHAFT_API_LOGINS from the .env file: {e}", file=sys.stderr)
+            return 1
+        if LOCAL_LOGIN not in logins:              # the Mac app's chats reach the API as this login (web_chat)
             print(f"{LOCAL_LOGIN} is not in SHAFT_API_LOGINS — run: shaft api on --local first")
             return 1
         try:
             settings.set_values({"SHAFT_WEB_LOCAL": "on"})
-        except settings.Refused as e:
-            print(f"cannot set SHAFT_WEB_LOCAL=on: {e}")
+        except (settings.Refused, OSError, ValueError) as e:     # e.g. .supervisor/settings.env not writable
+            print(f"cannot set SHAFT_WEB_LOCAL=on: {e}", file=sys.stderr)
             return 1
         if autonomy.service("web", "on"):
             return 1

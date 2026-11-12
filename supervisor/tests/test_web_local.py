@@ -286,6 +286,35 @@ class LocalInstallTest(LocalTest):
         self.assertIn("shaft web on --local", json.loads(lines[0])["error"])
         self.assertEqual(set(web.devices()), before)
 
+    def test_pair_local_storage_failure_is_a_json_refusal_not_a_traceback(self):
+        # review finding: a PermissionError writing devices.json escaped _pair_local, leaving stdout empty under --json
+        with mock.patch.object(web, "add_device", side_effect=PermissionError(13, "Permission denied", "devices.json")):
+            code, out, err = self.cli("web", "pair", "--local", "--name", "my-mac", "--json")
+        self.assertEqual(code, 1)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 1, out)
+        got = json.loads(lines[0])
+        self.assertIs(got["ok"], False)
+        self.assertIn("Permission denied", got["error"])
+        self.assertNotIn("Traceback", out + err)
+
+    def test_pair_local_unreadable_env_is_a_json_refusal(self):
+        with mock.patch.object(web, "allowed_logins", side_effect=PermissionError(13, "Permission denied", ".env")):
+            code, out, err = self.cli("web", "pair", "--local", "--json")
+        self.assertEqual(code, 1)
+        self.assertIn("Permission denied", json.loads(out)["error"])
+        self.assertNotIn("Traceback", out + err)
+
+    def test_web_on_local_settings_write_failure_is_a_refusal(self):
+        from supervisor import settings
+        for exc in (PermissionError(13, "Permission denied", "settings.env"), settings.Refused("SHAFT_WEB_LOCAL bad")):
+            with self.subTest(exc=type(exc).__name__), mock.patch.object(settings, "set_values", side_effect=exc):
+                code, out, err = self.cli("web", "on", "--local")
+            self.assertEqual(code, 1)
+            self.assertIn(str(exc), err)
+            self.assertNotIn("Traceback", out + err)
+        self.assertEqual(self.services, [])
+
     def test_pair_local_without_json_prints_the_fields_as_lines(self):
         code, out, _ = self.cli("web", "pair", "--local", "--name", "my-mac")
         self.assertEqual(code, 0, out)
