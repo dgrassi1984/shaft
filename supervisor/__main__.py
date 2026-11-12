@@ -1333,6 +1333,20 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["set", "unset", "list"])
     p.add_argument("name", nargs="?")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    p = sub.add_parser("provider", help="use PROVIDER: one consistent preset of every model the supervisor calls "
+                                        "(openrouter, codex or custom); check PROVIDER: one live call per configured "
+                                        "model of it. Never touches .env (shaft secrets sets the keys)")
+    p.add_argument("action", choices=["use", "check"])
+    p.add_argument("provider", choices=["openrouter", "codex", "custom"])
+    p.add_argument("--model", help="codex: the instance model (default codex/gpt-6-astra) · custom: the model name")
+    p.add_argument("--judge-model", help="custom: the judge's model (default: the same model)")
+    p.add_argument("--base-url", help="custom: the OpenAI-compatible endpoint, e.g. https://host/v1")
+    p.add_argument("--price-in", type=float, help="custom: dollars per million input tokens of --model")
+    p.add_argument("--price-out", type=float, help="custom: dollars per million output tokens of --model")
+    p.add_argument("--judge-price-in", type=float, help="custom: dollars per million input tokens of --judge-model")
+    p.add_argument("--judge-price-out", type=float, help="custom: dollars per million output tokens of --judge-model")
+    p.add_argument("--vision", action="store_true", help="custom: --model reads images (declares it in SHAFT_CUSTOM_VISION)")
+    p.add_argument("--json", action="store_true", help="one JSON object per line on stdout")
     p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
                                       " (one write, one commit; --expect refuses if a value changed since you looked)")
     p.add_argument("name")
@@ -1784,6 +1798,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "secrets":
         from . import opsecrets
         return opsecrets.command(args.action, args.name, args.json)
+    if args.cmd == "provider":
+        from . import provider
+        return provider.command(args)
     if args.cmd == "config":
         from . import opconfig
         return opconfig.config_command(args.name, args.action, args.items, args.expect, args.expect_unset)
