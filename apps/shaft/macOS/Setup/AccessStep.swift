@@ -7,11 +7,13 @@ import SwiftUI
 /// rows the chosen drive suggests come ticked, tagged "suggested". Telegram is whole: the bot's token, the service on,
 /// and your account paired with the code shown here. Continue applies the ticked rows in order and stops
 /// at the first failure with its real words and Try again (SetupSteps.applyAccess); "Skip all", in the footer, goes on
-/// granting nothing. The Google rows are the next step of this build: a debug build shows them, inactive.
+/// granting nothing. "Google" ticks what may be read there (mail labels, calendars, Drive, Chat) and "Set up Google…"
+/// opens the guided setup that grants them (GoogleSetupSheet); a ticked Google row still off stops Continue, saying so.
 struct AccessStepView: View {
     let setup: MacSetup
     let session: SHAFTSession
     @Bindable var steps: SetupSteps
+    @State private var settingUpGoogle = false
 
     static let botFather = URL(string: "https://t.me/BotFather")!
     static let scrapeBadger = URL(string: "https://scrapebadger.com")!
@@ -39,9 +41,7 @@ struct AccessStepView: View {
                 row(.browser, detail: "Chromium, shared by every instance, used from inside its run tool. The first "
                     + "install downloads it: a few minutes.") { browser }
             }
-            #if DEBUG
             google
-            #endif
             group("Elsewhere") {
                 row(.web, detail: "Search the web through ScrapeBadger. The key is SHAFT's, for every instance: "
                     + "\(name) never sees it.") { webSearch }
@@ -50,6 +50,9 @@ struct AccessStepView: View {
             }
         }
         .onAppear(perform: prepare)
+        .sheet(isPresented: $settingUpGoogle) {
+            GoogleSetupSheet(setup: setup, session: session, steps: steps) { settingUpGoogle = false }
+        }
     }
 
     private func prepare() { steps.prepareAccess(store: session.store, setup: setup) }
@@ -243,25 +246,32 @@ struct AccessStepView: View {
         .elevatedBlock()
     }
 
-    #if DEBUG
-    /// The Google rows, inactive until the Google setup is built (the next step of this build): a debug build shows
-    /// where they go; a release build leaves the group out.
+    /// The Google rows: what may be read there, each through the guided setup (a project and an OAuth client of the
+    /// operator's own in Google Cloud, a sign-in, then the pickers).
     private var google: some View {
-        group("Google — one-time setup, ~10 min, guided") {
-            ForEach(AccessRow.google) { row in
-                HStack(spacing: Design.Space.s8) {
-                    Toggle(row.title, isOn: .constant(steps.accessSuggested.contains(row)))
-                        .toggleStyle(.checkbox)
-                        .disabled(true)
-                    if steps.accessSuggested.contains(row) {
-                        Text("suggested").font(.caption).foregroundStyle(Color.textSecondary)
-                    }
+        let progress = setup.state.google
+        return group("Google — one-time setup, about 10 minutes, guided") {
+            row(.mail, detail: "Gmail, one label at a time: \(name) reads what you file there, never sends.") {
+                EmptyView()
+            }
+            row(.calendar, detail: "The calendars you pick, each read-only or also able to change events.") {
+                EmptyView()
+            }
+            row(.drive, detail: "Drive, read-only: its own files, or also those shared with you.") { EmptyView() }
+            row(.chat, detail: "Google Chat, read-only (Google Workspace accounts).") { EmptyView() }
+            HStack(spacing: Design.Space.s12) {
+                Button(progress.resume == nil ? "Google is set up — grant more…"
+                       : progress.done.isEmpty ? "Set up Google…" : "Continue the Google setup…") {
+                    settingUpGoogle = true
+                }
+                .disabled(steps.googleChosen.isEmpty || steps.granting.running)
+                if steps.googleChosen.isEmpty {
+                    Text("Tick what \(name) may read in Google first.")
+                        .font(.caption).foregroundStyle(Color.textSecondary)
                 }
             }
-            Button("Set up Google…") {}
-                .disabled(true)
-            Text("Available in the next step of this build").font(.caption).foregroundStyle(Color.textSecondary)
         }
     }
-    #endif
+
+    private var name: String { setup.state.createdInstance ?? "your instance" }
 }

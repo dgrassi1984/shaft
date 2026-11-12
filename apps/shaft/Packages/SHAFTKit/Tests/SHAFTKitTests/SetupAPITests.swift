@@ -98,6 +98,39 @@ struct SetupAPITests {
         #expect(requests[1].timeout < 900)
     }
 
+    @Test func googlePickersReadLiveAndGrantsSendOnlyTheirFields() async throws {
+        let server = StubServer { request in
+            request.path.hasSuffix("/labels") ? .json(200, Self.fixture("google-labels"))
+                : request.path.hasSuffix("/calendars") ? .json(200, Self.fixture("google-calendars"))
+                : .json(200, Self.fixture("access"))
+        }
+        let labels = try await server.client.googleLabels("work")
+        #expect(labels.labels == ["Assistant", "Receipts"])
+        let calendars = try await server.client.googleCalendars("work")
+        #expect(calendars.calendars.map(\.id) == ["me@example.com", "team@group.calendar.google.com"])
+        #expect(calendars.calendars.first?.primary == true)
+        for grant in [AccessGrant.mail(alias: "work", label: "Receipts"),
+                      .calendar(alias: "work", id: "team@group.calendar.google.com", writable: false),
+                      .calendar(alias: "work", id: "me@example.com", writable: true),
+                      .drive(alias: "work", all: false), .drive(alias: "work", all: true), .chat(alias: "work")] {
+            _ = try await server.client.grantAccess("ledger", grant)
+        }
+        let requests = server.requests
+        #expect(requests.prefix(2).map { "\($0.method) \($0.path)" } == ["GET /app/v1/google/work/labels",
+                                                                        "GET /app/v1/google/work/calendars"])
+        let bodies = requests.dropFirst(2).map { NSDictionary(dictionary: $0.json ?? [:]) }
+        let expected: [[String: Any]] = [
+            ["grant": "mail", "action": "grant", "alias": "work", "what": "Receipts"],
+            ["grant": "calendar", "action": "grant", "alias": "work", "what": "team@group.calendar.google.com"],
+            ["grant": "calendar", "action": "grant", "alias": "work", "what": "me@example.com", "writable": true],
+            ["grant": "drive", "action": "grant", "alias": "work"],
+            ["grant": "drive", "action": "grant", "alias": "work", "all": true],
+            ["grant": "chat", "action": "grant", "alias": "work"],
+        ]
+        #expect(bodies == expected.map { NSDictionary(dictionary: $0) })
+        #expect(requests.dropFirst(2).allSatisfy { $0.path == "/app/v1/access/ledger" && $0.method == "POST" })
+    }
+
     @Test func aTelegramTokenGoesInTheBodyAlone() async throws {
         let server = StubServer { _ in .json(200, #"{"said": "saved: ledger answers on Telegram"}"#) }
         let said = try await server.client.setupTelegram(name: "ledger", token: "123:secret")

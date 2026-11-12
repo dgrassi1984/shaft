@@ -541,6 +541,17 @@ public final class APIClient: Sendable {
                        timeout: grant.grant == "browser" ? AccessGrant.browserTimeout : 120)
     }
 
+    /// The Gmail labels of the operator's Google account `alias`, read live from Google (§18.7): what a mail grant
+    /// may name.
+    public func googleLabels(_ alias: String) async throws -> GoogleLabels {
+        try await get("/app/v1/google/\(alias)/labels")
+    }
+
+    /// The calendars of the operator's Google account `alias`, primary first (§18.7): what a calendar grant may name.
+    public func googleCalendars(_ alias: String) async throws -> GoogleCalendars {
+        try await get("/app/v1/google/\(alias)/calendars")
+    }
+
     /// `first-reply`: `resume` (it works on its own after the first answered reply) or `stay`.
     public func setupAutonomy(_ instance: String, then: String) async throws -> SetupAutonomyResponse {
         try await post("/app/v1/setup/autonomy/\(instance)", json: ["then": then])

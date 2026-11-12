@@ -26,12 +26,18 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
   or containing "bad"; web search reads as set once SCRAPEBADGER_API_KEY was saved. `telegram on` writes a live
   service record (never launchd); `telegram pair --json` issues a real code on this folder, and the fixture "sends" it
   to the bot PAIR_AFTER_S (3 s) later, so the wizard sees the pairing land.
+- Google (§18.6–18.7): never Google. The app runs `shaft google client|login` itself, against the installed server, which
+  a fixture run has not: `act google [address]` stands in for that login, writing an account `google` (a fake token) on
+  this folder. Its labels and calendars are GOOGLE_LABELS and GOOGLE_CALENDARS; `mail|calendar|gdrive|gchat <n> grant`
+  run the real grant setters here, refusing a label or calendar the account does not have, and a label whose name
+  contains "Refused" (to drive the wizard's first-failure stop).
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
     python3 apps/shaft/DevServer/fixture_server.py act   --dir /tmp/shaft-fixture --port 8899 <what> [text]
 
-`act` (run while `serve` runs, on the same folder; pass the same --simctl): `message <instance> [text]` and
+`act` (run while `serve` runs, on the same folder; pass the same --simctl): `google [address]` (the operator's Google
+account `google` signed in, as the app's local `shaft google login` would), `message <instance> [text]` and
 `question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
@@ -61,6 +67,10 @@ ME = "operator@example.com"
 PAIR_AFTER_S = 3.0          # a pairing code "sent to the bot" this long after the wizard asked for it (tests shorten it)
 TOPIC = os.environ.get("SHAFT_APNS_TOPIC", "")
 INSTANCES = ("tundra", "wisp", "ada")
+GOOGLE_LABELS = ["Assistant", "Receipts", "Refused here", "Travel"]
+GOOGLE_CALENDARS = [{"id": ME, "title": ME, "summary": ME, "primary": True, "access": "owner"},
+                    {"id": "team@group.calendar.google.com", "title": "Team", "summary": "Team", "primary": False,
+                     "access": "reader"}]
 
 
 def setup(base: Path, port: int):
@@ -77,6 +87,7 @@ def setup(base: Path, port: int):
                             opconfig, version, web, web_chat, webpush, web_settings)
     from supervisor import __main__ as shaft_cli       # the real `first-reply` verb, on this folder (SUP_DIR below)
     from supervisor import setup as setup_access       # GET/POST /access answers (§18.6)
+    from supervisor import calendar as calendar_mod, google as google_mod, mail as mail_mod   # never Google here
     from supervisor import telegram as telegram_mod    # the real pairing state, on this folder (SUP_DIR above)
 
     # setup can be called again in the same test process after supervisor imports are cached.
@@ -270,6 +281,8 @@ def setup(base: Path, port: int):
             off = core.disabled_tools(name)
             core._update_tool_settings(name, off=sorted(off - {tool} if args[2] == "on" else off | {tool}))
             return True, f"{name}: {tool} {args[2]}"
+        if verb in ("mail", "calendar", "gdrive", "gchat") and len(args) >= 4 and args[2].startswith("grant"):
+            return google_grant(args)
         if args[:2] == ["telegram", "token"] and len(args) == 3:
             name, token = args[2], (input or "").strip()
             if ":" not in token or "bad" in token:
@@ -327,6 +340,40 @@ def setup(base: Path, port: int):
             return True, "fixture scheduler drain updated"
         raise ValueError(f"unsupported fixture command: {args}")
 
+    def google_grant(args):
+        # The grant verbs over this folder's account and lists: the real setters, never Google.
+        verb, name, op, alias = args[:4]
+        what = args[4] if len(args) > 4 else ""
+        if name not in names():
+            return False, f"no instance named {name!r}"
+        if not google_mod.account(alias):
+            return False, f"no Google account {alias!r} (logged in: {', '.join(google_mod.accounts()) or 'none'})"
+        if verb == "mail":
+            if what not in GOOGLE_LABELS or "Refused" in what:
+                return False, f"not granted: Gmail has no label {what!r} for {alias} (fixture)"
+            core.set_mail_grants(name, core.mail_grants(name) + [{"account": alias, "label": what,
+                                                                  **({"draft": True} if op == "grant-draft" else {})}])
+            return True, f"{name}: mail {op} {alias}/{what}"
+        if verb == "calendar":
+            cal = next((c for c in GOOGLE_CALENDARS if what in (c["id"], c["title"]) or (what == "primary" and c["primary"])),
+                       None)
+            if not cal:
+                return False, f"not granted: {alias} has no calendar {what!r} (fixture)"
+            grants = [g for g in core.calendar_grants(name) if (g["account"], g["calendar"]) != (alias, cal["id"])]
+            prior = next((g for g in core.calendar_grants(name) if (g["account"], g["calendar"]) == (alias, cal["id"])), {})
+            write = op == "grant-write" or prior.get("write") is True
+            if op == "grant-write" and cal["access"] not in ("owner", "writer"):
+                return False, f"not granted: {alias} may only read {cal['title']} (fixture)"
+            core.set_calendar_grants(name, grants + [{"account": alias, "calendar": cal["id"], "name": cal["title"],
+                                                      **({"write": True} if write else {})}])
+            return True, f"{name}: calendar {op} {alias}/{cal['id']}"
+        if verb == "gdrive":
+            core.set_gdrive_grants(name, [g for g in core.gdrive_grants(name) if g["account"] != alias]
+                                   + [{"account": alias, "reach": "all" if "--all" in args else "own"}])
+            return True, f"{name}: Drive {alias}"
+        core.set_gchat_grants(name, [g for g in core.gchat_grants(name) if g["account"] != alias] + [{"account": alias}])
+        return True, f"{name}: Chat {alias}"
+
     def forbidden_launchctl(*args):
         raise AssertionError(f"fixture must not query launchd: {args}")
 
@@ -366,6 +413,11 @@ def setup(base: Path, port: int):
               # never the Mac's own Playwright cache: the version `browser install` recorded here
               mock.patch("supervisor.browser.version", side_effect=lambda: _read_json(setup_state).get("browser")),
               mock.patch.object(setup_access, "access", side_effect=access),
+              # the pickers' lists (§18.7) and a writable calendar's id: this fixture's, never Google's
+              mock.patch.object(mail_mod, "labels",
+                                side_effect=lambda acct: {n: f"Label_{i}" for i, n in enumerate(GOOGLE_LABELS)}),
+              mock.patch.object(calendar_mod, "calendars", side_effect=lambda acct: [dict(c) for c in GOOGLE_CALENDARS]),
+              mock.patch.object(google_mod, "urlopen", side_effect=AssertionError("the fixture never calls Google")),
               # secrets_env is empty here: the bots are those `telegram token` recorded (never the real .env)
               mock.patch.object(telegram_mod, "tokens",
                                 side_effect=lambda: {n: "fixture" for n in _read_json(setup_state).get("telegram", [])}),
@@ -973,8 +1025,14 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                   **({"mid": f"long-{k}"} if k % 2 == 0 else {})} for k in range(int(text or 90))]
         web_chat.save({"id": "web-" + os.urandom(8).hex(), "instance": name, "login": ME,
                        "created": turns[0]["ts"], "state": "idle", "reply": None, "turns": turns})
+    elif what == "google":                             # the app's local `shaft google login`, which a fixture run has not
+        from supervisor import google
+        address = args[0] if args else ME
+        google._save_account("google", {"address": address, "client": "google", "refresh_token": "fixture",
+                                        "scope": " ".join(google.SCOPES), "created": now})
+        print(f"Google account google is {address} (fixture: every scope, a fake token)")
     else:
-        raise SystemExit(f"unknown act {what!r}: message, question, state, doc, long")
+        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long")
 
 
 def main() -> int:

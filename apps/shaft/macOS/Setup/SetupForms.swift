@@ -263,13 +263,15 @@ enum CodexLogin {
 }
 
 /// The Access step's rows: the access a drive may suggest (`DrivePreset.grants`, the server's names), grouped as the step
-/// shows them. Continue applies the checked rows of `applied`, in that order; the Google rows are their own step.
+/// shows them. Continue applies the checked rows of `applied`, in that order; the Google rows are granted by the Google
+/// setup (Set up Google…), and a ticked one still off stops Continue there, saying so.
 enum AccessRow: String, CaseIterable, Identifiable, Sendable {
     case folder, browser, mail, calendar, drive, chat, web, telegram
     var id: String { rawValue }
 
-    /// The rows granted from this step, in the order Continue applies them.
-    static let applied: [AccessRow] = [.folder, .browser, .web, .telegram]
+    /// The rows Continue goes through, in order: the Google rows last, each already on (granted in the Google setup)
+    /// or the stop that asks for it.
+    static let applied: [AccessRow] = [.folder, .browser, .web, .telegram, .mail, .calendar, .drive, .chat]
     static let google: [AccessRow] = [.mail, .calendar, .drive, .chat]
 
     var title: String {

@@ -192,8 +192,15 @@ opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --
 device-code sign-in, no terminal): the app opens the `{"url": …}` it relays in the browser once and shows the
 `{"code": …}` to enter there, copyable; Cancel terminates the command, which stops Codex. The Access step grants the
 non-Google rows (a folder, the browser, web search, Telegram) through `/access/<n>`, `/setup/secret` and
-`/setup/telegram*` (the bot's token, the service on, the pairing code shown until the pairing lands); a Debug build shows the Google rows inactive, a Release build leaves them out until the Google setup
-is built.
+`/setup/telegram*` (the bot's token, the service on, the pairing code shown until the pairing lands). Its Google
+rows (mail labels, calendars, Drive, Chat) are granted by "Set up Google…" (`macOS/Setup/GoogleStep.swift`): five
+cards into Google Cloud (a project, the APIs, the audience published In production, the Data Access scopes, a Desktop
+app client), then the client's JSON dropped or chosen and sent on `shaft google client google --json`'s stdin, the
+sign-in through `shaft google login google <address> --client google --json` (the app opens its `{"url"}`; Cancel
+terminates it), and the pickers (`/google/google/labels|calendars`) applied in order through `/access/<n>`. Where it
+got is kept in `setup.state` (never the JSON); a ticked Google row still off stops Continue on Access. Against the
+fixture server those two commands cannot run (nothing is installed): `fixture_server.py act google` signs the account
+in on the fixture's folder instead, so the pickers and grants can be driven.
 
 ### Voice against the fixture server
 

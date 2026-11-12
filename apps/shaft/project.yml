@@ -200,6 +200,7 @@ targets:
       - path: macOS/Setup/MacSetup.swift
       - path: macOS/Setup/SetupForms.swift
       - path: macOS/Setup/SetupSteps.swift
+      - path: macOS/Setup/GoogleSetup.swift
       - path: Shared/Attachments/AttachmentViews.swift
     dependencies:
       - package: SHAFTKit

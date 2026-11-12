@@ -29,12 +29,15 @@ public struct SetupState: Codable, Equatable, Sendable {
     public var driveText = ""
     /// `POST /setup/instance`'s `autonomy`: `own` (works on its own after the first reply) or `talk`.
     public var autonomy = "own"
+    /// How far the Google setup (Access → Set up Google…) got: its stages done and the address typed. Never the
+    /// client's JSON or anything in it: that goes to the server's `.env` on `shaft google client`'s stdin.
+    public var google = GoogleSetupProgress()
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
         case step, operatorName, email, provider, model, instanceName, createdInstance, startedInstance, drive, driveText
-        case autonomy
+        case autonomy, google
     }
 
     /// A state saved by an older app lacks the newer fields: they take their defaults. An unknown step is an error.
@@ -51,6 +54,60 @@ public struct SetupState: Codable, Equatable, Sendable {
         drive = try c.decodeIfPresent(String.self, forKey: .drive)
         driveText = try c.decodeIfPresent(String.self, forKey: .driveText) ?? ""
         autonomy = try c.decodeIfPresent(String.self, forKey: .autonomy) ?? "own"
+        google = try c.decodeIfPresent(GoogleSetupProgress.self, forKey: .google) ?? GoogleSetupProgress()
+    }
+}
+
+/// The Google setup's stages, in order: five cards in Google Cloud (a project, the APIs, the audience and its
+/// publishing status, the Data Access scopes, a Desktop app client), the client's JSON handed to the server, the
+/// sign-in, and the grants.
+public enum GoogleSetupStage: String, Codable, CaseIterable, Sendable {
+    case project, apis, audience, scopes, client, json, signIn, grants
+
+    /// The cards the operator follows in Google Cloud and marks done: the app cannot see that console.
+    public static let cards: [GoogleSetupStage] = [.project, .apis, .audience, .scopes, .client]
+}
+
+/// What the Google setup keeps in `setup.state`, so a reopened app resumes at the first stage not done.
+public struct GoogleSetupProgress: Codable, Equatable, Sendable {
+    /// The stages done, in their order.
+    public private(set) var done: [GoogleSetupStage] = []
+    /// The Google address typed for the sign-in.
+    public var address = ""
+
+    public init() {}
+
+    /// Where the setup resumes: the first stage not done, in order (a card skipped stays the place to resume, even
+    /// when a later one was marked); nil once every stage is done.
+    public var resume: GoogleSetupStage? {
+        GoogleSetupStage.allCases.first { !done.contains($0) }
+    }
+
+    public func isDone(_ stage: GoogleSetupStage) -> Bool { done.contains(stage) }
+
+    public mutating func finish(_ stage: GoogleSetupStage) {
+        guard !done.contains(stage) else { return }
+        done = GoogleSetupStage.allCases.filter { done.contains($0) || $0 == stage }
+    }
+
+    public mutating func reopen(_ stage: GoogleSetupStage) {
+        done.removeAll { $0 == stage }
+    }
+
+    /// The server kept a client from a new JSON: a login made with an earlier client no longer refreshes, so the
+    /// sign-in (and the grants that follow it) are to do again.
+    public mutating func clientSaved() {
+        finish(.json)
+        reopen(.signIn)
+        reopen(.grants)
+    }
+
+    /// The server already has the account signed in (`google_accounts`), and this setup never handed it a client
+    /// itself: the cards, the client and the sign-in were done before (another run, the CLI). Nothing changes once
+    /// this setup sent a JSON of its own, whose sign-in is still to come.
+    public mutating func adopt(signedIn: Bool) {
+        guard signedIn, !isDone(.json), !isDone(.signIn) else { return }
+        for stage in GoogleSetupStage.cards + [.json, .signIn] { finish(stage) }
     }
 }
 

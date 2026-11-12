@@ -140,6 +140,32 @@ class FixtureSetupTest(unittest.TestCase):
                     if path.is_file():
                         self.assertNotIn("fixture-token-never-kept", path.read_text(errors="ignore"), str(path))
 
+                # Google: no account until `act google` (the app's own local login); then the pickers' lists and the
+                # grants, each answered with the fresh access; a refused label stops with the verb's words.
+                err = api("/app/v1/google/google/labels", expected=409)
+                self.assertIn("not logged in", err["error"]["message"])
+                fixture.act(base, web, chat, messages, push, "google", [])
+                self.assertEqual(api("/app/v1/google/google/labels")["labels"], fixture.GOOGLE_LABELS)
+                cals = api("/app/v1/google/google/calendars")["calendars"]
+                self.assertEqual([(c["id"], c["primary"]) for c in cals],
+                                 [(fixture.ME, True), ("team@group.calendar.google.com", False)])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "mail", "action": "grant", "alias": "google",
+                                                                "what": "Receipts"})
+                self.assertEqual(granted["mail"], [{"account": "google", "label": "Receipts", "draft": False}])
+                self.assertEqual([a["alias"] for a in granted["google_accounts"]], ["google"])
+                err = api("/app/v1/access/ledger", "POST", {"grant": "mail", "action": "grant", "alias": "google",
+                                                            "what": "Refused here"}, expected=409)
+                self.assertIn("no label 'Refused here'", err["error"]["message"])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "calendar", "action": "grant", "alias": "google",
+                                                                "what": fixture.ME, "writable": True})
+                self.assertEqual(granted["calendar"], [{"account": "google", "calendar": fixture.ME,
+                                                        "name": fixture.ME, "write": True}])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "drive", "action": "grant", "alias": "google",
+                                                                "all": True})
+                self.assertEqual(granted["drive"], [{"account": "google", "reach": "all"}])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "chat", "action": "grant", "alias": "google"})
+                self.assertEqual(granted["chat"], [{"account": "google"}])
+
                 # How it works alone: the real first-reply verb on the fixture's marker, then a budget.
                 self.assertEqual(api("/app/v1/setup/autonomy/ledger", "POST", {"then": "stay"}),
                                  {"instance": "ledger", "then": "stay"})

@@ -428,8 +428,63 @@ struct SetupTests {
         // Only these fields exist: a new field is a deliberate decision that it is not a secret.
         let keys = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any]).keys
         #expect(Set(keys).isSubset(of: ["step", "operatorName", "email", "provider", "model", "instanceName",
-                                        "createdInstance", "startedInstance", "drive", "driveText", "autonomy"]),
+                                        "createdInstance", "startedInstance", "drive", "driveText", "autonomy",
+                                        "google"]),
                 "\(keys)")
+        // The Google setup's part: stage names and the address typed, nothing else.
+        let google = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any])["google"]
+        #expect(Set(((google as? [String: Any]) ?? [:]).keys).isSubset(of: ["done", "address"]))
+    }
+
+    /// The Google setup resumes at the first stage not done, the order of the cards kept: one skipped is still where it
+    /// resumes. A new client undoes the sign-in made with the earlier one; an account the server has signed in already
+    /// (and no JSON sent by this setup) counts the cards, the client and the sign-in as done.
+    @Test func googleStepsResumeAtTheFirstUnfinished() throws {
+        var progress = GoogleSetupProgress()
+        #expect(progress.resume == .project)
+        progress.finish(.project)
+        progress.finish(.apis)
+        #expect(progress.resume == .audience)
+        progress.finish(.scopes)                               // marked out of order: audience is still to do
+        #expect(progress.resume == .audience)
+        #expect(progress.done == [.project, .apis, .scopes])
+        progress.finish(.audience)
+        progress.finish(.client)
+        #expect(progress.resume == .json)
+        progress.clientSaved()
+        #expect(progress.resume == .signIn)
+        progress.finish(.signIn)
+        #expect(progress.resume == .grants)
+        progress.reopen(.apis)                                 // reopened to enable another API
+        #expect(progress.resume == .apis)
+        progress.finish(.apis)
+        progress.clientSaved()                                 // a new JSON: sign in again with it
+        #expect(progress.resume == .signIn)
+        progress.adopt(signedIn: true)                         // the server's account is the earlier client's
+        #expect(progress.resume == .signIn)
+        progress.finish(.signIn)
+        progress.finish(.grants)
+        #expect(progress.resume == nil)
+
+        var adopted = GoogleSetupProgress()
+        adopted.adopt(signedIn: false)
+        #expect(adopted.resume == .project)
+        adopted.adopt(signedIn: true)
+        #expect(adopted.resume == .grants)
+
+        // Kept across a reopened app, as setup.state.
+        let suite = "shaft-google-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var state = SetupState()
+        state.step = .access
+        state.google.finish(.project)
+        state.google.finish(.apis)
+        state.google.address = "ada@example.com"
+        try SetupStateStore(defaults: defaults).save(state)
+        let reopened = try SetupStateStore(defaults: defaults).load()
+        #expect(reopened.google.resume == .audience)
+        #expect(reopened.google.address == "ada@example.com")
     }
 
     @Test func resumesAtThePersistedStep() throws {
@@ -453,6 +508,8 @@ struct SetupTests {
         state.drive = "research"
         state.driveText = "Read widely and report back."
         state.autonomy = "talk"
+        state.google.finish(.project)
+        state.google.address = "ada@example.com"
         try store.save(state)
 
         // Reopening the app: a new store over the same defaults resumes there, with every input.
@@ -465,6 +522,7 @@ struct SetupTests {
         #expect(older.step == .model)
         #expect(older.operatorName == "Ada")
         #expect(older.autonomy == "own")
+        #expect(older.google == GoogleSetupProgress())
 
         // A corrupt value is an error, not a silent restart.
         defaults.set(Data(#"{"step": "nowhere"}"#.utf8), forKey: SetupStateStore.key)

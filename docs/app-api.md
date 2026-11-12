@@ -1612,6 +1612,11 @@ What a mail or calendar grant may name, read live from Google with the operator'
 An account that is not logged in, or whose login lacks `gmail.readonly` / `calendar.readonly`, is `409 refused` with
 the command that fixes it; Google's own error (`Google answered HTTP …`) is `409 refused` too.
 
+The account itself is not made through a route: the Mac app's setup wizard runs `shaft google client google --json`
+(the Desktop app client's JSON on stdin) and `shaft google login google <address> --client google --json` as local
+processes of the installed server, since the consent's loopback listener lives in that process for the minutes it
+takes (docs/integrations.md, "Google accounts").
+
 ### 18.8 `POST /setup/hello/<n>`
 
 The wizard's last step: the setup's hidden opening to `<n>`'s Main conversation (`web_chat.opening`), as the device's

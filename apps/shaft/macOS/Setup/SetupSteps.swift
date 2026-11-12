@@ -4,8 +4,9 @@ import Observation
 import SHAFTKit
 
 /// The wizard's work after Install, against the server this app just paired with (docs/app-api.md §18): the provider's
-/// key, preset and check; the Codex sign-in; the drives; creating the instance; the access granted to it; its choice
-/// for working alone and its budget; and the welcome. MacSetup owns it, so a closed window reopened finds it as it was.
+/// key, preset and check; the Codex sign-in; the drives; creating the instance; the access granted to it (its Google
+/// part in `google`, GoogleSetup); its choice for working alone and its budget; and the welcome. MacSetup owns it, so a
+/// closed window reopened finds it as it was.
 ///
 /// Every action runs in a task kept here, under the wizard's generation. `reset()` (the wizard ended or started over)
 /// moves the generation on and cancels them all: work started before changes nothing after its next suspension.
@@ -85,6 +86,9 @@ final class SetupSteps {
     // MARK: Say hello
     private(set) var greeting: Work = .idle
 
+    /// Access → "Set up Google…": its own work and lifecycle, stopped and reset with the wizard's.
+    let google: GoogleSetup
+
     @ObservationIgnored private var generation = 0
     /// The Codex sign-in's own identity: Cancel and a new sign-in move it on, so a late line of one given up is dropped.
     @ObservationIgnored private var loginRun = 0
@@ -94,6 +98,7 @@ final class SetupSteps {
     /// `openURL` opens the Codex sign-in page; tests give one that records it.
     init(openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }) {
         self.openURL = openURL
+        google = GoogleSetup(openURL: openURL)
     }
 
     static let unpaired = "This app is not paired with the server on this Mac: go back to Install, which pairs it."
@@ -101,7 +106,7 @@ final class SetupSteps {
     /// Something of the step on screen runs: Back and Continue wait.
     var busy: Bool {
         [saving, testing, signingIn, loadingDrives, creating, loadingAccess, granting, loadingSettings, savingAlone,
-         greeting].contains(.running)
+         greeting].contains(.running) || google.busy
     }
 
     // MARK: - Lifecycle
@@ -121,6 +126,7 @@ final class SetupSteps {
         if loadingDrives.running { loadingDrives = .idle }
         if loadingAccess.running { loadingAccess = .idle }
         if loadingSettings.running { loadingSettings = .idle }
+        google.stop()
     }
 
     /// The wizard ended or starts over: everything stops, and nothing started before changes anything.
@@ -137,6 +143,7 @@ final class SetupSteps {
             (nil, nil, nil, nil, [], [], [])
         telegramStarting = false
         (accessFolder, webKey, telegramToken, grantingRow, failedRow) = ("", "", "", nil, nil)
+        google.reset()
     }
 
     /// Run `body` as the task `key`, its state in `status`: running, then idle, or the real error. `current()` says
@@ -379,6 +386,16 @@ final class SetupSteps {
         return accessDone.contains(row) || AccessRow.granted(in: access, telegram: telegram).contains(row)
     }
 
+    /// The fresh access a grant made elsewhere answered (the Google setup's): the rows show what is on.
+    func received(access answer: AccessResponse) {
+        access = answer
+    }
+
+    /// The Google rows ticked: what the Google setup grants, and so which APIs and scopes its cards list.
+    var googleChosen: Set<AccessRow> {
+        accessChecked.intersection(AccessRow.google)
+    }
+
     /// A folder chosen in the open panel: it is the folder row's, which it ticks.
     func choose(folder: URL) {
         accessFolder = folder.path
@@ -433,7 +450,9 @@ final class SetupSteps {
         case .telegram:
             try await applyTelegram(to: name, client: client, current: current)
         case .mail, .calendar, .drive, .chat:
-            break                                     // the Google setup grants these
+            // Granted in the Google setup, never from here: a ticked row still off waits for it (or an untick).
+            throw FormProblem("\(row.title) is granted through Set up Google… above: finish it there, or untick "
+                              + "\(row.title).")
         }
     }
 

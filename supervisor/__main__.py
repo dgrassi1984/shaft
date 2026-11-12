@@ -749,11 +749,21 @@ def cmd_share(name: str, folder: str | None) -> int:
     return 0
 
 
-def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "") -> int:
-    """The operator's Google accounts, shared by mail, calendar, Drive and Chat: log one in (one
-    consent), list them with their clients and granted scopes, or move the account files out of the old mail folder."""
+def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "",
+               as_json: bool = False) -> int:
+    """The operator's Google accounts, shared by mail, calendar, Drive and Chat: keep an OAuth client from the JSON
+    Google Cloud downloads, log one in (one consent), list them with their clients and granted scopes, or move the
+    account files out of the old mail folder."""
     from . import google
     from .core import secrets_env
+    if as_json and action not in ("client", "login"):
+        print("shaft google" + (f" {action}" if action else "") + " has no --json (only client and login)",
+              file=sys.stderr)
+        return 2
+    if action == "client":
+        return _google_client(alias, as_json)
+    if action == "login" and as_json:
+        return _google_login_json(alias, address, client)
     if action == "login":
         if not (alias and address):
             print("usage: shaft google login <alias> <address> [--client <name>]  (e.g. shaft google login work "
@@ -792,7 +802,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
         print("\n".join(lines))
         return 0
     if action:
-        print(f"unknown google action {action!r}: login or migrate (alone: list the accounts)", file=sys.stderr)
+        print(f"unknown google action {action!r}: client, login or migrate (alone: list the accounts)", file=sys.stderr)
         return 2
     accts = google.accounts()
     for a, d in accts.items():
@@ -803,6 +813,83 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
     if (left := google.unmigrated()):
         print(f"NOT READ: {', '.join(left)} still in {google.old_accounts_dir()} (shaft google migrate)", file=sys.stderr)
     return 0
+
+
+def _google_client(name: str | None, as_json: bool) -> int:
+    """`shaft google client NAME [--json]`: the Desktop app OAuth client from the JSON Google Cloud downloads, read on
+    stdin, kept as GMAIL_<NAME>_CLIENT_ID / _CLIENT_SECRET in .env (core.set_secret_env). Neither value is printed or
+    logged. One line: `{"ok": true, "client", "login_again": [aliases]}` or `{"ok": false, "error"}`."""
+    from . import google
+
+    def say(ok: bool, text: str, **extra) -> int:
+        if as_json:
+            print(json.dumps({"ok": ok, **({} if ok else {"error": text}), **extra}))
+        else:
+            print(text, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+    if not name:
+        usage = "usage: shaft google client <name> [--json] < client.json  (the Desktop app client's JSON on stdin)"
+        if as_json:
+            print(json.dumps({"ok": False, "error": usage}))
+        else:
+            print(usage, file=sys.stderr)
+        return 2
+    try:
+        text = sys.stdin.read(google.CLIENT_JSON_MAX + 1)
+        again = google.save_client(name, text)
+    except google.AccountError as e:
+        return say(False, f"not saved: {e}")
+    except (ValueError, OSError) as e:
+        return say(False, f"not saved: {e}")
+    id_key, secret_key = google.client_keys(name)
+    log(f"Google OAuth client {name} saved from its JSON ({id_key}, {secret_key}) by the operator"
+        + (f"; {', '.join(again)} must log in again" if again else ""))
+    text = f"saved: Google client {name} ({id_key} and {secret_key} in .env)" + (
+        f". {', '.join(again)} logged in with its earlier ID: run shaft google login for "
+        f"{'it' if len(again) == 1 else 'each'} again" if again else "")
+    return say(True, text, client=name, login_again=again)
+
+
+def _google_login_json(alias: str | None, address: str | None, client: str) -> int:
+    """`shaft google login ALIAS ADDRESS [--client NAME] --json`, for the Mac app: `{"url"}` (Google's consent page;
+    the app opens it, nothing here opens a browser) as soon as the loopback listener waits, then
+    `{"ok": true, "alias", "address", "client", "granted": [scope names], "missing": [scope names]}` or
+    `{"ok": false, "error"}` with the real reason (300 s without an answer from the browser among them). SIGTERM (the
+    app's Cancel) ends it with nothing saved."""
+    from . import google
+    from .core import secrets_env
+
+    def emit(row: dict) -> None:
+        print(json.dumps(row), flush=True)
+    if not (alias and address):
+        emit({"ok": False, "error": "usage: shaft google login <alias> <address> [--client <name>] --json"})
+        return 2
+    try:
+        saved = google.login(alias, address, secrets_env(), client=client,
+                             open_url=lambda url: emit({"url": url}), announce=False)
+    except BrokenPipeError:
+        return 1                                     # nobody reads the answer any more
+    except google.AccountError as e:
+        error = str(e)
+    except (OSError, ValueError) as e:              # the token exchange could not reach Google
+        error = f"the Google login failed: {e}"
+    else:
+        granted = google.scopes(saved)
+        names = [google.SCOPE_NAMES[s] for s in google.SCOPES if s in granted]
+        missing = [google.SCOPE_NAMES[s] for s in google.SCOPES if s not in granted]
+        log(f"Google account {alias} logged in as {saved['address']} (client {saved['client']}, granted "
+            f"{google.scope_text(saved)}) by the operator, from the app")
+        try:
+            emit({"ok": True, "alias": alias, "address": saved["address"], "client": saved["client"],
+                  "granted": names, "missing": missing})
+        except BrokenPipeError:
+            pass
+        return 0
+    try:
+        emit({"ok": False, "error": error})
+    except BrokenPipeError:
+        pass
+    return 1
 
 
 def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
@@ -1790,14 +1877,18 @@ def main(argv: list[str]) -> int:
                                        "[--playwright X.Y.Z]' (re)installs it; alone shows it and each profile")
     p.add_argument("action", nargs="?", choices=["install"])
     p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
-    p = sub.add_parser("google", help="your Google accounts, for mail, calendar and Drive: 'login <alias> <address> "
+    p = sub.add_parser("google", help="your Google accounts, for mail, calendar and Drive: 'client <name>' (a Desktop "
+                                      "app OAuth client from its downloaded JSON, on stdin), 'login <alias> <address> "
                                       "[--client <name>]' (reads, calendar writes and mail drafts), 'migrate' (from .supervisor/mail/); "
                                       "alone lists them with their clients and granted scopes")
-    p.add_argument("action", nargs="?", choices=["login", "migrate"])
-    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work)")
+    p.add_argument("action", nargs="?", choices=["client", "login", "migrate"])
+    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work); with client: the client's "
+                                            "name (GMAIL_<NAME>_CLIENT_ID/_SECRET), its downloaded JSON on stdin")
     p.add_argument("address", nargs="?", help="with login: its address")
     p.add_argument("--client", default="", help="with login: the OAuth client (GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env); "
                                                 "default: the alias. One per Google organisation: personal Google needs its own")
+    p.add_argument("--json", action="store_true", help="client, login: one JSON object per line on stdout (login: "
+                                                       "the consent URL first, opened by the caller)")
     p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: "
                                     "'<name> grant|revoke|grant-draft|revoke-draft <alias> <label>', "
                                     "'<name> off', '<name>' shows; alone lists all "
@@ -2017,7 +2108,7 @@ def main(argv: list[str]) -> int:
             print(f"  {name}: {browser.describe(INSTANCES / name)}")
         return 0
     if args.cmd == "google":
-        return cmd_google(args.action, args.alias, args.address, args.client)
+        return cmd_google(args.action, args.alias, args.address, args.client, args.json)
     if args.cmd == "mail":
         if args.target == "login":   # one login for every Google service
             print("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", file=sys.stderr)
