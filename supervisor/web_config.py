@@ -116,14 +116,18 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if op not in allowed or not alias or not what:
             raise Refused(f"{verb} {op} needs an account and a {'label' if verb == 'mail' else 'calendar'}")
         if verb == "calendar" and op == "grant" and form.get("writable"):
-            status, text = _ran([verb, name, op, alias, what])
+            # The calendar this request names, resolved to its ID once (titles may hold commas or quotes): the read
+            # grant and the write upgrade both name that ID, never one inferred from the stored grants, which another
+            # request's grant may reorder in between. Both keep the CLI as the grant writer.
+            from . import calendar, google
+            try:
+                cid = calendar.grant_id(alias, what)
+            except (google.AccountError, google.ApiError) as e:
+                raise Refused(f"not granted: {e}") from None
+            status, text = _ran([verb, name, op, alias, cid])
             if status != 200:
                 return status, text
-            # cmd_calendar appends the resolved grant, including an existing one. Use that saved ID for the
-            # upgrade: titles may contain commas or quotes. Both operations keep the CLI as the grant writer.
-            from .core import calendar_grants
-            grant = [g for g in calendar_grants(name) if g["account"] == alias][-1]
-            return _ran([verb, name, "grant-write", alias, grant["calendar"]])
+            return _ran([verb, name, "grant-write", alias, cid])
         return _ran([verb, name, op, alias, what])
     if verb == "battery-switch":
         if form.get("op") not in ("on", "off"):

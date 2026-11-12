@@ -20,6 +20,10 @@ from supervisor.tests.test_app_api import AppTest, write_or_check_fixtures
 from supervisor.tests.test_web import ME
 from supervisor.tests.test_web_local import LocalTest
 
+CALENDARS = [{"id": "team-id@group.calendar.google.com", "title": "Team, \"core\"", "summary": "", "primary": False,
+              "access": "owner"},
+             {"id": "family-id@group.calendar.google.com", "title": "Family", "summary": "", "primary": False,
+              "access": "owner"}]
 DRIVE = "You were created to keep the ledgers straight. Check every total before you report it."
 DEFAULT_DRIVE = "You were created with one innate drive: to improve yourself.\n"
 KEY = "sk-or-v1-never-in-argv-or-a-log-91c3"
@@ -33,6 +37,7 @@ class SetupTest(AppTest):
         self.refuse: dict[str, tuple[int, list[dict]] | tuple[bool, str]] = {}    # verb -> its answer instead
         self.env: dict[str, str] = {}
         self.browser_version: str | None = "1.64.0"
+        self.during_grant = None             # runs inside the next `calendar grant`: another request interleaving
         self.real_run_json = actions.run_json            # before the fake: the secret test runs the real one
         self.tmpl = Path(tempfile.mkdtemp(prefix="shaft-setup-tmpl-"))
         self.addCleanup(shutil.rmtree, self.tmpl, True)
@@ -90,9 +95,18 @@ class SetupTest(AppTest):
         if args[0] == "mail" and args[2] in ("grant", "grant-draft"):
             core.set_mail_grants(args[1], core.mail_grants(args[1]) + [
                 {"account": args[3], "label": args[4], "draft": args[2] == "grant-draft"}])
-        if args[0] == "calendar" and args[2] == "grant":
-            core.set_calendar_grants(args[1], core.calendar_grants(args[1]) + [
-                {"account": args[3], "calendar": f"{args[4]}@group.calendar.google.com", "name": args[4]}])
+        if args[0] == "calendar" and args[2] in ("grant", "grant-write"):
+            cal = next((c for c in CALENDARS if args[4] in (c["id"], c["title"])),
+                       {"id": f"{args[4]}@group.calendar.google.com", "title": args[4]})
+            # as cmd_calendar: the grant moves to the end of the stored list, the write flag kept or added
+            grants = core.calendar_grants(args[1])
+            prior = next((g for g in grants if (g["account"], g["calendar"]) == (args[3], cal["id"])), {})
+            rest = [g for g in grants if (g["account"], g["calendar"]) != (args[3], cal["id"])]
+            core.set_calendar_grants(args[1], rest + [{"account": args[3], "calendar": cal["id"], "name": cal["title"],
+                                                       "write": args[2] == "grant-write" or bool(prior.get("write"))}])
+            if self.during_grant and args[2] == "grant":
+                hook, self.during_grant = self.during_grant, None
+                hook()
         if args[0] == "gdrive" and args[2] == "grant":
             core.set_gdrive_grants(args[1], [{"account": args[3], "reach": "all" if "--all" in args else "own"}])
         return True, "done"
@@ -161,7 +175,7 @@ class CreateTest(SetupTest):
         self.assertIn("drive.md changed", err["message"])
 
     def test_bad_bodies_run_nothing(self):
-        for over in ({"autonomy": "sometimes"}, {"name": 3}, {"drive": ""}, {"drive": "x" * 20001}, {"operator": ""},
+        for over in ({"autonomy": "sometimes"}, {"autonomy": []}, {"autonomy": {}}, {"name": 3}, {"drive": ""}, {"drive": "x" * 20001}, {"operator": ""},
                      {"model": ""}):
             with self.subTest(over=over):
                 self.error(self.create(**over), 400, "bad_request")
@@ -344,11 +358,51 @@ class AccessTest(SetupTest):
                 self.assertEqual({c["who"] for c in self.calls}, {"app iphone-app"})
                 self.assertEqual(set(json.loads(r.body)), set(self.get("/app/v1/access/wisp")))   # the fresh access
 
-    def test_a_writable_calendar_is_granted_then_upgraded_by_its_saved_id(self):
-        r = self.grant(grant="calendar", action="grant", alias="work", what="Team, \"core\"", writable=True)
+    def google_work(self):
+        google._save_account("work", {"address": "me@example.com", "refresh_token": "r", "client": "work",
+                                      "scope": f"{google.CALENDAR} {google.CALENDAR_EVENTS}"})
+        return mock.patch.object(calendar, "calendars", return_value=CALENDARS)
+
+    def test_a_writable_calendar_is_granted_then_upgraded_by_its_resolved_id(self):
+        with self.google_work():
+            r = self.grant(grant="calendar", action="grant", alias="work", what="Team, \"core\"", writable=True)
         self.assertEqual(r.status, 200, r.body)
-        self.assertEqual(self.verbs(), [["calendar", "wisp", "grant", "work", "Team, \"core\""],
-                                      ["calendar", "wisp", "grant-write", "work", "Team, \"core\"@group.calendar.google.com"]])
+        team = CALENDARS[0]["id"]
+        self.assertEqual(self.verbs(), [["calendar", "wisp", "grant", "work", team],
+                                        ["calendar", "wisp", "grant-write", "work", team]])
+        self.assertEqual(json.loads(r.body)["calendar"], [{"account": "work", "calendar": team,
+                                                           "name": "Team, \"core\"", "write": True}])
+
+    def test_a_concurrent_grant_on_the_same_account_never_gets_this_requests_write(self):
+        # Bug: the upgrade took the account's LAST stored grant; another request's grant landing between this one's
+        # read grant and its upgrade made Family writable instead of Team.
+        team, family = CALENDARS[0]["id"], CALENDARS[1]["id"]
+        self.during_grant = lambda: self.run_now(["calendar", "wisp", "grant", "work", "Family"], who="app other")
+        with self.google_work():
+            r = self.grant(grant="calendar", action="grant", alias="work", what="Team, \"core\"", writable=True)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual([a for a in self.verbs() if a[2] == "grant-write"],
+                         [["calendar", "wisp", "grant-write", "work", team]])
+        self.assertEqual({g["calendar"]: g.get("write", False) for g in core.calendar_grants("wisp")},
+                         {team: True, family: False})
+
+    def test_the_web_access_page_upgrades_the_calendar_it_granted_too(self):
+        from supervisor import web_config
+        team, family = CALENDARS[0]["id"], CALENDARS[1]["id"]
+        self.during_grant = lambda: self.run_now(["calendar", "wisp", "grant", "work", "Family"], who="app other")
+        with self.google_work():
+            status, _ = web_config.run("calendar", "wisp", {"op": "grant", "alias": "work", "what": "Team, \"core\"",
+                                                             "writable": "1"})
+        self.assertEqual(status, 200)
+        self.assertEqual({g["calendar"]: g.get("write", False) for g in core.calendar_grants("wisp")},
+                         {team: True, family: False})
+
+    def test_a_writable_calendar_that_does_not_resolve_is_refused_before_any_grant(self):
+        with self.google_work():
+            err = self.error(self.grant(grant="calendar", action="grant", alias="work", what="Nope", writable=True),
+                             409, "refused")
+        self.assertIn("has no calendar 'Nope'", err["message"])
+        self.assertEqual(self.calls, [])
 
     def test_grants_show_in_the_access(self):
         self.grant(grant="mail", action="grant", alias="work", what="Assistant", writable=True)
@@ -379,7 +433,8 @@ class AccessTest(SetupTest):
         self.assertIn("chat.messages.readonly", err["message"])
 
     def test_bad_access_bodies(self):
-        for body in ({"grant": "everything", "action": "grant"}, {"grant": "mail", "action": "grant", "alias": "work"},
+        for body in ({"grant": "everything", "action": "grant"}, {"grant": [], "action": "grant"},
+                     {"grant": {}, "action": "grant"}, {"grant": "drive", "action": [], "alias": "work"}, {"grant": "mail", "action": "grant", "alias": "work"},
                      {"grant": "mail", "action": "grant", "alias": "Bad Alias", "what": "x"},
                      {"grant": "folder", "action": "grant"}, {"grant": "drive", "action": "maybe", "alias": "work"},
                      {"grant": "drive", "action": "grant", "alias": "work", "all": "yes"}):

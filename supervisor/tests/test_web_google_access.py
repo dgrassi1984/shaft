@@ -154,13 +154,15 @@ class GoogleAccessTest(ActionsTest):
         for op in ("grant-write", "revoke-write"):
             status, _ = self.act("calendar", name="wisp", op=op, alias="work", what="id%40calendar")
             self.assertEqual(status, 200)
-        with mock.patch.object(core, "calendar_grants", return_value=[
-                {"account": "work", "calendar": "id@calendar", "name": 'A, "title"'}]):
+        # a writable grant resolves the title to its calendar ID once, then grants and upgrades by that ID (never the
+        # account's last stored grant, which a concurrent grant may have become)
+        with mock.patch("supervisor.calendar.grant_id", return_value="id@calendar") as resolve:
             self.act("calendar", name="wisp", op="grant", alias="work", what="A%2C%20%22title%22", writable="1")
+        resolve.assert_called_once_with("work", 'A, "title"')
         self.assertEqual([r[1] for r in self.ran], [
             ["calendar", "wisp", "grant-write", "work", "id@calendar"],
             ["calendar", "wisp", "revoke-write", "work", "id@calendar"],
-            ["calendar", "wisp", "grant", "work", 'A, "title"'],
+            ["calendar", "wisp", "grant", "work", "id@calendar"],
             ["calendar", "wisp", "grant-write", "work", "id@calendar"]])
 
     def test_cli_refuses_missing_write_scope_before_resolving_or_saving(self):

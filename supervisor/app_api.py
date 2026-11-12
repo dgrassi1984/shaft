@@ -1114,7 +1114,7 @@ def _setup_instance(req: Request) -> Response:
     drive = data["drive"]
     if not isinstance(drive, str) or not drive.strip() or len(drive) > DRIVE_MAX:
         raise Refusal(400, "bad_request", f"drive must be the drive's text, at most {DRIVE_MAX} characters.")
-    if data["autonomy"] not in AUTONOMY:
+    if not isinstance(data["autonomy"], str) or data["autonomy"] not in AUTONOMY:
         raise Refusal(400, "bad_request", "autonomy must be own or talk.")
     who = _who(req)
     log(f"{who}: operator set up instance {name}")
@@ -1263,7 +1263,7 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
     """The verbs one access change runs, in order (the browser's and the calendar's write upgrade: _set_access)."""
     from . import google
     grant, action = data.get("grant"), data.get("action")
-    if grant not in GRANT_FIELDS or action not in ("grant", "revoke"):
+    if not isinstance(grant, str) or grant not in GRANT_FIELDS or action not in ("grant", "revoke"):
         raise Refusal(400, "bad_request", f"grant must be one of {', '.join(GRANT_FIELDS)}; action grant or revoke.")
     fields = GRANT_FIELDS[grant]
     if set(data) - fields - {"grant", "action"} or any(type(data[k]) is not bool for k in ("writable", "all")
@@ -1288,11 +1288,19 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
 
 def _set_access(req: Request, n: str) -> Response:
     """One grant or revocation through its CLI verb (§18.6), then the fresh access."""
-    from . import actions, browser, core, setup
+    from . import actions, browser, calendar, core, google, setup
     data = _body(req)
     runs = _access_args(n, data)
     who = _who(req)
     log(f"{who}: operator {data['action']} {data['grant']} for {n}")
+    if data["grant"] == "calendar" and data["action"] == "grant" and data.get("writable"):
+        # the calendar this request names, resolved to its ID once: the read grant and the write upgrade both name that
+        # ID — never one inferred from the stored grants, which another request's grant may reorder meanwhile
+        try:
+            cid = calendar.grant_id(data["alias"], data["what"])
+        except (google.AccountError, google.ApiError) as e:
+            raise Refusal(409, "refused", f"not granted: {e}") from None
+        runs = [["calendar", n, "grant", data["alias"], cid], ["calendar", n, "grant-write", data["alias"], cid]]
     if data["grant"] == "browser":
         if data["action"] == "revoke":
             raise Refusal(409, "refused", "The browser is shared by every instance and reached from inside run: there "
@@ -1306,12 +1314,6 @@ def _set_access(req: Request, n: str) -> Response:
             runs = [["tools", n, "on", "run"]]
     for args in runs:
         ok, said = actions.run_now(args, who=who)
-        if not ok:
-            raise Refusal(409, "refused", said)
-    if data["grant"] == "calendar" and data["action"] == "grant" and data.get("writable"):
-        # as the web Access page: upgrade the grant by its saved calendar ID, never its title again (titles hold commas)
-        grant = [g for g in core.calendar_grants(n) if g["account"] == data["alias"]][-1]
-        ok, said = actions.run_now(["calendar", n, "grant-write", data["alias"], grant["calendar"]], who=who)
         if not ok:
             raise Refusal(409, "refused", said)
     return _json(200, setup.access(n))

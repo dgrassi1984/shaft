@@ -1561,7 +1561,7 @@ object:
 | `folder` | `what` (a path; grant only) | `share <n> <what>`; revoke: `share <n> off` |
 | `browser` | | `browser install` (only when none is installed, held up to 15 minutes), then `tools <n> on run` when `run` is off. Revoke is `409 refused`: the browser is shared, and switching `run` off would also stop the instance running its own code |
 | `mail` | `alias`, `what` (label), `writable` | `mail <n> grant|revoke <alias> <what>`; `writable`: `grant-draft`/`revoke-draft` (revoking the draft keeps the read) |
-| `calendar` | `alias`, `what` (`primary`, a title or an id), `writable` | `calendar <n> grant|revoke <alias> <what>`; a writable grant then runs `grant-write` with the calendar's saved id; `writable` revoke: `revoke-write` |
+| `calendar` | `alias`, `what` (`primary`, a title or an id), `writable` | `calendar <n> grant|revoke <alias> <what>`; a writable grant first resolves `what` to the calendar's id once (`calendar.grant_id`; unresolvable: `409 refused`, nothing granted), then runs `grant` and `grant-write` with that id, so a concurrent grant on the same account never receives this request's write; `writable` revoke: `revoke-write` |
 | `drive` | `alias`, `all` | `gdrive <n> grant <alias> [--all]` / `revoke <alias>` |
 | `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
 
