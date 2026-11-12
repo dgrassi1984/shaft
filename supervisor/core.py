@@ -535,19 +535,30 @@ def long_pauses(now: datetime | None = None) -> list[dict]:
     return out
 
 
-def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator") -> None:
+def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator", write_flag: bool = True,
+               note: bool = True) -> None:
     """Set or lift a pause flag (`.supervisor/paused-<name>`, or `paused` for all), then tell each instance it touches
     in a journal note: the scheduler leaves a paused instance out without a word, and tundra took an operator pause
     (2026-10-25 12:42 to 26 14:36) for the scheduler silently skipping its wakes. Re-pausing writes nothing; notes
-    are best effort and never stop the pause, resume, kill or delete that called this."""
+    are best effort and never stop the pause, resume, kill or delete that called this. `write_flag=False` (pausing
+    only) writes just the note for a flag already in place, `note=False` just the flag: `shaft new` pauses before the
+    worktree exists, so no scheduler tick can wake it, and notes once it does."""
     flag = SUP_DIR / (f"paused-{name}" if name else "paused")
     now = datetime.now()
     SUP_DIR.mkdir(exist_ok=True)
     if enabled:
-        try:
-            with flag.open("x") as f:
-                f.write(now.isoformat())
-        except FileExistsError:
+        if write_flag:
+            try:
+                with flag.open("x") as f:
+                    f.write(now.isoformat())
+            except FileExistsError:
+                return
+        else:
+            try:
+                now = datetime.fromisoformat(flag.read_text().strip())
+            except (OSError, UnicodeError, ValueError):
+                pass
+        if not note:
             return
         title = f"Supervisor: paused by {reason}"
         body = f"{'Global pause' if name is None else 'Pause'} started at {now:%Y-%m-%d %H:%M} by {reason}. "

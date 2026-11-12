@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -73,8 +74,7 @@ def _write_first_reply(name: str, then: str) -> None:
     """`.supervisor/first-reply-<name>`: what to do once the operator has answered the welcome (atomic, 0600)."""
     SUP_DIR.mkdir(exist_ok=True)
     path = SUP_DIR / f"first-reply-{name}"
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(prefix=f".first-reply-{name}.", dir=SUP_DIR)     # exclusive, 0600
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps({"then": then, "created": datetime.now().astimezone().isoformat(timespec="seconds")}))
@@ -82,7 +82,7 @@ def _write_first_reply(name: str, then: str) -> None:
             os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        Path(tmp).unlink(missing_ok=True)
         raise
 
 
@@ -115,7 +115,10 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
     if seed and not source:
         return refuse("--seed copies from a parent instance: name it with --from")
     if source:
-        instance_root(source)
+        try:
+            instance_root(source)
+        except SystemExit as e:        # an unknown parent is a usage refusal, not an exit from inside the verb
+            return refuse(str(e.code))
     if seed:
         try:
             operator, seeds = _seed_files(source)
@@ -124,41 +127,48 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
     if (problem := _git_identity_problem()):
         return refuse(problem)
     base = f"instance/{source}" if source else "template"
-    INSTANCES.mkdir(exist_ok=True)
-    git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
-    git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)   # a parent's, pre-cutover
-    for d in MIND_PATHS:
-        shutil.rmtree(root / d, ignore_errors=True)
-    for d in ("self", "memory", "notes", "skills"):
-        safe_mkdir(root, d)
-    safe_write(root, "self/self.md", 
-        f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
-        "this self-model is for me to write.\n")
-    safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
-    origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
-        else "from the SHAFT template"
-    if seed:
-        for path, text in seeds.items():
-            safe_write(root, path, _seeded(text, source, operator))
-        origin = (f"forked from {source} (code, skills and plugins; of its memories only what it knows about "
-                  f"{operator}: {', '.join(seeds) or 'none, it had neither file'})")
-    safe_write(root, "memory/journal.md", f"# {name} — journal\n")
-    journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here."
-                 + (f" The seeded files are {source}'s beliefs, in {source}'s voice; my own sleeps will make them mine."
-                    if seed and seeds else ""))
-    message = f"{name}: created {origin}"
-    add_all_but_mind(root)
-    git_wt(root, "commit", "-q", "--allow-empty", "-m", message)   # from the template: no code change, the lineage
-    mind.init(name)
-    mind.commit(name, message, root)
-    log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
     paused = bool(paused_until_first_reply)
-    if paused:
-        try:
-            set_paused(name, True, reason="waiting for the operator's first reply")
+    made = []        # the pause files this call created, removed again if the creation fails
+    try:
+        if paused:     # before the worktree exists: the scheduler finds an instance by its `shaft` folder
+            made = [f for f in (SUP_DIR / f"paused-{name}", SUP_DIR / f"first-reply-{name}") if not f.exists()]
+            set_paused(name, True, reason="waiting for the operator's first reply", note=False)
             _write_first_reply(name, paused_until_first_reply)
-        except OSError as e:     # the instance exists and stays: say what failed, never delete it
-            return refuse(f"created {name}, but could not pause it until the first reply: {e}", 1)
+        INSTANCES.mkdir(exist_ok=True)
+        git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
+        git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)   # a parent's, pre-cutover
+        for d in MIND_PATHS:
+            shutil.rmtree(root / d, ignore_errors=True)
+        for d in ("self", "memory", "notes", "skills"):
+            safe_mkdir(root, d)
+        safe_write(root, "self/self.md", 
+            f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
+            "this self-model is for me to write.\n")
+        safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
+        origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
+            else "from the SHAFT template"
+        if seed:
+            for path, text in seeds.items():
+                safe_write(root, path, _seeded(text, source, operator))
+            origin = (f"forked from {source} (code, skills and plugins; of its memories only what it knows about "
+                      f"{operator}: {', '.join(seeds) or 'none, it had neither file'})")
+        safe_write(root, "memory/journal.md", f"# {name} — journal\n")
+        journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here."
+                     + (f" The seeded files are {source}'s beliefs, in {source}'s voice; my own sleeps will make them mine."
+                        if seed and seeds else ""))
+        message = f"{name}: created {origin}"
+        add_all_but_mind(root)
+        git_wt(root, "commit", "-q", "--allow-empty", "-m", message)   # from the template: no code change, the lineage
+        mind.init(name)
+        mind.commit(name, message, root)
+        log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
+    except (subprocess.CalledProcessError, OSError) as e:
+        for f in made:
+            f.unlink(missing_ok=True)
+        detail = (getattr(e, "stderr", None) or "").strip() or str(e)
+        return refuse(f"could not create {name}: {detail}", 1)
+    if paused:     # the instance exists now: the note the pause owes its journal (best effort, like every pause)
+        set_paused(name, True, reason="waiting for the operator's first reply", write_flag=False)
     if as_json:
         print(json.dumps({"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
                           "paused": paused}))

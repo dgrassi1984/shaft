@@ -120,6 +120,54 @@ class NewInstanceTest(unittest.TestCase):
             self.assertIn("waiting for the operator's first reply",
                           (self.project / "instances" / name / "memory" / "journal.md").read_text())
 
+    def test_new_paused_is_in_force_before_the_worktree_exists(self):
+        # Bug class: pausing after creation let a scheduler tick wake the new instance first (it finds one by `shaft/`).
+        seen = []
+        real = cli.git
+
+        def spy(*a, **k):
+            if a[:2] == ("worktree", "add"):
+                seen.append((core.paused("ada"), (self.sup / "first-reply-ada").exists()))
+            return real(*a, **k)
+        with mock.patch.object(cli, "git", spy):
+            self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 0)
+        self.assertEqual(seen, [(True, True)])
+
+    def test_failed_creation_leaves_no_pause_flag_or_marker(self):
+        git(self.project, "branch", "-m", "template", "gone")        # no template branch: the worktree add fails
+        code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "resume")
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(out)["ok"])
+        self.assertIn("template", json.loads(out)["error"])
+        self.assertFalse(core.paused("ada"))
+        self.assertEqual([p.name for p in self.sup.iterdir()], [])
+
+    def test_failed_creation_keeps_a_flag_it_did_not_make(self):
+        self.sup.mkdir()
+        (self.sup / "paused-ada").write_text("2026-01-01T00:00:00")
+        git(self.project, "branch", "-m", "template", "gone")
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 1)
+        self.assertTrue((self.sup / "paused-ada").exists())
+
+    def test_missing_template_with_json_is_a_json_failure_not_a_traceback(self):
+        git(self.project, "branch", "-m", "template", "gone")
+        code, out, err = self.run_new("ada", "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn("template", json.loads(out)["error"])
+
+    def test_unknown_parent_with_json_is_a_usage_refusal(self):
+        code, out, err = self.run_new("ada", "--from", "nobody", "--json")
+        self.assertEqual((code, err), (2, ""))
+        self.assertIn("no instance named 'nobody'", json.loads(out)["error"])
+
+    def test_the_marker_temp_is_private_even_beside_a_loose_file(self):
+        self.sup.mkdir()
+        (self.sup / "first-reply-ada.tmp").write_text("x")
+        (self.sup / "first-reply-ada.tmp").chmod(0o666)
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 0)
+        self.assertEqual((self.sup / "first-reply-ada").stat().st_mode & 0o777, 0o600)
+
     def test_new_without_the_flag_is_not_paused(self):
         self.run_new("ada")
         self.assertFalse(core.paused("ada"))
@@ -130,12 +178,12 @@ class NewInstanceTest(unittest.TestCase):
             self.run_new("ada", "--paused-until-first-reply", "maybe")
         self.assertEqual(e.exception.code, 2)
 
-    def test_new_reports_a_failed_pause_write_without_deleting_the_instance(self):
-        with mock.patch.object(cli, "set_paused", side_effect=OSError("disk full")):
+    def test_new_reports_a_failed_marker_write_and_cleans_up(self):
+        with mock.patch.object(cli, "_write_first_reply", side_effect=OSError("disk full")):
             code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
         self.assertEqual(code, 1)
         self.assertIn("disk full", json.loads(out)["error"])
-        self.assertTrue((self.project / "instances" / "ada").exists())
+        self.assertFalse(core.paused("ada"))      # and nothing half-made was left
 
 
 if __name__ == "__main__":
