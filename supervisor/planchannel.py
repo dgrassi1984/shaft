@@ -41,7 +41,7 @@ class ChannelSecurity(ChannelFailure):
 
 
 # Prefix -> backend module. Adding a backend needs no changes in callers.
-PROVIDERS = {"codex": ".codexcli", "grok": ".grokcli", "claudecode": ".claudecli"}
+PROVIDERS = {"codex": ".codexcli", "grok": ".grokcli", "claudecode": ".claudecli", "antigravity": ".agycli"}
 
 
 def provider(model: str):

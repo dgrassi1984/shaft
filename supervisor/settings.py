@@ -24,7 +24,7 @@ from . import core, planchannel
 from .core import KNOB_GROUPS, KNOBS, SERVICE_NAMES, config_lock, log, resolve
 
 # Every module that calls knob() at import (test_settings greps the code for knob(" calls and checks each is here).
-MODULES = ("core", "actions", "api", "apns", "autonomy", "battery", "broker", "calendar_proposals", "cloudllm", "codexcli", "grokcli", "claudecli", "coder", "consult",
+MODULES = ("core", "actions", "api", "apns", "autonomy", "battery", "broker", "calendar_proposals", "cloudllm", "codexcli", "grokcli", "claudecli", "agycli", "coder", "consult",
            "finetune", "gate", "jobs", "judge", "localmodel", "metrics", "orders", "panel", "planchannel", "pushes", "recap", "selfhosted", "telegram", "trial",
            "vision", "watch", "web")
 VALUE_MAX = 4000
