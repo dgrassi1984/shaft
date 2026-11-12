@@ -154,6 +154,33 @@ class NewInstanceTest(unittest.TestCase):
         self.assertTrue((self.sup / "first-reply-ada").exists())
         self.assertTrue((self.project / "instances" / "ada").exists())
 
+    def test_git_failing_after_it_made_the_worktree_keeps_the_instance_paused(self):
+        real = cli.git
+
+        def fake(*a, **k):
+            if a[:2] == ("worktree", "add"):
+                real(*a, **k)       # the worktree exists, then a hook-like failure
+                raise subprocess.CalledProcessError(1, ["git"], stderr="post-checkout hook failed")
+            return real(*a, **k)
+        with mock.patch.object(cli, "git", fake):
+            code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        self.assertIn("shaft delete ada", json.loads(out)["error"])
+        self.assertIn("post-checkout hook failed", json.loads(out)["error"])
+        self.assertTrue(core.paused("ada"))
+        self.assertTrue((self.sup / "first-reply-ada").exists())
+
+    def test_a_failed_cleanup_stays_inside_the_json_contract(self):
+        git(self.project, "branch", "-m", "template", "gone")
+        with mock.patch.object(Path, "unlink", side_effect=PermissionError("denied")):
+            code, out, err = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(out.count("\n"), 1)
+        error = json.loads(out)["error"]
+        self.assertIn("could not remove", error)
+        self.assertIn("denied", error)
+        self.assertIn("template", error)
+
     def test_failed_creation_keeps_a_flag_it_did_not_make(self):
         self.sup.mkdir()
         (self.sup / "paused-ada").write_text("2026-01-01T00:00:00")

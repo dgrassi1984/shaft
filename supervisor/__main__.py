@@ -128,8 +128,7 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
         return refuse(problem)
     base = f"instance/{source}" if source else "template"
     paused = bool(paused_until_first_reply)
-    made = []        # the pause files this call created, removed again if the creation fails before any worktree
-    worktree_made = False
+    made = []        # the pause files this call created, removed again if the creation fails before any worktree exists
     try:
         if paused:     # before the worktree exists: the scheduler finds an instance by its `shaft` folder
             made = [f for f in (SUP_DIR / f"paused-{name}", SUP_DIR / f"first-reply-{name}") if not f.exists()]
@@ -137,7 +136,6 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
             _write_first_reply(name, paused_until_first_reply)
         INSTANCES.mkdir(exist_ok=True)
         git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
-        worktree_made = True
         git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)   # a parent's, pre-cutover
         for d in MIND_PATHS:
             shutil.rmtree(root / d, ignore_errors=True)
@@ -166,11 +164,14 @@ def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = F
         log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
     except (subprocess.CalledProcessError, OSError) as e:
         detail = (getattr(e, "stderr", None) or "").strip() or str(e)
-        if worktree_made:     # discoverable by the scheduler now: it stays paused (flag and marker kept) until deleted
+        if root.exists():     # by the filesystem, not git's return: a hook can fail after the worktree was made
             return refuse(f"{name} is half-created{' and paused' if paused else ''} ({detail}); remove it with "
                           f"`shaft delete {name}`", 1)
         for f in made:
-            f.unlink(missing_ok=True)
+            try:
+                f.unlink(missing_ok=True)
+            except OSError as err:
+                detail += f"; could not remove {f}: {err}"
         return refuse(f"could not create {name}: {detail}", 1)
     if paused:     # the instance exists now: the note the pause owes its journal (best effort, like every pause)
         set_paused(name, True, reason="waiting for the operator's first reply", write_flag=False)
