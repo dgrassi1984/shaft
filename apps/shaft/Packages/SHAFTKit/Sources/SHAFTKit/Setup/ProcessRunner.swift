@@ -85,11 +85,7 @@ private final class Child: @unchecked Sendable {
 
         let group = DispatchGroup()
         group.enter()
-        process.terminationHandler = { [self] _ in
-            // Cancelled: answer now, without waiting for grandchildren that may still hold the pipes open.
-            if lock.withLock({ cancelled }) { finish(.failure(CancellationError())) }
-            group.leave()
-        }
+        process.terminationHandler = { _ in group.leave() }
         lock.withLock { self.continuation = continuation }
         let stop: Bool = lock.withLock { cancelled }
         if stop {
@@ -135,11 +131,14 @@ private final class Child: @unchecked Sendable {
         }
     }
 
+    /// Answers the caller now, whatever the child or its descendants still do: the readers drain the pipes on their own
+    /// (a descendant may hold them open long after) and their late result is dropped.
     func cancel() {
         let running: Bool = lock.withLock {
             cancelled = true
             return launched
         }
+        finish(.failure(CancellationError()))
         if running, process.isRunning { process.terminate() }
     }
 

@@ -52,10 +52,13 @@ public struct SetupStateStore: @unchecked Sendable {
         self.defaults = defaults
     }
 
-    /// The saved state, or a new one at Welcome when nothing is saved. A value that does not decode throws: the caller
-    /// shows it rather than silently restarting the wizard.
+    /// The saved state, or a new one at Welcome when nothing is saved. A stored value that is not the saved state (not
+    /// data, or data that does not decode) throws: the caller shows it rather than silently restarting the wizard.
     public func load() throws -> SetupState {
-        guard let data = defaults.data(forKey: Self.key) else { return SetupState() }
+        guard let stored = defaults.object(forKey: Self.key) else { return SetupState() }
+        guard let data = stored as? Data else {
+            throw SetupStateError("\(Self.key) holds a \(type(of: stored)), not the setup wizard's saved state.")
+        }
         return try JSONDecoder().decode(SetupState.self, from: data)
     }
 
@@ -67,4 +70,10 @@ public struct SetupStateStore: @unchecked Sendable {
     public func clear() {
         defaults.removeObject(forKey: Self.key)
     }
+}
+
+public struct SetupStateError: Error, Sendable, Equatable, LocalizedError {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
 }

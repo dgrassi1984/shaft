@@ -86,6 +86,11 @@ final class Machine: @unchecked Sendable {
     var pairJSON = #"{"ok": true, "base_url": "http://127.0.0.1:8090", "device": "d-123", "secret": "s3cr3t-bearer", "name": "mac-app", "login": "local@mac"}"#
     var templateBranch = false
     var pythonInstalled = false
+    var origin = "https://github.com/dgrassi1984/shaft.git"
+    /// What `uv --version` fails with once uv is unpacked (nil: it answers the pinned version).
+    var uvVersionError: String?
+    /// What `uv python find` fails with other than "not found" (nil: found or not found).
+    var pythonFindError: String?
     private var polls = 0
 
     init(home: URL) { self.home = home }
@@ -122,7 +127,7 @@ final class Machine: @unchecked Sendable {
             if a.count >= 3, a[0] == "-C" {
                 let rest = Array(a.dropFirst(2))
                 switch rest.first {
-                case "remote": return ok("https://github.com/dgrassi1984/shaft.git\n")
+                case "remote": return ok(origin + "\n")
                 case "rev-parse": return templateBranch ? ok("abc123\n") : failed(1, "")
                 case "describe": return ok("v0.56.0\n")
                 case "fetch": return ok()
@@ -138,11 +143,20 @@ final class Machine: @unchecked Sendable {
         case "xattr":
             return failed(1, "xattr: \(a.last!): No such xattr: com.apple.quarantine\n")
         case "uv":
+            if a == ["--version"], let uvVersionError { return failed(1, uvVersionError) }
             if a == ["--version"] { return ok("uv \(UVPin.current.version) (abc 2026-11-03 aarch64-apple-darwin)\n") }
+            if a.starts(with: ["python", "find"]), let pythonFindError { return failed(2, pythonFindError) }
             if a.starts(with: ["python", "find"]) {
                 return pythonInstalled ? ok(python + "\n") : failed(2, "error: No interpreter found for Python 3.12 in managed installations")
             }
-            if a.starts(with: ["python", "install"]) { pythonInstalled = true; return ok("", "Installed Python 3.12.12\n") }
+            if a.starts(with: ["python", "install"]) {
+                // uv makes the interpreter: a real file, so the containment check can resolve it.
+                let file = URL(fileURLWithPath: python)
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("python".utf8).write(to: file)
+                pythonInstalled = true
+                return ok("", "Installed Python 3.12.12\n")
+            }
         case "shaft":
             if a.first == "install" {
                 return ProcessResult(status: installStatus, stdout: Data((installLines.joined(separator: "\n") + "\n").utf8), stderr: Data())
@@ -168,10 +182,10 @@ func hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: 
 
 @MainActor
 func makeInstaller(_ machine: Machine, runner: FakeRunner, downloader: FakeDownloader, store: any CredentialStore,
-                   pinnedHash: String? = nil) -> Installer {
+                   pinnedHash: String? = nil, source: ServerSource? = nil) -> Installer {
     let pin = UVPin(version: UVPin.current.version, sha256: ["aarch64-apple-darwin": pinnedHash ?? hex(uvBytes)])
     let config = Installer.Configuration(home: machine.home, uv: pin, arch: "aarch64-apple-darwin",
-                                         pollInterval: .milliseconds(1), toolsTimeout: .milliseconds(5),
+                                         pollInterval: .milliseconds(1), toolsTimeout: .milliseconds(5), serverSource: source,
                                          environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/nowhere",
                                                        "VIRTUAL_ENV": "/somewhere/venv"])
     return Installer(operatorName: "Ada", email: "ada@example.com", runner: runner, downloader: downloader, store: store,
@@ -515,6 +529,111 @@ struct SetupTests {
         guard case .failed(let refused) = second.steps[.server] else { Issue.record("another checkout was accepted"); return }
         #expect(refused.contains(machine.server.path))
         #expect(refused.contains("someone/else"))
+    }
+
+    @Test func aUVThatFailsAfterUnpackingFailsWithItsStderr() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        machine.uvVersionError = "dyld[4242]: Library not loaded: /usr/lib/libmissing.dylib\n  Reason: tried: '/usr/lib/libmissing.dylib' (no such file)\n"
+        let runner = FakeRunner(machine.answer)
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+        await installer.run()
+        guard case .failed(let message) = installer.steps[.runtime] else {
+            Issue.record("the runtime step did not fail: \(String(describing: installer.steps[.runtime]))"); return
+        }
+        #expect(message.contains("dyld[4242]: Library not loaded: /usr/lib/libmissing.dylib"), "\(message)")
+        #expect(!runner.calls.contains { $0.args.starts(with: ["python"]) })
+    }
+
+    @Test func aFailingPythonFindFailsWithItsStderrAndInstallsNothing() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        machine.pythonFindError = "error: Failed to discover managed Python installations\n  cause: failed to read directory `/x/.runtime/python`: Permission denied (os error 13)\n"
+        let runner = FakeRunner(machine.answer)
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+        await installer.run()
+        guard case .failed(let message) = installer.steps[.runtime] else {
+            Issue.record("the runtime step did not fail: \(String(describing: installer.steps[.runtime]))"); return
+        }
+        #expect(message.contains("Permission denied (os error 13)"), "\(message)")
+        // An operational failure is not "Python is absent": nothing is installed over it.
+        #expect(!runner.calls.contains { $0.args.starts(with: ["python", "install"]) })
+    }
+
+    @Test func anInterpreterThatResolvesOutsideTheRuntimeIsRefused() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let elsewhere = try temporaryFolder("uv-cache")
+        defer { try? FileManager.default.removeItem(at: elsewhere) }
+        let machine = Machine(home: home)
+        // Lexically under .runtime/python, really in another folder (as if ~/.cache/uv).
+        let outside = elsewhere.appending(path: "python3.12")
+        try Data("python".utf8).write(to: outside)
+        let link = URL(fileURLWithPath: machine.python)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        machine.pythonInstalled = true
+        // ~/SHAFT is a finished checkout, so the run reaches the runtime step.
+        try FileManager.default.createDirectory(at: machine.server.appending(path: ".git"), withIntermediateDirectories: true)
+        machine.templateBranch = true
+        let installer = makeInstaller(machine, runner: FakeRunner(machine.answer), downloader: FakeDownloader(uvBytes),
+                                      store: MemoryCredentialStore())
+        await installer.run()
+        guard case .failed(let message) = installer.steps[.runtime] else {
+            Issue.record("accepted: \(String(describing: installer.python)), steps \(String(describing: installer.steps))"); return
+        }
+        #expect(message.contains("outside"), "\(message)")
+        #expect(installer.python == nil)
+        #expect(installer.steps[.configure] == .pending)
+    }
+
+    @Test func anInjectedServerSourceClonesItWithoutTheReleaseLookup() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        let source = ServerSource(url: "/Users/dev/src/shaft", ref: "feature/onboarding", templateRef: "template")
+        machine.origin = source.url
+        let runner = FakeRunner(machine.answer)
+        let store = MemoryCredentialStore()
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: store, source: source)
+        await installer.run()
+        for step in InstallStep.allCases { #expect(installer.steps[step] == .done, "\(step)") }
+        let lines = runner.calls.map(\.line)
+        let server = machine.server.path
+        #expect(!lines.contains { $0.hasPrefix("git ls-remote") })
+        #expect(lines.contains("git clone --branch feature/onboarding /Users/dev/src/shaft \(server)"))
+        #expect(lines.contains("git -C \(server) fetch origin template"))
+        #expect(lines.contains("git -C \(server) branch -f template FETCH_HEAD"))
+        #expect(installer.version == "feature/onboarding")
+
+        // Rerun over it: the checkout of that source is kept.
+        runner.reset()
+        let again = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: store, source: source)
+        await again.run()
+        #expect(again.steps[.server] == .done)
+        #expect(!runner.calls.contains { $0.args.first == "clone" || $0.args.first == "ls-remote" })
+    }
+
+    @Test func aStoredValueOfTheWrongTypeIsAnError() throws {
+        let suite = "shaft-setup-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("welcome", forKey: SetupStateStore.key)
+        #expect(throws: (any Error).self) { try SetupStateStore(defaults: defaults).load() }
+    }
+
+    @Test func cancellingReturnsWhileADescendantHoldsThePipes() async throws {
+        let runner = ProcessRunner()
+        let started = ContinuousClock.now
+        // The shell exits at once; the background sleep keeps stdout and stderr open for 20 s.
+        let task = Task { try await runner.run(URL(fileURLWithPath: "/bin/sh"), ["-c", "sleep 20 & exit 0"],
+                                               env: ["PATH": "/bin"], stdin: nil) }
+        try await Task.sleep(for: .milliseconds(500))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(ContinuousClock.now - started < .seconds(10))
     }
 
     @Test func theRealRunnerCapturesBothStreamsFeedsStdinAndCancels() async throws {

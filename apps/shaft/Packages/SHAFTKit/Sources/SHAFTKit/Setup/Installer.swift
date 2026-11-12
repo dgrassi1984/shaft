@@ -57,6 +57,21 @@ public struct UVPin: Sendable, Equatable {
     }
 }
 
+/// Where the server comes from instead of the newest release: for acceptance runs before a release is tagged. The app's
+/// DEBUG build passes it (from its own development settings); SHAFTKit reads no environment. `ref` is a branch or tag
+/// `git clone --branch` accepts; `templateRef` is fetched from the same origin into the `template` branch.
+public struct ServerSource: Sendable, Equatable {
+    public var url: String
+    public var ref: String
+    public var templateRef: String
+
+    public init(url: String, ref: String, templateRef: String) {
+        self.url = url
+        self.ref = ref
+        self.templateRef = templateRef
+    }
+}
+
 /// Fetches a URL into a file. The real one is `URLSessionDownloader`; tests write fixed bytes.
 public protocol Downloading: Sendable {
     func download(_ url: URL, to destination: URL) async throws
@@ -106,11 +121,14 @@ public final class Installer {
         public var toolsTimeout: Duration
         /// The environment every command starts from (the app's own).
         public var environment: [String: String]
+        /// nil: the newest release with a template tag. Set: that origin and refs (pre-release acceptance runs).
+        public var serverSource: ServerSource?
 
         public init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                     repository: URL = URL(string: "https://github.com/dgrassi1984/shaft")!,
                     uv: UVPin = .current, arch: String = UVPin.hostArch,
                     pollInterval: Duration = .seconds(5), toolsTimeout: Duration = .seconds(30 * 60),
+                    serverSource: ServerSource? = nil,
                     environment: [String: String] = ProcessInfo.processInfo.environment) {
             self.home = home
             self.repository = repository
@@ -119,6 +137,7 @@ public final class Installer {
             self.pollInterval = pollInterval
             self.toolsTimeout = toolsTimeout
             self.environment = environment
+            self.serverSource = serverSource
         }
 
         public var server: URL { home.appending(path: "SHAFT", directoryHint: .isDirectory) }
@@ -269,6 +288,13 @@ public final class Installer {
                                    + "folder away (it is never deleted or overwritten), then Try again.")
             }
         }
+        if let source = configuration.serverSource {
+            try await git(["clone", "--branch", source.ref, source.url, path], "Cloning SHAFT \(source.ref) from \(source.url)")
+            try await templateBranch(from: source)
+            version = source.ref
+            details[.server] = "SHAFT \(source.ref) from \(source.url) in \(path)"
+            return
+        }
         let tag = try await latestRelease()
         try await git(["clone", "--branch", tag, configuration.repository.absoluteString, path], "Cloning SHAFT \(tag)")
         try await templateBranch(tag)
@@ -276,19 +302,26 @@ public final class Installer {
         details[.server] = "SHAFT \(tag) in \(path)"
     }
 
+    /// The origin the checkout must have: the injected source, else the SHAFT repository.
+    private var origin: String { configuration.serverSource?.url ?? configuration.repository.absoluteString }
+
     private func existingCheckout() async throws {
         let path = configuration.server.path
         let origin = try await run(Self.git, ["-C", path, "remote", "get-url", "origin"], env: gitEnvironment())
         let url = String(decoding: origin.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard origin.succeeded, Self.sameRepository(url, configuration.repository.absoluteString) else {
+        guard origin.succeeded, Self.sameRepository(url, self.origin) else {
             let found = origin.succeeded ? "a checkout of \(url)" : "a git checkout without the SHAFT origin (\(origin.said))"
             throw InstallError("\(path) is \(found), not SHAFT. Move that folder away (it is never deleted or "
                                + "overwritten), then Try again.")
         }
+        if let source = configuration.serverSource {
+            if !(try await hasTemplateBranch()) { try await templateBranch(from: source) }
+            version = source.ref
+            details[.server] = "SHAFT \(source.ref) from \(source.url) in \(path)"
+            return
+        }
         let tag = try await describe()
-        let hasTemplate = try await run(Self.git, ["-C", path, "rev-parse", "--verify", "--quiet", "refs/heads/template"],
-                                        env: gitEnvironment()).succeeded
-        if !hasTemplate {
+        if !(try await hasTemplateBranch()) {
             // A clone whose template fetch failed: finish it from the release it is at.
             guard let tag else {
                 throw InstallError("\(path) has no template branch and is not at a release tag: run "
@@ -306,6 +339,17 @@ public final class Installer {
                               env: gitEnvironment())
         let tag = String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return r.succeeded && Self.semver(tag) != nil ? tag : nil
+    }
+
+    private func hasTemplateBranch() async throws -> Bool {
+        try await run(Self.git, ["-C", configuration.server.path, "rev-parse", "--verify", "--quiet", "refs/heads/template"],
+                      env: gitEnvironment()).succeeded
+    }
+
+    private func templateBranch(from source: ServerSource) async throws {
+        let path = configuration.server.path
+        try await git(["-C", path, "fetch", "origin", source.templateRef], "Fetching \(source.templateRef)")
+        try await git(["-C", path, "branch", "-f", "template", "FETCH_HEAD"], "Setting the template branch")
     }
 
     private func templateBranch(_ tag: String) async throws {
@@ -339,7 +383,8 @@ public final class Installer {
     /// uv (pinned, checksum-verified before unpacking) in `~/SHAFT/.runtime/bin`, then Python 3.12 under
     /// `~/SHAFT/.runtime/python`: never `~/.cache/uv`, where sandbox-exec refuses an interpreter.
     private func runtime() async throws {
-        if try await !uvIsPinned() {
+        if try await uvState() != .version(configuration.uv.version) {
+            // Absent, another version, or a uv that no longer runs: the pinned one replaces it.
             try await installUV()
         }
         if let found = try await findPython() {
@@ -356,19 +401,26 @@ public final class Installer {
         details[.runtime] = "uv \(configuration.uv.version), Python at \(python?.path ?? "")"
     }
 
-    private func uvIsPinned() async throws -> Bool {
-        guard FileManager.default.fileExists(atPath: configuration.uvBinary.path) else { return false }
-        // A uv that cannot start (damaged, another architecture) is replaced, not an error.
+    private enum UVState: Equatable {
+        case absent
+        case version(String)
+        /// It is there but does not run or answers something else: why, in its own words.
+        case broken(String)
+    }
+
+    private func uvState() async throws -> UVState {
+        guard FileManager.default.fileExists(atPath: configuration.uvBinary.path) else { return .absent }
         let r: ProcessResult
         do {
             r = try await run(configuration.uvBinary, ["--version"], env: uvEnvironment())
-        } catch is InstallError {
-            return false
+        } catch let error as InstallError {
+            return .broken(error.message)
         }
-        guard r.succeeded else { return false }
-        let words = String(decoding: r.stdout, as: UTF8.self).split(separator: " ")
-        return words.count >= 2 && words[0] == "uv" && words[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            == configuration.uv.version
+        guard r.succeeded else { return .broken(Self.failure("uv --version", r).message) }
+        let text = String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = text.split(separator: " ")
+        guard words.count >= 2, words[0] == "uv" else { return .broken("uv --version answered: \(text)") }
+        return .version(String(words[1]))
     }
 
     private func installUV() async throws {
@@ -407,21 +459,36 @@ public final class Installer {
             let r = try await run(Self.xattr, ["-d", "com.apple.quarantine", file])
             if !r.succeeded, !r.said.contains("No such xattr") { throw Self.failure("Clearing quarantine on \(name)", r) }
         }
-        guard try await uvIsPinned() else {
-            throw InstallError("uv was unpacked into \(bin.path) but does not report version \(pin.version).")
+        switch try await uvState() {
+        case .version(let version) where version == pin.version:
+            break
+        case .version(let version):
+            throw InstallError("uv was unpacked into \(bin.path) but reports version \(version), not \(pin.version).")
+        case .broken(let said):
+            throw InstallError("uv was unpacked into \(bin.path) but does not run: \(said)")
+        case .absent:
+            throw InstallError("uv is missing from \(bin.path) after unpacking.")
         }
     }
 
-    /// uv's own Python 3.12 under `.runtime/python`, nil when it is not installed there.
+    /// uv's own Python 3.12 under `.runtime/python`, nil when uv says it is not installed. uv exits 2 for every error,
+    /// so "not installed" is its "No interpreter found" message; any other failure fails the step with uv's words.
     private func findPython() async throws -> URL? {
         let r = try await run(configuration.uvBinary, ["python", "find", "--managed-python", "3.12"], env: uvEnvironment())
-        guard r.succeeded else { return nil }
-        let path = String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        let found = URL(fileURLWithPath: path)
-        guard Self.isInside(found, configuration.runtimePython) else {
-            throw InstallError("uv python find 3.12 answered \(path), outside \(configuration.runtimePython.path).")
+        guard r.succeeded else {
+            if r.said.contains("No interpreter found") { return nil }
+            throw Self.failure("uv python find 3.12", r)
         }
-        return found
+        let path = String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = configuration.runtimePython.path
+        guard let real = Self.canonical(path) else {
+            throw InstallError("uv python find 3.12 answered \(path.isEmpty ? "nothing" : path), which does not exist.")
+        }
+        guard let realRoot = Self.canonical(root), real.hasPrefix(realRoot + "/") else {
+            throw InstallError("uv python find 3.12 answered \(path), which is \(real): outside \(root). SHAFT's Python "
+                               + "must live there (sandbox-exec refuses an interpreter elsewhere).")
+        }
+        return URL(fileURLWithPath: path)
     }
 
     /// `shaft install --json`: its lines become the sub-rows as they arrive; a line with `ok: false` fails the step with
@@ -606,11 +673,11 @@ public final class Installer {
         ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
     }
 
-    static func isInside(_ file: URL, _ folder: URL) -> Bool {
-        func paths(_ url: URL) -> [String] {
-            [url.standardizedFileURL.path, url.resolvingSymlinksInPath().path]
-        }
-        return paths(file).contains { f in paths(folder).contains { f.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") } }
+    /// The path with every symlink resolved (realpath(3)), nil when it does not exist.
+    static func canonical(_ path: String) -> String? {
+        guard !path.isEmpty, let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }
 #endif
