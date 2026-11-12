@@ -1,6 +1,6 @@
+import Foundation
 import Observation
 import SHAFTKit
-import SwiftUI
 
 /// How the Mac window reaches a session without a pasted link (SetupGate): the setup wizard when SHAFT is not
 /// installed, the local pairing when it is and this app is not paired, the session otherwise. It owns the Installer the
@@ -42,10 +42,22 @@ final class MacSetup {
     @ObservationIgnored private var automaticRepairs = 0
     @ObservationIgnored private var pairTask: Task<Void, Never>?
     @ObservationIgnored private var installTask: Task<Void, Never>?
+    /// Continue's work (opening the session on the install's pairing, then the next step), owned so closing the
+    /// window stops it.
+    @ObservationIgnored private(set) var completeTask: Task<Void, Never>?
+    /// The install's identity: `stopInstall()` moves it on, and work started under an earlier one changes nothing.
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored private var shared: (session: ObjectIdentifier, installer: Installer)?
+    @ObservationIgnored private let configure: () throws -> Installer.Configuration
+    @ObservationIgnored private let runner: any ProcessRunning
 
-    init(states: SetupStateStore = SetupStateStore()) {
+    /// `configure` and `runner` are the real ones in the app; tests give a temporary home and a scripted runner.
+    init(states: SetupStateStore = SetupStateStore(),
+         configure: @escaping () throws -> Installer.Configuration = SetupEnvironment.configuration,
+         runner: any ProcessRunning = ProcessRunner()) {
         self.states = states
+        self.configure = configure
+        self.runner = runner
         wizardOpen = states.hasSaved
         wizardContinues = false
         loadConfiguration()
@@ -61,7 +73,7 @@ final class MacSetup {
     /// Read the environment again (the Try again of a dev run's startup error).
     func loadConfiguration() {
         do {
-            configuration = try SetupEnvironment.configuration()
+            configuration = try configure()
             configurationError = nil
         } catch {
             configuration = nil
@@ -96,8 +108,8 @@ final class MacSetup {
     func installer(for session: SHAFTSession) -> Installer? {
         guard let configuration else { return nil }
         if let shared, shared.session == ObjectIdentifier(session) { return shared.installer }
-        let installer = Installer(operatorName: state.operatorName, email: state.email, store: session.pairing.store,
-                                  configuration: configuration)
+        let installer = Installer(operatorName: state.operatorName, email: state.email, runner: runner,
+                                  store: session.pairing.store, configuration: configuration)
         shared = (ObjectIdentifier(session), installer)
         return installer
     }
@@ -142,6 +154,7 @@ final class MacSetup {
 
     /// "Run setup" from the local pairing screen.
     func openWizard(_ session: SHAFTSession) {
+        shared?.installer.stop()
         pairTask?.cancel()
         wizardOpen = true
         loadState()
@@ -157,6 +170,7 @@ final class MacSetup {
 
     private func endWizard() {
         installTask?.cancel()
+        installTask = nil
         wizardOpen = false
         wizardContinues = false
         states.clear()
@@ -218,23 +232,46 @@ final class MacSetup {
         }
     }
 
-    /// The window closed or the wizard left the step: the running command stops, and its later lines change nothing.
+    /// The window closed: the running command and Continue's work stop at once. The command's later lines, and
+    /// whatever the stopped work would still do after its next suspension, change nothing.
     func stopInstall() {
+        generation &+= 1
+        if let shared { shared.installer.stop() }
         installTask?.cancel()
         installTask = nil
+        completeTask?.cancel()
+        completeTask = nil
+        installing = false
     }
 
-    /// Continue after every row is done: the session opens on the install's own pairing (no link), then the wizard
-    /// goes on to Model when the server has no instance yet (Debug: Model's own step comes in a later build) or ends
-    /// in the app.
-    func completeInstall(_ session: SHAFTSession) async {
-        guard let installer = installer(for: session), !installing else { return }
+    /// Continue after every row is done (and its Try again): `completeInstall`, owned so `stopInstall` stops it.
+    @discardableResult
+    func continueInstall(_ session: SHAFTSession) -> Task<Void, Never>? {
+        guard !installing else { return nil }
+        let mine = generation
         installing = true
         installError = nil
-        defer { installing = false }
+        let task = Task { [weak self] in
+            await self?.completeInstall(session, generation: mine)
+            guard let self, self.generation == mine else { return }
+            self.installing = false
+            self.completeTask = nil
+        }
+        completeTask = task
+        return task
+    }
+
+    /// The session opens on the install's own pairing (no link), then the wizard goes on to Model when the server has
+    /// no instance yet (Debug: Model's own step comes in a later build) or ends in the app. After every suspension it
+    /// checks that it was not stopped (the window closed) before opening the session, moving the saved step or
+    /// clearing the progress.
+    private func completeInstall(_ session: SHAFTSession, generation mine: Int) async {
+        func current() -> Bool { !Task.isCancelled && generation == mine }
+        guard let installer = installer(for: session) else { return }
         if (try? session.pairing.current()) == nil {
             // The credential was dropped since the pair row finished (401 unpaired): pair again first.
             await installer.run(only: .pair)
+            guard current() else { return }
             if case .failed(let message) = installer.steps[.pair] {
                 installError = message
                 return
@@ -244,19 +281,21 @@ final class MacSetup {
             installError = "The install finished without pairing this app."
             return
         }
-        #if DEBUG
+        // The wizard stays on screen while the session opens (it would otherwise give way to the app at the store's
+        // first appearance, mid-pairing); it ends or goes on below.
         wizardContinues = true
-        #endif
         if session.credential != credential || session.store == nil {
             guard await session.pair(credential: credential) else {
                 wizardContinues = false
                 installError = session.problem ?? "Keeping the pairing failed."
                 return
             }
+            guard current() else { return }
         }
         #if DEBUG
         if let store = session.store {
             await store.refresh()
+            guard current() else { return }
             if store.loaded, store.instances.isEmpty {
                 go(to: .model)
                 update(session)

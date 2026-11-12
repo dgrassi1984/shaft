@@ -127,6 +127,110 @@ struct LocalPairingTests {
         #expect(installer.subRows.map(\.step) == ["identity", "setup", "api", "web", "scheduler"])
         #expect(installer.steps[.configure] == .done)
     }
+
+    /// Fix round 1: a line streamed after the run was stopped, while `shaft install` is still running (its reader thread
+    /// outlives the cancel), never reaches the rows; nor does the command's later answer finish the step.
+    @Test func aLineStreamedWhileTheStoppedCommandIsStillRunningIsDropped() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        let gate = HeldCommand()
+        let runner = HoldingRunner(inner: FakeRunner(machine.answer), gate: gate, first: machine.installLines[0])
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+        let run = Task { await installer.run() }
+        for _ in 0..<400 where installer.subRows.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(installer.subRows.map(\.step) == ["identity"])
+
+        installer.stop()
+        run.cancel()
+        gate.send(machine.installLines[1])               // still suspended: the command has not answered yet
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(installer.subRows.map(\.step) == ["identity"])
+
+        gate.release(ok(machine.installLines.joined(separator: "\n") + "\n"))   // it finishes anyway, ignoring the cancel
+        await run.value
+        #expect(installer.subRows.map(\.step) == ["identity"])
+        #expect(installer.steps[.configure] == .pending)  // a stopped run is not done, nor failed
+    }
+
+    /// Fix round 1: the pair command answering after the run was stopped keeps no credential.
+    @Test func aPairAnsweredAfterStopKeepsNothing() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        await makeInstaller(machine, runner: FakeRunner(machine.answer), downloader: FakeDownloader(uvBytes),
+                            store: MemoryCredentialStore()).run()
+        let gate = HeldCommand()
+        let store = MemoryCredentialStore()
+        let installer = makeInstaller(machine, runner: HoldingRunner(inner: FakeRunner(machine.answer), gate: gate, holds: "pair"),
+                                      downloader: FakeDownloader(uvBytes), store: store)
+        let run = Task { await installer.run(only: .pair) }
+        for _ in 0..<400 where !gate.holding { try await Task.sleep(for: .milliseconds(5)) }
+        installer.stop()
+        run.cancel()
+        gate.release(ok(machine.pairJSON + "\n"))
+        await run.value
+        #expect(installer.steps[.pair] == .pending)
+        #expect(try store.load() == nil)
+        #expect(installer.credential == nil)
+    }
+}
+
+/// A command held open until the test releases it, whatever cancellation says (as a child that ignores SIGTERM, or a
+/// reader thread that outlives the cancel).
+final class HeldCommand: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProcessResult, Never>?
+    private var onLine: (@Sendable (String) -> Void)?
+    private var early: ProcessResult?
+
+    var holding: Bool { lock.withLock { continuation != nil } }
+
+    func hold(onLine: (@Sendable (String) -> Void)?) async -> ProcessResult {
+        await withCheckedContinuation { continuation in
+            let ready: ProcessResult? = lock.withLock {
+                self.onLine = onLine
+                if let early { return early }
+                self.continuation = continuation
+                return nil
+            }
+            if let ready { continuation.resume(returning: ready) }
+        }
+    }
+
+    func send(_ line: String) { lock.withLock { onLine }?(line) }
+
+    func release(_ result: ProcessResult) {
+        let waiting: CheckedContinuation<ProcessResult, Never>? = lock.withLock {
+            defer { continuation = nil }
+            if continuation == nil { early = result }
+            return continuation
+        }
+        waiting?.resume(returning: result)
+    }
+}
+
+/// Holds `shaft install` (after streaming `first`) or `shaft web pair` open on a `HeldCommand`; the rest goes to `inner`.
+struct HoldingRunner: ProcessRunning {
+    let inner: FakeRunner
+    let gate: HeldCommand
+    var first: String?
+    var holds = "install"
+
+    init(inner: FakeRunner, gate: HeldCommand, first: String? = nil, holds: String = "install") {
+        self.inner = inner
+        self.gate = gate
+        self.first = first
+        self.holds = holds
+    }
+
+    func run(_ exe: URL, _ args: [String], env: [String: String], stdin: Data?,
+             onLine: (@Sendable (String) -> Void)?) async throws -> ProcessResult {
+        let held = exe.lastPathComponent == "shaft" && (holds == "install" ? args.first == "install" : args.starts(with: ["web", "pair"]))
+        guard held else { return try await inner.run(exe, args, env: env, stdin: stdin, onLine: onLine) }
+        if let first { onLine?(first) }
+        return await gate.hold(onLine: onLine)
+    }
 }
 
 private struct RefusingStore: CredentialStore {

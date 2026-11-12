@@ -171,6 +171,9 @@ public final class Installer {
     @ObservationIgnored private let downloader: any Downloading
     @ObservationIgnored private let store: any CredentialStore
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
+    /// The run's identity: `stop()` and a cancelled step move it on, and a command's lines or answer from an earlier
+    /// identity change nothing.
+    @ObservationIgnored private var generation = 0
 
     /// The `--name` the app pairs with.
     public static let deviceName = "mac-app"
@@ -201,6 +204,13 @@ public final class Installer {
         }
     }
 
+    /// Stop the run in progress, at once: every line its command streams from now on is dropped, and its later answer
+    /// counts as a cancel (the step goes back to pending, nothing is kept). The caller also cancels the task running
+    /// it, which ends the command; this covers what that command's reader threads still hand over afterwards.
+    public func stop() {
+        generation &+= 1
+    }
+
     /// Run `step` alone, whatever the others' state: the Mac app's root gate pairs with an install that already exists
     /// (`.pair`) without running the rest. Running it again is its Try again.
     public func run(only step: InstallStep) async {
@@ -220,6 +230,7 @@ public final class Installer {
             return true
         } catch {
             if error is CancellationError || Task.isCancelled {   // the window closed: not a failure, rerun later
+                generation &+= 1
                 steps[step] = .pending
                 return false
             }
@@ -521,11 +532,15 @@ public final class Installer {
         args.append("--json")
 
         subRows = []
+        let run = generation
         let (lines, sink) = AsyncStream.makeStream(of: String.self)
         let reader = Task { @MainActor [weak self] in
             var stray: [String] = []
             for await line in lines {
-                if let row = Self.subRow(line) { self?.subRows.append(row) } else if !line.isEmpty { stray.append(line) }
+                // A stopped or cancelled run's lines (still buffered, or handed over by a reader thread that outlived
+                // the cancel) never reach the rows.
+                guard let self, self.generation == run else { continue }
+                if let row = Self.subRow(line) { self.subRows.append(row) } else if !line.isEmpty { stray.append(line) }
             }
             return stray
         }
@@ -533,12 +548,14 @@ public final class Installer {
         do {
             result = try await shaft(args, onLine: { sink.yield($0) })
         } catch {
+            if error is CancellationError || Task.isCancelled { generation &+= 1 }   // drop what is still buffered
             sink.finish()
             _ = await reader.value
             throw error
         }
         sink.finish()
         let stray = await reader.value
+        try stillCurrent(run)
         if let refused = subRows.first(where: { !$0.ok }) {
             throw InstallError(refused.error ?? (refused.detail.isEmpty ? "shaft install: \(refused.step) failed" : refused.detail))
         }
@@ -557,7 +574,9 @@ public final class Installer {
             details[.pair] = "Paired as \(existing.name)"
             return
         }
+        let run = generation
         let r = try await shaft(["web", "pair", "--local", "--name", Self.deviceName, "--json"])
+        try stillCurrent(run)     // stopped meanwhile: the answer is not kept
         // stdout holds the bearer: it is parsed, never shown.
         let line = String(decoding: r.stdout, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
         let answer = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
@@ -587,6 +606,11 @@ public final class Installer {
     }
 
     // MARK: - Commands and their environments
+
+    /// A command answered after its run was stopped or cancelled: that is a cancel, whatever it answered.
+    private func stillCurrent(_ run: Int) throws {
+        if generation != run || Task.isCancelled { throw CancellationError() }
+    }
 
     private func interpreter() async throws -> URL {
         if let python { return python }

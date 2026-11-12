@@ -51,7 +51,7 @@ struct InstallStepView: View {
 
             if let error = setup.installError {
                 Text(error).foregroundStyle(Color.warning).textSelection(.enabled)
-                Button("Try again") { Task { await setup.completeInstall(session) } }
+                Button("Try again") { setup.continueInstall(session) }
                     .buttonStyle(ProminentAction())
             }
         }

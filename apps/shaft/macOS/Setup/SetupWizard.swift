@@ -122,7 +122,7 @@ struct SetupWizard: View {
             return (SetupGate.welcomeCanContinue(understood: understood), { setup.go(to: .install) })
         case .install:
             let done = setup.installer(for: session)?.isComplete == true
-            return (done && !busy, { Task { await setup.completeInstall(session) } })
+            return (done && !busy, { setup.continueInstall(session) })
         case .model, .instance, .access, .alone, .hello:
             return nil
         }

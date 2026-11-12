@@ -197,6 +197,7 @@ targets:
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift
       - path: macOS/Setup/SetupGate.swift
+      - path: macOS/Setup/MacSetup.swift
       - path: Shared/Attachments/AttachmentViews.swift
     dependencies:
       - package: SHAFTKit
