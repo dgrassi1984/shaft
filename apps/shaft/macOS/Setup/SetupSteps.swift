@@ -51,6 +51,10 @@ final class SetupSteps {
     private(set) var telegram: TelegramStatus?
     /// While the Telegram row waits for the pairing: the code the operator sends the bot as `/pair <code>`.
     private(set) var telegramCode: String?
+    /// While the Telegram row waits for the service to record that it runs (after asking Telegram about every bot).
+    private(set) var telegramStarting = false
+    /// How long the Telegram row waits for the service before it stops with the status route's reason.
+    @ObservationIgnored var telegramServiceWait: Duration = .seconds(60)
     /// How often the Telegram row asks whether the pairing landed (tests shorten it).
     @ObservationIgnored var telegramPoll: Duration = .seconds(2)
     private(set) var loadingAccess: Work = .idle
@@ -131,6 +135,7 @@ final class SetupSteps {
         (loginURL, loginCode, signedIn, drives, capText) = (nil, nil, false, [], "")
         (access, telegram, telegramCode, accessPrepared, accessSuggested, accessChecked, accessDone) =
             (nil, nil, nil, nil, [], [], [])
+        telegramStarting = false
         (accessFolder, webKey, telegramToken, grantingRow, failedRow) = ("", "", "", nil, nil)
     }
 
@@ -367,8 +372,11 @@ final class SetupSteps {
     }
 
     /// Granted already (by the server's word) or applied by this wizard.
+    /// Telegram only by the server's status now (bot, paired account, running service): a "done" recorded earlier never
+    /// stands for a service that has stopped since.
     func isOn(_ row: AccessRow) -> Bool {
-        accessDone.contains(row) || AccessRow.granted(in: access, telegram: telegram).contains(row)
+        if row == .telegram { return telegram?.ready == true }
+        return accessDone.contains(row) || AccessRow.granted(in: access, telegram: telegram).contains(row)
     }
 
     /// A folder chosen in the open panel: it is the folder row's, which it ticks.
@@ -446,10 +454,45 @@ final class SetupSteps {
             _ = try await client.telegramService()
             guard current() else { return }
         }
-        var status = try await client.telegramStatus(name)
-        guard current() else { return }
-        telegram = status
-        guard !status.paired else { return }
+        // `telegram on` answers before the service has asked Telegram about the bots and recorded itself: wait for it
+        // (pairing needs it too, it is what reads the `/pair` message).
+        guard var status = try await waitForTelegramService(name, client: client, current: current) else { return }
+        if !status.paired {
+            try await pairTelegram(name, client: client, current: current)
+            guard current() else { return }
+            status = try await client.telegramStatus(name)
+            guard current() else { return }
+            telegram = status
+        }
+        guard status.ready else {
+            throw FormProblem("Telegram is not ready: " + Self.sentence(status.problem ?? (status.paired
+                ? "the Telegram service is not running" : "no Telegram account is paired")))
+        }
+    }
+
+    /// The status once the service runs; nil when the wait was given up (Cancel, the wizard over). After
+    /// `telegramServiceWait`, the status route's reason.
+    private func waitForTelegramService(_ name: String, client: APIClient,
+                                        current: @escaping @MainActor () -> Bool) async throws -> TelegramStatus? {
+        telegramStarting = true
+        defer { if current() { telegramStarting = false } }
+        let until = ContinuousClock.now + telegramServiceWait
+        while true {
+            let status = try await client.telegramStatus(name)
+            guard current() else { return nil }
+            telegram = status
+            if status.service { return status }
+            guard ContinuousClock.now < until else {
+                let why = Self.sentence(status.problem ?? "it has not recorded that it runs")
+                throw FormProblem("The Telegram service did not start: \(why) Try again.")
+            }
+            try await Task.sleep(for: telegramPoll)
+            guard current() else { return nil }
+        }
+    }
+
+    /// No account paired yet: a code the operator sends the bot, then the wait until the pairing lands or it expires.
+    private func pairTelegram(_ name: String, client: APIClient, current: @escaping @MainActor () -> Bool) async throws {
         let pairing = try await client.telegramPair(name)
         guard current() else { return }
         telegram = pairing
@@ -457,6 +500,7 @@ final class SetupSteps {
         telegramCode = code
         defer { if current() { telegramCode = nil } }
         let until = ContinuousClock.now + .seconds(60 * (pairing.minutes ?? 10))
+        var status = pairing
         while !status.paired {
             try await Task.sleep(for: telegramPoll)
             guard current() else { return }
@@ -468,6 +512,11 @@ final class SetupSteps {
             guard current() else { return }
             telegram = status
         }
+    }
+
+    /// The server's words as a sentence: a final period added when they have none.
+    static func sentence(_ words: String) -> String {
+        words.last?.isPunctuation == true ? words : words + "."
     }
 
     /// The bot as the operator finds it in Telegram.
@@ -489,7 +538,7 @@ final class SetupSteps {
         tasks["access"]?.cancel()
         tasks["access"] = nil
         if granting.running { granting = .idle }
-        (grantingRow, telegramCode) = (nil, nil)
+        (grantingRow, telegramCode, telegramStarting) = (nil, nil, false)
     }
 
     // MARK: - How it works alone

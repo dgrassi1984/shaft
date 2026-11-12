@@ -5,6 +5,7 @@
   "paired": false,
   "account": null,
   "service": true,
+  "problem": null,
   "pairing": false,
   "code": "C0FFEE12",
   "minutes": 10

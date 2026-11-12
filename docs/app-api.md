@@ -1560,13 +1560,15 @@ or restarts it. Refused (no bot yet, launchd failing): `409 refused` with the ve
 | `bot` | str or null | its bot's username, when it has a token and Telegram told it |
 | `paired` | bool | an account is paired with SHAFT's bots |
 | `account` | str or null | that account's username (or id) |
-| `service` | bool | the Telegram service runs |
+| `service` | bool | the Telegram service runs: it has recorded itself, which it does after asking Telegram about every bot (so `telegram on` answering is not yet this) |
+| `problem` | str or null | with a bot and no running service: why, in launchd's words (not installed, not loaded, its state and last exit code) |
 | `pairing` | bool | a pairing code is out and not expired |
 
 `POST /setup/telegram/pair/<n>` (empty body): with no account paired, `telegram pair --json` issues a one-time code
 (`telegram.PAIR_MINUTES`, 10 minutes) and the answer is the status plus `code` and `minutes`; the operator sends
-`/pair <code>` to `<n>`'s bot from their account, and the running service pairs it. The wizard asks the status every
-2 s until `paired`. With an account paired already, no code is issued: `code` and `minutes` are null. No bot for `<n>`
+`/pair <code>` to `<n>`'s bot from their account, and the running service pairs it. The wizard first waits (up to
+60 s, asking every 2 s) for `service`, then asks every 2 s until `paired`, and records Telegram done only when both
+hold. With an account paired already, no code is issued: `code` and `minutes` are null. No bot for `<n>`
 yet: `409 refused`. An unknown instance: `404 not_found`.
 
 ### 18.6 Access

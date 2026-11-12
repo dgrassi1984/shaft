@@ -326,9 +326,16 @@ class TelegramTest(SetupTest):
                   mock.patch.object(telegram, "tokens", side_effect=lambda: {n: "t" for n in self.bots}),
                   mock.patch.object(version, "service", side_effect=lambda name, stale=True:
                                     {"pid": 1} if name == "telegram" and self.service else None),
-                  mock.patch("supervisor.autonomy.service", side_effect=AssertionError("launchd touched"))):
+                  mock.patch("supervisor.autonomy.service", side_effect=AssertionError("launchd touched")),
+                  mock.patch("supervisor.autonomy._launchctl", side_effect=self.launchctl),
+                  mock.patch("supervisor.autonomy.AGENTS", self.sup / "LaunchAgents")):        # never ~/Library
             p.start()
             self.addCleanup(p.stop)
+
+    def launchctl(self, *args):
+        # launchd's own words for a service that keeps failing: read only, never a change
+        self.assertEqual(args[0], "print")
+        return mock.Mock(returncode=0, stdout="\tstate = spawn scheduled\n\tlast exit code = 1\n\tpid = 9\n", stderr="")
 
     def run_json(self, args, timeout=actions.RUN_NOW_S, who="top", input=None):
         if args[:2] == ["telegram", "pair"]:
@@ -343,12 +350,18 @@ class TelegramTest(SetupTest):
 
     def test_status_says_bot_pairing_and_service_never_a_token(self):
         self.assertEqual(self.status(), {"instance": "wisp", "token": False, "bot": None, "paired": False,
-                                         "account": None, "service": False, "pairing": False})
+                                         "account": None, "service": False, "problem": None, "pairing": False})
         self.bots.add("wisp")
         self.telegram.remember_bot("wisp", "wisp_bot")
+        from supervisor import autonomy
+        self.assertEqual(self.status()["problem"], "the telegram service is not installed")   # its plist: not there,
+        (self.sup / "LaunchAgents").mkdir()                                                   # then there
+        (self.sup / "LaunchAgents" / f"{autonomy.SERVICES['telegram']['label']}.plist").write_text("x")
+        self.assertEqual(self.status()["problem"], "the telegram service is spawn scheduled in launchd (last exit "
+                                                   "code 1), and it has not recorded that it runs")
         self.service = True
         self.assertEqual(self.status(), {"instance": "wisp", "token": True, "bot": "wisp_bot", "paired": False,
-                                         "account": None, "service": True, "pairing": False})
+                                         "account": None, "service": True, "problem": None, "pairing": False})
         self.telegram.new_pairing_code()
         self.assertTrue(self.status()["pairing"])
         self.telegram.try_pair({"id": 42, "username": "ada"}, "wrong")

@@ -383,6 +383,8 @@ def setup(base: Path, port: int):
               mock.patch.object(actions, "service_guard", side_effect=lambda name, action:
                                 _read_json(base / "services.json").get("busy", "") if name == "api" else ""),
               mock.patch.object(autonomy, "_launchctl", side_effect=forbidden_launchctl),
+              mock.patch.object(autonomy, "service_problem",
+                                side_effect=lambda name: f"the {name} service is not running in this fixture"),
               mock.patch.object(autonomy, "launchd_pid", side_effect=lambda name:
                                 _read_json(base / "sup" / "services" / f"{name}.json").get("pid")),
               mock.patch.object(autonomy, "running", side_effect=lambda name:

@@ -82,6 +82,24 @@ def launchd_pid(name: str) -> int | None:
     return int(pid) if pid.isdigit() else None
 
 
+def service_problem(name: str) -> str:
+    """Why a service is not up, in launchd's words: not installed, not loaded, or its state and last exit code."""
+    label = SERVICES[name]["label"]
+    if not (AGENTS / f"{label}.plist").exists():
+        return f"the {name} service is not installed"
+    r = _launchctl("print", f"gui/{os.getuid()}/{label}")
+    if r.returncode != 0:
+        return f"the {name} service is installed but launchd has not loaded it"
+    fields: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        key, sep, value = line.strip().partition(" = ")
+        if sep:
+            fields.setdefault(key, value)
+    code = fields.get("last exit code")
+    return (f"the {name} service is {fields.get('state', 'in an unknown state')} in launchd"
+            + (f" (last exit code {code})" if code else "") + ", and it has not recorded that it runs")
+
+
 def _plist(name: str) -> dict:
     """What `service(name, "on")` writes: one builder for it and for service_current."""
     svc = SERVICES[name]

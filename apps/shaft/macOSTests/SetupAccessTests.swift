@@ -23,9 +23,10 @@ struct SetupAccessTests {
 
     /// `GET /setup/telegram/status/ledger` as the server answers it.
     nonisolated static func telegram(token: Bool = false, paired: Bool = false, service: Bool = false,
-                                     code: String? = nil, minutes: Int = 10) -> String {
+                                     problem: String? = nil, code: String? = nil, minutes: Int = 10) -> String {
         #"{"instance":"ledger","token":\#(token),"bot":\#(token ? #""ledger_bot""# : "null"),"paired":\#(paired),"#
-            + #""account":\#(paired ? #""ada""# : "null"),"service":\#(service),"pairing":\#(code != nil)"#
+            + #""account":\#(paired ? #""ada""# : "null"),"service":\#(service),"pairing":\#(code != nil),"#
+            + #""problem":\#(problem.map { #""\#($0)""# } ?? "null")"#
             + (code.map { #","code":"\#($0)","minutes":\#(minutes)"# } ?? "") + "}"
     }
 
@@ -272,6 +273,54 @@ struct SetupAccessTests {
         #expect(f.setup.state.step == .alone)
     }
 
+    /// Fix round 2: an account paired already (by another bot) made the row complete without a running service, and the
+    /// "done" it recorded then stood for a service that never came up.
+    @Test func anAlreadyPairedAccountWithoutARunningServiceNeverCompletes() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 1, token: true, paired: true, serviceAfterPolls: nil)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        let steps = f.setup.steps
+        (steps.telegramPoll, steps.telegramServiceWait) = (.milliseconds(10), .milliseconds(120))
+        #expect(!steps.isOn(.telegram))
+        steps.accessChecked = [.telegram]
+        steps.applyAccess(store: f.store, setup: f.setup)
+        await until { steps.telegramStarting }
+        #expect(steps.grantingRow == .telegram)               // "Starting the Telegram service…"
+        await f.settle()
+        #expect(posts(f) == ["/app/v1/setup/telegram/service"])
+        #expect(steps.failedRow == .telegram)
+        #expect(steps.granting == .failed("The Telegram service did not start: \(TelegramServer.problem). Try again."))
+        #expect(!steps.telegramStarting)
+        #expect(!steps.isOn(.telegram))
+        #expect(!steps.accessDone.contains(.telegram))
+        #expect(f.setup.state.step == .access)
+    }
+
+    @Test func theServiceStartingAfterAFewPollsCompletesTelegramAndAStoppedOneIsNotOn() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 1, token: true, paired: true, serviceAfterPolls: 3)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        let steps = f.setup.steps
+        steps.telegramPoll = .milliseconds(10)
+        steps.accessChecked = [.telegram]
+        steps.applyAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(posts(f) == ["/app/v1/setup/telegram/service"])  // paired already: no code
+        #expect(steps.granting == .idle)
+        #expect(steps.isOn(.telegram))
+        #expect(f.setup.state.step == .alone)
+
+        // Back on Access later, the service stopped meanwhile: the earlier "done" does not make the row on.
+        server.stopService()
+        f.setup.go(to: .access)
+        steps.prepareAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(steps.accessDone.contains(.telegram))
+        #expect(!steps.isOn(.telegram))
+    }
+
     @Test func cancellingThePairingStopsTheWaitAndKeepsTheRowOff() async throws {
         let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
         let server = TelegramServer(pairedAfterPolls: 100_000)
@@ -474,40 +523,58 @@ final class LoginRunner: ProcessRunning, @unchecked Sendable {
     }
 }
 
-/// The Telegram routes of one instance, `ledger`, as the server would answer them: the token saved, the service on, a
-/// code issued, and the pairing landing after `pairedAfterPolls` status reads once the code is out.
+/// The Telegram routes of one instance, `ledger`, as the server would answer them: the token saved; the service asked
+/// on, then running after `serviceAfterPolls` status reads (nil: never, with launchd's `problem`); a code issued, and
+/// the pairing landing after `pairedAfterPolls` status reads once the code is out.
 final class TelegramServer: @unchecked Sendable {
+    static let problem = "the telegram service is spawn scheduled in launchd (last exit code 1), and it has not "
+        + "recorded that it runs"
     private let lock = NSLock()
     private let pairedAfterPolls: Int
+    private let serviceAfterPolls: Int?
     private let minutes: Int
     private var token: Bool
     private var service = false
-    private var paired = false
+    private var paired: Bool
+    private var sinceService: Int?
     private var sincePair: Int?
     private var _polls = 0
+    private var _serviceRequests = 0
 
-    init(pairedAfterPolls: Int, token: Bool = false, minutes: Int = 10) {
-        (self.pairedAfterPolls, self.token, self.minutes) = (pairedAfterPolls, token, minutes)
+    init(pairedAfterPolls: Int, token: Bool = false, paired: Bool = false, serviceAfterPolls: Int? = 0,
+         minutes: Int = 10) {
+        (self.pairedAfterPolls, self.token, self.paired, self.minutes) = (pairedAfterPolls, token, paired, minutes)
+        self.serviceAfterPolls = serviceAfterPolls
     }
 
-    /// Status reads since the code was issued.
+    /// Status reads since the code was issued, and `telegram on` requests.
     var polls: Int { lock.withLock { _polls } }
+    var serviceRequests: Int { lock.withLock { _serviceRequests } }
+
+    /// The service dies (or never ran): it is not running now.
+    func stopService() { lock.withLock { (service, sinceService) = (false, nil) } }
 
     func answer(_ request: SetupStub.Request) -> SetupStub.Answer {
         lock.withLock {
             switch (request.method, request.path) {
             case ("GET", "/app/v1/setup/telegram/status/ledger"):
+                if let n = sinceService {
+                    sinceService = n + 1
+                    if let after = serviceAfterPolls, n >= after { service = true }
+                }
                 if let n = sincePair {
                     sincePair = n + 1
                     _polls += 1
                     if n + 1 >= pairedAfterPolls { paired = true }
                 }
-                return .init(200, SetupAccessTests.telegram(token: token, paired: paired, service: service))
+                return .init(200, SetupAccessTests.telegram(token: token, paired: paired, service: service,
+                                                            problem: token && !service ? Self.problem : nil))
             case ("POST", "/app/v1/setup/telegram"):
                 token = true
                 return .init(200, #"{"said": "saved"}"#)
             case ("POST", "/app/v1/setup/telegram/service"):
-                service = true
+                _serviceRequests += 1
+                sinceService = sinceService ?? 0       // `telegram on` answers before the service records itself
                 return .init(200, #"{"said": "telegram installed"}"#)
             case ("POST", "/app/v1/setup/telegram/pair/ledger"):
                 sincePair = 0

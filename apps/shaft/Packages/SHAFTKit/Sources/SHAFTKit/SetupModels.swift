@@ -171,7 +171,8 @@ public struct AccessGrant: Codable, Sendable, Equatable {
 
 /// `GET /setup/telegram/status/<n>` (and `POST /setup/telegram/pair/<n>`, which adds `code` and `minutes`): where the
 /// instance's Telegram stands. `token`: it has a bot token; `bot`: the bot's username; `paired`: an account is paired
-/// with SHAFT's bots (one for all), `account` naming it; `service`: the Telegram service runs; `pairing`: a code is out.
+/// with SHAFT's bots (one for all), `account` naming it; `service`: the Telegram service runs (it has recorded itself);
+/// `problem`: with a bot and no running service, why (launchd's words); `pairing`: a code is out.
 public struct TelegramStatus: Codable, Sendable, Equatable {
     public var instance: String
     public var token: Bool
@@ -179,6 +180,7 @@ public struct TelegramStatus: Codable, Sendable, Equatable {
     public var paired: Bool
     public var account: String?
     public var service: Bool
+    public var problem: String?
     public var pairing: Bool
     /// The pairing answer only: the code to send the bot as `/pair <code>`, and how many minutes it lasts. Nil when an
     /// account is paired already.
@@ -186,9 +188,9 @@ public struct TelegramStatus: Codable, Sendable, Equatable {
     public var minutes: Int?
 
     public init(instance: String, token: Bool, bot: String? = nil, paired: Bool, account: String? = nil, service: Bool,
-                pairing: Bool = false, code: String? = nil, minutes: Int? = nil) {
+                problem: String? = nil, pairing: Bool = false, code: String? = nil, minutes: Int? = nil) {
         (self.instance, self.token, self.bot, self.paired, self.account) = (instance, token, bot, paired, account)
-        (self.service, self.pairing, self.code, self.minutes) = (service, pairing, code, minutes)
+        (self.service, self.problem, self.pairing, self.code, self.minutes) = (service, problem, pairing, code, minutes)
     }
 
     /// The operator can talk with the instance there: a bot, a paired account, the service running.

@@ -129,9 +129,10 @@ struct AccessStepView: View {
         HStack(spacing: Design.Space.s8) {
             ProgressView().controlSize(.small)
             Text(row == .browser ? "Installing the browser and turning it on: this can take a few minutes…"
+                 : row == .telegram ? (steps.telegramStarting ? "Starting the Telegram service…" : "Saving the bot…")
                  : "Granting…")
                 .foregroundStyle(Color.textSecondary)
-            if row == .browser {
+            if row == .browser || row == .telegram {
                 Button("Cancel") { steps.cancelAccess() }
             }
         }
