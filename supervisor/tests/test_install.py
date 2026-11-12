@@ -24,7 +24,65 @@ def run_install(runner, operator="Ada", email=None):
     return code, [json.loads(line) for line in out.getvalue().splitlines()]
 
 
-class StepsTest(unittest.TestCase):
+class _RealLaunchctl:
+    """autonomy.subprocess in these tests: anything that would reach the real launchctl binary fails loudly."""
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+    def run(self, argv, *a, **k):
+        if argv and Path(str(argv[0])).name == "launchctl":
+            raise AssertionError(f"the real launchctl was invoked: {argv}")
+        return subprocess.run(argv, *a, **k)
+
+
+class Hermetic(unittest.TestCase):
+    """Every test here runs on throwaway state: its own project (a git repo), .supervisor, LaunchAgents folder, global
+    git config and a fake launchctl, so the outcome never depends on this Mac's .env or on which services are loaded."""
+
+    def setUp(self):
+        from supervisor import api
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-install-"))
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.project, self.agents, self.sup = self.tmp / "p", self.tmp / "agents", self.tmp / "p" / ".supervisor"
+        self.project.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        self.calls, self.loaded = [], set()
+        self.glob = self.tmp / "gitconfig"
+        self.glob.write_text("")
+        env = {"GIT_CONFIG_GLOBAL": str(self.glob), "GIT_CONFIG_NOSYSTEM": "1"}
+        patches = [mock.patch.dict(os.environ, env),
+                   mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
+                   mock.patch.object(core, "SETTINGS_FILE", self.sup / "settings.env"),
+                   mock.patch.object(autonomy, "PROJECT", self.project), mock.patch.object(autonomy, "SUP_DIR", self.sup),
+                   mock.patch.object(autonomy, "AGENTS", self.agents), mock.patch.object(autonomy, "log"),
+                   mock.patch.object(autonomy, "subprocess", _RealLaunchctl()),
+                   mock.patch.object(autonomy, "_launchctl", self.launchctl),
+                   mock.patch.object(api, "_tailscale", side_effect=AssertionError("tailscale")),
+                   mock.patch.object(cli, "TEMPLATE", self.project / "template"),
+                   mock.patch.object(cli, "INSTANCES", self.project / "instances")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        for k in ("SHAFT_API_LOGINS", "SHAFT_API_KEY", "SHAFT_INBOX_KEY", "SHAFT_WEB_LOCAL"):
+            os.environ.pop(k, None)
+
+    def launchctl(self, *args):
+        self.calls.append(args)
+        label = args[1].rsplit("/", 1)[-1] if len(args) > 1 else ""
+        if args[0] == "bootstrap":
+            self.loaded.add(Path(args[2]).stem)
+        elif args[0] == "bootout":
+            self.loaded.discard(label)
+        rc = 0 if args[0] != "print" or label in self.loaded else 113
+        return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
+
+    def test_the_real_launchctl_cannot_be_reached(self):
+        with self.assertRaisesRegex(AssertionError, "real launchctl"):
+            autonomy.subprocess.run(["launchctl", "print", "x"])
+
+
+class StepsTest(Hermetic):
     def test_steps_run_in_order_and_report_json(self):
         seen = []
 
@@ -65,7 +123,7 @@ class StepsTest(unittest.TestCase):
                                     "error": "api refused: nothing to add"})
 
 
-class DefaultRunnerTest(unittest.TestCase):
+class DefaultRunnerTest(Hermetic):
     """The real steps, in process, with every side effect patched out."""
 
     def test_the_default_runner_calls_the_real_functions_and_keeps_stdout_clean(self):
@@ -106,20 +164,10 @@ class DefaultRunnerTest(unittest.TestCase):
         sched.assert_not_called()
 
 
-class IdentityTest(unittest.TestCase):
+class IdentityTest(Hermetic):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-install-"))
-        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
-        self.repo = self.tmp / "repo"
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        self.glob = self.tmp / "global-gitconfig"
-        self.glob.write_text("")
-        env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(self.glob), "GIT_CONFIG_NOSYSTEM": "1"})
-        env.start()
-        self.addCleanup(env.stop)
-        proj = mock.patch.object(core, "PROJECT", self.repo)
-        proj.start()
-        self.addCleanup(proj.stop)
+        super().setUp()
+        self.repo = self.project
 
     def cfg(self, *args):
         return subprocess.run(["git", "-C", str(self.repo), "config", *args], capture_output=True, text=True).stdout.strip()
@@ -147,7 +195,7 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(self.cfg("--local", "user.name"), "Ada")
 
 
-class RerunTest(unittest.TestCase):
+class RerunTest(Hermetic):
     def test_a_rerun_after_success_is_all_ok_and_changes_nothing(self):
         # Review Focus 1: the app may run install twice (a retry after a later failure); the second run must not
         # duplicate logins or rewrite the identity. State is kept by a fake that mirrors the real idempotence.
@@ -172,53 +220,15 @@ class RerunTest(unittest.TestCase):
         self.assertEqual(state["logins"], ["operator@local"])
 
 
-class DefaultRunnerRerunTest(unittest.TestCase):
+class DefaultRunnerRerunTest(Hermetic):
     """Review: a rerun must not restart services that are already right (a restarted scheduler cuts running cycles).
     The default runner twice over isolated state; only launchctl and tailscale are faked."""
-
-    def setUp(self):
-        from supervisor import api, mind, settings
-        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-install-rerun-"))
-        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
-        self.project, self.agents, self.sup = self.tmp / "p", self.tmp / "agents", self.tmp / "p" / ".supervisor"
-        self.project.mkdir()
-        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
-        self.calls, self.loaded = [], set()
-        glob = self.tmp / "gitconfig"
-        glob.write_text("")
-        env = {"GIT_CONFIG_GLOBAL": str(glob), "GIT_CONFIG_NOSYSTEM": "1"}
-        for k in ("SHAFT_API_LOGINS", "SHAFT_API_KEY", "SHAFT_INBOX_KEY"):
-            env[k] = ""
-        patches = [mock.patch.dict(os.environ, env),
-                   mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
-                   mock.patch.object(core, "SETTINGS_FILE", self.sup / "settings.env"),
-                   mock.patch.object(autonomy, "PROJECT", self.project), mock.patch.object(autonomy, "SUP_DIR", self.sup),
-                   mock.patch.object(autonomy, "AGENTS", self.agents), mock.patch.object(autonomy, "log"),
-                   mock.patch.object(autonomy, "_launchctl", self.launchctl),
-                   mock.patch.object(api, "_tailscale", side_effect=AssertionError("tailscale")),
-                   mock.patch.object(cli, "TEMPLATE", self.project / "template"),
-                   mock.patch.object(cli, "INSTANCES", self.project / "instances")]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
-        os.environ.pop("SHAFT_API_LOGINS", None)
-        os.environ.pop("SHAFT_API_KEY", None)
-        os.environ.pop("SHAFT_INBOX_KEY", None)
-
-    def launchctl(self, *args):
-        self.calls.append(args)
-        label = args[1].rsplit("/", 1)[-1] if len(args) > 1 else ""
-        if args[0] == "bootstrap":
-            self.loaded.add(Path(args[2]).stem)
-        elif args[0] == "bootout":
-            self.loaded.discard(label)
-        rc = 0 if args[0] != "print" or label in self.loaded else 113
-        return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
 
     def snapshot(self):
         files = [p for p in (list(self.agents.glob("*.plist")) + [self.project / ".env", self.sup / "settings.env",
                                                                   self.project / ".git" / "config"]) if p.exists()]
-        return {str(p): p.read_bytes() for p in files}
+        # content AND file identity: an atomic rewrite with the same bytes (os.replace) still changes the inode/mtime
+        return {str(p): (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in files}
 
     def test_a_second_default_run_writes_nothing_and_restarts_nothing(self):
         first, lines1 = run_install(None, "Ada", "ada@example.com")
@@ -247,7 +257,7 @@ class DefaultRunnerRerunTest(unittest.TestCase):
         self.assertTrue(autonomy.service_current("web") and autonomy.service_current("scheduler"))
 
 
-class ServicePathTest(unittest.TestCase):
+class ServicePathTest(Hermetic):
     def plist_path(self, with_runtime: bool) -> str:
         tmp = Path(tempfile.mkdtemp(prefix="shaft-install-svc-"))
         self.addCleanup(__import__("shutil").rmtree, tmp, True)
@@ -273,7 +283,7 @@ class ServicePathTest(unittest.TestCase):
         self.assertEqual(path, "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
 
 
-class SetupFailureTest(unittest.TestCase):
+class SetupFailureTest(Hermetic):
     def test_cmd_setup_returns_1_with_gits_stderr_instead_of_a_traceback(self):
         err = subprocess.CalledProcessError(128, ["git"], stderr="fatal: not a git repository")
         with mock.patch.object(cli, "git", side_effect=err), contextlib.redirect_stderr(io.StringIO()) as e:
