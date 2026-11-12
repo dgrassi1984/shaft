@@ -9,31 +9,56 @@ public enum LocalFiles {
                                                   appropriateFor: nil, create: true)
         let root = support.appending(path: "SHAFT", directoryHint: .isDirectory)
         #if os(macOS)
-        // Earlier Mac builds ran sandboxed: their drafts and outbox live in the app's container. Best effort: a
-        // folder that cannot be moved stays where it is and the app starts with what it finds.
+        // Earlier Mac builds ran sandboxed: their drafts and outbox live in the app's container. A move that fails
+        // throws, so the app reports it at startup instead of running on empty storage beside unreadable data.
         if let id = Bundle.main.bundleIdentifier {
             let home = FileManager.default.homeDirectoryForCurrentUser
             let container = home.appending(path: "Library/Containers/\(id)/Data/Library/Application Support/SHAFT",
                                            directoryHint: .isDirectory)
             if container.standardizedFileURL != root.standardizedFileURL {
-                try? adoptSandboxContainer(container, into: root)
+                try adoptSandboxContainer(container, into: root)
             }
         }
         #endif
         return root
     }
 
-    /// Move what a sandboxed build left in its container (`drafts`, `outbox`, `servers`) into `root`, once: a folder
-    /// moves only when `root` has none of that name, so the move never overwrites and a second call does nothing.
+    /// Move what a sandboxed build left in its container into `root`, file by file, so a partial earlier move is
+    /// finished by the next one. A file absent from `root` moves; one in both with the same bytes drops the container
+    /// copy; one in both with other bytes is kept beside it as `<name>.from-sandbox<ext>` (no store reads that name:
+    /// drafts and the outbox are opened by key). Throws, naming the container, when anything cannot be moved.
     static func adoptSandboxContainer(_ container: URL, into root: URL) throws {
         let manager = FileManager.default
         guard manager.fileExists(atPath: container.path) else { return }
-        try manager.createDirectory(at: root, withIntermediateDirectories: true)
-        for name in ["drafts", "outbox", "servers"] {
-            let source = container.appending(path: name, directoryHint: .isDirectory)
-            let target = root.appending(path: name, directoryHint: .isDirectory)
-            if manager.fileExists(atPath: source.path), !manager.fileExists(atPath: target.path) {
-                try manager.moveItem(at: source, to: target)
+        do {
+            try manager.createDirectory(at: root, withIntermediateDirectories: true)
+            try adopt(container, into: root)
+        } catch {
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "Could not move the drafts and outbox from \(container.path) to \(root.path): "
+                    + error.localizedDescription])
+        }
+    }
+
+    private static func adopt(_ source: URL, into target: URL) throws {
+        let manager = FileManager.default
+        for item in try manager.contentsOfDirectory(at: source, includingPropertiesForKeys: [.isDirectoryKey]) {
+            let name = item.lastPathComponent
+            let destination = target.appending(path: name)
+            let isDirectory = (try item.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true
+            if !manager.fileExists(atPath: destination.path) {
+                try manager.moveItem(at: item, to: destination)
+            } else if isDirectory {
+                try adopt(item, into: destination)
+                if try manager.contentsOfDirectory(atPath: item.path).isEmpty { try manager.removeItem(at: item) }
+            } else if manager.contentsEqual(atPath: item.path, andPath: destination.path) {
+                try manager.removeItem(at: item)
+            } else {
+                let base = destination.deletingPathExtension().lastPathComponent
+                let ext = destination.pathExtension
+                let kept = target.appending(path: base + ".from-sandbox" + (ext.isEmpty ? "" : "." + ext))
+                if manager.fileExists(atPath: kept.path) { try manager.removeItem(at: kept) }
+                try manager.moveItem(at: item, to: kept)
             }
         }
     }

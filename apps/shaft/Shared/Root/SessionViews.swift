@@ -26,7 +26,9 @@ struct SessionRoot<Paired: View>: View {
                     PairingView(session: session)
                 }
             } else {
-                MarkMessage("SHAFT could not start", message: Text(model.startupError ?? "No reason was given."))
+                MarkMessage("SHAFT could not start", message: Text(model.startupError ?? "No reason was given.")) {
+                    Button("Try again") { model.retryStart() }.buttonStyle(ProminentAction())
+                }
             }
         }
         .environment(model)

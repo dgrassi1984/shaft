@@ -4,28 +4,96 @@ import Testing
 
 @MainActor
 struct PersistenceSafetyTests {
-    @Test func leavingTheSandboxKeepsTheDraftsAndOutboxOfTheContainer() throws {
+    private func adoptionFolders() -> (base: URL, container: URL, root: URL) {
         let base = FileManager.default.temporaryDirectory.appending(path: "shaft-adopt-\(UUID().uuidString)")
+        return (base, base.appending(path: "container/SHAFT"), base.appending(path: "real/SHAFT"))
+    }
+
+    private func text(_ url: URL) throws -> String { String(decoding: try Data(contentsOf: url), as: UTF8.self) }
+
+    @Test func leavingTheSandboxKeepsTheDraftsAndOutboxOfTheContainer() throws {
+        let (base, container, root) = adoptionFolders()
         defer { try? FileManager.default.removeItem(at: base) }
-        let container = base.appending(path: "container/SHAFT")
-        let root = base.appending(path: "real/SHAFT")
         try LocalFiles.write(Data("draft".utf8), to: container.appending(path: "drafts/main.json"))
         try LocalFiles.write(Data("outbox".utf8), to: container.appending(path: "servers/abc/outbox/outbox.json"))
-        // Something the unsandboxed folder already holds (the server's own backup folder) is left alone.
         try LocalFiles.write(Data("backup".utf8), to: root.appending(path: "battery-backup/b.json"))
 
         try LocalFiles.adoptSandboxContainer(container, into: root)
-        #expect(try Data(contentsOf: root.appending(path: "drafts/main.json")) == Data("draft".utf8))
-        #expect(try Data(contentsOf: root.appending(path: "servers/abc/outbox/outbox.json")) == Data("outbox".utf8))
-        #expect(try Data(contentsOf: root.appending(path: "battery-backup/b.json")) == Data("backup".utf8))
+        #expect(try text(root.appending(path: "drafts/main.json")) == "draft")
+        #expect(try text(root.appending(path: "servers/abc/outbox/outbox.json")) == "outbox")
+        #expect(try text(root.appending(path: "battery-backup/b.json")) == "backup")
         #expect(!FileManager.default.fileExists(atPath: container.appending(path: "drafts").path))
-
-        // A second call never overwrites what the app has written since.
-        try LocalFiles.write(Data("new".utf8), to: container.appending(path: "drafts/other.json"))
-        try LocalFiles.adoptSandboxContainer(container, into: root)
-        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "drafts/other.json").path))
         // No container at all is a no-op.
         try LocalFiles.adoptSandboxContainer(base.appending(path: "none"), into: root)
+    }
+
+    @Test func aPartialEarlierMoveIsFinishedFileByFile() throws {
+        let (base, container, root) = adoptionFolders()
+        defer { try? FileManager.default.removeItem(at: base) }
+        // The destination already holds a draft; the container still holds that one's sibling and an attachment.
+        try LocalFiles.write(Data("a".utf8), to: root.appending(path: "drafts/a.json"))
+        try LocalFiles.write(Data("b".utf8), to: container.appending(path: "drafts/b.json"))
+        try LocalFiles.write(Data("pdf".utf8), to: container.appending(path: "drafts/files/a/1/x.pdf"))
+
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(try text(root.appending(path: "drafts/a.json")) == "a")
+        #expect(try text(root.appending(path: "drafts/b.json")) == "b")
+        #expect(try text(root.appending(path: "drafts/files/a/1/x.pdf")) == "pdf")
+        #expect(!FileManager.default.fileExists(atPath: container.appending(path: "drafts").path))
+    }
+
+    @Test func anIdenticalDuplicateIsDroppedAndAConflictingOneKeptBeside() throws {
+        let (base, container, root) = adoptionFolders()
+        defer { try? FileManager.default.removeItem(at: base) }
+        try LocalFiles.write(Data("same".utf8), to: root.appending(path: "drafts/s.json"))
+        try LocalFiles.write(Data("same".utf8), to: container.appending(path: "drafts/s.json"))
+        try LocalFiles.write(Data("new".utf8), to: root.appending(path: "drafts/c.json"))
+        try LocalFiles.write(Data("old".utf8), to: container.appending(path: "drafts/c.json"))
+
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(try text(root.appending(path: "drafts/s.json")) == "same")
+        #expect(try text(root.appending(path: "drafts/c.json")) == "new")
+        #expect(try text(root.appending(path: "drafts/c.from-sandbox.json")) == "old")
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "drafts/s.from-sandbox.json").path))
+        #expect(!FileManager.default.fileExists(atPath: container.appending(path: "drafts").path))
+        // The stores open by key and a key has no dot: the kept copy can never be read as a draft.
+        let drafts = DraftStore(directory: root.appending(path: "drafts"))
+        #expect(throws: (any Error).self) { try drafts.load("c.from-sandbox") }
+    }
+
+    @MainActor
+    @Test func aFailedMoveIsAStartupErrorAndTryAgainMigratesAndStarts() throws {
+        let (base, container, root) = adoptionFolders()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appending(path: "drafts").path)
+            try? FileManager.default.removeItem(at: base)
+        }
+        try LocalFiles.write(Data("b".utf8), to: container.appending(path: "drafts/b.json"))
+        // A destination folder that refuses new files makes the move fail.
+        try FileManager.default.createDirectory(at: root.appending(path: "drafts"), withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.appending(path: "drafts").path)
+
+        var started = 0
+        let model = AppModel(start: {
+            try LocalFiles.adoptSandboxContainer(container, into: root)
+            started += 1
+            return SHAFTSession(pairing: PairingStore(store: MemoryCredentialStore()),
+                                outbox: try Outbox(directory: root.appending(path: "outbox")),
+                                drafts: DraftStore(directory: root.appending(path: "drafts")))
+        })
+        #expect(model.session == nil)
+        let message = try #require(model.startupError)
+        #expect(message.contains(container.path))
+        #expect(message.contains("Could not move"))
+        #expect(started == 0)
+        #expect(FileManager.default.fileExists(atPath: container.appending(path: "drafts/b.json").path))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appending(path: "drafts").path)
+        model.retryStart()
+        #expect(model.startupError == nil)
+        #expect(model.session != nil)
+        #expect(started == 1)
+        #expect(try text(root.appending(path: "drafts/b.json")) == "b")
     }
 
     @Test func reinstallDoesNotReuseThePairingLeftInKeychain() throws {
