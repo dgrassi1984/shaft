@@ -59,37 +59,70 @@ def _seeded(text: str, source: str, operator: str) -> str:
     return f"{first}\n\n{note}{rest}" if first.startswith("# ") else f"{note}\n{text}"
 
 
-def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
+def _git_identity_problem() -> str | None:
+    """None when git resolves an author and committer in PROJECT (env, repo-local or global config: the same test the
+    commit makes), else the message. Checked first, so `new` never fails at its commit with a worktree half made."""
+    for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        if git("var", var, check=False).returncode != 0:
+            return ("git has no identity here, so the instance's first commit would fail: run `shaft install` (it sets "
+                    "one for this project) or `git config user.name` and `git config user.email`, then try again")
+    return None
+
+
+def _write_first_reply(name: str, then: str) -> None:
+    """`.supervisor/first-reply-<name>`: what to do once the operator has answered the welcome (atomic, 0600)."""
+    SUP_DIR.mkdir(exist_ok=True)
+    path = SUP_DIR / f"first-reply-{name}"
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"then": then, "created": datetime.now().astimezone().isoformat(timespec="seconds")}))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = False,
+            paused_until_first_reply: str | None = None) -> int:
     """Create instance/<name> forked from `template` (or from another instance's branch).
 
     A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
     self-model, personality, goals, journal, episodes and notes start fresh. The lineage
     stays in git history. With `seed`, it also starts knowing what the parent knows about the operator
     (its people file and facts, marked as the parent's), never what the parent is.
+    With `paused_until_first_reply` ("resume" or "stay") it is also paused, with a marker the app reads once the
+    operator has answered its welcome. With `as_json` stdout is one JSON object; refusals exit 2, failures 1.
     """
+    def refuse(message: str, code: int = 2) -> int:
+        if as_json:
+            print(json.dumps({"ok": False, "error": message}))
+        else:
+            print(message, file=sys.stderr)
+        return code
+
     if not NAME_RE.match(name) or name == "operator":
-        print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
-              file=sys.stderr)
-        return 2
+        return refuse("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')")
     root = INSTANCES / name
     if root.exists() or git("rev-parse", "--verify", "-q", f"refs/heads/instance/{name}", check=False).stdout:
-        print(f"instance {name!r} already exists", file=sys.stderr)
-        return 2
+        return refuse(f"instance {name!r} already exists")
     if mind.exists(name):
-        print(f"a mind store for {name!r} already exists at {mind.store(name)} (an earlier instance of that name); "
-              "move it away first", file=sys.stderr)
-        return 2
+        return refuse(f"a mind store for {name!r} already exists at {mind.store(name)} (an earlier instance of that "
+                      "name); move it away first")
     if seed and not source:
-        print("--seed copies from a parent instance: name it with --from", file=sys.stderr)
-        return 2
+        return refuse("--seed copies from a parent instance: name it with --from")
     if source:
         instance_root(source)
     if seed:
         try:
             operator, seeds = _seed_files(source)
         except ValueError as e:
-            print(f"cannot seed from {source}: {e}", file=sys.stderr)
-            return 2
+            return refuse(f"cannot seed from {source}: {e}")
+    if (problem := _git_identity_problem()):
+        return refuse(problem)
     base = f"instance/{source}" if source else "template"
     INSTANCES.mkdir(exist_ok=True)
     git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
@@ -119,6 +152,17 @@ def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
     mind.init(name)
     mind.commit(name, message, root)
     log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
+    paused = bool(paused_until_first_reply)
+    if paused:
+        try:
+            set_paused(name, True, reason="waiting for the operator's first reply")
+            _write_first_reply(name, paused_until_first_reply)
+        except OSError as e:     # the instance exists and stays: say what failed, never delete it
+            return refuse(f"created {name}, but could not pause it until the first reply: {e}", 1)
+    if as_json:
+        print(json.dumps({"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
+                          "paused": paused}))
+        return 0
     print(f"created {name} (branch instance/{name}, worktree {root.relative_to(PROJECT)})")
     if seed:
         missing = [p for p in _seed_paths(operator) if p not in seeds]
@@ -1585,6 +1629,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--seed", action="store_true",
                    help="with --from: also start knowing what the parent knows about you (its people file and "
                         "facts, marked as its own), never what it is")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout: ok, name, branch, worktree, paused")
+    p.add_argument("--paused-until-first-reply", choices=["resume", "stay"], metavar="{resume,stay}",
+                   help="create it paused, with a marker saying what to do once you have answered its welcome")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -2151,7 +2198,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
-        return cmd_new(args.name, args.source, args.seed)
+        return cmd_new(args.name, args.source, args.seed, args.json, args.paused_until_first_reply)
     if args.cmd == "kill":
         from . import kill
         if not (INSTANCES / args.name / "shaft").is_dir():
