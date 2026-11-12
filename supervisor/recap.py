@@ -1,5 +1,6 @@
 """One line per instance for `shaft top`: what it is doing right now and what it did in the last hour, written on
-demand (the overview's `a`) by a small model — SHAFT_RECAP_MODEL, default Claude Haiku 5.5.
+demand (the overview's `a`) by a small model — SHAFT_RECAP_MODEL, default Claude Haiku 5.5, or any model the
+supervisor can call (modelcall: openrouter/…, a priced custom/…, codex/…).
 
 The model reads only the instance's records, never asks the instance: its live status (.tmp/activity.json, through
 the panel's snapshot), the cycles and conversations of the last hour (memory/episodes, panel.transcripts), the
@@ -16,17 +17,15 @@ import os
 import re
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections import Counter
 from datetime import datetime
 
-from .core import NETWORK_ERRORS, SUP_DIR, claude_model, knob, secrets_env
+from . import modelcall
+from .core import SUP_DIR, any_model, knob
 
 MODEL, _ = knob(
-    "SHAFT_RECAP_MODEL", "claude-haiku-5-5", claude_model, "the model that writes the overview's one-line recap of "
+    "SHAFT_RECAP_MODEL", "claude-haiku-5-5", any_model, "the model that writes the overview's one-line recap of "
     "each instance", group="Models and spend")
-API = "https://api.anthropic.com/v1/messages"
 STORE = SUP_DIR / "recaps.json"
 USAGE = SUP_DIR / "recap_usage.jsonl"
 WINDOW_S = 3600                 # "the last hour"
@@ -148,12 +147,14 @@ def context(inst: dict, now: float | None = None) -> str:
 
 
 # -- the call -----------------------------------------------------------------------------------------------------
-def _log(usage: dict | None, seconds: float, error: str | None, model: str = MODEL) -> None:
-    from . import cloudllm
-    usage = usage or {}
-    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": model, "input_tokens": usage.get("input_tokens"),
-           "output_tokens": usage.get("output_tokens"), "seconds": round(seconds, 1), "error": error}
-    rec["usd"] = cloudllm.usd(model, rec)
+def _log(call: modelcall.Call) -> None:
+    """One line per model call in recap_usage.jsonl, with its dollars (modelcall's: priced Claude tokens, OpenRouter's
+    own cost, a custom/ model's declared price, $0 for plan usage; None when unknown)."""
+    usage = call.usage or {}
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": call.model,
+           "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
+           "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
+           "seconds": round(call.seconds, 1), "error": call.error, "usd": call.usd}
     SUP_DIR.mkdir(exist_ok=True)
     with USAGE.open("a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -161,40 +162,18 @@ def _log(usage: dict | None, seconds: float, error: str | None, model: str = MOD
 
 def _call(system: str, prompt: str) -> tuple[str, str]:
     """One call: (now, last_hour). Raises RecapError with the reason (no key, HTTP error, refusal, length, bad JSON)."""
-    key = secrets_env().get("ANTHROPIC_API_KEY")
-    if not key:
-        raise RecapError(f"no ANTHROPIC_API_KEY in {SUP_DIR.parent / '.env'} (SHAFT_RECAP_MODEL={MODEL})")
-    body = {"model": MODEL, "max_tokens": MAX_TOKENS, "system": system,
-            "messages": [{"role": "user", "content": prompt}],
-            "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}}}
-    req = urllib.request.Request(API, data=json.dumps(body).encode(), headers={
-        "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
-    started = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as e:
-        err = f"HTTP {e.code}: {e.read().decode(errors='replace')[:300]}"
-        _log(None, time.monotonic() - started, err)
-        raise RecapError(err) from e
-    except NETWORK_ERRORS as e:
-        _log(None, time.monotonic() - started, f"network: {e}")
-        raise RecapError(f"network: {e}") from e
-    usage, stop = data.get("usage") or {}, data.get("stop_reason")
-    if stop in ("refusal", "max_tokens"):           # max_tokens: no answer yet — never shown as a recap
-        _log(usage, time.monotonic() - started, stop)
-        raise RecapError(f"{MODEL} stopped: {stop}")
-    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        answer = modelcall.ask(MODEL, system, [{"role": "user", "content": prompt}], max_tokens=MAX_TOKENS,
+                               effort="low", schema=SCHEMA, purpose="recap", log=_log)
+    except modelcall.ModelCallError as e:   # no answer yet (max_tokens) is never shown as a recap
+        raise RecapError(f"{e} (SHAFT_RECAP_MODEL={MODEL})") from e
     try:
-        out = json.loads(text)
+        out = json.loads(answer.text)
         now, hour = (" ".join(str(out[k]).split()).rstrip(".") for k in ("now", "last_hour"))
     except (ValueError, KeyError, TypeError) as e:
-        _log(usage, time.monotonic() - started, f"bad json: {text[:200]}")
-        raise RecapError(f"{MODEL} returned no recap: {text[:120]!r}") from e
+        raise RecapError(f"{MODEL} returned no recap: {answer.text[:120]!r}") from e
     if not (now and hour):
-        _log(usage, time.monotonic() - started, "empty recap")
         raise RecapError(f"{MODEL} returned an empty recap")
-    _log(usage, time.monotonic() - started, None, data.get("model") or MODEL)
     return now, hour
 
 

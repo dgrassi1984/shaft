@@ -166,7 +166,8 @@ def run(name: str, now=None) -> int:
                                              "standing_orders": standing}, ensure_ascii=False)
                         verdict = judge.ask(SYSTEM, prompt, SCHEMA, purpose=f"unrecorded {name}",
                                             effort="low", exclude=excluded, model=model)
-                        row.update(orders=_validated(verdict, turns), judge=model)
+                        row.update(orders=_validated(verdict, turns), judge=model,
+                                   **judge.independence(model, excluded))
                     except judge.JudgeError as e:
                         core.log(f"{name}: unrecorded {tid} skipped: {e}")
                         continue

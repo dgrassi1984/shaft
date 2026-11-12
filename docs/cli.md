@@ -440,7 +440,8 @@ Pause/resume (`p`), sleep (`s`), update (`u`), and kill (`K`) ask for confirmati
 On the instance tab, `D` deletes after the operator types the instance name.
 
 `shaft recap`, also the panel's `a` key, writes one-line recaps from each instance's records. It uses
-`SHAFT_RECAP_MODEL`, default `claude-haiku-5-5`, and records usage under recaps. `shaft alerts` lists open
+`SHAFT_RECAP_MODEL`, default `claude-haiku-5-5` (any model the supervisor can call: Claude, OpenRouter, a priced
+`custom/` model or a `codex/` plan model), and records usage under recaps. `shaft alerts` lists open
 alerts or dismisses the given IDs.
 
 `shaft docs` lists, shows, writes, or deletes documents under `notes/docs/`. Writes and deletions require the

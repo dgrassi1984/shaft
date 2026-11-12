@@ -527,7 +527,8 @@ Instances can see images. There are two ways:
 - **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
   message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
 - **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
-  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`) answers in text, marked as described rather than seen. This
+  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`; any model the supervisor can call: Claude, OpenRouter, a priced
+  `custom/` model or a `codex/` plan model) answers in text, marked as described rather than seen. This
   is how an instance whose model cannot see images (an instance on Bonsai) learns what is in one, and the cost counts
   toward its daily cloud cap. At most 10 calls per run.
 

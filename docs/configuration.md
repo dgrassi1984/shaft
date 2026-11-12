@@ -96,7 +96,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_QUIET_HOURS` | `22-07` | local quiet hours, may wrap midnight; empty disables | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DIGEST_AT` | `07:15` | local digest time, or quiet hours' end if later | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_PUSH_BUDGET` | `6` | operator pushes per instance per day before holding for a digest (0: unlimited, count hidden) | [pushes.py](../supervisor/pushes.py) |
-| `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
+| `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images (a custom/ model named here is taken to see them) | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CODEX_HOME` | `.supervisor/codex-home` | private Codex login and configuration directory, mode 700 | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_MODELS` | `codex/gpt-6-astra,codex/gpt-6.1-sol` | Codex models offered to instances, comma separated | [codexcli.py](../supervisor/codexcli.py) |

@@ -289,7 +289,7 @@ def check(name: str, text: str, orders: list[dict], held: list[dict], exclude=()
     if out["violates"] and out["order_id"] not in ids:
         raise judge.JudgeError(f"the judge {model} named {out['order_id']!r}, not one of {sorted(ids)}")
     return {"violates": out["violates"], "order_id": out["order_id"] if out["violates"] else "",
-            "reason": out["reason"], "judge": model}
+            "reason": out["reason"], "judge": model, **judge.independence(model, exclude)}
 
 
 def log_check(name: str, row: dict) -> None:

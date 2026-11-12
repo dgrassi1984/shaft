@@ -399,9 +399,15 @@ class ModelsTest(Case):
         from supervisor import coder, recap
         with self.assertRaisesRegex(ValueError, "Claude model"):
             coder._priced_claude(MODEL)
-        with self.assertRaisesRegex(ValueError, "Claude model"):
-            core.KNOBS["SHAFT_RECAP_MODEL"].parse(MODEL)
-        self.assertIs(core.KNOBS["SHAFT_RECAP_MODEL"].parse, core.claude_model)
+
+    def test_supervisor_side_calls_accept_codex_models(self):
+        """modelcall runs judges, recaps and describe_image on a Codex plan too (a standalone app-server)."""
+        for name in ("SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL", "SHAFT_DESCRIBE_MODEL"):
+            self.assertIs(core.KNOBS[name].parse, core.any_model, name)
+            self.assertEqual(core.KNOBS[name].parse(MODEL), MODEL)
+        self.assertEqual(core.KNOBS["SHAFT_JUDGE_MODELS"].parse(MODEL), [MODEL])
+        with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS"):
+            core.any_model("codex/not-offered")
 
     def test_operator_choices_and_setting_choices(self):
         with mock.patch.object(opconfig, "_template_text", return_value=""), \
@@ -413,8 +419,9 @@ class ModelsTest(Case):
         with mock.patch.object(settings, "model_choices", return_value=[MODEL, "claude-haiku-5-5"]), \
                 mock.patch.object(settings, "not_live", return_value={}):
             fields = {f["name"]: f for f in settings.listing()}
-        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
-            self.assertNotIn(MODEL, fields[name]["choices"])
+        self.assertNotIn(MODEL, fields["SHAFT_TRIAL_FALLBACK_MODEL"]["choices"])
+        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_RECAP_MODEL"):
+            self.assertIn(MODEL, fields[name]["choices"], name)       # modelcall calls Codex plan models too
         self.assertIn("codexcli", settings.MODULES)
 
     def test_bakeoff_arms_accept_codex_and_reject_same_judge_across_providers(self):

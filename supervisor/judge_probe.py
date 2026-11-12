@@ -69,7 +69,8 @@ def run(name: str) -> int:
             row = {"at": now.isoformat(timespec="seconds"), "episode_ts": ep["ts"],
                    "defect": "delivery refused"}
             try:
-                by = judge.pick(exclude=metrics.own_models(name, ep))
+                own = metrics.own_models(name, ep)
+                by = judge.pick(exclude=own)
                 case = metrics._case(planted, metrics._written_files(name, planted),
                                      metrics._provenance_evidence(name, planted),
                                      metrics._prior_goals(metrics.judgments_for_stats(name), ep["ts"]),
@@ -77,7 +78,7 @@ def run(name: str) -> int:
                 verdict = judge.ask(metrics.JUDGE_SYSTEM, case, metrics.JUDGE_SCHEMA,
                                     purpose=f"judge catch {name}", model=by)
                 metrics._check_ratings(verdict)
-                row.update(judge=by, verdict=verdict,
+                row.update(judge=by, verdict=verdict, **judge.independence(by, own),
                            caught=verdict.get("delivery_supported") != "yes" or verdict.get("claim_supported") is False)
             except judge.JudgeError as e:
                 metrics.log(f"{name}: judge catch skipped: {e}")

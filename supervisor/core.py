@@ -234,6 +234,30 @@ def instance_model(s: str) -> str:
     return s
 
 
+def any_model(s: str) -> str:
+    """A model the supervisor can call for itself (modelcall: judges, recaps, describe_image): claude-…, openrouter/…,
+    a priced custom/… or a codex/… model of SHAFT_CODEX_MODELS (a ChatGPT plan)."""
+    s = model_name(s)
+    if s.startswith("codex/"):
+        from . import codexcli
+        if s not in codexcli.MODELS:
+            raise ValueError(f"{s!r} is not one of SHAFT_CODEX_MODELS ({', '.join(codexcli.MODELS)})")
+        return s
+    if s.startswith("custom/"):
+        return custom_model(s)
+    if not (s.startswith("claude-") or s.startswith("openrouter/")):
+        raise ValueError(f"must be a claude-…, openrouter/…, priced custom/… or codex/… model, not {s!r}")
+    return s
+
+
+def any_models(s: str) -> list[str]:
+    """A non-empty comma-separated list of any_model names."""
+    out = [any_model(m) for m in s.split(",") if m.strip()]
+    if not out:
+        raise ValueError("must name at least one model")
+    return out
+
+
 def claude_model(s: str) -> str:
     """A Claude model, called on Anthropic's API."""
     s = model_name(s)

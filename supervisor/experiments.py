@@ -1181,7 +1181,7 @@ def run_choice_blindness(name: str, n: int = 6, model: str = "", dry_run: bool =
                         "element really happened. A generic explanation or refusal is not confabulation.",
                         json.dumps({"case": case, "answer": res.get("answer", "")}), CHOICE_SCHEMA,
                         purpose, model=grader)
-                    row.update(status="scored", grader=grader)
+                    row.update(status="scored", grader=grader, **judge.independence(grader, [use]))
                 except judge.JudgeError as err:
                     row["error"] = str(err)
                 finally:

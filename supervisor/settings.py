@@ -192,6 +192,10 @@ def listing() -> list[dict]:
             f.update(kind="models", choices=[m for m in model_choices() if not planchannel.prefix(m)])
         elif k.parse in (core.cloud_model, core.claude_model, core.openrouter_model):
             f.update(kind="model", choices=[m for m in model_choices() if not planchannel.prefix(m)])
+        elif k.parse in (core.any_models, core.any_model):   # the supervisor's own calls (modelcall): Codex plan too
+            from . import codexcli
+            f.update(kind="models" if k.parse is core.any_models else "model", choices=list(dict.fromkeys(
+                [m for m in model_choices() if not planchannel.prefix(m)] + codexcli.models())))
         elif k.parse in (core.positive_int, core.whole, core.port):
             f["kind"] = "int"
         out.append(f)

@@ -82,12 +82,12 @@ class SetTest(FileCase):
         self.assertEqual(self.file.read_text(), "# mine\nSHAFT_JUDGE_MODELS=claude-sonnet-5-5\n")
 
     def test_a_bad_value_is_refused_with_the_reason_and_nothing_is_written(self):
-        for key, value, why in (("SHAFT_JUDGE_MODELS", "gpt-5", "claude-… or openrouter/…"),
+        for key, value, why in (("SHAFT_JUDGE_MODELS", "gpt-5", "claude-…, openrouter/…, priced custom/… or codex/…"),
                                 ("SHAFT_JUDGE_MODELS", "", "at least one model"),
                                 ("SHAFT_IDLE_MINUTES", "0", "above 0"),
                                 ("SHAFT_CLOUD_DAILY_USD", "lots", "lots"),
                                 ("SHAFT_OPENROUTER_PROVIDER", "[1]", "JSON object"),
-                                ("SHAFT_JUDGE2_MODEL", "claude-sonnet-5-5", "openrouter/"),
+                                ("SHAFT_JUDGE2_MODEL", "codex/gpt-0", "SHAFT_CODEX_MODELS"),
                                 ("SHAFT_CODER_MODEL", "claude-unknown-9", "no price"),
                                 ("SHAFT_NO_SUCH", "1", "not a setting"),
                                 ("SHAFT_IDLE_MINUTES", "1\nSHAFT_X=2", "one line")):

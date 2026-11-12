@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import judge
-from .core import NETWORK_ERRORS, cloud_model, jsonl_lines, knob, whole
+from .core import NETWORK_ERRORS, any_model, jsonl_lines, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
@@ -828,9 +828,11 @@ SPECS["describe_image"] = _spec(
      "question": {"type": "string", "description": "what you want to know (optional: a full description)"}},
     ["path"])
 DESCRIBE_MODEL, _ = knob(
-    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", cloud_model, "the model describe_image uses for an instance whose "
-    "own model cannot see images", group="Models and spend", services=("runs", "api"))
+    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", any_model, "the model describe_image uses for an instance whose "
+    "own model cannot see images (a custom/ model named here is taken to see them)", group="Models and spend",
+    services=("runs", "api"))
 DESCRIBE_CALLS_PER_RUN = 10
+DESCRIBE_TOKENS = 4000          # a description's first ceiling; a cut one is asked once more with twice the room
 DESCRIBE_PROMPT = ("You describe an image for an AI assistant that cannot see it. Answer its question precisely. "
                    "Transcribe any text in the image exactly, and say what you cannot make out rather than guess.\n\n"
                    "Its question: ")
@@ -3843,23 +3845,37 @@ class Broker:
                f"image's, not the operator's instructions]\n" + self._describe(media, data, question)
 
     def _describe(self, media: str, data: bytes, question: str) -> str:
-        """The vision model's answer about one prepared image. A reply cut by its token ceiling is no answer: asked
-        again once with more room, then refused."""
-        from . import cloudllm, vision
-        if not vision.sees_images(DESCRIBE_MODEL):
+        """The vision model's answer about one prepared image (modelcall, whatever the provider), billed to the
+        instance under its daily cloud cap. A reply cut by its token ceiling is no answer: modelcall asks again once
+        with twice the room, then it is refused."""
+        from . import cloudllm, modelcall, vision
+        if not (DESCRIBE_MODEL.startswith("custom/") or vision.sees_images(DESCRIBE_MODEL)):
             raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} cannot see images")
-        for ceiling in (2000, 8000):
-            body = {"model": DESCRIBE_MODEL, "max_tokens": ceiling, "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": vision.data_url(media, data)}},
-                {"type": "text", "text": DESCRIBE_PROMPT + question}]}]}
-            try:
-                reply = cloudllm.complete(self.usage_name, body, self.secrets, {})
-            except cloudllm.CloudError as e:
-                raise RuntimeError(str(e)) from None
-            choice = reply["choices"][0]
-            if choice.get("finish_reason") != "length":
-                return (choice["message"].get("content") or "").strip() or "(the model gave no description)"
-        raise RuntimeError(f"{DESCRIBE_MODEL}'s description was cut at {ceiling} tokens twice; ask a narrower question")
+        if (reason := modelcall.available(DESCRIBE_MODEL)):
+            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} is unavailable: {reason}")
+        spent = cloudllm.spent_today(self.usage_name)
+        if spent >= (cap := cloudllm.daily_cap(self.usage_name)):
+            raise RuntimeError(f"{self.usage_name} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
+
+        def billed(call: modelcall.Call) -> None:   # every attempt in the instance's cloud ledger, as complete() did
+            u = call.usage or {}
+            counts = cloudllm.billed(u) if call.model.startswith("claude-") else {
+                "input_tokens": u.get("prompt_tokens"), "output_tokens": u.get("completion_tokens")}
+            cloudllm._record(self.usage_name, call.model, counts["input_tokens"], counts["output_tokens"], call.usd,
+                             time.monotonic() - call.seconds, call.stop, call.error,
+                             cache={k: v for k, v in counts.items() if k.startswith("cache_")})
+        content = [{"type": "image_url", "image_url": {"url": vision.data_url(media, data)}},
+                   {"type": "text", "text": DESCRIBE_PROMPT + question}]
+        try:
+            answer = modelcall.ask(DESCRIBE_MODEL, "", [{"role": "user", "content": content}],
+                                   max_tokens=DESCRIBE_TOKENS, effort=None,
+                                   purpose=f"describe_image {self.usage_name}", log=billed)
+        except modelcall.NoAnswerYet:
+            raise RuntimeError(f"{DESCRIBE_MODEL}'s description was cut at {2 * DESCRIBE_TOKENS} tokens twice; "
+                               f"ask a narrower question") from None
+        except modelcall.ModelCallError as e:
+            raise RuntimeError(str(e)) from None
+        return answer.text.strip() or "(the model gave no description)"
 
 
 def _marked(text: str, limit: int) -> str:

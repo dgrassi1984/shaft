@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, judge, metrics
+from supervisor import cloudllm, judge, metrics, modelcall
 from supervisor.tests.test_openrouter import FakeOpenRouter
 
 POOL = ["openrouter/xiaomi/mimo-v2.6-pro", "claude-haiku-5-5", "claude-sonnet-5-5"]
@@ -73,15 +73,48 @@ class PickTest(unittest.TestCase):
         self.assertEqual(draws, {"openrouter/xiaomi/mimo-v2.6-pro", "claude-sonnet-5-5"})
 
     def test_no_judge_left_is_an_error_not_self_judging(self):
-        with mock.patch.object(judge, "JUDGE_MODELS", ["claude-haiku-5-5"]), \
-                self.assertRaises(judge.JudgeError) as e:
-            judge.pick(exclude=["claude-haiku-5-5"])
+        """A pool of other models, every one of them the instance's own: no judge, never self-judging."""
+        with mock.patch.object(judge, "JUDGE_MODELS", ["claude-haiku-5-5", "claude-sonnet-5-5"]), \
+                self.assertRaises(judge.NoJudgeLeft) as e:
+            judge.pick(exclude=["claude-haiku-5-5", "claude-sonnet-5-5"])
         self.assertIn("never judged by its own model", str(e.exception))
 
     def test_available_needs_every_models_key(self):
-        with mock.patch.object(judge, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a"}):
+        with mock.patch.object(modelcall, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a"}):
             self.assertFalse(judge.available())               # MiMo would fail a third of the judgments
-        with mock.patch.object(judge, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a", "OPENROUTER_API_KEY": "o"}):
+            self.assertIn("OPENROUTER_API_KEY", judge.unavailable())
+        with mock.patch.object(modelcall, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a", "OPENROUTER_API_KEY": "o"}):
+            self.assertTrue(judge.available())
+            self.assertIsNone(judge.unavailable())
+
+
+class ProviderPoolTest(unittest.TestCase):
+    """An operator with one provider: a pool of custom/ (or codex/) models judges as a mixed pool does."""
+
+    def setUp(self):
+        for p in (mock.patch.object(cloudllm, "CUSTOM_PRICES", {"a": (1.0, 2.0), "b": (1.0, 2.0)}),
+                  mock.patch.object(cloudllm, "CUSTOM_BASE_URL", "http://127.0.0.1:9/v1"),
+                  mock.patch.object(modelcall, "secrets_env", return_value={"SHAFT_CUSTOM_API_KEY": "k"}),
+                  mock.patch.object(judge, "JUDGE2_MODEL", "custom/b")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_judge_pool_of_custom_models_never_picks_the_instances_model(self):
+        with mock.patch.object(judge, "JUDGE_MODELS", ["custom/a", "custom/b"]):
+            rng = random.Random(3)
+            self.assertEqual({judge.pick(exclude=["custom/b"], rng=rng) for _ in range(50)}, {"custom/a"})
+            # custom/b is the second judge too: the rotation is custom/a, the instance's own model is never drawn
+            self.assertEqual({judge.pick(exclude=["custom/a"], rng=rng) for _ in range(50)}, {"custom/b"})
+            self.assertEqual(judge.independence("custom/b", ["custom/a"]), {})
+            self.assertTrue(judge.available())
+            with mock.patch.object(modelcall, "secrets_env", return_value={}):
+                self.assertFalse(judge.available())
+                self.assertIn("SHAFT_CUSTOM_API_KEY", judge.unavailable())
+        with mock.patch.object(judge, "JUDGE_MODELS", ["custom/a", "custom/b"]), self.assertRaises(judge.NoJudgeLeft):
+            judge.pick(exclude=["custom/a", "custom/b"])      # two models, both the instance's: not a one-model pool
+
+    def test_judge_available_for_a_one_model_provider_whose_model_is_also_the_second_judge(self):
+        with mock.patch.object(judge, "JUDGE_MODELS", ["custom/b"]):
             self.assertTrue(judge.available())
 
 
@@ -96,9 +129,9 @@ class RoutingTest(unittest.TestCase):
             "usage": {"prompt_tokens": 1200, "completion_tokens": 300, "cost": 0.0008}})
         self.addCleanup(self.claude.close)
         self.addCleanup(self.router.close)
-        for p in (mock.patch.object(judge, "SUP_DIR", self.sup), mock.patch.object(judge, "API", self.claude.url),
+        for p in (mock.patch.object(judge, "SUP_DIR", self.sup), mock.patch.object(modelcall, "API", self.claude.url),
                   mock.patch.object(cloudllm, "OPENROUTER_API", self.router.url),
-                  mock.patch.object(judge, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a", "OPENROUTER_API_KEY": "o"})):
+                  mock.patch.object(modelcall, "secrets_env", return_value={"ANTHROPIC_API_KEY": "a", "OPENROUTER_API_KEY": "o"})):
             p.start()
             self.addCleanup(p.stop)
 
@@ -170,6 +203,39 @@ class CycleVerdictTest(unittest.TestCase):
         self.assertEqual(set(used), {"claude-haiku-5-5", "claude-sonnet-5-5"})   # rotated, MiMo never
         recorded = sorted(j["judge"] for j in metrics.judgments("wisp", self.tmp / "sup"))
         self.assertEqual(recorded, sorted(used))
+        self.assertFalse(any("independence" in j for j in metrics.judgments("wisp", self.tmp / "sup")))
+
+    def test_a_single_model_provider_judges_with_the_same_model_and_marks_it(self):
+        """An operator whose one provider offers one model (a custom endpoint, say): the instance and its judge run
+        on it. That is the operator's configuration, not a missing key: the cycle is judged, and the verdict says the
+        judge was the instance's own model. same_model() is the comparison, whatever the spelling."""
+        own = "custom/My-Model"
+        (self.tmp / "instances" / "wisp" / "config.env").write_text(f'LLM_MODEL="{own}"\n')
+        used = []
+
+        def ask(system, case, schema, purpose, model=None, **kw):
+            used.append(model)
+            return self.verdict()
+        with mock.patch.object(judge, "JUDGE_MODELS", ["custom/my-model"]), \
+                mock.patch.object(judge, "JUDGE2_MODEL", "custom/my-model"), \
+                mock.patch.object(judge, "same_model", wraps=judge.same_model) as same, \
+                mock.patch.object(judge, "ask", ask):
+            self.assertEqual(metrics.judge_pending("wisp"), 40)
+            self.assertTrue(any(c.args[1] == own for c in same.call_args_list))
+        self.assertEqual(set(used), {"custom/my-model"})
+        rows = metrics.judgments("wisp", self.tmp / "sup")
+        self.assertEqual({(j["judge"], j.get("independence")) for j in rows}, {("custom/my-model", "same-model")})
+
+    @staticmethod
+    def verdict():
+        return {"criterion_met": "yes", "claim_supported": True, "criterion_quality": "checkable", "failure_mode": "",
+                "reasoning": "ok", "origin": "self", "origin_supported": True, "origin_evidence": "",
+                "difficulty": 2, "difficulty_reason": "", "novelty": 2,
+                "value": 1, "value_for": "nobody", "value_reason": "nothing kept", "expectations": [],
+                "unreported_surprises": [], "reported_surprises_supported": True, "delivery_supported": "na",
+                "deliverable_met": "yes", "self_imposed_clauses": "none", "self_audit": False,
+                "should_have_waited": "na", "pushback": "none", "first_error_step": 0,
+                "first_error": "No step is at fault.", "followup_useful": "na"}
 
 
 if __name__ == "__main__":

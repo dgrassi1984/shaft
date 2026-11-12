@@ -472,8 +472,12 @@ tell which) is graded from its tool log by a cloud model picked at random from a
 default MiMo and GLM 5.3 Flash), never the model the judged instance runs on; each verdict
 records its judge, and a cycle left out has no verdict rather than a failing one. The second judge's model
 (`SHAFT_JUDGE2_MODEL`, DeepSeek V4.1 Flash) stays out of the main rotation, so its cross-check is independent; a
-pool that still lists it uses it only when no other judge may grade, and that cycle gets no second judgment. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
-collection, zero retention). A trial pair keeps
+pool that still lists it uses it only when no other judge may grade, and that cycle gets no second judgment. Every
+judge call goes through `supervisor/modelcall.py`: Claude models straight to the Claude API; OpenRouter ones under the
+instances' data policy (no data collection, zero retention); `custom/` ones to the operator's endpoint at their declared
+prices; `codex/` ones to a ChatGPT plan, through a short-lived Codex app-server of the supervisor's own. A pool of one
+model that is the instance's own (an operator whose one provider offers one model) grades it with that model, and the
+verdict records `"independence": "same-model"`; a pool of several models never does. A trial pair keeps
 one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
 feed `self/stats.md`.
 

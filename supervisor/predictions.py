@@ -248,7 +248,7 @@ def score(name, now=None) -> int:
                 continue
             _append(file, {"event": "scored", "id": pid, "at": now.isoformat(),
                            "result": "not checked" if verdict["result"] == "unclear" else verdict["result"],
-                           "reason": verdict["reason"], "judge": model})
+                           "reason": verdict["reason"], "judge": model, **judge.independence(model, exclude)})
             count += 1
     return count
 

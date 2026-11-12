@@ -1318,12 +1318,15 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
     # One judge for both orders of the pair (the order swap checks position bias, not judge variance), never the
     # model the instance or its replay ran on.
     from . import judge
+    own = [_config(project, name).get("LLM_MODEL"), label]
     try:
-        by = judge.pick(exclude=[_config(project, name).get("LLM_MODEL"), label])
+        by = judge.pick(exclude=own)
     except judge.JudgeError as e:
         by = None
         log(f"{name}: trial {t['id']} past cycle {i + 1}: {e}")
     s["judge"] = by
+    if by:
+        s.update(judge.independence(by, own))
     for first, second in (("A", "B"), ("B", "A")):
         purpose = f"trial {name} {t['id']} s{i} {first}{second}"
         try:

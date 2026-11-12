@@ -500,13 +500,14 @@ def make_recall(name: str, force: bool = False) -> Path | None:
               "outcome), not an opinion — phrased as someone asking the agent about its past, without quoting "
               "the entry. Give the answer as the entry states it.\n\n"
               + "\n\n".join(f"## Entry {stamp}\n{text[:3000]}" for stamp, text in picked))
-    by = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
+    own = [instance_config(name).get("LLM_MODEL")]
+    by = judge.pick(exclude=own)
     out = judge.ask("You write precise recall questions.", prompt, RECALL_SCHEMA, purpose=f"battery recall-gen {name}",
                     model=by)
     qs = out["questions"]
     if len(qs) != RECALL_ITEMS:
         raise judge.JudgeError(f"expected {RECALL_ITEMS} recall questions, got {len(qs)}")
-    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": by,
+    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": by, **judge.independence(by, own),
             "questions": [{"id": f"{name}-{i + 1}", "prompt": q["question"], "answer": q["answer"],
                            "entry": q["entry"], "max_steps": 8} for i, q in enumerate(qs)]}
     path.parent.mkdir(parents=True, exist_ok=True)

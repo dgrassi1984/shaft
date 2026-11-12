@@ -859,14 +859,15 @@ def judge_pending(name: str) -> int:
                        "judge": "rule", "first_error_step": 0, "first_error": "No intent was declared.",
                        **{k: None for k in RATINGS + VALUES + OUTCOMES + PUSHES + PUSHBACKS}}
         elif not judge.available():
-            log(f"{name}: judge unavailable, episode {ep['ts']} left unjudged")
+            log(f"{name}: judge unavailable ({judge.unavailable()}), episode {ep['ts']} left unjudged")
             break
         else:
             try:
                 case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
                              followed=_followed_surprise(name, ep))
                 second = selected and second_sampled(name, ep["ts"])
-                by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
+                own = own_models(name, ep)
+                by = judge.pick(exclude=own, avoid=(judge.JUDGE2_MODEL,) if second else ())
                 verdict = judge.ask(JUDGE_SYSTEM, case, MAIN_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
                 _links(verdict, js, ep["ts"])
@@ -878,6 +879,7 @@ def judge_pending(name: str) -> int:
                     except Exception as e:   # naming the fact never costs the verdict
                         log(f"{name}: unsourced fact not matched for {ep['ts']}: {type(e).__name__}: {e}")
                 verdict["judge"] = by
+                verdict.update(judge.independence(by, own))   # a one-model pool: graded by the instance's own model
                 if second and not judge.same_model(by, judge.JUDGE2_MODEL):   # never a model agreeing with itself
                     from .consultstats import vendor
                     if vendor(judge.JUDGE2_MODEL) in consulted_vendors(name, ep):   # it saw this cycle's work
