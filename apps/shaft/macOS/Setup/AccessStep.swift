@@ -183,6 +183,11 @@ struct AccessStepView: View {
                 .fixedSize(horizontal: false, vertical: true)
             SecureField("Bot token", text: $steps.telegramToken)
             Link("Open @BotFather", destination: Self.botFather).foregroundStyle(Color.brand)
+            Text("This saves the bot. Your Telegram account is paired with it, and Telegram turned on, afterwards: "
+                 + "shaft telegram pair, then shaft telegram on.")
+                .font(.caption).foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
     }
 
