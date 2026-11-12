@@ -39,6 +39,30 @@ class SecretsWriterTest(unittest.TestCase):
         self.assertNotIn("OPENROUTER", self.env.read_text())
         self.assertEqual(core.secrets_env()["ANTHROPIC_API_KEY"], "new")
 
+    def test_spaced_and_duplicated_lines_are_matched_as_the_reader_parses_them(self):
+        self.env.write_text("A=1\n  SHAFT_API_KEY = old1\n# SHAFT_API_KEY=comment\nB=2\nSHAFT_API_KEY=old2\n")
+        core.set_secret_env("SHAFT_API_KEY", "new")
+        self.assertEqual(self.env.read_text(), "A=1\nSHAFT_API_KEY=new\n# SHAFT_API_KEY=comment\nB=2\n")
+        self.env.write_text("A=1\nSHAFT_API_KEY = old1\nSHAFT_API_KEY=old2\n")
+        core.set_secret_env("SHAFT_API_KEY", None)
+        self.assertNotIn("SHAFT_API_KEY", core.secrets_env())
+        self.assertEqual(self.env.read_text(), "A=1\n")
+        self.assertEqual(self.run_cli("unset", "SHAFT_API_KEY\n")[0], 1)
+
+    def test_list_read_failure_is_a_json_error(self):
+        with mock.patch.object(core, "secrets_env", side_effect=PermissionError("denied")):
+            code, out, _ = self.run_cli("list")
+        self.assertEqual(code, 1)
+        self.assertIn("denied", json.loads(out)["error"])
+
+    def test_registered_parser_dispatches_set(self):
+        from supervisor import __main__ as m
+        with mock.patch("sys.stdin", io.StringIO("sk-ant-Z\n")), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = m.main(["secrets", "set", "ANTHROPIC_API_KEY", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue()), {"ok": True, "name": "ANTHROPIC_API_KEY"})
+        self.assertEqual(core.secrets_env()["ANTHROPIC_API_KEY"], "sk-ant-Z")
+
     def test_concurrent_writers_lose_nothing(self):
         def writer(tag):
             for i in range(50):
@@ -58,7 +82,7 @@ class SecretsWriterTest(unittest.TestCase):
         self.assertEqual([p.name for p in self.dir.iterdir() if p.name.startswith(".env.")], [])   # no temp left
 
     def test_a_name_outside_the_list_is_refused(self):
-        for bad in ("PATH", "telegram_token_x", "TELEGRAM_TOKEN_", "SHAFT_API_KEY\nX", "GMAIL_X_CLIENT_TOKEN"):
+        for bad in ("PATH", "telegram_token_x", "TELEGRAM_TOKEN_", "SHAFT_API_KEY\nX", "SHAFT_API_KEY\n", "GMAIL_X_CLIENT_TOKEN"):
             with self.assertRaises(ValueError, msg=bad):
                 core.set_secret_env(bad, "v")
         with self.assertRaises(ValueError):

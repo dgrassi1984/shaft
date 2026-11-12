@@ -334,7 +334,7 @@ SECRET_NAMES_RE = re.compile(r"^(ANTHROPIC_API_KEY|OPENROUTER_API_KEY|SCRAPEBADG
 def set_secret_env(name: str, value: str | None) -> None:
     """The one writer of PROJECT/.env: set NAME=value (None removes it). Atomic (temp file + os.replace), serialised by
     SUP_DIR/env.lock, mode 0600. A key keeps its line; a new one goes last; every other line is kept byte for byte."""
-    if not SECRET_NAMES_RE.match(name):
+    if not SECRET_NAMES_RE.fullmatch(name):
         raise ValueError(f"{name!r} is not a secret name the supervisor stores")
     if value is not None and ("\n" in value or "\r" in value or "\0" in value):
         raise ValueError(f"the value for {name} must be a single line")
@@ -346,7 +346,8 @@ def set_secret_env(name: str, value: str | None) -> None:
         out: list[str] = []
         done = False
         for line in old:
-            if line.strip().startswith(f"{name}="):
+            text = line.strip()                                          # the reader's parse (secrets_env)
+            if text and not text.startswith("#") and "=" in text and text.split("=", 1)[0].strip() == name:
                 if value is not None and not done:
                     out.append(f"{name}={value}\n")
                 done = True

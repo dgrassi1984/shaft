@@ -20,7 +20,10 @@ def _say(as_json: bool, ok: bool, text: str = "", **extra) -> int:
 
 def command(action: str, name: str | None, as_json: bool = False) -> int:
     if action == "list":
-        names = sorted(k for k in core.secrets_env() if core.SECRET_NAMES_RE.match(k))
+        try:
+            names = sorted(k for k in core.secrets_env() if core.SECRET_NAMES_RE.fullmatch(k))
+        except (ValueError, OSError) as e:
+            return _say(as_json, False, f"cannot read the secrets file: {e}")
         if as_json:
             print(json.dumps({"ok": True, "names": names}))
         else:
@@ -29,7 +32,7 @@ def command(action: str, name: str | None, as_json: bool = False) -> int:
     if not name:
         print(f"usage: shaft secrets {action} NAME", file=sys.stderr)
         return 2
-    if not core.SECRET_NAMES_RE.match(name):
+    if not core.SECRET_NAMES_RE.fullmatch(name):
         return _say(as_json, False, f"{name} is not a secret name the supervisor stores")
     try:
         if action == "set":
