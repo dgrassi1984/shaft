@@ -152,14 +152,13 @@ targets:
           - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
             CFBundleURLSchemes: [shaft]
     postBuildScripts:
-      # As for iOS: plain http to this machine (the fixture server) in Debug builds only.
-      - name: Allow local http in Debug
+      # Plain http to this machine in every configuration: the Mac app's setup wizard talks to the server it starts on
+      # 127.0.0.1 (and the fixture server in Debug). iOS stays Debug-only above.
+      - name: Allow local http
         script: |
-          if [ "$CONFIGURATION" = "Debug" ]; then
-            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
-          fi
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
           touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
         inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
         outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
@@ -172,10 +171,9 @@ targets:
     entitlements:
       path: Generated/macOS.entitlements
       properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.network.client: true
-        com.apple.security.files.user-selected.read-write: true
-        # The microphone for voice mode, under the sandbox and the hardened runtime alike.
+        # No App Sandbox: the setup wizard runs git, uv and the server's CLI and writes ~/SHAFT. The hardened runtime
+        # stays on (ENABLE_HARDENED_RUNTIME); NotificationService-macOS keeps its sandbox (extensions must).
+        # The microphone for voice mode, under the hardened runtime.
         com.apple.security.device.audio-input: true
         com.apple.developer.aps-environment: development
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]

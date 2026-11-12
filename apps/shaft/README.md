@@ -103,9 +103,10 @@ fake records only; no CLI or launchd runs. `act ... services busy "<name> replyi
 and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
 finishes a pending drain with a new fake pid. Cancel is available in the app. Run
 `python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
-A Debug build may load plain `http://` from this machine (`NSAllowsLocalNetworking`,
-added to the built Info.plist by a Debug-only build step in `project.yml`); a Release build keeps App Transport
-Security whole.
+A Debug iOS build may load plain `http://` from this machine (`NSAllowsLocalNetworking`, added to the built
+Info.plist by a Debug-only build step in `project.yml`); a Release iOS build keeps App Transport Security whole. The
+Mac app gets `NSAllowsLocalNetworking` in every configuration (its setup wizard talks to the server on 127.0.0.1) and
+runs outside the App Sandbox (hardened runtime only); its notification extension stays sandboxed.
 
 For a simulator build that keeps the Keychain entitlement, sign it locally (never registers anything with Apple):
 

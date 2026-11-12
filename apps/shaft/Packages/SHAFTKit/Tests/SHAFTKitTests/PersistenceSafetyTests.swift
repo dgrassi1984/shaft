@@ -4,6 +4,30 @@ import Testing
 
 @MainActor
 struct PersistenceSafetyTests {
+    @Test func leavingTheSandboxKeepsTheDraftsAndOutboxOfTheContainer() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "shaft-adopt-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let container = base.appending(path: "container/SHAFT")
+        let root = base.appending(path: "real/SHAFT")
+        try LocalFiles.write(Data("draft".utf8), to: container.appending(path: "drafts/main.json"))
+        try LocalFiles.write(Data("outbox".utf8), to: container.appending(path: "servers/abc/outbox/outbox.json"))
+        // Something the unsandboxed folder already holds (the server's own backup folder) is left alone.
+        try LocalFiles.write(Data("backup".utf8), to: root.appending(path: "battery-backup/b.json"))
+
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(try Data(contentsOf: root.appending(path: "drafts/main.json")) == Data("draft".utf8))
+        #expect(try Data(contentsOf: root.appending(path: "servers/abc/outbox/outbox.json")) == Data("outbox".utf8))
+        #expect(try Data(contentsOf: root.appending(path: "battery-backup/b.json")) == Data("backup".utf8))
+        #expect(!FileManager.default.fileExists(atPath: container.appending(path: "drafts").path))
+
+        // A second call never overwrites what the app has written since.
+        try LocalFiles.write(Data("new".utf8), to: container.appending(path: "drafts/other.json"))
+        try LocalFiles.adoptSandboxContainer(container, into: root)
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "drafts/other.json").path))
+        // No container at all is a no-op.
+        try LocalFiles.adoptSandboxContainer(base.appending(path: "none"), into: root)
+    }
+
     @Test func reinstallDoesNotReuseThePairingLeftInKeychain() throws {
         let suite = "shaft-reinstall-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

@@ -1,13 +1,41 @@
 import Foundation
 
-/// The app's own files: drafts and the outbox, under Application Support (the app's container on iOS and in the macOS
-/// sandbox). Stored records name their files relative to these folders, never by absolute path: iOS moves the
+/// The app's own files: drafts and the outbox, under Application Support (the app's container on iOS; the real
+/// `~/Library/Application Support/SHAFT` on the Mac, which left the App Sandbox: see `adoptSandboxContainer`). Stored records name their files relative to these folders, never by absolute path: iOS moves the
 /// container when the app is updated.
 public enum LocalFiles {
     public static func root() throws -> URL {
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                   appropriateFor: nil, create: true)
-        return support.appending(path: "SHAFT", directoryHint: .isDirectory)
+        let root = support.appending(path: "SHAFT", directoryHint: .isDirectory)
+        #if os(macOS)
+        // Earlier Mac builds ran sandboxed: their drafts and outbox live in the app's container. Best effort: a
+        // folder that cannot be moved stays where it is and the app starts with what it finds.
+        if let id = Bundle.main.bundleIdentifier {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let container = home.appending(path: "Library/Containers/\(id)/Data/Library/Application Support/SHAFT",
+                                           directoryHint: .isDirectory)
+            if container.standardizedFileURL != root.standardizedFileURL {
+                try? adoptSandboxContainer(container, into: root)
+            }
+        }
+        #endif
+        return root
+    }
+
+    /// Move what a sandboxed build left in its container (`drafts`, `outbox`, `servers`) into `root`, once: a folder
+    /// moves only when `root` has none of that name, so the move never overwrites and a second call does nothing.
+    static func adoptSandboxContainer(_ container: URL, into root: URL) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: container.path) else { return }
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in ["drafts", "outbox", "servers"] {
+            let source = container.appending(path: name, directoryHint: .isDirectory)
+            let target = root.appending(path: name, directoryHint: .isDirectory)
+            if manager.fileExists(atPath: source.path), !manager.fileExists(atPath: target.path) {
+                try manager.moveItem(at: source, to: target)
+            }
+        }
     }
 
     public static func drafts() throws -> URL { try root().appending(path: "drafts", directoryHint: .isDirectory) }
