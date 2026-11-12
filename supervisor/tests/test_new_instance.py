@@ -142,6 +142,18 @@ class NewInstanceTest(unittest.TestCase):
         self.assertFalse(core.paused("ada"))
         self.assertEqual([p.name for p in self.sup.iterdir()], [])
 
+    def test_failure_after_the_worktree_keeps_the_instance_paused(self):
+        with mock.patch.object(cli.mind, "init", side_effect=OSError("mind store unwritable")):
+            code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        self.assertIn("shaft delete ada", error)
+        self.assertIn("half-created and paused", error)
+        self.assertIn("mind store unwritable", error)
+        self.assertTrue(core.paused("ada"))
+        self.assertTrue((self.sup / "first-reply-ada").exists())
+        self.assertTrue((self.project / "instances" / "ada").exists())
+
     def test_failed_creation_keeps_a_flag_it_did_not_make(self):
         self.sup.mkdir()
         (self.sup / "paused-ada").write_text("2026-01-01T00:00:00")
