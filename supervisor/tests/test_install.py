@@ -51,6 +51,8 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(seen, ["identity", "setup"])               # api, web, scheduler never ran
         self.assertEqual([l["ok"] for l in lines], [True, False])
         self.assertIn("fatal: not a git repository", lines[1]["detail"])
+        self.assertEqual(lines[1]["error"], "fatal: not a git repository")   # the contract: "error" holds the message
+        self.assertNotIn("error", lines[0])
 
     def test_a_step_that_returns_nonzero_is_a_failure_with_its_output(self):
         def runner(step, operator, email):
@@ -59,7 +61,8 @@ class StepsTest(unittest.TestCase):
             return "ok"
         code, lines = run_install(runner)
         self.assertEqual(code, 1)
-        self.assertEqual(lines[-1], {"step": "api", "ok": False, "detail": "api refused: nothing to add"})
+        self.assertEqual(lines[-1], {"step": "api", "ok": False, "detail": "api refused: nothing to add",
+                                    "error": "api refused: nothing to add"})
 
 
 class DefaultRunnerTest(unittest.TestCase):
@@ -167,6 +170,81 @@ class RerunTest(unittest.TestCase):
         self.assertTrue(all(l["ok"] for l in lines))
         self.assertEqual(state["writes"], writes)
         self.assertEqual(state["logins"], ["operator@local"])
+
+
+class DefaultRunnerRerunTest(unittest.TestCase):
+    """Review: a rerun must not restart services that are already right (a restarted scheduler cuts running cycles).
+    The default runner twice over isolated state; only launchctl and tailscale are faked."""
+
+    def setUp(self):
+        from supervisor import api, mind, settings
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-install-rerun-"))
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.project, self.agents, self.sup = self.tmp / "p", self.tmp / "agents", self.tmp / "p" / ".supervisor"
+        self.project.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        self.calls, self.loaded = [], set()
+        glob = self.tmp / "gitconfig"
+        glob.write_text("")
+        env = {"GIT_CONFIG_GLOBAL": str(glob), "GIT_CONFIG_NOSYSTEM": "1"}
+        for k in ("SHAFT_API_LOGINS", "SHAFT_API_KEY", "SHAFT_INBOX_KEY"):
+            env[k] = ""
+        patches = [mock.patch.dict(os.environ, env),
+                   mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
+                   mock.patch.object(core, "SETTINGS_FILE", self.sup / "settings.env"),
+                   mock.patch.object(autonomy, "PROJECT", self.project), mock.patch.object(autonomy, "SUP_DIR", self.sup),
+                   mock.patch.object(autonomy, "AGENTS", self.agents), mock.patch.object(autonomy, "log"),
+                   mock.patch.object(autonomy, "_launchctl", self.launchctl),
+                   mock.patch.object(api, "_tailscale", side_effect=AssertionError("tailscale")),
+                   mock.patch.object(cli, "TEMPLATE", self.project / "template"),
+                   mock.patch.object(cli, "INSTANCES", self.project / "instances")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        os.environ.pop("SHAFT_API_LOGINS", None)
+        os.environ.pop("SHAFT_API_KEY", None)
+        os.environ.pop("SHAFT_INBOX_KEY", None)
+
+    def launchctl(self, *args):
+        self.calls.append(args)
+        label = args[1].rsplit("/", 1)[-1] if len(args) > 1 else ""
+        if args[0] == "bootstrap":
+            self.loaded.add(Path(args[2]).stem)
+        elif args[0] == "bootout":
+            self.loaded.discard(label)
+        rc = 0 if args[0] != "print" or label in self.loaded else 113
+        return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
+
+    def snapshot(self):
+        files = [p for p in (list(self.agents.glob("*.plist")) + [self.project / ".env", self.sup / "settings.env",
+                                                                  self.project / ".git" / "config"]) if p.exists()]
+        return {str(p): p.read_bytes() for p in files}
+
+    def test_a_second_default_run_writes_nothing_and_restarts_nothing(self):
+        first, lines1 = run_install(None, "Ada", "ada@example.com")
+        self.assertEqual(first, 0, lines1)
+        self.assertEqual([l["step"] for l in lines1], list(install.STEPS))
+        self.assertEqual(len(list(self.agents.glob("*.plist"))), 3)       # api, web, scheduler
+        before, self.calls[:] = self.snapshot(), []
+        second, lines2 = run_install(None, "Ada", "ada@example.com")
+        self.assertEqual(second, 0, lines2)
+        self.assertTrue(all(l["ok"] for l in lines2))
+        self.assertEqual([l["detail"] for l in lines2[2:]], ["running"] * 3)
+        self.assertEqual(self.snapshot(), before)                                   # no config or plist rewritten
+        self.assertEqual({c[0] for c in self.calls} & {"bootout", "bootstrap", "kickstart"}, set())
+        logins = [l for l in (self.project / ".env").read_text().splitlines() if l.startswith("SHAFT_API_LOGINS")]
+        self.assertEqual(logins, ["SHAFT_API_LOGINS=operator@local"])
+
+    def test_a_service_that_is_not_loaded_or_whose_plist_differs_is_installed_again(self):
+        run_install(None, "Ada", "ada@example.com")
+        self.loaded.discard("com.shaft.scheduler")                 # launchd lost it
+        (self.agents / "com.shaft.web.plist").write_bytes(plistlib.dumps({"Label": "com.shaft.web"}))   # stale plist
+        self.calls[:] = []
+        code, lines = run_install(None, "Ada", "ada@example.com")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual([l["detail"] == "running" for l in lines[2:]], [True, False, False])
+        self.assertIn("bootstrap", {c[0] for c in self.calls})
+        self.assertTrue(autonomy.service_current("web") and autonomy.service_current("scheduler"))
 
 
 class ServicePathTest(unittest.TestCase):

@@ -50,16 +50,39 @@ def _verb(fn, *args, **kwargs) -> str:
     return said.splitlines()[-1] if said else "done"
 
 
+RUNNING = "running"
+
+
+def _api_right() -> bool:
+    """`api on --local` has nothing left to do: both keys, the local login, the service current."""
+    from . import api, autonomy
+    env = core.secrets_env()
+    logins = {x.strip().lower() for x in env.get("SHAFT_API_LOGINS", "").split(",")}
+    return bool(env.get("SHAFT_API_KEY") and env.get("SHAFT_INBOX_KEY") and api.LOCAL_LOGIN in logins
+                and autonomy.service_current("api"))
+
+
+def _web_right() -> bool:
+    from . import api, autonomy, settings
+    logins = {x.strip().lower() for x in core.secrets_env().get("SHAFT_API_LOGINS", "").split(",")}
+    return (api.LOCAL_LOGIN in logins and settings.file_values().get("SHAFT_WEB_LOCAL") == "on"
+            and autonomy.service_current("web"))
+
+
 def _default_runner(step: str, operator: str, email: str | None) -> str:
+    """A step whose result already holds is skipped ("running"): `on` would boot the service out and in again, and a
+    restarted scheduler cuts the cycles it runs."""
     from . import __main__ as cli, api, autonomy, web
     if step == "identity":
         return _identity(operator, email)
     if step == "setup":
-        return _verb(cli.cmd_setup)
+        return _verb(cli.cmd_setup)   # idempotent: existing worktrees are left, the guard is rewritten identically
     if step == "api":
-        return _verb(api.command, "on", local=True)
+        return RUNNING if _api_right() else _verb(api.command, "on", local=True)
     if step == "web":   # needs the api step's operator@local login
-        return _verb(web.command, "on", local=True)
+        return RUNNING if _web_right() else _verb(web.command, "on", local=True)
+    if autonomy.service_current("scheduler"):
+        return RUNNING
     return _verb(autonomy.autonomy, "on")   # no instances yet: the scheduler schedules nothing, harmlessly
 
 
@@ -73,7 +96,10 @@ def run(operator: str, email: str | None = None, runner=None) -> int:
             detail, ok = (said.strip() if isinstance(said, str) and said.strip() else str(e)), False
         except Exception as e:   # the app shows the real message, never a traceback
             detail, ok = str(e) or type(e).__name__, False
-        print(json.dumps({"step": step, "ok": ok, "detail": detail}), flush=True)
+        record = {"step": step, "ok": ok, "detail": detail}
+        if not ok:
+            record["error"] = detail   # the contract of every --json verb: "error" holds the real message
+        print(json.dumps(record), flush=True)
         if not ok:
             return 1
     return 0

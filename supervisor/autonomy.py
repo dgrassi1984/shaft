@@ -82,6 +82,33 @@ def launchd_pid(name: str) -> int | None:
     return int(pid) if pid.isdigit() else None
 
 
+def _plist(name: str) -> dict:
+    """What `service(name, "on")` writes: one builder for it and for service_current."""
+    svc = SERVICES[name]
+    label = svc["label"]
+    # A fresh install keeps its own tools (uv) in PROJECT/.runtime/bin: the services and the runs they start find them.
+    runtime_bin = PROJECT / ".runtime" / "bin"
+    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if not runtime_bin.is_dir()
+                    else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    return {
+        "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
+        "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
+        "EnvironmentVariables": {"PATH": service_path},
+        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}
+
+
+def service_current(name: str) -> bool:
+    """Whether `service(name, "on")` would change nothing: the plist on disk is exactly what it would write and launchd
+    has the job loaded. A rerun of an install uses it to leave a right service (and the runs it holds) alone."""
+    path = AGENTS / f"{SERVICES[name]['label']}.plist"
+    try:
+        if plistlib.loads(path.read_bytes()) != _plist(name):
+            return False
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return False
+    return _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}").returncode == 0
+
+
 def service(name: str, action: str) -> int:
     svc = SERVICES[name]
     label, domain = svc["label"], f"gui/{os.getuid()}"
@@ -101,15 +128,7 @@ def service(name: str, action: str) -> int:
         return 0
     SUP_DIR.mkdir(exist_ok=True)
     AGENTS.mkdir(parents=True, exist_ok=True)
-    # A fresh install keeps its own tools (uv) in PROJECT/.runtime/bin: the services and the runs they start find them.
-    runtime_bin = PROJECT / ".runtime" / "bin"
-    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if not runtime_bin.is_dir()
-                    else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-    path.write_bytes(plistlib.dumps({
-        "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
-        "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
-        "EnvironmentVariables": {"PATH": service_path},
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}))
+    path.write_bytes(plistlib.dumps(_plist(name)))
     # bootout returns before launchd has let go of the old job: a bootstrap right after it failed with
     # "5: Input/output error" and left the service unloaded (`shaft model on`, 2026-10-19; it worked a moment later).
     for _ in range(BOOTSTRAP_TRIES):
