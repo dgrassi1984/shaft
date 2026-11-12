@@ -27,6 +27,8 @@ struct GoogleSetupSheet: View {
 
     private var progress: GoogleSetupProgress { setup.state.google }
     private var chosen: Set<AccessRow> { steps.googleChosen }
+    /// Chat chosen alone, before any sign-in: said here and on Access, and the sign-in waits for another choice.
+    private var problem: String? { GoogleScopes.problem(chosen: chosen, signedIn: progress.isDone(.signIn)) }
     private var name: String { setup.state.createdInstance ?? "your instance" }
 
     var body: some View {
@@ -44,6 +46,9 @@ struct GoogleSetupSheet: View {
                              + "scopes for those.")
                             .foregroundStyle(Color.warning)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let problem {
+                        Text(problem).foregroundStyle(Color.warning).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(Array(GoogleSetupStage.allCases.enumerated()), id: \.element) { index, stage in
                         card(stage, number: index + 1)
@@ -219,29 +224,31 @@ struct GoogleSetupSheet: View {
     }
 
     private var scopesCard: some View {
-        let scopes = GoogleScopes.needed(by: chosen)
-        let text = scopes.map(\.url).joined(separator: "\n")
+        let card = GoogleScopes.card(for: chosen)
+        let text = card.map(\.scope.url).joined(separator: "\n")
         return VStack(alignment: .leading, spacing: Design.Space.s8) {
-            sentence("In Google Auth Platform → Data Access, click Add or remove scopes, paste these under Manually "
-                     + "add scopes, click Add to table, then Update and Save.")
-            Text(text)
-                .font(Design.Text.code)
-                .foregroundStyle(Color.textPrimary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            sentence("In Google Auth Platform → Data Access, click Add or remove scopes, paste all of these under "
+                     + "Manually add scopes, click Add to table, then Update and Save. SHAFT's sign-in asks for every one "
+                     + "of them; those marked are what your choices need now, the others serve later grants.")
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(card, id: \.scope.url) { item in
+                    HStack(spacing: Design.Space.s8) {
+                        Text(item.scope.url)
+                            .font(Design.Text.code)
+                            .foregroundStyle(Color.textPrimary)
+                            .textSelection(.enabled)
+                        if item.chosen {
+                            Text("needed for your choices").font(.caption).foregroundStyle(Color.brand)
+                        }
+                    }
+                }
+            }
             HStack(spacing: Design.Space.s12) {
-                Button("Copy the scopes") {
+                Button("Copy all the scopes") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 }
-                .disabled(scopes.isEmpty)
                 link("Data Access", "https://console.cloud.google.com/auth/scopes")
-            }
-            if scopes.contains(where: { !$0.required }) {
-                Text("gmail.compose, gmail.modify and calendar.events serve later grants (mail drafts, changing "
-                     + "events): adding them now saves a second sign-in.")
-                    .font(.callout).foregroundStyle(Color.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             markButton(.scopes)
         }
@@ -279,7 +286,13 @@ struct GoogleSetupSheet: View {
                 }
                 return true
             }
-            .disabled(google.savingClient.running)
+            // Never while a sign-in waits: its consent is for the client a new one would replace (a client sent
+            // anyway ends that sign-in first, GoogleSetup.saveClient).
+            .disabled(google.savingClient.running || google.signingIn.running)
+            if google.signingIn.running {
+                Text("A sign-in is waiting: cancel it to give SHAFT another client.")
+                    .font(.callout).foregroundStyle(Color.textSecondary)
+            }
             if google.savingClient.running {
                 HStack(spacing: Design.Space.s8) {
                     ProgressView().controlSize(.small)
@@ -334,7 +347,7 @@ struct GoogleSetupSheet: View {
                 } else {
                     Button(progress.isDone(.signIn) ? "Sign in again" : "Sign in with Google") { signIn() }
                         .buttonStyle(ProminentAction())
-                        .disabled(!progress.isDone(.json))
+                        .disabled(!progress.isDone(.json) || google.savingClient.running || problem != nil)
                 }
             }
             if google.signingIn.running {
@@ -352,7 +365,7 @@ struct GoogleSetupSheet: View {
                 SetupFailure(message: failure, retry: signIn)
             }
             if progress.isDone(.signIn), !google.signingIn.running {
-                Label("Signed in as \(progress.address).", systemImage: "checkmark.circle.fill")
+                Label(google.signedInAs.map { "Signed in as \($0)." } ?? "Signed in.", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(Color.textPrimary)
                 let short = google.missingNeeded(for: chosen)
                 if !short.isEmpty {
@@ -367,7 +380,8 @@ struct GoogleSetupSheet: View {
     }
 
     private func signIn() {
-        google.signIn(address: setup.state.google.address, installer: setup.installer(for: session), setup: setup)
+        google.signIn(address: setup.state.google.address, installer: setup.installer(for: session), setup: setup,
+                      chosen: chosen, store: session.store)
     }
 
     // MARK: 8: the grants
@@ -478,7 +492,7 @@ struct GoogleSetupSheet: View {
         if progress.isDone(.grants), !google.applying.running {
             Label("Granted. \(name) reads these from its next run.", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(Color.textPrimary)
-            Button("Grant more") { google.grantMore(setup: setup) }
+            Button("Change the grants") { google.grantMore(setup: setup) }
         } else {
             HStack(spacing: Design.Space.s12) {
                 Button("Apply", action: apply)

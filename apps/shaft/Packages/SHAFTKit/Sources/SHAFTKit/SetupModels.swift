@@ -167,20 +167,29 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     public static func folder(_ path: String) -> AccessGrant { AccessGrant(grant: "folder", what: path) }
     /// `browser install` when none is installed, then `tools <n> on run` when `run` is off.
     public static let browser = AccessGrant(grant: "browser")
-    /// `mail <n> grant <alias> <label>`: the instance reads that label (never drafts: those are their own grant).
-    public static func mail(alias: String, label: String) -> AccessGrant {
-        AccessGrant(grant: "mail", alias: alias, what: label)
+    /// `mail <n> grant|revoke <alias> <label>`: the instance reads that label (never drafts: those are their own
+    /// grant); a revoke takes the label back, its draft grant with it.
+    public static func mail(alias: String, label: String, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "mail", action: action, alias: alias, what: label)
     }
-    /// `calendar <n> grant <alias> <id>`, and with `writable` `grant-write` on the same calendar.
-    public static func calendar(alias: String, id: String, writable: Bool) -> AccessGrant {
-        AccessGrant(grant: "calendar", alias: alias, what: id, writable: writable ? true : nil)
+    /// `calendar <n> grant <alias> <id>`, and with `writable` `grant-write` on the same calendar; with `action`
+    /// `revoke`, `calendar <n> revoke` (read and write both).
+    public static func calendar(alias: String, id: String, writable: Bool, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "calendar", action: action, alias: alias, what: id, writable: writable ? true : nil)
     }
-    /// `gdrive <n> grant <alias> [--all]`: its own files, or with `all` also the files shared with the account.
-    public static func drive(alias: String, all: Bool) -> AccessGrant {
-        AccessGrant(grant: "drive", alias: alias, all: all ? true : nil)
+    /// `calendar <n> revoke-write <alias> <id>`: it keeps reading the calendar, no longer changes its events.
+    public static func calendarWriteRevoked(alias: String, id: String) -> AccessGrant {
+        AccessGrant(grant: "calendar", action: "revoke", alias: alias, what: id, writable: true)
     }
-    /// `gchat <n> grant <alias>`.
-    public static func chat(alias: String) -> AccessGrant { AccessGrant(grant: "chat", alias: alias) }
+    /// `gdrive <n> grant <alias> [--all]`: its own files, or with `all` also the files shared with the account (a grant
+    /// replaces the reach in force); with `action` `revoke`, `gdrive <n> revoke <alias>`.
+    public static func drive(alias: String, all: Bool, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "drive", action: action, alias: alias, all: all && action == "grant" ? true : nil)
+    }
+    /// `gchat <n> grant|revoke <alias>`.
+    public static func chat(alias: String, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "chat", action: action, alias: alias)
+    }
 }
 
 /// `GET /setup/telegram/status/<n>` (and `POST /setup/telegram/pair/<n>`, which adds `code` and `minutes`): where the

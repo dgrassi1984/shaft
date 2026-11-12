@@ -11,7 +11,13 @@ import SHAFTKit
 ///
 /// Where it got is `setup.state.google` (GoogleSetupProgress): a reopened app resumes at the first stage not done.
 /// Every task here runs under this setup's generation: `reset()` (the wizard over) drops them all, `stop()` (the window
-/// closed) stops the reads and the sign-in; the client's JSON and the grants, once sent, finish.
+/// closed) stops the reads and the sign-in; the client's JSON and the grants, once sent, finish. The client and the
+/// sign-in never overlap: a client sent while a sign-in waits ends that sign-in first (its consent would belong to the
+/// earlier client), and no sign-in starts while a client is being saved.
+///
+/// The pickers show what the server has granted now (`sync`), and Apply sends the difference between what they say and
+/// the grants the server holds at that moment (`GoogleGrants.plan`, read again before each Apply): a control cleared is
+/// a revocation, a calendar's "can change events" cleared is a downgrade, and nothing already in force is sent again.
 @MainActor
 @Observable
 final class GoogleSetup {
@@ -27,6 +33,9 @@ final class GoogleSetup {
     private(set) var signingIn: Work = .idle
     /// The consent page the running sign-in relayed (opened once; "Open it again" reopens it).
     private(set) var loginURL: URL?
+    /// The account the server has signed in, by its own word (the login's answer, or `google_accounts`): never the
+    /// address typed in the field.
+    private(set) var signedInAs: String?
     /// The last sign-in's scopes, as Google granted them, and those it did not grant.
     private(set) var granted: [String] = []
     private(set) var missing: [String] = []
@@ -34,21 +43,21 @@ final class GoogleSetup {
     private(set) var loadingLabels: Work = .idle
     private(set) var calendars: [GoogleCalendars.Calendar]?
     private(set) var loadingCalendars: Work = .idle
-    /// The pickers: labels and calendars ticked (by name and id), the calendars it may change, Drive's reach, Chat.
+    /// The pickers, from the server's grants (`sync`): labels and calendars ticked (by name and id), the calendars it
+    /// may change, Drive's reach, Chat.
     var pickedLabels: Set<String> = []
     var pickedCalendars: Set<String> = []
     var writableCalendars: Set<String> = []
     var driveAll = false
     var chatOn = true
     private(set) var applying: Work = .idle
-    /// The grants this setup sent and the server accepted: Try again never sends one twice.
-    private(set) var applied: [AccessGrant] = []
-    /// The grant being sent now, and the one the last failure stopped at.
+    /// The change being sent now, and the one the last failure stopped at.
     private(set) var sending: AccessGrant?
     private(set) var failed: AccessGrant?
 
     @ObservationIgnored private var generation = 0
-    /// The sign-in's own identity: Cancel and a new sign-in move it on, so a late line of one given up is dropped.
+    /// The sign-in's own identity: Cancel, a client sent and a new sign-in move it on, so the answer or a late line of
+    /// one given up is dropped.
     @ObservationIgnored private var loginRun = 0
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let openURL: @MainActor (URL) -> Void
@@ -66,15 +75,11 @@ final class GoogleSetup {
     /// The window closed: the reads and the sign-in stop (its command is terminated: nothing is saved). The client's
     /// JSON and a grant already sent finish.
     func stop() {
-        for key in ["login", "labels", "calendars"] {
+        for key in ["labels", "calendars"] {
             tasks[key]?.cancel()
             tasks[key] = nil
         }
-        if signingIn.running {
-            loginRun &+= 1
-            signingIn = .idle
-            loginURL = nil
-        }
+        cancelSignIn()
         if loadingLabels.running { loadingLabels = .idle }
         if loadingCalendars.running { loadingCalendars = .idle }
     }
@@ -86,20 +91,22 @@ final class GoogleSetup {
         for task in tasks.values { task.cancel() }
         tasks = [:]
         (savingClient, signingIn, loadingLabels, loadingCalendars, applying) = (.idle, .idle, .idle, .idle, .idle)
-        (loginURL, granted, missing, labels, calendars) = (nil, [], [], nil, nil)
+        (loginURL, signedInAs, granted, missing, labels, calendars) = (nil, nil, [], [], nil, nil)
         (pickedLabels, pickedCalendars, writableCalendars, driveAll, chatOn) = ([], [], [], false, true)
-        (applied, sending, failed) = ([], nil, nil)
+        (sending, failed) = (nil, nil)
     }
 
-    /// The sheet opened: an account the server has signed in already counts (GoogleSetupProgress.adopt), and the
-    /// address field starts from the install's email.
+    /// The sheet opened: an account the server has signed in already counts (GoogleSetupProgress.adopt) and is shown
+    /// as the server names it; the address field starts from the install's email; the pickers show what is granted.
     func prepare(access: AccessResponse?, setup: MacSetup) {
-        let signedIn = access?.googleAccounts.contains { $0.alias == Self.alias } == true
+        let account = access?.googleAccounts.first { $0.alias == Self.alias }
+        if let account { signedInAs = account.address }
         let email = setup.state.email
         setup.edit { state in
-            state.google.adopt(signedIn: signedIn)
+            state.google.adopt(signedIn: account != nil)
             if state.google.address.isEmpty { state.google.address = email }
         }
+        sync(access, opening: true)
     }
 
     /// A card marked done (or reopened) by the operator: the app cannot see Google Cloud.
@@ -127,12 +134,15 @@ final class GoogleSetup {
         saveClient(json: data, installer: installer, setup: setup)
     }
 
+    /// `shaft google client google --json`, the JSON on stdin. A sign-in still waiting is ended first: its consent is
+    /// for the client this replaces, and its answer, should it still come, is dropped (never marked signed in).
     func saveClient(json: Data, installer: Installer?, setup: MacSetup) {
         guard !savingClient.running else { return }
         guard let installer else {
             savingClient = .failed("SHAFT is not installed on this Mac: go back to Install.")
             return
         }
+        cancelSignIn()
         let mine = generation
         savingClient = .running
         tasks["client"] = Task { [weak self] in
@@ -160,9 +170,20 @@ final class GoogleSetup {
     // MARK: - Sign in
 
     /// `shaft google login google <address> --client google --json`: its `{"url"}` line opens the consent page in the
-    /// browser (once), then the wait (the server's 300 s) ends with `{"ok": true, granted, missing}` or the real error.
-    func signIn(address raw: String, installer: Installer?, setup: MacSetup) {
+    /// browser (once), then the wait (the server's 300 s) ends with `{"ok": true, address, granted, missing}` or the
+    /// real error. Each sign-in that succeeds reads the pickers' lists again with it (`chosen`, `store`), whether or not
+    /// an earlier one had.
+    func signIn(address raw: String, installer: Installer?, setup: MacSetup, chosen: Set<AccessRow>,
+                store: InstancesStore?) {
         guard !signingIn.running else { return }
+        guard !savingClient.running else {
+            signingIn = .failed("The client is still being saved: sign in once it is.")
+            return
+        }
+        if let problem = GoogleScopes.problem(chosen: chosen, signedIn: setup.state.google.isDone(.signIn)) {
+            signingIn = .failed(problem)
+            return
+        }
         let address = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard address.contains("@"), !address.contains(where: \.isWhitespace) else {
             signingIn = .failed("Type the address of the Google account SHAFT will read (name@example.com).")
@@ -181,7 +202,7 @@ final class GoogleSetup {
             Task { @MainActor in self.received(line, generation: mine, run: run) }
         }
         func current(_ me: GoogleSetup) -> Bool {
-            !Task.isCancelled && me.generation == mine && me.loginRun == run && me.signingIn.running
+            me.generation == mine && me.loginRun == run && me.signingIn.running
         }
         tasks["login"] = Task { [weak self] in
             do {
@@ -190,24 +211,26 @@ final class GoogleSetup {
                 guard let self, current(self) else { return }
                 switch GoogleCommand.outcome(result.stdout) {
                 case .ok(let row)? where result.succeeded:
+                    self.signedInAs = row["address"] as? String ?? address
                     self.granted = row["granted"] as? [String] ?? []
                     self.missing = row["missing"] as? [String] ?? []
                     self.signingIn = .idle
                     self.loginURL = nil
-                    (self.labels, self.calendars) = (nil, nil)       // read again with this login
                     setup.edit { $0.google.finish(.signIn) }
+                    self.reloadPickers(chosen: chosen, store: store)       // with this login, every time
                 case .failed(let why)?: self.signingIn = .failed(why)
                 default: self.signingIn = .failed(Self.failure("The Google sign-in", result))
                 }
             } catch {
                 guard let self, current(self) else { return }
-                self.signingIn = .failed(error.localizedDescription)
+                self.signingIn = APIError.isCancellation(error) ? .idle : .failed(error.localizedDescription)
             }
             if let self, self.generation == mine, self.loginRun == run { self.tasks["login"] = nil }
         }
     }
 
-    /// The operator gave up: the command is terminated (its listener with it), nothing is saved.
+    /// The operator gave up (or a client replaces the one it used): the command is terminated (its listener with it),
+    /// nothing is saved, and whatever it still answers is dropped.
     func cancelSignIn() {
         loginRun &+= 1
         tasks["login"]?.cancel()
@@ -249,6 +272,7 @@ final class GoogleSetup {
             read("calendars", \.loadingCalendars, store: store) { client, me in
                 let answer = try await client.googleCalendars(Self.alias)
                 me.calendars = answer.calendars
+                // Nothing granted yet: the primary calendar starts ticked.
                 if me.pickedCalendars.isEmpty, let primary = answer.calendars.first(where: \.primary) {
                     me.pickedCalendars = [primary.id]
                 }
@@ -256,8 +280,14 @@ final class GoogleSetup {
         }
     }
 
-    /// Read the lists again (the Try again of a refused read).
+    /// Read the lists again: after a sign-in, and the Try again of a refused read. A read still running from before
+    /// is replaced.
     func reloadPickers(chosen: Set<AccessRow>, store: InstancesStore?) {
+        for key in ["labels", "calendars"] {
+            tasks[key]?.cancel()
+            tasks[key] = nil
+        }
+        (loadingLabels, loadingCalendars) = (.idle, .idle)
         (labels, calendars) = (nil, nil)
         loadPickers(chosen: chosen, store: store)
     }
@@ -286,58 +316,76 @@ final class GoogleSetup {
         }
     }
 
-    // MARK: - Apply
-
-    /// The grants the pickers say, in order (GoogleGrants.requests).
-    func requests(chosen: Set<AccessRow>) -> Result<[AccessGrant], FormProblem> {
-        GoogleGrants.requests(alias: Self.alias, chosen: chosen, labels: labels ?? [], picked: pickedLabels,
-                              calendars: (calendars ?? []).map(\.id), pickedCalendars: pickedCalendars,
-                              writable: writableCalendars, driveAll: driveAll, chat: chatOn)
+    /// The pickers as the server's grants for the account say now. `opening`: the sheet opened, so a Chat not granted
+    /// yet starts on (it was ticked on Access); after an Apply every control is exactly what the server holds.
+    func sync(_ access: AccessResponse?, opening: Bool) {
+        guard let access else { return }
+        let mine = { (account: String) in account == Self.alias }
+        pickedLabels = Set(access.mail.filter { mine($0.account) }.map(\.label))
+        let cals = access.calendar.filter { mine($0.account) }
+        pickedCalendars = Set(cals.map(\.calendar))
+        writableCalendars = Set(cals.filter(\.write).map(\.calendar))
+        driveAll = access.drive.first { mine($0.account) }?.reach == "all"
+        let chat = access.chat.contains { mine($0.account) }
+        chatOn = chat || opening
     }
 
-    /// Apply: each grant not sent yet, in order, through `POST /access/<n>`; the first refusal stops there with the
-    /// server's words (Try again sends what is left). All accepted, the grants stage is done and the sheet may close.
-    /// Each answer is the fresh access, handed to the Access step so its rows show what is on.
+    // MARK: - Apply
+
+    /// Apply: the grants the server holds now are read, and only the difference with the pickers is sent, in order
+    /// (GoogleGrants.plan): grants, upgrades, downgrades and revocations. The first refusal stops there with the server's
+    /// words; Try again reads the grants again, so nothing in force is sent twice and nothing left out is skipped. All
+    /// sent, the grants stage is done, and each answer (the fresh access) reached the Access step on the way.
     func apply(chosen: Set<AccessRow>, store: InstancesStore?, setup: MacSetup, steps: SetupSteps) {
         guard !applying.running, let name = setup.state.createdInstance else { return }
-        let all: [AccessGrant]
-        switch requests(chosen: chosen) {
-        case .failure(let problem):
-            applying = .failed(problem.message)
-            return
-        case .success(let value): all = value
-        }
         guard let store else {
             applying = .failed(SetupSteps.unpaired)
             return
         }
-        let left = all.filter { !applied.contains($0) }
         let mine = generation
         let client = store.client
+        let picks = GoogleGrants.Picks(labels: labels ?? [], picked: pickedLabels,
+                                       calendars: (calendars ?? []).map(\.id), pickedCalendars: pickedCalendars,
+                                       writable: writableCalendars, driveAll: driveAll, chat: chatOn)
         failed = nil
         applying = .running
         tasks["apply"] = Task { [weak self] in
             var outcome: Work = .idle
-            for grant in left {
-                guard let self, self.generation == mine else { return }
-                self.sending = grant
-                do {
-                    let answer = try await client.grantAccess(name, grant)
-                    guard self.generation == mine else { return }
-                    self.applied.append(grant)
-                    steps.received(access: answer)
-                } catch {
-                    guard self.generation == mine else { return }
-                    self.failed = grant
-                    outcome = .failed(APIError.from(error)?.message ?? error.localizedDescription)
-                    break
+            var latest: AccessResponse?
+            do {
+                latest = try await client.access(name)
+                guard let self, self.generation == mine, let now = latest else { return }
+                steps.received(access: now)
+                switch GoogleGrants.plan(alias: Self.alias, chosen: chosen, current: now, picks: picks) {
+                case .failure(let problem): outcome = .failed(problem.message)
+                case .success(let changes):
+                    for change in changes {
+                        self.sending = change
+                        do {
+                            let answer = try await client.grantAccess(name, change)
+                            guard self.generation == mine else { return }
+                            latest = answer
+                            steps.received(access: answer)
+                        } catch {
+                            guard self.generation == mine else { return }
+                            self.failed = change
+                            outcome = .failed(APIError.from(error)?.message ?? error.localizedDescription)
+                            break
+                        }
+                    }
                 }
+            } catch {
+                outcome = .failed(APIError.from(error)?.message ?? error.localizedDescription)
             }
             guard let self, self.generation == mine else { return }
             self.sending = nil
             if outcome == .idle {
-                // Chat turned off in the sheet: its row on Access is unticked, so Continue does not wait for it.
-                if !self.chatOn { steps.accessChecked.remove(.chat) }
+                // A row whose every grant was taken back is no longer ticked on Access: Continue does not wait for it.
+                let on = AccessRow.granted(in: latest)
+                for row in AccessRow.google where chosen.contains(row) && !on.contains(row) {
+                    steps.accessChecked.remove(row)
+                }
+                self.sync(latest, opening: false)
                 setup.edit { $0.google.finish(.grants) }
             }
             self.applying = outcome
@@ -345,7 +393,7 @@ final class GoogleSetup {
         }
     }
 
-    /// "Grant more": the grants stage open again, what was sent kept (never sent twice).
+    /// "Change the grants": the grants stage open again.
     func grantMore(setup: MacSetup) {
         setup.edit { $0.google.reopen(.grants) }
         if applying.failure != nil { applying = .idle }
@@ -392,8 +440,8 @@ enum GoogleCommand {
     }
 }
 
-/// The APIs and Data Access scopes each Google grant needs (supervisor/google.py SCOPES; a test there checks that
-/// every scope the login asks for is listed here).
+/// The APIs and Data Access scopes of the Google grants (supervisor/google.py SCOPES, through the `google-scopes`
+/// fixture the server's tests write).
 enum GoogleScopes {
     struct Scope: Equatable {
         let url: String
@@ -438,7 +486,17 @@ enum GoogleScopes {
         }
     }
 
-    /// The chosen grants' scopes and APIs, in the order the Access step shows the rows.
+    /// Every scope the sign-in asks for (`shaft google login` asks for all of google.SCOPES whatever was chosen), in
+    /// its order.
+    static var requested: [Scope] { AccessRow.google.flatMap(scopes) }
+
+    /// The Data Access card: every scope the sign-in asks for, each said needed or not by the grants chosen.
+    static func card(for chosen: Set<AccessRow>) -> [(scope: Scope, chosen: Bool)] {
+        let needed = Set(self.needed(by: chosen).map(\.url))
+        return requested.map { ($0, needed.contains($0.url)) }
+    }
+
+    /// The chosen grants' scopes, in the order the Access step shows the rows.
     static func needed(by chosen: Set<AccessRow>) -> [Scope] {
         AccessRow.google.filter(chosen.contains).flatMap(scopes)
     }
@@ -446,31 +504,73 @@ enum GoogleScopes {
     static func apis(for chosen: Set<AccessRow>) -> [API] {
         AccessRow.google.filter(chosen.contains).compactMap(api)
     }
+
+    /// Why the chosen grants cannot be set up as they are, or nil. The sign-in confirms which account signed in by
+    /// reading Gmail, Calendar or Drive (supervisor/google.py `_signed_in_as`), so Chat alone cannot sign in.
+    static func problem(chosen: Set<AccessRow>, signedIn: Bool) -> String? {
+        guard !signedIn, chosen.contains(.chat), chosen.isDisjoint(with: [.mail, .calendar, .drive]) else { return nil }
+        return "Google Chat cannot be set up alone: the sign-in confirms which Google account it is through Gmail, "
+            + "Calendar or Drive. Tick one of those too."
+    }
 }
 
-/// The pickers as the grants they send, in order: the labels (as listed), the calendars (as listed, each writable or
-/// not), Drive's reach, Chat. Only the chosen rows; a chosen row with nothing picked is the operator's to fix.
+/// The pickers against the grants the server holds now, as the changes that make them agree, in order: the labels (as
+/// listed), the calendars (as listed: a grant, an upgrade to "can change events", a downgrade, or a revocation), Drive's
+/// reach, Chat. Only the chosen rows; a label or calendar not in the lists (renamed, removed) is left as it is.
 enum GoogleGrants {
-    static func requests(alias: String, chosen: Set<AccessRow>, labels: [String], picked: Set<String>,
-                         calendars: [String], pickedCalendars: Set<String>, writable: Set<String>,
-                         driveAll: Bool, chat: Bool) -> Result<[AccessGrant], FormProblem> {
+    struct Picks: Equatable {
+        var labels: [String]
+        var picked: Set<String>
+        var calendars: [String]
+        var pickedCalendars: Set<String>
+        var writable: Set<String>
+        var driveAll: Bool
+        var chat: Bool
+    }
+
+    static func plan(alias: String, chosen: Set<AccessRow>, current: AccessResponse,
+                     picks p: Picks) -> Result<[AccessGrant], FormProblem> {
         var out: [AccessGrant] = []
         if chosen.contains(.mail) {
-            let names = labels.filter(picked.contains)
-            guard !names.isEmpty else {
+            let held = Set(current.mail.filter { $0.account == alias }.map(\.label))
+            let wanted = Set(p.labels.filter(p.picked.contains))
+            guard !wanted.isEmpty || !held.isEmpty else {
                 return .failure(FormProblem("Pick at least one mail label, or untick Mail labels on Access."))
             }
-            out += names.map { AccessGrant.mail(alias: alias, label: $0) }
+            for label in p.labels {
+                if wanted.contains(label), !held.contains(label) { out.append(.mail(alias: alias, label: label)) }
+                if !wanted.contains(label), held.contains(label) {
+                    out.append(.mail(alias: alias, label: label, action: "revoke"))
+                }
+            }
         }
         if chosen.contains(.calendar) {
-            let ids = calendars.filter(pickedCalendars.contains)
-            guard !ids.isEmpty else {
+            var held: [String: Bool] = [:]
+            for g in current.calendar where g.account == alias { held[g.calendar] = g.write }
+            let wanted = Set(p.calendars.filter(p.pickedCalendars.contains))
+            guard !wanted.isEmpty || !held.isEmpty else {
                 return .failure(FormProblem("Pick at least one calendar, or untick Calendars on Access."))
             }
-            out += ids.map { AccessGrant.calendar(alias: alias, id: $0, writable: writable.contains($0)) }
+            for id in p.calendars {
+                let write = p.writable.contains(id)
+                switch (wanted.contains(id), held[id]) {
+                case (true, nil): out.append(.calendar(alias: alias, id: id, writable: write))
+                case (true, false?) where write: out.append(.calendar(alias: alias, id: id, writable: true))
+                case (true, true?) where !write: out.append(.calendarWriteRevoked(alias: alias, id: id))
+                case (false, _?): out.append(.calendar(alias: alias, id: id, writable: false, action: "revoke"))
+                default: break
+                }
+            }
         }
-        if chosen.contains(.drive) { out.append(.drive(alias: alias, all: driveAll)) }
-        if chosen.contains(.chat), chat { out.append(.chat(alias: alias)) }
+        if chosen.contains(.drive) {
+            let reach = current.drive.first { $0.account == alias }?.reach
+            if reach != (p.driveAll ? "all" : "own") { out.append(.drive(alias: alias, all: p.driveAll)) }
+        }
+        if chosen.contains(.chat) {
+            let held = current.chat.contains { $0.account == alias }
+            if p.chat, !held { out.append(.chat(alias: alias)) }
+            if !p.chat, held { out.append(.chat(alias: alias, action: "revoke")) }
+        }
         return .success(out)
     }
 }

@@ -121,8 +121,9 @@ OpenID scopes, which SHAFT never does), and that test users' authorizations laps
 ([refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration),
 [manage app audience](https://support.google.com/cloud/answer/15549945)). An External app in Testing therefore
 stops working a week after each login. To keep it working, open Google Auth Platform → **Audience** and click
-**Publish app**, so the status reads **In production**, then log in (again: a token issued while it was in Testing
-keeps its 7-day expiry). Google does not require verification for an app for personal use (fewer than 100 users,
+**Publish app**, so the status reads **In production**, then log in. If you logged in while it was in Testing, log in
+again after publishing, as a precaution: Google's documentation does not say whether a token issued in Testing outlives
+the 7 days once the app is published. Google does not require verification for an app for personal use (fewer than 100 users,
 [exceptions to verification](https://support.google.com/cloud/answer/13464323)); until verified, the consent page
 shows an "unverified app" warning, which you continue past, and the app may sign in at most 100 new users in its
 lifetime. An **Internal** app (Workspace only) has no Testing status, so the 7-day rule does not apply to it. A

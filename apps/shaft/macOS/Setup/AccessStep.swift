@@ -250,6 +250,7 @@ struct AccessStepView: View {
     /// operator's own in Google Cloud, a sign-in, then the pickers).
     private var google: some View {
         let progress = setup.state.google
+        let problem = GoogleScopes.problem(chosen: steps.googleChosen, signedIn: progress.isDone(.signIn))
         return group("Google — one-time setup, about 10 minutes, guided") {
             row(.mail, detail: "Gmail, one label at a time: \(name) reads what you file there, never sends.") {
                 EmptyView()
@@ -264,11 +265,16 @@ struct AccessStepView: View {
                        : progress.done.isEmpty ? "Set up Google…" : "Continue the Google setup…") {
                     settingUpGoogle = true
                 }
-                .disabled(steps.googleChosen.isEmpty || steps.granting.running)
+                .disabled(steps.googleChosen.isEmpty || problem != nil || steps.granting.running)
                 if steps.googleChosen.isEmpty {
                     Text("Tick what \(name) may read in Google first.")
                         .font(.caption).foregroundStyle(Color.textSecondary)
                 }
+            }
+            if let problem {
+                Text(problem)
+                    .font(.callout).foregroundStyle(Color.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

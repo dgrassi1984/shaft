@@ -197,7 +197,9 @@ rows (mail labels, calendars, Drive, Chat) are granted by "Set up Google…" (`m
 cards into Google Cloud (a project, the APIs, the audience published In production, the Data Access scopes, a Desktop
 app client), then the client's JSON dropped or chosen and sent on `shaft google client google --json`'s stdin, the
 sign-in through `shaft google login google <address> --client google --json` (the app opens its `{"url"}`; Cancel
-terminates it), and the pickers (`/google/google/labels|calendars`) applied in order through `/access/<n>`. Where it
+terminates it; a client sent meanwhile ends it), and the pickers (`/google/google/labels|calendars`), which start
+from the server's grants: Apply reads `/access/<n>` again and sends only the difference, in order (a cleared control
+is a revocation, "can change events" cleared a `revoke` with `writable`). Where it
 got is kept in `setup.state` (never the JSON); a ticked Google row still off stops Continue on Access. Against the
 fixture server those two commands cannot run (nothing is installed): `fixture_server.py act google` signs the account
 in on the fixture's folder instead, so the pickers and grants can be driven.

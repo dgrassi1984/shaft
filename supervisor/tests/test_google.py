@@ -413,13 +413,19 @@ class LoginJsonTest(GoogleCase):
         self.assertEqual(saved["address"], ME)
 
 
+SCOPES_FIXTURE = Path(__file__).resolve().parent / "google_scopes.json"
+
+
 class AppScopesTest(unittest.TestCase):
-    def test_the_app_lists_every_scope_the_login_asks_for(self):
-        # The Mac app's Google setup tells the operator which scopes to add on Data Access (GoogleSetup.swift); a scope
-        # added to SCOPES without it there would be missing from every new project, and its grant refused.
-        app = (Path(__file__).resolve().parents[2] / "apps/shaft/macOS/Setup/GoogleSetup.swift").read_text()
-        for scope in google.SCOPES:
-            self.assertIn(f'"{scope}"', app, scope)
+    def test_the_scopes_fixture_is_what_the_login_asks_for(self):
+        # The Mac app's Data Access card lists every scope the login asks for, and its test checks that list against
+        # this file (macOSTests/GoogleSetupTests.swift): a scope added to SCOPES fails here until the file is rewritten
+        # (SHAFT_UPDATE_FIXTURES=1), then there until the app lists it.
+        want = {"scopes": list(google.SCOPES)}
+        if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
+            SCOPES_FIXTURE.write_text(json.dumps(want, indent=2) + "\n")
+        self.assertEqual(json.loads(SCOPES_FIXTURE.read_text()), want,
+                         f"{SCOPES_FIXTURE.name} is not google.SCOPES: rewrite it with SHAFT_UPDATE_FIXTURES=1")
 
 
 if __name__ == "__main__":

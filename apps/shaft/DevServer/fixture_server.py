@@ -29,8 +29,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 - Google (§18.6–18.7): never Google. The app runs `shaft google client|login` itself, against the installed server, which
   a fixture run has not: `act google [address]` stands in for that login, writing an account `google` (a fake token) on
   this folder. Its labels and calendars are GOOGLE_LABELS and GOOGLE_CALENDARS; `mail|calendar|gdrive|gchat <n> grant`
-  run the real grant setters here, refusing a label or calendar the account does not have, and a label whose name
-  contains "Refused" (to drive the wizard's first-failure stop).
+  and their revokes run the real grant setters here, refusing a label or calendar the account does not have, and a
+  label whose name contains "Refused" (to drive the wizard's first-failure stop).
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
@@ -281,7 +281,7 @@ def setup(base: Path, port: int):
             off = core.disabled_tools(name)
             core._update_tool_settings(name, off=sorted(off - {tool} if args[2] == "on" else off | {tool}))
             return True, f"{name}: {tool} {args[2]}"
-        if verb in ("mail", "calendar", "gdrive", "gchat") and len(args) >= 4 and args[2].startswith("grant"):
+        if verb in ("mail", "calendar", "gdrive", "gchat") and len(args) >= 4 and args[2].startswith(("grant", "revoke")):
             return google_grant(args)
         if args[:2] == ["telegram", "token"] and len(args) == 3:
             name, token = args[2], (input or "").strip()
@@ -348,6 +348,8 @@ def setup(base: Path, port: int):
             return False, f"no instance named {name!r}"
         if not google_mod.account(alias):
             return False, f"no Google account {alias!r} (logged in: {', '.join(google_mod.accounts()) or 'none'})"
+        if op.startswith("revoke"):                     # never contacts Google: the stored grant only
+            return google_revoke(verb, name, op, alias, what)
         if verb == "mail":
             if what not in GOOGLE_LABELS or "Refused" in what:
                 return False, f"not granted: Gmail has no label {what!r} for {alias} (fixture)"
@@ -373,6 +375,31 @@ def setup(base: Path, port: int):
             return True, f"{name}: Drive {alias}"
         core.set_gchat_grants(name, [g for g in core.gchat_grants(name) if g["account"] != alias] + [{"account": alias}])
         return True, f"{name}: Chat {alias}"
+
+    def google_revoke(verb, name, op, alias, what):
+        if verb == "mail":
+            grants = core.mail_grants(name)
+            hits = [g for g in grants if (g["account"], g["label"]) == (alias, what)]
+            if not hits:
+                return False, f"{name} has no grant {alias}/{what}"
+            rest = [g for g in grants if g not in hits]
+            if op == "revoke-draft":
+                rest += [{k: v for k, v in g.items() if k != "draft"} for g in hits]
+            core.set_mail_grants(name, rest)
+        elif verb == "calendar":
+            grants = core.calendar_grants(name)
+            hits = [g for g in grants if g["account"] == alias and what in (g["calendar"], g["name"])]
+            if not hits or (op == "revoke-write" and not any(g.get("write") for g in hits)):
+                return False, f"{name} has no calendar {op} grant {alias}/{what}"
+            rest = [g for g in grants if g not in hits]
+            if op == "revoke-write":
+                rest += [{k: v for k, v in g.items() if k != "write"} for g in hits]
+            core.set_calendar_grants(name, rest)
+        elif verb == "gdrive":
+            core.set_gdrive_grants(name, [g for g in core.gdrive_grants(name) if g["account"] != alias])
+        else:
+            core.set_gchat_grants(name, [g for g in core.gchat_grants(name) if g["account"] != alias])
+        return True, f"{name}: {verb} {op} {alias} {what}".strip()
 
     def forbidden_launchctl(*args):
         raise AssertionError(f"fixture must not query launchd: {args}")

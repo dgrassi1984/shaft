@@ -391,9 +391,10 @@ final class SetupSteps {
         access = answer
     }
 
-    /// The Google rows ticked: what the Google setup grants, and so which APIs and scopes its cards list.
+    /// The Google rows ticked, and those on already (an "On" row has no tick to clear): what the Google setup shows
+    /// and changes, and so which APIs and scopes its cards list.
     var googleChosen: Set<AccessRow> {
-        accessChecked.intersection(AccessRow.google)
+        accessChecked.union(AccessRow.granted(in: access)).intersection(AccessRow.google)
     }
 
     /// A folder chosen in the open panel: it is the folder row's, which it ticks.

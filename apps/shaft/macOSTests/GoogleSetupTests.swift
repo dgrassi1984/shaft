@@ -14,100 +14,178 @@ struct GoogleSetupTests {
     {"ok": true, "alias": "google", "address": "ada@example.com", "client": "google", "granted": ["gmail.readonly", "calendar.readonly", "drive.readonly"], "missing": ["gmail.compose", "chat.spaces.readonly"]}
     """#
     nonisolated static let desktopJSON = Data(#"{"installed": {"client_id": "1.apps.googleusercontent.com", "client_secret": "GOCSPX-never-kept"}}"#.utf8)
-    nonisolated static let labels = #"{"alias": "google", "labels": ["Assistant", "Receipts", "Travel"]}"#
-    nonisolated static let calendars = #"""
-    {"alias": "google", "calendars": [{"id": "ada@example.com", "title": "Ada", "primary": true, "access": "owner"},
-                                      {"id": "team@group.calendar.google.com", "title": "Team", "primary": false, "access": "reader"}]}
-    """#
 
     func until(_ done: () -> Bool) async {
         for _ in 0..<800 where !done() { try? await Task.sleep(for: .milliseconds(5)) }
     }
 
-    func posts(_ f: Fixture) -> [[String: Any]] {
-        f.server.requests.filter { $0.method == "POST" }.compactMap(\.json)
-    }
+    nonisolated static let me = "ada@example.com"
 
-    // MARK: - Pickers → grants
-
-    @Test func pickersMapToGrantsInOrder() throws {
-        let all: Set<AccessRow> = [.mail, .calendar, .drive, .chat]
-        let made = GoogleGrants.requests(alias: "google", chosen: all, labels: ["Assistant", "Receipts", "Travel"],
-                                         picked: ["Travel", "Assistant"],
-                                         calendars: ["ada@example.com", "team@group.calendar.google.com"],
-                                         pickedCalendars: ["team@group.calendar.google.com", "ada@example.com"],
-                                         writable: ["ada@example.com"], driveAll: true, chat: true)
-        #expect(try made.get() == [.mail(alias: "google", label: "Assistant"), .mail(alias: "google", label: "Travel"),
-                                   .calendar(alias: "google", id: "ada@example.com", writable: true),
-                                   .calendar(alias: "google", id: "team@group.calendar.google.com", writable: false),
-                                   .drive(alias: "google", all: true), .chat(alias: "google")])
-        // Only the chosen rows; Drive's own files; Chat turned off in the sheet sends nothing.
-        let some = GoogleGrants.requests(alias: "google", chosen: [.drive, .chat], labels: ["Assistant"],
-                                         picked: ["Assistant"], calendars: [], pickedCalendars: [], writable: [],
-                                         driveAll: false, chat: false)
-        #expect(try some.get() == [.drive(alias: "google", all: false)])
-        // A chosen row with nothing picked is the operator's to fix, before anything is sent.
-        let none = GoogleGrants.requests(alias: "google", chosen: [.mail], labels: ["Assistant"], picked: [],
-                                         calendars: [], pickedCalendars: [], writable: [], driveAll: false, chat: true)
-        #expect(none == .failure(FormProblem("Pick at least one mail label, or untick Mail labels on Access.")))
-        let noCalendar = GoogleGrants.requests(alias: "google", chosen: [.calendar], labels: [], picked: [],
-                                               calendars: ["a"], pickedCalendars: ["gone"], writable: [],
-                                               driveAll: false, chat: true)
-        #expect(noCalendar == .failure(FormProblem("Pick at least one calendar, or untick Calendars on Access.")))
-        // The cards list the chosen grants' APIs and scopes.
-        #expect(GoogleScopes.apis(for: [.chat, .mail]).map(\.id) == ["gmail.googleapis.com", "chat.googleapis.com"])
-        #expect(GoogleScopes.needed(by: [.drive]).map(\.name) == ["drive.readonly"])
-    }
-
-    @Test func applySendsInOrderStopsAtTheFirstRefusalAndTryAgainSendsTheRest() async throws {
-        let f = try Fixture(step: .access) { state in
+    /// Paired, the instance made, the cards, the client and the sign-in done: the grants card.
+    func signedInFixture(runner: any ProcessRunning = NoProcesses()) throws -> Fixture {
+        try Fixture(step: .access, runner: runner) { state in
             state.createdInstance = "ledger"
-            state.google.adopt(signedIn: true)                         // the cards, the client and the sign-in done
+            state.google.adopt(signedIn: true)
         }
-        let granted = SetupAccessTests.nothingGranted.replacingOccurrences(
-            of: #""drive":[]"#, with: #""drive":[{"account":"google","reach":"own"}]"#)
-        let refusing = Answers([:])
-        f.server.answer { request in
-            switch (request.method, request.path) {
-            case ("GET", "/app/v1/google/google/labels"): return .init(200, Self.labels)
-            case ("GET", "/app/v1/google/google/calendars"): return .init(200, Self.calendars)
-            case ("POST", "/app/v1/access/ledger"):
-                if request.json?["grant"] as? String == "calendar", request.json?["what"] as? String == "team@group.calendar.google.com",
-                   refusing.answer(.init(method: "GET", path: "team", body: Data())).status == 409 {
-                    return refusing.answer(.init(method: "GET", path: "team", body: Data()))
-                }
-                return .init(200, granted)
-            default: return .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
-            }
+    }
+
+    // MARK: - The Data Access card
+
+    /// The card lists every scope the sign-in asks for (supervisor/google.py SCOPES, through the file the server's tests
+    /// check: supervisor/tests/google_scopes.json), whatever single service was chosen; the chosen one's are marked.
+    @Test func theScopesCardListsEveryRequestedScopeForEachChoice() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "supervisor/tests/google_scopes.json")
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let requested = try #require(object["scopes"] as? [String])
+        #expect(requested.count == 9)
+        for row in AccessRow.google {
+            let card = GoogleScopes.card(for: [row])
+            #expect(card.map(\.scope.url) == requested, "\(row)")
+            #expect(card.filter(\.chosen).map(\.scope.url) == GoogleScopes.scopes(row).map(\.url), "\(row)")
         }
-        refusing.set("team", .init(409, #"{"error": {"code": "refused", "message": "not granted: Google answered HTTP 403: no access"}}"#))
+        #expect(GoogleScopes.card(for: []).map(\.scope.url) == requested)
+        #expect(GoogleScopes.apis(for: [.chat, .mail]).map(\.id) == ["gmail.googleapis.com", "chat.googleapis.com"])
+    }
+
+    // MARK: - Chat alone
+
+    @Test func chatAloneIsExplainedAndCannotSignIn() async throws {
+        let said = "Google Chat cannot be set up alone: the sign-in confirms which Google account it is through Gmail, "
+            + "Calendar or Drive. Tick one of those too."
+        #expect(GoogleScopes.problem(chosen: [.chat], signedIn: false) == said)
+        #expect(GoogleScopes.problem(chosen: [.chat, .drive], signedIn: false) == nil)
+        #expect(GoogleScopes.problem(chosen: [.mail], signedIn: false) == nil)
+        #expect(GoogleScopes.problem(chosen: [.chat], signedIn: true) == nil)     // signed in already: Chat can change
+        let runner = ScriptRunner(["google login": ([Self.consent, Self.signedIn], 0)])
+        let f = try Fixture(step: .access, runner: runner) { $0.createdInstance = "ledger" }
+        f.setup.steps.google.signIn(address: "ada@example.com", installer: try runner.installer(home: f.home),
+                                    setup: f.setup, chosen: [.chat], store: f.store)
+        #expect(f.setup.steps.google.signingIn == .failed(said))
+        #expect(runner.ran.isEmpty)
+    }
+
+    // MARK: - Pickers against the server's grants
+
+    @Test func thePlanIsTheDifferenceWithWhatTheServerHolds() throws {
+        let current = try GrantsFake(mail: ["Receipts"], calendars: ["a@x": true, "team": false], drive: "all",
+                                     chat: true).access()
+        let picks = GoogleGrants.Picks(labels: ["Assistant", "Receipts", "Travel"], picked: ["Assistant"],
+                                       calendars: ["a@x", "team", "home"], pickedCalendars: ["a@x", "home"],
+                                       writable: ["home"], driveAll: false, chat: false)
+        let plan = try GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
+                                         picks: picks).get()
+        #expect(plan == [.mail(alias: "google", label: "Assistant"),
+                         .mail(alias: "google", label: "Receipts", action: "revoke"),
+                         .calendarWriteRevoked(alias: "google", id: "a@x"),
+                         .calendar(alias: "google", id: "team", writable: false, action: "revoke"),
+                         .calendar(alias: "google", id: "home", writable: true),
+                         .drive(alias: "google", all: false),
+                         .chat(alias: "google", action: "revoke")])
+        // What the server holds already is never sent again; a row not chosen is left alone.
+        let same = GoogleGrants.Picks(labels: ["Receipts"], picked: ["Receipts"], calendars: ["a@x", "team"],
+                                      pickedCalendars: ["a@x", "team"], writable: ["a@x"], driveAll: true, chat: true)
+        #expect(try GoogleGrants.plan(alias: "google", chosen: [.mail, .calendar, .drive, .chat], current: current,
+                                      picks: same).get().isEmpty)
+        #expect(try GoogleGrants.plan(alias: "google", chosen: [.drive], current: current, picks: picks).get()
+                == [.drive(alias: "google", all: false)])
+        // Nothing picked and nothing held is the operator's to fix, before anything is sent.
+        let empty = try GrantsFake().access()
+        let none = GoogleGrants.plan(alias: "google", chosen: [.mail], current: empty,
+                                     picks: .init(labels: ["Assistant"], picked: [], calendars: [], pickedCalendars: [],
+                                                  writable: [], driveAll: false, chat: true))
+        #expect(none == .failure(FormProblem("Pick at least one mail label, or untick Mail labels on Access.")))
+    }
+
+    /// Fix round 1: Apply remembered what it had sent, so Drive own → all → own left "all" in force while saying done.
+    @Test func driveOwnAllOwnEndsAsOwn() async throws {
+        let f = try signedInFixture()
+        let fake = GrantsFake()
+        f.server.answer { fake.handle($0) }
         let steps = f.setup.steps, google = steps.google
-        steps.accessChecked = [.mail, .calendar, .drive, .chat]
+        steps.accessChecked = [.drive]
+        google.prepare(access: try fake.access(), setup: f.setup)
+        for all in [false, true, false] {
+            google.grantMore(setup: f.setup)
+            google.driveAll = all
+            google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
+            await until { !google.applying.running }
+            #expect(google.applying == .idle)
+            #expect(fake.drive == (all ? "all" : "own"))
+        }
+        #expect(f.setup.state.google.isDone(.grants))
+        #expect(!google.driveAll)
+    }
+
+    /// Fix round 1: clearing a control sent nothing (Chat off), or a plain read grant the server kept as a write
+    /// (calendar). Now every control starts from the server's grants and a cleared one is a revocation or a downgrade.
+    @Test func clearingAControlRevokesOrDowngrades() async throws {
+        let f = try signedInFixture()
+        let fake = GrantsFake(mail: ["Receipts", "Travel"], calendars: [Self.me: true], drive: "own", chat: true)
+        fake.labels = ["Assistant", "Receipts", "Travel"]
+        f.server.answer { fake.handle($0) }
+        let steps = f.setup.steps, google = steps.google
+        steps.received(access: try fake.access())
+        #expect(steps.googleChosen == [.mail, .calendar, .drive, .chat])     // on already, so shown
+        google.prepare(access: try fake.access(), setup: f.setup)
+        #expect(google.pickedLabels == ["Receipts", "Travel"])
+        #expect(google.pickedCalendars == [Self.me])
+        #expect(google.writableCalendars == [Self.me])
+        #expect(google.chatOn)
         google.loadPickers(chosen: steps.googleChosen, store: f.store)
         await until { google.labels != nil && google.calendars != nil }
-        #expect(google.pickedCalendars == ["ada@example.com"])           // the primary, ticked to start
-        google.pickedLabels = ["Receipts"]
-        google.pickedCalendars.insert("team@group.calendar.google.com")
+
+        google.pickedLabels.remove("Travel")
+        google.writableCalendars = []
         google.chatOn = false
+        google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
+        await until { !google.applying.running }
+        #expect(google.applying == .idle)
+        #expect(fake.mail == ["Receipts"])
+        #expect(fake.calendars == [Self.me: false])                     // still read, no longer written
+        #expect(fake.chat == false)
+        #expect(fake.drive == "own")
+        #expect(fake.posts == [["grant": "mail", "action": "revoke", "alias": "google", "what": "Travel"],
+                               ["grant": "calendar", "action": "revoke", "alias": "google", "what": Self.me,
+                                "writable": "true"],
+                               ["grant": "chat", "action": "revoke", "alias": "google"]])
+        #expect(!steps.accessChecked.contains(.chat))                   // nothing left of it: off on Access
+        #expect(!steps.isOn(.chat))
+        #expect(!google.chatOn)                                          // the controls say what the server holds
+    }
+
+    @Test func applyStopsAtTheFirstRefusalAndTryAgainSendsOnlyWhatIsLeft() async throws {
+        let f = try signedInFixture()
+        let fake = GrantsFake()
+        fake.refuse = ["calendar team"]
+        f.server.answer { fake.handle($0) }
+        let steps = f.setup.steps, google = steps.google
+        steps.accessChecked = [.mail, .calendar, .drive, .chat]
+        google.prepare(access: try fake.access(), setup: f.setup)
+        google.loadPickers(chosen: steps.googleChosen, store: f.store)
+        await until { google.labels != nil && google.calendars != nil }
+        #expect(google.pickedCalendars == [Self.me])                    // nothing granted: the primary to start
+        google.pickedLabels = ["Receipts"]
+        google.pickedCalendars.insert("team")
 
         google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
         await until { !google.applying.running }
-        #expect(posts(f).map { $0["grant"] as? String ?? "" } == ["mail", "calendar", "calendar"])
         #expect(google.applying == .failed("not granted: Google answered HTTP 403: no access"))
-        #expect(google.failed == .calendar(alias: "google", id: "team@group.calendar.google.com", writable: false))
+        #expect(google.failed == .calendar(alias: "google", id: "team", writable: false))
+        #expect(fake.posts.map { $0["grant"] ?? "" } == ["mail", "calendar", "calendar"])
         #expect(!f.setup.state.google.isDone(.grants))
 
-        // Try again: from the refused calendar on; nothing sent twice; Chat off sends nothing and unticks its row.
-        refusing.set("team", .init(200, granted))
+        fake.refuse = []                                                // Try again: read again, send what is left
         google.apply(chosen: steps.googleChosen, store: f.store, setup: f.setup, steps: steps)
         await until { !google.applying.running }
-        #expect(posts(f).map { $0["grant"] as? String ?? "" } == ["mail", "calendar", "calendar", "calendar", "drive"])
         #expect(google.applying == .idle)
+        #expect(fake.posts.map { $0["grant"] ?? "" } == ["mail", "calendar", "calendar", "calendar", "drive", "chat"])
+        #expect(fake.mail == ["Receipts"])
+        #expect(fake.calendars == [Self.me: false, "team": false])
+        #expect((fake.drive, fake.chat) == ("own", true))
         #expect(f.setup.state.google.isDone(.grants))
-        #expect(f.setup.state.google.resume == nil)
-        #expect(steps.isOn(.drive))                                    // the answer reached the Access step
-        #expect(!steps.accessChecked.contains(.chat))
-        #expect(posts(f).last?["all"] == nil)                           // its own files
+        #expect(steps.isOn(.drive))                                      // each answer reached the Access step
     }
 
     // MARK: - The client's JSON
@@ -148,7 +226,8 @@ struct GoogleSetupTests {
         let runner = ScriptRunner(["google login": ([Self.consent, Self.consent, Self.signedIn], 0)])
         let f = try Fixture(step: .access, runner: runner) { $0.createdInstance = "ledger" }
         let google = f.setup.steps.google
-        google.signIn(address: " ada@example.com ", installer: try runner.installer(home: f.home), setup: f.setup)
+        google.signIn(address: " ada@example.com ", installer: try runner.installer(home: f.home), setup: f.setup,
+                      chosen: [.drive], store: f.store)
         await until { !google.signingIn.running }
         #expect(google.signingIn == .idle)
         #expect(runner.ran.map(\.args) == [["google", "login", "google", "ada@example.com", "--client", "google", "--json"]])
@@ -156,6 +235,7 @@ struct GoogleSetupTests {
         #expect(f.setup.state.google.isDone(.signIn))
         #expect(f.setup.state.google.address == "ada@example.com")
         #expect(google.granted == ["gmail.readonly", "calendar.readonly", "drive.readonly"])
+        #expect(google.signedInAs == "ada@example.com")
         // What a chosen grant needs and was not granted is said; a scope for later grants is not.
         #expect(google.missingNeeded(for: [.mail, .chat]) == ["chat.spaces.readonly"])
     }
@@ -165,12 +245,14 @@ struct GoogleSetupTests {
         let runner = ScriptRunner(["google login": ([Self.consent, timeout], 1)])
         let f = try Fixture(step: .access, runner: runner) { $0.createdInstance = "ledger" }
         let google = f.setup.steps.google
-        google.signIn(address: "ada@example.com", installer: try runner.installer(home: f.home), setup: f.setup)
+        google.signIn(address: "ada@example.com", installer: try runner.installer(home: f.home), setup: f.setup,
+                      chosen: [.drive], store: f.store)
         await until { !google.signingIn.running }
         #expect(google.signingIn == .failed("no answer from the browser in 300 s: nothing saved"))
         #expect(!f.setup.state.google.isDone(.signIn))
         // Not an address: nothing runs.
-        google.signIn(address: "ada", installer: try runner.installer(home: f.home), setup: f.setup)
+        google.signIn(address: "ada", installer: try runner.installer(home: f.home), setup: f.setup, chosen: [.drive],
+                      store: f.store)
         #expect(google.signingIn.failure?.hasPrefix("Type the address") == true)
         #expect(runner.ran.count == 1)
     }
@@ -179,7 +261,8 @@ struct GoogleSetupTests {
         let runner = ScriptRunner(["google login": ([Self.consent], nil)])
         let f = try Fixture(step: .access, runner: runner) { $0.createdInstance = "ledger" }
         let google = f.setup.steps.google
-        google.signIn(address: "ada@example.com", installer: try runner.installer(home: f.home), setup: f.setup)
+        google.signIn(address: "ada@example.com", installer: try runner.installer(home: f.home), setup: f.setup,
+                      chosen: [.drive], store: f.store)
         await until { google.loginURL != nil }
         google.cancelSignIn()
         await until { runner.cancelled }
@@ -188,6 +271,65 @@ struct GoogleSetupTests {
         #expect(google.loginURL == nil)
         #expect(!f.setup.state.google.isDone(.signIn))
         #expect(!f.setup.steps.busy)
+    }
+
+    /// Fix round 1: "Sign in again" dropped the lists but nothing read them again while the grants card was already
+    /// showing. Every successful sign-in reads them again itself.
+    @Test func everySignInReadsThePickersAgain() async throws {
+        let runner = ScriptRunner(["google login": ([Self.consent, Self.signedIn], 0)])
+        let f = try signedInFixture(runner: runner)
+        let fake = GrantsFake()
+        f.server.answer { fake.handle($0) }
+        let google = f.setup.steps.google
+        let installer = try runner.installer(home: f.home)
+        google.loadPickers(chosen: [.mail], store: f.store)
+        await until { google.labels != nil }
+        #expect(google.labels == ["Assistant", "Receipts"])
+        fake.labels = ["Assistant", "Receipts", "Travel"]                // the same card on screen, signed in again
+        for expected in [3, 3] {
+            google.signIn(address: Self.me, installer: installer, setup: f.setup, chosen: [.mail], store: f.store)
+            await until { !google.signingIn.running && !google.loadingLabels.running && google.labels != nil }
+            #expect(google.labels?.count == expected)
+        }
+        #expect(fake.labelReads == 3)
+    }
+
+    /// Fix round 1: a client sent while a sign-in waited let that sign-in, made with the earlier client, finish as
+    /// signed in. Now the client ends it first and its late answer is dropped.
+    @Test func aClientSentDuringASignInEndsItAndItsAnswerIsDropped() async throws {
+        let gate = Gate()
+        let runner = ScriptRunner(["google login": ([Self.consent, Self.signedIn], 0),
+                                   "google client": ([#"{"ok": true, "client": "google", "login_again": []}"#], 0)],
+                                  held: ["google login": gate])
+        let f = try Fixture(step: .access, runner: runner) { state in
+            state.createdInstance = "ledger"
+            state.google.adopt(signedIn: true)
+            state.google.clientSaved()                                     // client A saved, its sign-in to come
+        }
+        let google = f.setup.steps.google
+        let installer = try runner.installer(home: f.home)
+        google.signIn(address: Self.me, installer: installer, setup: f.setup, chosen: [.drive], store: f.store)
+        await until { google.loginURL != nil }
+        google.saveClient(json: Self.desktopJSON, installer: installer, setup: f.setup)     // client B
+        #expect(!google.signingIn.running)
+        await until { !google.savingClient.running }
+        gate.open()                                                         // A's consent finishes anyway
+        await until { runner.finished("google login") }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!f.setup.state.google.isDone(.signIn))
+        #expect(google.signedInAs == nil)
+        #expect(f.setup.state.google.resume == .signIn)
+        // And no sign-in starts while a client is being saved.
+        let slow = Gate()
+        let second = ScriptRunner(["google client": ([#"{"ok": true, "client": "google", "login_again": []}"#], 0)],
+                                  held: ["google client": slow])
+        let g = try Fixture(step: .access, runner: second) { $0.createdInstance = "ledger" }
+        let other = try second.installer(home: g.home)
+        g.setup.steps.google.saveClient(json: Self.desktopJSON, installer: other, setup: g.setup)
+        g.setup.steps.google.signIn(address: Self.me, installer: other, setup: g.setup, chosen: [.drive], store: g.store)
+        #expect(g.setup.steps.google.signingIn == .failed("The client is still being saved: sign in once it is."))
+        slow.open()
+        await until { !g.setup.steps.google.savingClient.running }
     }
 
     @Test func onlyGooglesConsentPageIsEverOpened() {
@@ -237,32 +379,42 @@ struct GoogleSetupTests {
         }
         let access = try SHAFTJSON.decoder().decode(AccessResponse.self, from: Data(SetupAccessTests.nothingGranted
             .replacingOccurrences(of: #""google_accounts":[]"#,
-                                  with: #""google_accounts":[{"alias":"google","address":"ada@example.com","scopes":[]}]"#).utf8))
+                                  with: #""google_accounts":[{"alias":"google","address":"ada.work@example.com","scopes":[]}]"#).utf8))
         f.setup.steps.google.prepare(access: access, setup: f.setup)
         #expect(f.setup.state.google.resume == .grants)
+        // The identity is the server's account; the field keeps what was typed (here the install's email, different).
+        #expect(f.setup.steps.google.signedInAs == "ada.work@example.com")
         #expect(f.setup.state.google.address == "ada@example.com")
         // None signed in: it starts at the first card, the address from the install's email.
         let g = try Fixture(step: .access) { $0.email = "ada@example.com" }
         g.setup.steps.google.prepare(access: nil, setup: g.setup)
         #expect(g.setup.state.google.resume == .project)
+        #expect(g.setup.steps.google.signedInAs == nil)
         #expect(g.setup.state.google.address == "ada@example.com")
     }
 }
 
 /// `shaft google client|login --json` scripted, by its first two words: its lines, then its exit, or held until
-/// cancelled (nil). It records each command's args and stdin. `uv python find` answers the test's own Python.
+/// cancelled (nil). `held`: a command that waits for its gate before it ends, cancelled or not (a process whose consent
+/// still finishes). It records each command's args and stdin. `uv python find` answers the test's own Python.
 final class ScriptRunner: ProcessRunning, @unchecked Sendable {
     struct Ran { let args: [String]; let stdin: Data? }
     private let lock = NSLock()
     private let script: [String: ([String], Int32?)]
+    private let held: [String: Gate]
     private var python = ""
     private var _ran: [Ran] = []
+    private var _finished: [String] = []
     private var _cancelled = false
 
-    init(_ script: [String: ([String], Int32?)]) { self.script = script }
+    init(_ script: [String: ([String], Int32?)], held: [String: Gate] = [:]) {
+        self.script = script
+        self.held = held
+    }
 
     var ran: [Ran] { lock.withLock { _ran } }
     var cancelled: Bool { lock.withLock { _cancelled } }
+    func finished(_ command: String) -> Bool { lock.withLock { _finished.contains(command) } }
 
     @MainActor func installer(home: URL) throws -> Installer {
         let configuration = Installer.Configuration(home: home)
@@ -283,18 +435,121 @@ final class ScriptRunner: ProcessRunning, @unchecked Sendable {
             return ProcessResult(status: 0, stdout: Data(lock.withLock { python }.utf8), stderr: Data())
         }
         lock.withLock { _ran.append(Ran(args: args, stdin: stdin)) }
-        guard let (lines, status) = script[args.prefix(2).joined(separator: " ")] else {
+        let command = args.prefix(2).joined(separator: " ")
+        guard let (lines, status) = script[command] else {
             return ProcessResult(status: 2, stdout: Data(), stderr: Data("no script for \(args)".utf8))
         }
-        for line in lines {
+        let gate = held[command]
+        for line in lines.dropLast(gate == nil ? 0 : 1) {
             onLine?(line)
             try? await Task.sleep(for: .milliseconds(20))
         }
+        if let gate {
+            await gate.wait()                                   // ignores cancellation, as a consent that completes
+            if let last = lines.last { onLine?(last) }
+            lock.withLock { _finished.append(command) }
+            return ProcessResult(status: status ?? 0, stdout: Data(lines.map { $0 + "\n" }.joined().utf8), stderr: Data())
+        }
         if let status {
+            lock.withLock { _finished.append(command) }
             return ProcessResult(status: status, stdout: Data(lines.map { $0 + "\n" }.joined().utf8), stderr: Data())
         }
         while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
         lock.withLock { _cancelled = true }
         throw CancellationError()
+    }
+}
+
+/// The server's grants for the instance `ledger` and the account `google`, kept as the verbs keep them (a calendar
+/// grant keeps a write already there, a Drive grant replaces the reach): what `GET|POST /access/ledger` answer, and
+/// the labels and calendars the pickers read. `refuse`: "<grant> <what>" refused with Google's words.
+final class GrantsFake: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _mail: [String]
+    private var _calendars: [String: Bool]
+    private var _drive: String?
+    private var _chat: Bool
+    private var _posts: [[String: String]] = []
+    private var _labels = ["Assistant", "Receipts"]
+    private var _labelReads = 0
+    private var _refuse: Set<String> = []
+
+    init(mail: [String] = [], calendars: [String: Bool] = [:], drive: String? = nil, chat: Bool = false) {
+        (_mail, _calendars, _drive, _chat) = (mail, calendars, drive, chat)
+    }
+
+    var mail: [String] { lock.withLock { _mail } }
+    var calendars: [String: Bool] { lock.withLock { _calendars } }
+    var drive: String? { lock.withLock { _drive } }
+    var chat: Bool { lock.withLock { _chat } }
+    var posts: [[String: String]] { lock.withLock { _posts } }
+    var labelReads: Int { lock.withLock { _labelReads } }
+    var labels: [String] {
+        get { lock.withLock { _labels } }
+        set { lock.withLock { _labels = newValue } }
+    }
+    var refuse: Set<String> {
+        get { lock.withLock { _refuse } }
+        set { lock.withLock { _refuse = newValue } }
+    }
+
+    func json() -> String {
+        lock.withLock {
+            let mail = _mail.map { #"{"account":"google","label":"\#($0)","draft":false}"# }.joined(separator: ",")
+            let cals = _calendars.keys.sorted().map {
+                #"{"account":"google","calendar":"\#($0)","name":"\#($0)","write":\#(_calendars[$0]!)}"#
+            }.joined(separator: ",")
+            let drive = _drive.map { #"{"account":"google","reach":"\#($0)"}"# } ?? ""
+            return #"{"instance":"ledger","folder":null,"browser":{"installed":null,"run":true},"web_search":false,"#
+                + #""telegram":false,"mail":[\#(mail)],"calendar":[\#(cals)],"drive":[\#(drive)],"#
+                + #""chat":[\#(_chat ? #"{"account":"google"}"# : "")],"#
+                + #""google_accounts":[{"alias":"google","address":"ada@example.com","scopes":[]}]}"#
+        }
+    }
+
+    func access() throws -> AccessResponse {
+        try SHAFTJSON.decoder().decode(AccessResponse.self, from: Data(json().utf8))
+    }
+
+    func handle(_ request: SetupStub.Request) -> SetupStub.Answer {
+        switch (request.method, request.path) {
+        case ("GET", "/app/v1/access/ledger"): return .init(200, json())
+        case ("GET", "/app/v1/google/google/labels"):
+            let names = lock.withLock { () -> [String] in
+                _labelReads += 1
+                return _labels
+            }
+            return .init(200, #"{"alias":"google","labels":[\#(names.map { "\"\($0)\"" }.joined(separator: ","))]}"#)
+        case ("GET", "/app/v1/google/google/calendars"):
+            return .init(200, #"{"alias":"google","calendars":[{"id":"ada@example.com","title":"Ada","primary":true,"access":"owner"},"#
+                         + #"{"id":"team","title":"Team","primary":false,"access":"reader"}]}"#)
+        case ("POST", "/app/v1/access/ledger"):
+            let body = (request.json ?? [:]).mapValues { "\($0)" == "1" ? "true" : "\($0)" }
+            let grant = body["grant"] ?? "", action = body["action"] ?? "", what = body["what"] ?? ""
+            let refused = lock.withLock { () -> Bool in
+                _posts.append(body)
+                return _refuse.contains("\(grant) \(what)")
+            }
+            if refused {
+                return .init(409, #"{"error": {"code": "refused", "message": "not granted: Google answered HTTP 403: no access"}}"#)
+            }
+            lock.withLock {
+                let grantIt = action == "grant", write = body["writable"] == "true"
+                switch grant {
+                case "mail":
+                    _mail.removeAll { $0 == what }
+                    if grantIt { _mail.append(what) }
+                case "calendar":
+                    if grantIt { _calendars[what] = (_calendars[what] ?? false) || write }
+                    else if write { if _calendars[what] != nil { _calendars[what] = false } }
+                    else { _calendars[what] = nil }
+                case "drive": _drive = grantIt ? (body["all"] == "true" ? "all" : "own") : nil
+                case "chat": _chat = grantIt
+                default: break
+                }
+            }
+            return .init(200, json())
+        default: return .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
+        }
     }
 }

@@ -165,6 +165,18 @@ class FixtureSetupTest(unittest.TestCase):
                 self.assertEqual(granted["drive"], [{"account": "google", "reach": "all"}])
                 granted = api("/app/v1/access/ledger", "POST", {"grant": "chat", "action": "grant", "alias": "google"})
                 self.assertEqual(granted["chat"], [{"account": "google"}])
+                # The wizard's downgrades and revocations: write off keeps the read; Drive back to its own files.
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "calendar", "action": "revoke",
+                                                                "alias": "google", "what": fixture.ME, "writable": True})
+                self.assertEqual(granted["calendar"], [{"account": "google", "calendar": fixture.ME,
+                                                        "name": fixture.ME, "write": False}])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "drive", "action": "grant", "alias": "google"})
+                self.assertEqual(granted["drive"], [{"account": "google", "reach": "own"}])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "chat", "action": "revoke", "alias": "google"})
+                self.assertEqual(granted["chat"], [])
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "mail", "action": "revoke", "alias": "google",
+                                                                "what": "Receipts"})
+                self.assertEqual(granted["mail"], [])
 
                 # How it works alone: the real first-reply verb on the fixture's marker, then a budget.
                 self.assertEqual(api("/app/v1/setup/autonomy/ledger", "POST", {"then": "stay"}),

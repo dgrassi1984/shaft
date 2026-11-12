@@ -112,7 +112,11 @@ struct SetupAPITests {
         for grant in [AccessGrant.mail(alias: "work", label: "Receipts"),
                       .calendar(alias: "work", id: "team@group.calendar.google.com", writable: false),
                       .calendar(alias: "work", id: "me@example.com", writable: true),
-                      .drive(alias: "work", all: false), .drive(alias: "work", all: true), .chat(alias: "work")] {
+                      .drive(alias: "work", all: false), .drive(alias: "work", all: true), .chat(alias: "work"),
+                      .mail(alias: "work", label: "Receipts", action: "revoke"),
+                      .calendarWriteRevoked(alias: "work", id: "me@example.com"),
+                      .calendar(alias: "work", id: "me@example.com", writable: false, action: "revoke"),
+                      .chat(alias: "work", action: "revoke")] {
             _ = try await server.client.grantAccess("ledger", grant)
         }
         let requests = server.requests
@@ -126,6 +130,11 @@ struct SetupAPITests {
             ["grant": "drive", "action": "grant", "alias": "work"],
             ["grant": "drive", "action": "grant", "alias": "work", "all": true],
             ["grant": "chat", "action": "grant", "alias": "work"],
+            // A label taken back; a calendar no longer written (revoke-write: still read); one taken back; Chat off.
+            ["grant": "mail", "action": "revoke", "alias": "work", "what": "Receipts"],
+            ["grant": "calendar", "action": "revoke", "alias": "work", "what": "me@example.com", "writable": true],
+            ["grant": "calendar", "action": "revoke", "alias": "work", "what": "me@example.com"],
+            ["grant": "chat", "action": "revoke", "alias": "work"],
         ]
         #expect(bodies == expected.map { NSDictionary(dictionary: $0) })
         #expect(requests.dropFirst(2).allSatisfy { $0.path == "/app/v1/access/ledger" && $0.method == "POST" })
