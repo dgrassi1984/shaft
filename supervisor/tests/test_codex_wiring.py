@@ -446,8 +446,11 @@ class ModelsTest(Case):
         with mock.patch.object(settings, "model_choices", return_value=[MODEL, "claude-haiku-5-5"]), \
                 mock.patch.object(settings, "not_live", return_value={}):
             fields = {f["name"]: f for f in settings.listing()}
-        self.assertNotIn(MODEL, fields["SHAFT_TRIAL_FALLBACK_MODEL"]["choices"])
-        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_RECAP_MODEL"):
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL"):   # called directly by the broker
+            self.assertNotIn(MODEL, fields[name]["choices"], name)
+            self.assertIn("none", fields[name]["choices"], name)
+        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_RECAP_MODEL",
+                     "SHAFT_CODER_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
             self.assertIn(MODEL, fields[name]["choices"], name)       # modelcall calls Codex plan models too
         self.assertIn("codexcli", settings.MODULES)
 
