@@ -20,7 +20,10 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
   verb on this folder, `secrets set` keeps only the key's name in <dir>/setup.json (never its value), and `provider use`
   and `provider check` answer as the real verbs would: OpenRouter covers everything once its key was set, and is off
   with the missing key before; a check fails for a model whose name contains "fail". The drives come from a fixture
-  template (<dir>/template/drive.md).
+  template (<dir>/template/drive.md). Access (§18.6): `share` is the real check and setting on this folder, `browser
+  install` only records a fake Chromium version in <dir>/setup.json, `tools <n> on|off <tool>` writes the instance's
+  tool settings here, and `telegram token` keeps the instance's name (never the token), refusing a token without ":"
+  or containing "bad"; web search reads as set once SCRAPEBADGER_API_KEY was saved.
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
@@ -70,6 +73,7 @@ def setup(base: Path, port: int):
     from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
                             opconfig, version, web, web_chat, webpush, web_settings)
     from supervisor import __main__ as shaft_cli       # the real `first-reply` verb, on this folder (SUP_DIR below)
+    from supervisor import setup as setup_access       # GET/POST /access answers (§18.6)
 
     # setup can be called again in the same test process after supervisor imports are cached.
     for module_name, module in list(sys.modules.items()):
@@ -232,6 +236,35 @@ def setup(base: Path, port: int):
                 code = opconfig.drive_command(args[1], "set", args[args.index("--file") + 1],
                                               args[args.index("--expect-sha") + 1])
             return code == 0, out[-1] if out else ""
+        if verb == "share" and len(args) == 3:             # the real check and setting, on this folder
+            name = args[1]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            try:
+                path = core.set_shared_folder(name, None if args[2] == "off" else args[2])
+            except ValueError as e:
+                return False, str(e)
+            return True, f"{name} may read {path} as shared/ (read-only)" if path else f"{name} has no shared folder"
+        if args == ["browser", "install"]:                # never Playwright: a version recorded here
+            state = _read_json(setup_state)
+            state["browser"] = "1.58.0-fixture"
+            _write_json(setup_state, state)
+            return True, "Chromium 1.58.0-fixture installed"
+        if verb == "tools" and len(args) == 4 and args[2] in ("on", "off"):
+            name, tool = args[1], args[3]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            off = core.disabled_tools(name)
+            core._update_tool_settings(name, off=sorted(off - {tool} if args[2] == "on" else off | {tool}))
+            return True, f"{name}: {tool} {args[2]}"
+        if args[:2] == ["telegram", "token"] and len(args) == 3:
+            name, token = args[2], (input or "").strip()
+            if ":" not in token or "bad" in token:
+                return False, "not saved: Telegram refused the token (Unauthorized)"
+            state = _read_json(setup_state)
+            state["telegram"] = sorted({*state.get("telegram", []), name})
+            _write_json(setup_state, state)
+            return True, f"saved: {name} answers on Telegram as @{name}_fixture_bot"
         if verb in ("limits", "channel", "pause", "resume"):
             name = args[1]
             if name not in names():
@@ -286,6 +319,14 @@ def setup(base: Path, port: int):
             (rec := _read_json(base / "sup" / "services" / f"{name}.json")).get("fixture")
             and rec.get("pid") == pid for name in ("api", "scheduler"))
 
+    real_access = setup_access.access
+
+    def access(name):
+        # secrets_env is empty here: the key and the bot this fixture recorded (by name only) say what is set
+        state = _read_json(setup_state)
+        return {**real_access(name), "web_search": "SCRAPEBADGER_API_KEY" in state.get("secrets", []),
+                "telegram": name in state.get("telegram", [])}
+
     for fake in (run_now, run_json):
         try:
             fake(["unknown-fixture-verb"])
@@ -303,7 +344,9 @@ def setup(base: Path, port: int):
               mock.patch.object(web, "url", return_value=f"http://127.0.0.1:{port}"),
               mock.patch.object(web, "_names", side_effect=names),
               mock.patch.object(core, "TEMPLATE", template),
-              mock.patch("supervisor.browser.version", return_value=None),   # never the Mac's own Playwright cache
+              # never the Mac's own Playwright cache: the version `browser install` recorded here
+              mock.patch("supervisor.browser.version", side_effect=lambda: _read_json(setup_state).get("browser")),
+              mock.patch.object(setup_access, "access", side_effect=access),
               mock.patch.object(web, "_live", side_effect=lambda n: _state(base).get(n, {})),
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),

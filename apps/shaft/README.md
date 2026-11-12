@@ -106,7 +106,9 @@ finishes a pending drain with a new fake pid. Cancel is available in the app. Ru
 The setup wizard's routes (`/app/v1/setup/*`, docs/app-api.md §18) answer as the real verbs would, over the fixture's
 folder: OpenRouter is off until a key is set (only the key's name is kept, in `<dir>/setup.json`), a model whose name
 contains "fail" fails its check, `new` makes the instance's folders here (paused until the first reply), and
-`first-reply` is the real verb; `test_fixture_setup.py` walks them from Model to Say hello.
+`first-reply` is the real verb; `test_fixture_setup.py` walks them from Model to Say hello. Access: `share` is the real
+check on the fixture's own instance (a folder inside the checkout is refused, as on a real server), `browser install`
+records a fake Chromium version, and `/setup/telegram` refuses a token without `:` or containing `bad`.
 A Debug iOS build may load plain `http://` from this machine (`NSAllowsLocalNetworking`, added to the built
 Info.plist by a Debug-only build step in `project.yml`); a Release iOS build keeps App Transport Security whole. The
 Mac app gets `NSAllowsLocalNetworking` in every configuration (its setup wizard talks to the server on 127.0.0.1) and
@@ -185,8 +187,12 @@ Debug builds only, these move the install away from the real `~/SHAFT` and the n
 The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
 which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step the
 wizard goes on to Model while the server has no instance (or this wizard made one already); a server with instances
-opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install and shows what
-it prints, opening a `{"url": …}` line in the browser.
+opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install (Codex's
+device-code sign-in, no terminal): the app opens the `{"url": …}` it relays in the browser once and shows the
+`{"code": …}` to enter there, copyable; Cancel terminates the command, which stops Codex. The Access step grants the
+non-Google rows (a folder, the browser, web search, Telegram) through `/access/<n>`, `/setup/secret` and
+`/setup/telegram`; a Debug build shows the Google rows inactive, a Release build leaves them out until the Google setup
+is built.
 
 ### Voice against the fixture server
 

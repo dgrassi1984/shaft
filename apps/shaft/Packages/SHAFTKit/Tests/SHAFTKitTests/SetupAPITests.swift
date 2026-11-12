@@ -82,6 +82,32 @@ struct SetupAPITests {
         #expect(error?.message == "LLM_MODEL: no such model.")
     }
 
+    @Test func accessIsReadAndGrantedWithOnlyItsFields() async throws {
+        let server = StubServer { _ in .json(200, Self.fixture("access")) }
+        let read = try await server.client.access("wisp")
+        _ = try await server.client.grantAccess("wisp", .folder("/Users/ada/Notes"))
+        _ = try await server.client.grantAccess("wisp", .browser)
+        #expect(read.instance == "wisp")
+        let requests = server.requests
+        #expect(requests.map { "\($0.method) \($0.path)" } == ["GET /app/v1/access/wisp", "POST /app/v1/access/wisp",
+                                                              "POST /app/v1/access/wisp"])
+        #expect(requests[1].json as? [String: String] == ["grant": "folder", "action": "grant", "what": "/Users/ada/Notes"])
+        #expect(requests[2].json as? [String: String] == ["grant": "browser", "action": "grant"])
+        // The browser's grant may install Chromium first (900 s on the server): the request waits longer than that.
+        #expect(requests[2].timeout > 900)
+        #expect(requests[1].timeout < 900)
+    }
+
+    @Test func aTelegramTokenGoesInTheBodyAlone() async throws {
+        let server = StubServer { _ in .json(200, #"{"said": "saved: ledger answers on Telegram"}"#) }
+        let said = try await server.client.setupTelegram(name: "ledger", token: "123:secret")
+        #expect(said.said == "saved: ledger answers on Telegram")
+        let request = try #require(server.requests.first)
+        #expect((request.method, request.path) == ("POST", "/app/v1/setup/telegram"))
+        #expect(request.json as? [String: String] == ["name": "ledger", "token": "123:secret"])
+        #expect(!request.url.absoluteString.contains("secret"))
+    }
+
     @Test func autonomyAndHelloNameTheInstance() async throws {
         let server = StubServer { request in
             request.path.hasPrefix("/app/v1/setup/autonomy/")

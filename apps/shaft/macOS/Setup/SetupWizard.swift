@@ -61,7 +61,7 @@ struct SetupWizard: View {
             case .instance:
                 page { InstanceStepView(setup: setup, session: session, steps: setup.steps) }
             case .access:
-                page { AccessStepView(setup: setup) }
+                page { AccessStepView(setup: setup, session: session, steps: setup.steps) }
             case .alone:
                 page { AloneStepView(setup: setup, session: session, steps: setup.steps) }
             case .hello:
@@ -92,6 +92,11 @@ struct SetupWizard: View {
                 Text(error).font(.callout).foregroundStyle(Color.warning).lineLimit(2)
             }
             Spacer()
+            if setup.state.step == .access, !connecting {
+                // Everything on Access is optional: on, granting nothing.
+                Button("Skip all") { setup.steps.skipAccess(setup: setup) }
+                    .disabled(busy)
+            }
             if let back = backAction {
                 Button("Back", action: back)
                     .keyboardShortcut(.cancelAction)
@@ -146,7 +151,7 @@ struct SetupWizard: View {
         case .instance:
             return (setup.state.createdInstance == nil ? "Create" : "Continue", enabled,
                     { steps.createInstance(store: store, setup: setup) })
-        case .access: return ("Continue", enabled, { setup.go(to: .alone) })
+        case .access: return ("Continue", enabled, { steps.applyAccess(store: store, setup: setup) })
         case .alone: return ("Continue", enabled, { steps.saveAlone(store: store, setup: setup) })
         case .hello: return ("Say hello", enabled, hello)
         }

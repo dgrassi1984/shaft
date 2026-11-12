@@ -173,8 +173,12 @@ struct SetupStepsTests {
         let server: SetupStub
         let setup: MacSetup
         let store: InstancesStore
+        let home: URL
+        /// The pages the steps asked to open: never the real browser in a test.
+        let opened = Opened()
 
-        init(step: SetupWizardStep, edit: (inout SetupState) -> Void = { _ in }) throws {
+        init(step: SetupWizardStep, runner: any ProcessRunning = NoProcesses(),
+             edit: (inout SetupState) -> Void = { _ in }) throws {
             defaults = try #require(UserDefaults(suiteName: suite))
             let states = SetupStateStore(defaults: defaults)
             var state = SetupState()
@@ -182,9 +186,11 @@ struct SetupStepsTests {
             state.operatorName = "Ada"
             edit(&state)
             try states.save(state)
-            let home = root.appending(path: "home", directoryHint: .isDirectory)
+            home = root.appending(path: "home", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            setup = MacSetup(states: states, configure: { Installer.Configuration(home: home) }, runner: NoProcesses())
+            let home = home, opened = opened
+            setup = MacSetup(states: states, configure: { Installer.Configuration(home: home) }, runner: runner,
+                             steps: SetupSteps(openURL: { opened.add($0) }))
             server = SetupStub()
             store = InstancesStore(client: APIClient(credential: server.credential, session: server.session),
                                    outbox: try Outbox(directory: root.appending(path: "outbox")),
@@ -493,8 +499,16 @@ final class Gate: @unchecked Sendable {
     }
 }
 
+/// The URLs a test's steps opened.
+final class Opened: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+    func add(_ url: URL) { lock.withLock { urls.append(url) } }
+    var all: [URL] { lock.withLock { urls } }
+}
+
 /// No command runs in these tests.
-private struct NoProcesses: ProcessRunning {
+struct NoProcesses: ProcessRunning {
     struct Ran: Error {}
     func run(_ exe: URL, _ args: [String], env: [String: String], stdin: Data?,
              onLine: (@Sendable (String) -> Void)?) async throws -> ProcessResult {

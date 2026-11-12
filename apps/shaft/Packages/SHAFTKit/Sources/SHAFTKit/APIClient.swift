@@ -509,6 +509,23 @@ public final class APIClient: Sendable {
                        timeout: 240)
     }
 
+    /// `telegram token <name>`, the bot's token on the verb's stdin (Telegram is asked who the bot is first).
+    public func setupTelegram(name: String, token: String) async throws -> SaidResponse {
+        try await post("/app/v1/setup/telegram", json: ["name": name, "token": token])
+    }
+
+    /// What the operator has granted the instance (§18.6).
+    public func access(_ instance: String) async throws -> AccessResponse {
+        try await get("/app/v1/access/\(instance)")
+    }
+
+    /// One grant or revocation through its verb, answered with the fresh access. The browser's may first install the
+    /// shared Chromium, held up to the server's 15 minutes (`app_api.BROWSER_INSTALL_S`): this waits that and a margin.
+    public func grantAccess(_ instance: String, _ grant: AccessGrant) async throws -> AccessResponse {
+        try await post("/app/v1/access/\(instance)", json: grant,
+                       timeout: grant.grant == "browser" ? AccessGrant.browserTimeout : 120)
+    }
+
     /// `first-reply`: `resume` (it works on its own after the first answered reply) or `stay`.
     public func setupAutonomy(_ instance: String, then: String) async throws -> SetupAutonomyResponse {
         try await post("/app/v1/setup/autonomy/\(instance)", json: ["then": then])

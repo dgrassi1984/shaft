@@ -737,6 +737,130 @@ class CLITest(Case):
         self.assertEqual(set(run.call_args.kwargs), {"env"})
         self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(home.resolve()))
 
+    # A fake `codex` (never the real login): it records how it was run, prints the device-code prompt as Codex 0.167
+    # does (with colour codes), then waits for the code to be "entered" (the file `entered` in its CODEX_HOME), writes
+    # auth.json and exits 0. FAIL=1 makes it refuse after the prompt, EARLY=1 before it; HANG=1 makes it wait forever.
+    FAKE_CODEX = r"""#!/bin/sh
+echo "$$" > "$CODEX_HOME/pid"
+printf '%s\n' "$@" > "$CODEX_HOME/args"
+if read -r line; then echo "stdin was open: $line" >&2; exit 3; fi
+if [ "${EARLY:-}" = 1 ]; then
+  echo "Error: failed to request device code: device code login is not enabled for this Codex server." >&2; exit 1
+fi
+B=$(printf '\033[94m'); R=$(printf '\033[0m')
+printf '\nWelcome to Codex [v0.167.0]\nOpenAI\047s command-line coding agent\n\n'
+printf 'Follow these steps to sign in with ChatGPT using device code authorization:\n\n'
+printf '1. Open this link in your browser and sign in to your account\n   %shttps://auth.openai.com/codex/device%s\n\n' "$B" "$R"
+printf '2. Enter this one-time code (expires in 15 minutes)\n   %sWXYZ-12345%s\n\n' "$B" "$R"
+printf 'Continue only if you started this login in Codex. If a website or another person gave you this code, cancel.\n'
+if [ "${FAIL:-}" = 1 ]; then echo "Error logging in with device code: device auth was declined" >&2; exit 1; fi
+n=0
+while [ ! -f "$CODEX_HOME/entered" ]; do
+  sleep 0.05; n=$((n+1))
+  if [ "${HANG:-}" != 1 ] && [ $n -gt 400 ]; then echo "never entered" >&2; exit 4; fi
+done
+echo '{"tokens": {}}' > "$CODEX_HOME/auth.json"
+echo "Successfully logged in"
+"""
+
+    def fake_codex(self, **env):
+        binary = self.root / "fake-codex"
+        binary.write_text(self.FAKE_CODEX)
+        binary.chmod(0o755)
+        home = self.root / "codex-home"
+        self.enterContext(mock.patch.object(codexcli, "BIN", str(binary)))
+        self.enterContext(mock.patch.object(codexcli, "HOME", home))
+        self.enterContext(mock.patch.dict(os.environ, env))
+        return home.resolve()
+
+    def login_json(self, on_row=lambda row: None):
+        """`shaft codex login --json` in process: its JSON lines, each handed to `on_row` the moment it is printed."""
+        rows: list[dict] = []
+
+        class Lines(io.StringIO):
+            def write(self, text):
+                for line in text.splitlines():
+                    if line.strip():
+                        rows.append(json.loads(line))
+                        on_row(rows[-1])
+                return len(text)
+        with redirect_stdout(Lines()), mock.patch.object(cli.subprocess, "run",
+                                                         side_effect=AssertionError("no terminal login")):
+            code = cli.main(["codex", "login", "--json"])
+        return code, rows
+
+    def test_codex_login_json_relays_the_url_and_waits(self):
+        home = self.fake_codex()
+        seen_before_login = []
+
+        def on_row(row):
+            # The page and the code arrive while Codex still waits: nothing is logged in yet.
+            seen_before_login.append((row, (home / "auth.json").exists()))
+            if "code" in row:
+                (home / "entered").touch()          # the operator enters the code on the page
+        code, rows = self.login_json(on_row)
+        self.assertEqual(code, 0)
+        self.assertEqual(rows, [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}, {"ok": True}])
+        self.assertEqual(seen_before_login[:2], [({"url": "https://auth.openai.com/codex/device"}, False),
+                                                 ({"code": "WXYZ-12345"}, False)])
+        self.assertEqual((home / "args").read_text().split(), ["login", "--device-auth"])
+        self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+        self.assertTrue((home / "auth.json").is_file())
+
+    def test_codex_login_json_failure_carries_codexs_own_words(self):
+        home = self.fake_codex(FAIL="1")
+        code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
+        self.assertEqual(rows[-1], {"ok": False, "error": "Error logging in with device code: device auth was declined"})
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_refused_before_any_code_says_why(self):
+        self.fake_codex(EARLY="1")
+        code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(rows, [{"ok": False, "error": "Error: failed to request device code: device code login is not "
+                                                       "enabled for this Codex server."}])
+
+    def test_codex_login_json_times_out_and_stops_codex(self):
+        home = self.fake_codex(HANG="1")
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
+            code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertFalse(rows[-1]["ok"])
+        self.assertIn("timed out", rows[-1]["error"])
+        pid = int((home / "pid").read_text())
+        with self.assertRaises(ProcessLookupError):          # the fake Codex is gone, not left polling
+            os.kill(pid, 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_sigterm_stops_codex(self):
+        """The app's Cancel terminates `shaft codex login --json`: Codex goes with it and no login is written later."""
+        import signal
+        home = self.fake_codex(HANG="1")
+
+        def on_row(row):
+            if "code" in row:
+                os.kill(os.getpid(), signal.SIGTERM)    # what Process.terminate() sends
+        before = signal.getsignal(signal.SIGTERM)
+        code, rows = self.login_json(on_row)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[-1], {"ok": False, "error": "Codex sign-in stopped (SIGTERM)"})
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+        pid = int((home / "pid").read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_status_json_is_a_usage_error(self):
+        with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(cli.main(["codex", "status", "--json"]), 2)
+        self.assertIn("no --json", err.getvalue())
+
     def test_trial_run_cli_accepts_codex(self):
         with mock.patch.object(cli, "instance_root", return_value=self.root), \
                 mock.patch.object(trial, "create", return_value={"id": "test", "states": []}) as create, \

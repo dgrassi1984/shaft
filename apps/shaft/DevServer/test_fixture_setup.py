@@ -96,6 +96,32 @@ class FixtureSetupTest(unittest.TestCase):
                                                              "drive": "d", "autonomy": "own"}, expected=409)
                 self.assertIn("already exists", err["error"]["message"])
 
+                # Access (the wizard's non-Google rows): nothing granted yet; then a folder, the browser, web search
+                # and a Telegram bot, each answered with the fresh access.
+                none = api("/app/v1/access/ledger")
+                self.assertEqual((none["folder"], none["browser"], none["web_search"], none["telegram"]),
+                                 (None, {"installed": None, "run": True}, False, False))
+                outside = Path(tempfile.mkdtemp())          # SHAFT's own tree may not be shared: this one may
+                self.addCleanup(outside.rmdir)
+                granted = api("/app/v1/access/ledger", "POST", {"grant": "folder", "action": "grant", "what": str(outside)})
+                self.assertEqual(granted["folder"], str(outside.resolve()))
+                err = api("/app/v1/access/ledger", "POST", {"grant": "folder", "action": "grant",
+                                                             "what": str(base / "nowhere")}, expected=409)
+                self.assertIn("is not a directory", err["error"]["message"])
+                self.assertEqual(api("/app/v1/access/ledger", "POST", {"grant": "browser", "action": "grant"})["browser"],
+                                 {"installed": "1.58.0-fixture", "run": True})
+                self.assertEqual(api("/app/v1/setup/secret", "POST", {"name": "SCRAPEBADGER_API_KEY", "value": KEY}),
+                                 {"said": "SCRAPEBADGER_API_KEY saved"})
+                err = api("/app/v1/setup/telegram", "POST", {"name": "ledger", "token": "bad-token"}, expected=409)
+                self.assertIn("Telegram refused the token", err["error"]["message"])
+                self.assertIn("ledger", api("/app/v1/setup/telegram", "POST",
+                                            {"name": "ledger", "token": "123456:fixture-token-never-kept"})["said"])
+                after = api("/app/v1/access/ledger")
+                self.assertEqual((after["web_search"], after["telegram"]), (True, True))
+                for path in base.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn("fixture-token-never-kept", path.read_text(errors="ignore"), str(path))
+
                 # How it works alone: the real first-reply verb on the fixture's marker, then a budget.
                 self.assertEqual(api("/app/v1/setup/autonomy/ledger", "POST", {"then": "stay"}),
                                  {"instance": "ledger", "then": "stay"})

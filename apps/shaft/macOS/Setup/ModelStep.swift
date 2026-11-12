@@ -1,3 +1,4 @@
+import AppKit
 import SHAFTKit
 import SwiftUI
 
@@ -130,27 +131,26 @@ struct ModelStepView: View {
             Label("ChatGPT for Mac is installed.", systemImage: "checkmark.circle")
                 .foregroundStyle(Color.textSecondary)
             HStack(spacing: Design.Space.s12) {
-                Button(steps.signedIn ? "Sign in again" : "Sign in") {
-                    steps.signInToCodex(installer: setup.installer(for: session))
+                if steps.signingIn.running {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for you to sign in…").foregroundStyle(Color.textSecondary)
+                    Button("Cancel") { steps.cancelSignIn() }
+                } else {
+                    Button(steps.signedIn ? "Sign in again" : "Sign in") {
+                        steps.signInToCodex(installer: setup.installer(for: session))
+                    }
+                    .disabled(steps.busy)
                 }
-                .disabled(steps.busy)
-                if steps.signingIn.running { ProgressView().controlSize(.small) }
                 if steps.signedIn {
                     Label("Signed in", systemImage: "checkmark").foregroundStyle(Color.brand)
                 }
             }
-            Text("Signing in opens ChatGPT's page in your browser; Codex keeps its login inside SHAFT's own folder.")
+            Text("Signing in opens ChatGPT's sign-in page in your browser, where you enter a one-time code shown here. "
+                 + "Codex keeps its login inside SHAFT's own folder.")
                 .font(.caption).foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !steps.loginLines.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(steps.loginLines.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(Design.Text.code).foregroundStyle(Color.textSecondary).textSelection(.enabled)
-                    }
-                }
-                .padding(Design.Space.s8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .elevatedBlock()
+            if steps.signingIn.running, steps.loginCode != nil || steps.loginURL != nil {
+                codexCode
             }
             if let failure = steps.signingIn.failure {
                 SetupFailure(message: failure) { steps.signInToCodex(installer: setup.installer(for: session)) }
@@ -161,6 +161,37 @@ struct ModelStepView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Link("Get ChatGPT for Mac", destination: Self.chatGPTDownload).foregroundStyle(Color.brand)
         }
+    }
+
+    /// The code to enter on ChatGPT's page, copyable, and that page again should its tab have closed.
+    private var codexCode: some View {
+        VStack(alignment: .leading, spacing: Design.Space.s8) {
+            if let code = steps.loginCode {
+                Text("Enter this code on the page that opened in your browser (it expires in 15 minutes):")
+                    .foregroundStyle(Color.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Design.Space.s12) {
+                    Text(code)
+                        .font(.system(.title, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(Color.textPrimary)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Code \(code.map(String.init).joined(separator: " "))")
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(code, forType: .string)
+                    }
+                }
+                Text("Enter it only on a page this sign-in opened: anyone with the code could sign in as you.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let url = steps.loginURL {
+                Link("Open the sign-in page again", destination: url).foregroundStyle(Color.brand)
+            }
+        }
+        .padding(Design.Space.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .elevatedBlock()
     }
 
     private func coverageBlock(_ coverage: ProviderUseResponse) -> some View {

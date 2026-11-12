@@ -140,6 +140,35 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     }
 }
 
+/// `POST /access/<n>`: one grant (`folder`, `browser`, `mail`, `calendar`, `drive`, `chat`) or its revocation. Only the
+/// fields that grant takes are set; a nil one is not sent (the server refuses a field another grant takes).
+public struct AccessGrant: Codable, Sendable, Equatable {
+    /// `browser install` (900 s on the server) and the request around it.
+    public static let browserTimeout: TimeInterval = 960
+
+    public var grant: String
+    public var action: String
+    public var alias: String?
+    public var what: String?
+    public var all: Bool?
+    public var writable: Bool?
+
+    public init(grant: String, action: String = "grant", alias: String? = nil, what: String? = nil, all: Bool? = nil,
+                writable: Bool? = nil) {
+        self.grant = grant
+        self.action = action
+        self.alias = alias
+        self.what = what
+        self.all = all
+        self.writable = writable
+    }
+
+    /// `share <n> <folder>`: the folder it may read.
+    public static func folder(_ path: String) -> AccessGrant { AccessGrant(grant: "folder", what: path) }
+    /// `browser install` when none is installed, then `tools <n> on run` when `run` is off.
+    public static let browser = AccessGrant(grant: "browser")
+}
+
 /// `GET /google/<alias>/labels`.
 public struct GoogleLabels: Codable, Sendable, Equatable {
     public var alias: String

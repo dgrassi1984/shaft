@@ -222,13 +222,87 @@ enum Budget {
     ]
 }
 
-/// What `shaft codex login --json` prints: a `{"url": …}` line is the sign-in page to open in the browser.
+/// What `shaft codex login --json` prints, one JSON object a line: the sign-in page (`url`, opened in the browser), the
+/// one-time code to enter there (`code`), then `{"ok": true}` or `{"ok": false, "error"}` with Codex's own words.
 enum CodexLogin {
+    enum Event: Equatable {
+        case url(URL)
+        case code(String)
+        case ok
+        case failed(String)
+    }
+
+    static func event(in line: String) -> Event? {
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { return nil }
+        if let text = object["url"] as? String {
+            guard let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+            return .url(url)
+        }
+        if let code = object["code"] as? String, !code.isEmpty { return .code(code) }
+        if let ok = object["ok"] as? Bool {
+            return ok ? .ok : .failed((object["error"] as? String) ?? "Codex sign-in failed, without a reason.")
+        }
+        return nil
+    }
+
+    /// A web page to open; nothing else (a `file:` URL, prose) is ever opened.
     static func url(in line: String) -> URL? {
-        guard let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
-              let text = object["url"] as? String, let url = URL(string: text),
-              ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
-        return url
+        if case .url(let url) = event(in: line) { url } else { nil }
+    }
+
+    /// How the sign-in ended, from everything it printed: its last `ok` line, nil when it printed none.
+    static func outcome(_ stdout: Data) -> Event? {
+        String(decoding: stdout, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap { line -> Event? in
+            switch event(in: String(line)) {
+            case .ok?: .ok
+            case .failed(let why)?: .failed(why)
+            default: nil
+            }
+        }.last
+    }
+}
+
+/// The Access step's rows: the access a drive may suggest (`DrivePreset.grants`, the server's names), grouped as the step
+/// shows them. Continue applies the checked rows of `applied`, in that order; the Google rows are their own step.
+enum AccessRow: String, CaseIterable, Identifiable, Sendable {
+    case folder, browser, mail, calendar, drive, chat, web, telegram
+    var id: String { rawValue }
+
+    /// The rows granted from this step, in the order Continue applies them.
+    static let applied: [AccessRow] = [.folder, .browser, .web, .telegram]
+    static let google: [AccessRow] = [.mail, .calendar, .drive, .chat]
+
+    var title: String {
+        switch self {
+        case .folder: "A folder you choose"
+        case .browser: "A real browser"
+        case .mail: "Mail labels"
+        case .calendar: "Calendars"
+        case .drive: "Drive files"
+        case .chat: "Google Chat"
+        case .web: "Web search"
+        case .telegram: "Telegram"
+        }
+    }
+
+    /// The rows the chosen drive suggests: pre-checked when the step first opens.
+    static func suggested(by preset: DrivePreset?) -> Set<AccessRow> {
+        Set((preset?.suggests ?? []).compactMap(AccessRow.init(rawValue:)))
+    }
+
+    /// What the server says is granted already (§18.6): such a row shows as on, and Continue does not send it again.
+    static func granted(in access: AccessResponse?) -> Set<AccessRow> {
+        guard let access else { return [] }
+        var on: Set<AccessRow> = []
+        if access.folder != nil { on.insert(.folder) }
+        if access.browser.installed != nil, access.browser.run { on.insert(.browser) }
+        if access.webSearch { on.insert(.web) }
+        if access.telegram { on.insert(.telegram) }
+        if !access.mail.isEmpty { on.insert(.mail) }
+        if !access.calendar.isEmpty { on.insert(.calendar) }
+        if !access.drive.isEmpty { on.insert(.drive) }
+        if !access.chat.isEmpty { on.insert(.chat) }
+        return on
     }
 }
 

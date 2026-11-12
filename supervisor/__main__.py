@@ -1360,10 +1360,15 @@ def cmd_feedback(name: str | None, days: int | None) -> int:
     return 0
 
 
-def cmd_codex(action: str) -> int:
+def cmd_codex(action: str, as_json: bool = False) -> int:
     from . import codexcli, planchannel
     home = Path(codexcli.HOME).expanduser().resolve()
+    if as_json and action != "login":
+        print(f"shaft codex {action} has no --json", file=sys.stderr)
+        return 2
     if action == "login":
+        if as_json:
+            return _codex_login_json(home)
         try:
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
             home.chmod(0o700)
@@ -1378,6 +1383,33 @@ def cmd_codex(action: str) -> int:
     if (fault := planchannel.outage("codex")):
         print(("Codex security event: " if fault.get("security") else "Codex unavailable: ") + fault["reason"])
     return 0
+
+
+def _codex_login_json(home: Path) -> int:
+    """`shaft codex login --json`, for the Mac app (no terminal): `codex login --device-auth` in SHAFT's private Codex
+    home, stdin closed. One JSON line each: `{"url"}` (the page to open) and `{"code"}` (the code to enter there) as soon
+    as Codex prints them, then `{"ok": true}` once the login is in that home, or `{"ok": false, "error"}` with Codex's
+    own words. It opens no browser: the app does. SIGTERM (the app's Cancel), the app quitting, or 10 minutes without
+    the code entered stop Codex too."""
+    from . import codexcli
+
+    def emit(row: dict) -> None:
+        print(json.dumps(row), flush=True)
+    try:
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        home.chmod(0o700)
+        ok, error = codexcli.device_login(home, emit)
+    except OSError as e:
+        ok, error = False, f"Codex login failed: {e}"
+    except codexcli.LoginStopped as e:
+        ok, error = False, f"Codex sign-in stopped ({e})"
+    except BrokenPipeError:
+        return 1                                     # nobody reads the answer any more
+    try:
+        emit({"ok": True} if ok else {"ok": False, "error": error})
+    except BrokenPipeError:
+        pass
+    return 0 if ok else 1
 
 
 def cmd_grok(action: str) -> int:
@@ -1507,6 +1539,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
     p.add_argument("action", choices=["login", "status"])
+    p.add_argument("--json", action="store_true",
+                   help="login without a terminal: the page to open and the code to enter there, as JSON lines")
     p = sub.add_parser("migrate", help="move a SHAFT setup to a new Mac (docs/migration.md): source --to HOST [--check], "
                                        "or target [--check]")
     p.add_argument("role", choices=["source", "target"])
@@ -1860,7 +1894,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "grok":
         return cmd_grok(args.action)
     if args.cmd == "codex":
-        return cmd_codex(args.action)
+        return cmd_codex(args.action, args.json)
     if args.cmd == "migrate":
         from . import migrate
         return migrate.command(args.role, args.to, args.check)

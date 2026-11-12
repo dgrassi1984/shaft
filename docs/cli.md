@@ -92,7 +92,7 @@ run` runs one scheduled plugin now.
 ```text
 shaft web on [--local]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
 shaft grok login|status
-shaft codex login|status
+shaft codex login [--json]|status
 shaft model on|off|status
 shaft api on [--local]|off|status|key|inbox-key
 shaft telegram token <name>|pair|unpair|on|off|status
@@ -117,6 +117,13 @@ embed` controls the optional memory-search service.
 
 `shaft codex login` and `shaft grok login` authenticate the plan channels. Their `status` commands show login,
 offered models, and outages. Codex also shows observed weekly usage.
+
+`shaft codex login --json` signs in without a terminal (the Mac app's setup uses it). It runs `codex login
+--device-auth` in SHAFT's private Codex home with stdin closed and prints one JSON line for each event: `{"url"}` (the
+page to open) and `{"code"}` (the one-time code to enter there) as soon as Codex prints them, then `{"ok": true}` once
+the login is saved, or `{"ok": false, "error"}` with Codex's own words. It opens no browser. Codex stops when the
+command gets SIGTERM, when its parent exits, or after 10 minutes without the code entered. When Codex refuses a
+device-code sign-in, `shaft codex login` in a terminal (the browser sign-in) still works.
 
 ### Service entry points
 

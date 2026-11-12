@@ -4,14 +4,14 @@ import Observation
 import SHAFTKit
 
 /// The wizard's work after Install, against the server this app just paired with (docs/app-api.md §18): the provider's
-/// key, preset and check; the Codex sign-in; the drives; creating the instance; its choice for working alone and its
-/// budget; and the welcome. MacSetup owns it, so a closed window reopened finds it as it was.
+/// key, preset and check; the Codex sign-in; the drives; creating the instance; the access granted to it; its choice
+/// for working alone and its budget; and the welcome. MacSetup owns it, so a closed window reopened finds it as it was.
 ///
 /// Every action runs in a task kept here, under the wizard's generation. `reset()` (the wizard ended or started over)
 /// moves the generation on and cancels them all: work started before changes nothing after its next suspension.
 /// `stop()` (the window closed) stops only what is safe to drop, the reads, the check and the Codex sign-in; a write
-/// already sent (the key, the provider, the instance, the choice, the welcome) finishes and is recorded, so the app and
-/// the server never disagree on what was done.
+/// already sent (the key, the provider, the instance, a grant, the choice, the welcome) finishes and is recorded, so the
+/// app and the server never disagree on what was done. The Codex sign-in and the grants also have their own Cancel.
 @MainActor
 @Observable
 final class SetupSteps {
@@ -33,14 +33,35 @@ final class SetupSteps {
     private(set) var check: ProviderCheckResponse?
     private(set) var checked: ProviderRequest?
     private(set) var signingIn: Work = .idle
-    /// What `shaft codex login --json` printed, line by line.
-    private(set) var loginLines: [String] = []
+    /// What `shaft codex login --json` relayed: the sign-in page (opened in the browser) and the code to enter there.
+    private(set) var loginURL: URL?
+    private(set) var loginCode: String?
     private(set) var signedIn = false
 
     // MARK: Your instance
     private(set) var drives: [DrivePreset] = []
     private(set) var loadingDrives: Work = .idle
     private(set) var creating: Work = .idle
+
+    // MARK: Access
+    /// What the server says is granted (`GET /access/<n>`), refreshed by each grant's answer.
+    private(set) var access: AccessResponse?
+    private(set) var loadingAccess: Work = .idle
+    /// The instance whose rows were pre-checked: the operator's own ticks are never redone on a later visit.
+    private(set) var accessPrepared: String?
+    /// What the chosen drive suggests (tagged "suggested"), and the rows ticked.
+    private(set) var accessSuggested: Set<AccessRow> = []
+    var accessChecked: Set<AccessRow> = []
+    /// The folder chosen (`NSOpenPanel`), the ScrapeBadger key and the bot token as typed: held only until sent.
+    var accessFolder = ""
+    var webKey = ""
+    var telegramToken = ""
+    private(set) var granting: Work = .idle
+    /// The row being applied now, and the row the last failure stopped at.
+    private(set) var grantingRow: AccessRow?
+    private(set) var failedRow: AccessRow?
+    /// The rows this wizard applied.
+    private(set) var accessDone: Set<AccessRow> = []
 
     // MARK: How it works alone
     private(set) var settings: InstanceSettings?
@@ -53,6 +74,8 @@ final class SetupSteps {
     private(set) var greeting: Work = .idle
 
     @ObservationIgnored private var generation = 0
+    /// The Codex sign-in's own identity: Cancel and a new sign-in move it on, so a late line of one given up is dropped.
+    @ObservationIgnored private var loginRun = 0
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let openURL: @MainActor (URL) -> Void
 
@@ -65,20 +88,26 @@ final class SetupSteps {
 
     /// Something of the step on screen runs: Back and Continue wait.
     var busy: Bool {
-        [saving, testing, signingIn, loadingDrives, creating, loadingSettings, savingAlone, greeting].contains(.running)
+        [saving, testing, signingIn, loadingDrives, creating, loadingAccess, granting, loadingSettings, savingAlone,
+         greeting].contains(.running)
     }
 
     // MARK: - Lifecycle
 
     /// The window closed: the reads, the check and the sign-in stop (a reopened step asks again); writes finish.
     func stop() {
-        for key in ["check", "login", "drives", "settings"] {
+        for key in ["check", "login", "drives", "access-read", "settings"] {
             tasks[key]?.cancel()
             tasks[key] = nil
         }
         if testing.running { testing = .idle }
-        if signingIn.running { signingIn = .idle }
+        if signingIn.running {
+            loginRun &+= 1
+            signingIn = .idle
+            (loginURL, loginCode) = (nil, nil)       // that code is dead with its command
+        }
         if loadingDrives.running { loadingDrives = .idle }
+        if loadingAccess.running { loadingAccess = .idle }
         if loadingSettings.running { loadingSettings = .idle }
     }
 
@@ -88,10 +117,12 @@ final class SetupSteps {
         for task in tasks.values { task.cancel() }
         tasks = [:]
         form = ProviderForm()
-        (saving, testing, signingIn, loadingDrives, creating, loadingSettings, savingAlone, greeting) =
-            (.idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle)
+        (saving, testing, signingIn, loadingDrives, creating, loadingAccess, granting, loadingSettings, savingAlone,
+         greeting) = (.idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle)
         (coverage, saved, check, checked, settings) = (nil, nil, nil, nil, nil)
-        (loginLines, signedIn, drives, capText) = ([], false, [], "")
+        (loginURL, loginCode, signedIn, drives, capText) = (nil, nil, false, [], "")
+        (access, accessPrepared, accessSuggested, accessChecked, accessDone) = (nil, nil, [], [], [])
+        (accessFolder, webKey, telegramToken, grantingRow, failedRow) = ("", "", "", nil, nil)
     }
 
     /// Run `body` as the task `key`, its state in `status`: running, then idle, or the real error. `current()` says
@@ -170,40 +201,61 @@ final class SetupSteps {
         }
     }
 
-    /// `shaft codex login --json` through the installed server, its lines shown as they come; a `{"url": …}` line
-    /// opens that page in the browser.
+    /// `shaft codex login --json` through the installed server (`codex login --device-auth`, no terminal): its page opens
+    /// in the browser as soon as it is relayed, and its code shows here to enter there. Signed in only on its final
+    /// `{"ok": true}`; a failure shows Codex's own words. Nothing of it is kept in `setup.state`: a provider is saved only
+    /// by Save, so a sign-in given up (Cancel, the window closed, the app quit) leaves the step as it was.
     func signInToCodex(installer: Installer?) {
         guard !signingIn.running else { return }
         guard let installer else {
             signingIn = .failed("SHAFT is not installed on this Mac: go back to Install.")
             return
         }
-        let mine = generation
+        loginRun &+= 1
+        let mine = generation, run = loginRun
         forgetTest(saved: false)                     // another login: the check is of the one before
-        loginLines = []
-        signedIn = false
+        (loginURL, loginCode, signedIn) = (nil, nil, false)
         signingIn = .running
-        // Each line hops to the main actor; one from an earlier sign-in (another generation) is dropped there.
+        // Each line hops to the main actor; one from an earlier sign-in (cancelled, or another wizard's) is dropped there.
         let onLine: @Sendable (String) -> Void = { [self] line in
-            Task { @MainActor in self.received(line, generation: mine) }
+            Task { @MainActor in self.received(line, generation: mine, run: run) }
+        }
+        func current(_ steps: SetupSteps) -> Bool {
+            !Task.isCancelled && steps.generation == mine && steps.loginRun == run && steps.signingIn.running
         }
         tasks["login"] = Task { [weak self] in
             do {
                 let result = try await installer.shaft(["codex", "login", "--json"], onLine: onLine)
-                guard let self, !Task.isCancelled, self.generation == mine else { return }
-                if result.succeeded {
+                guard let self, current(self) else { return }
+                // The outcome from all it printed (a line's hop to the main actor may come after this answer).
+                switch CodexLogin.outcome(result.stdout) {
+                case .ok? where result.succeeded:
                     self.signedIn = true
                     self.signingIn = .idle
-                } else {
+                    self.loginCode = nil
+                case .failed(let why)?:
+                    self.signingIn = .failed(why)
+                default:
                     let said = result.said
-                    self.signingIn = .failed("shaft codex login failed (exit \(result.status))" + (said.isEmpty ? "." : ": \(said)"))
+                    self.signingIn = .failed("shaft codex login failed (exit \(result.status))"
+                                             + (said.isEmpty ? "." : ": \(said)"))
                 }
             } catch {
-                guard let self, !Task.isCancelled, self.generation == mine else { return }
+                guard let self, current(self) else { return }
                 self.signingIn = .failed(error.localizedDescription)
             }
-            if let self, self.generation == mine { self.tasks["login"] = nil }
+            // A sign-in given up was taken off already, and a newer one may hold the key now.
+            if let self, self.generation == mine, self.loginRun == run { self.tasks["login"] = nil }
         }
+    }
+
+    /// The operator gave up on the sign-in: the command is terminated (and Codex with it), nothing is recorded.
+    func cancelSignIn() {
+        loginRun &+= 1
+        tasks["login"]?.cancel()
+        tasks["login"] = nil
+        if signingIn.running { signingIn = .idle }
+        (loginURL, loginCode) = (nil, nil)
     }
 
     /// Drop the last check (and with `saved`, what the last save answered): nothing tested before a change counts.
@@ -216,10 +268,16 @@ final class SetupSteps {
         }
     }
 
-    private func received(_ line: String, generation mine: Int) {
-        guard generation == mine, signingIn.running else { return }
-        loginLines.append(line)
-        if let url = CodexLogin.url(in: line) { openURL(url) }
+    private func received(_ line: String, generation mine: Int, run: Int) {
+        guard generation == mine, loginRun == run, signingIn.running else { return }
+        switch CodexLogin.event(in: line) {
+        case .url(let url)?:
+            guard loginURL == nil else { return }    // one page per sign-in
+            loginURL = url
+            openURL(url)
+        case .code(let code)?: loginCode = code
+        default: break
+        }
     }
 
     // MARK: - Your instance
@@ -270,6 +328,110 @@ final class SetupSteps {
                                   + "Fix it here, then Try again: only what is left runs.")
             }
         }
+    }
+
+    // MARK: - Access
+
+    /// The step opened: what is granted already, and (once per instance) the rows the chosen drive suggests ticked,
+    /// minus those already on. The drive is the card picked on "Your instance" (`setup.state.drive`).
+    func prepareAccess(store: InstancesStore?, setup: MacSetup) {
+        guard let name = setup.state.createdInstance else { return }
+        let drive = setup.state.drive
+        let known = drives
+        perform("access-read", \.loadingAccess, store: store) { [weak self] client, current in
+            let presets = known.isEmpty ? try await client.setupDrives().drives : known
+            let answer = try await client.access(name)
+            guard current(), let self else { return }
+            if self.drives.isEmpty { self.drives = presets }
+            self.access = answer
+            guard self.accessPrepared != name else { return }
+            self.accessPrepared = name
+            self.accessSuggested = AccessRow.suggested(by: presets.first { $0.id == drive })
+            self.accessChecked = self.accessSuggested.subtracting(AccessRow.granted(in: answer))
+        }
+    }
+
+    /// Granted already (by the server's word) or applied by this wizard.
+    func isOn(_ row: AccessRow) -> Bool {
+        accessDone.contains(row) || AccessRow.granted(in: access).contains(row)
+    }
+
+    /// A folder chosen in the open panel: it is the folder row's, which it ticks.
+    func choose(folder: URL) {
+        accessFolder = folder.path
+        accessChecked.insert(.folder)
+    }
+
+    /// Continue: the ticked rows not on yet, in `AccessRow.applied` order, each through its route. The first failure
+    /// stops there with its real words (Try again sends what is left, never a row already applied); all applied, the
+    /// wizard goes on. A key or a token is held only until its route has it.
+    func applyAccess(store: InstancesStore?, setup: MacSetup) {
+        guard let name = setup.state.createdInstance else { return }
+        let rows = AccessRow.applied.filter { accessChecked.contains($0) && !isOn($0) }
+        failedRow = nil
+        perform("access", \.granting, store: store) { [weak self] client, current in
+            for row in rows {
+                guard let self, current() else { return }
+                self.grantingRow = row
+                do {
+                    try await self.apply(row, to: name, client: client, current: current)
+                } catch {
+                    if current() {
+                        self.failedRow = row
+                        self.grantingRow = nil
+                    }
+                    throw error
+                }
+                guard current() else { return }
+                self.accessDone.insert(row)
+            }
+            guard current() else { return }
+            self?.grantingRow = nil
+            setup.go(to: .alone)
+        }
+    }
+
+    private func apply(_ row: AccessRow, to name: String, client: APIClient,
+                       current: @escaping @MainActor () -> Bool) async throws {
+        switch row {
+        case .folder:
+            let path = accessFolder
+            guard !path.isEmpty else { throw FormProblem("Choose the folder \(name) may read, or untick it.") }
+            let answer = try await client.grantAccess(name, .folder(path))
+            if current() { access = answer }
+        case .browser:
+            let answer = try await client.grantAccess(name, .browser)
+            if current() { access = answer }
+        case .web:
+            let key = webKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { throw FormProblem("Paste your ScrapeBadger key, or untick web search.") }
+            _ = try await client.setupSecret(name: "SCRAPEBADGER_API_KEY", value: key)
+            if current(), webKey.trimmingCharacters(in: .whitespacesAndNewlines) == key { webKey = "" }
+        case .telegram:
+            let token = telegramToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { throw FormProblem("Paste the token @BotFather gave you, or untick Telegram.") }
+            _ = try await client.setupTelegram(name: name, token: token)
+            if current(), telegramToken.trimmingCharacters(in: .whitespacesAndNewlines) == token { telegramToken = "" }
+        case .mail, .calendar, .drive, .chat:
+            break                                     // the Google setup grants these
+        }
+    }
+
+    /// "Skip all": on to "How it works alone", granting nothing; a key or a token typed here is dropped.
+    func skipAccess(setup: MacSetup) {
+        guard !granting.running else { return }
+        (webKey, telegramToken, failedRow) = ("", "", nil)
+        if granting.failure != nil { granting = .idle }
+        setup.go(to: .alone)
+    }
+
+    /// Cancel while a row is applied (the browser's install may take minutes): the app stops waiting at once. A
+    /// request the server already has finishes there; the step reads what is granted again when it next opens.
+    func cancelAccess() {
+        tasks["access"]?.cancel()
+        tasks["access"] = nil
+        if granting.running { granting = .idle }
+        grantingRow = nil
     }
 
     // MARK: - How it works alone
