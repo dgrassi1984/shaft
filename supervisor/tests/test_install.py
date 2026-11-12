@@ -46,13 +46,18 @@ class Hermetic(unittest.TestCase):
         self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
         self.project, self.agents, self.sup = self.tmp / "p", self.tmp / "agents", self.tmp / "p" / ".supervisor"
         self.project.mkdir()
-        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
         self.calls, self.loaded = [], set()
         self.glob = self.tmp / "gitconfig"
         self.glob.write_text("")
-        env = {"GIT_CONFIG_GLOBAL": str(self.glob), "GIT_CONFIG_NOSYSTEM": "1"}
-        patches = [mock.patch.dict(os.environ, env),
-                   mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
+        (self.tmp / "git-templates").mkdir()
+        # git's isolation comes first, so the `git init` below never reads the operator's init.templateDir or hooks
+        env = {"GIT_CONFIG_GLOBAL": str(self.glob), "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_TEMPLATE_DIR": str(self.tmp / "git-templates")}
+        git_env = mock.patch.dict(os.environ, env)
+        git_env.start()
+        self.addCleanup(git_env.stop)
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        patches = [mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
                    mock.patch.object(core, "SETTINGS_FILE", self.sup / "settings.env"),
                    mock.patch.object(autonomy, "PROJECT", self.project), mock.patch.object(autonomy, "SUP_DIR", self.sup),
                    mock.patch.object(autonomy, "AGENTS", self.agents), mock.patch.object(autonomy, "log"),
