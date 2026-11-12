@@ -30,9 +30,6 @@ struct InstanceStepView: View {
                  + "and its drive in its documents (drive.md).")
                 .foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let failure = steps.creating.failure {
-                SetupFailure(message: failure)
-            }
         }
     }
 
@@ -41,6 +38,8 @@ struct InstanceStepView: View {
             VStack(alignment: .leading, spacing: Design.Space.s8) {
                 TextField("Name (lowercase, e.g. ledger)", text: binding(\.instanceName))
                     .accessibilityHint("Lowercase letters, digits and -, starting with a letter")
+                    // `new` made it already: the name stays, and Try again finishes that instance.
+                    .disabled(setup.state.startedInstance != nil)
                 if !setup.state.instanceName.isEmpty, let problem = InstanceName.problem(setup.state.instanceName) {
                     Text(problem).font(.callout).foregroundStyle(Color.warning)
                 }

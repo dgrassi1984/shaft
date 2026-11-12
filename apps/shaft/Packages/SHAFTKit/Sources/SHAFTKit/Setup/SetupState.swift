@@ -20,6 +20,9 @@ public struct SetupState: Codable, Equatable, Sendable {
     public var instanceName = ""
     /// The instance `POST /setup/instance` created, once it has: "Your instance" shows it, never creates a second.
     public var createdInstance: String?
+    /// An instance whose `new` succeeded while a later step of its creation was refused: its name is kept, and the
+    /// same request again finishes it (the server skips `new` for it).
+    public var startedInstance: String?
     /// The drive card picked (`GET /setup/drives` id), nil until one is picked.
     public var drive: String?
     /// The drive's editable text, which becomes `drive.md`.
@@ -30,7 +33,8 @@ public struct SetupState: Codable, Equatable, Sendable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case step, operatorName, email, provider, model, instanceName, createdInstance, drive, driveText, autonomy
+        case step, operatorName, email, provider, model, instanceName, createdInstance, startedInstance, drive, driveText
+        case autonomy
     }
 
     /// A state saved by an older app lacks the newer fields: they take their defaults. An unknown step is an error.
@@ -43,6 +47,7 @@ public struct SetupState: Codable, Equatable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
         instanceName = try c.decodeIfPresent(String.self, forKey: .instanceName) ?? ""
         createdInstance = try c.decodeIfPresent(String.self, forKey: .createdInstance)
+        startedInstance = try c.decodeIfPresent(String.self, forKey: .startedInstance)
         drive = try c.decodeIfPresent(String.self, forKey: .drive)
         driveText = try c.decodeIfPresent(String.self, forKey: .driveText) ?? ""
         autonomy = try c.decodeIfPresent(String.self, forKey: .autonomy) ?? "own"

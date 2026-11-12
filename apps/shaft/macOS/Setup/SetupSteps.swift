@@ -130,6 +130,9 @@ final class SetupSteps {
 
     /// The key first (when one was typed), then the provider's preset. The key field clears once the key is saved.
     func saveProvider(store: InstancesStore?, setup: MacSetup) {
+        guard !saving.running else { return }
+        // Whatever was tested before no longer counts, whether this save works or not: Continue waits for a new test.
+        forgetTest(saved: true)
         let request: ProviderRequest
         switch form.request() {
         case .failure(let problem):
@@ -148,8 +151,6 @@ final class SetupSteps {
             guard current(), let self else { return }
             self.coverage = answer
             self.saved = request
-            self.check = nil
-            self.checked = nil
             setup.edit { state in
                 state.provider = request.provider
                 state.model = answer.model
@@ -159,7 +160,8 @@ final class SetupSteps {
 
     /// One live call per configured model of the saved provider.
     func test(store: InstancesStore?) {
-        guard let saved else { return }
+        guard let saved, !testing.running else { return }
+        forgetTest(saved: false)                     // a failed or stopped retest leaves no earlier success behind
         perform("check", \.testing, store: store) { [weak self] client, current in
             let answer = try await client.checkProvider(saved.provider)
             guard current(), let self else { return }
@@ -177,6 +179,7 @@ final class SetupSteps {
             return
         }
         let mine = generation
+        forgetTest(saved: false)                     // another login: the check is of the one before
         loginLines = []
         signedIn = false
         signingIn = .running
@@ -203,6 +206,16 @@ final class SetupSteps {
         }
     }
 
+    /// Drop the last check (and with `saved`, what the last save answered): nothing tested before a change counts.
+    private func forgetTest(saved alsoSaved: Bool) {
+        check = nil
+        checked = nil
+        if alsoSaved {
+            saved = nil
+            coverage = nil
+        }
+    }
+
     private func received(_ line: String, generation mine: Int) {
         guard generation == mine, signingIn.running else { return }
         loginLines.append(line)
@@ -226,7 +239,8 @@ final class SetupSteps {
 
     /// `POST /setup/instance` as the operator leaves "Your instance": created paused, working on its own after the
     /// first answered reply (step 6 may change that). Once created, never again: the step shows it read-only. A
-    /// refusal after `new` succeeded keeps the instance as created and says what was not done.
+    /// refusal after `new` succeeded keeps its name (`startedInstance`) and says what was not set; Try again sends
+    /// the same request, which the server finishes without a second `new`.
     func createInstance(store: InstancesStore?, setup: MacSetup) {
         let state = setup.state
         if state.createdInstance != nil {
@@ -238,20 +252,22 @@ final class SetupSteps {
                 let made = try await client.setupInstance(name: state.instanceName, operator: state.operatorName,
                                                           model: state.model, drive: state.driveText, autonomy: "own")
                 guard current() else { return }
-                setup.edit { $0.createdInstance = made.instance }
+                setup.edit { state in
+                    state.createdInstance = made.instance
+                    state.startedInstance = nil
+                }
                 await store?.refresh()
                 guard current() else { return }
                 setup.go(to: .access)
             } catch APIError.server(let status, let body) where body.done?.contains("new") == true {
                 guard current() else { return }
-                setup.edit { $0.createdInstance = state.instanceName }
+                setup.edit { $0.startedInstance = state.instanceName }
                 await store?.refresh()
                 let missing = ["config": "its name for you and its model", "drive": "its drive"]
                     .filter { !(body.done ?? []).contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
                 throw FormProblem("\(state.instanceName) was created, but \(ListFormatter.localizedString(byJoining: missing)) "
                                   + "could not be set (HTTP \(status)): \(APIError.server(status: status, error: body).message) "
-                                  + "Continue goes on with it as it is; fix it in Settings, or run shaft delete "
-                                  + "\(state.instanceName) and set it up again.")
+                                  + "Fix it here, then Try again: only what is left runs.")
             }
         }
     }

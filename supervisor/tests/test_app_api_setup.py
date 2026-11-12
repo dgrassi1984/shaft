@@ -66,6 +66,9 @@ class SetupTest(AppTest):
             for d in ("shaft", ".git"):
                 (root / d).mkdir(parents=True)
             (root / "drive.md").write_text(DEFAULT_DRIVE)                   # the template's, as `shaft new` leaves it
+            if "--paused-until-first-reply" in args:                         # as `shaft new`: paused, with its marker
+                core.set_paused(name, True, reason="waiting for the operator's first reply", note=False)
+                (self.sup / f"first-reply-{name}").write_text(json.dumps({"then": args[-1], "created": "x"}))
             return 0, [{"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
                         "paused": "--paused-until-first-reply" in args}]
         if args[:2] == ["secrets", "set"]:
@@ -175,6 +178,33 @@ class CreateTest(SetupTest):
         err = self.error(self.create(), 409, "refused")
         self.assertEqual(err["done"], ["new", "config"])
         self.assertIn("drive.md changed", err["message"])
+
+    def test_asked_again_after_a_refused_step_it_finishes_without_a_second_new(self):
+        # Bug class: `new` succeeded, `config` was refused, and every later attempt was refused "already exists".
+        self.refuse["config"] = (False, "refused: LLM_MODEL: no such model")
+        self.assertEqual(self.error(self.create(), 409, "refused")["done"], ["new"])
+        del self.refuse["config"]
+        self.calls.clear()
+        r = self.create()
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(json.loads(r.body), {"instance": "ledger", "done": ["new", "config", "drive"], "paused": True})
+        self.assertEqual([a[0] for a in self.verbs()], ["config", "drive"])
+        self.assertEqual((self.inst / "ledger" / "drive.md").read_text(), DRIVE + "\n")
+        self.assertTrue((self.sup / "first-reply-ledger").exists())          # its choice is left as it was
+
+    def test_the_app_quitting_before_it_heard_is_finished_on_the_next_attempt(self):
+        self.assertEqual(self.create().status, 200)                        # the answer the app never read
+        self.calls.clear()
+        r = self.create()
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual([a[0] for a in self.verbs()], ["config"])          # the drive is already that text
+        self.assertEqual(json.loads(r.body)["done"], ["new", "config", "drive"])
+
+    def test_an_existing_instance_not_waiting_for_a_first_reply_is_news_refusal(self):
+        self.refuse["new"] = (2, [{"ok": False, "error": "instance 'wisp' already exists"}])
+        err = self.error(self.create(name="wisp"), 409, "refused")
+        self.assertEqual(err["message"], "instance 'wisp' already exists")
+        self.assertEqual(self.verbs(), [["new", "wisp", "--json", "--paused-until-first-reply", "resume"]])
 
     def test_bad_bodies_run_nothing(self):
         for over in ({"autonomy": "sometimes"}, {"autonomy": []}, {"autonomy": {}}, {"name": 3}, {"drive": ""}, {"drive": "x" * 20001}, {"operator": ""},

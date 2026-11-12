@@ -192,20 +192,26 @@ enum AloneChoice: String, CaseIterable, Identifiable {
 /// The daily budgets shown on "How it works alone".
 enum Budget {
     /// The model's daily cap as typed: empty is no override (the supervisor's default, `SHAFT_CLOUD_DAILY_USD`,
-    /// applies), else dollars, 0 or more.
+    /// applies), else a positive amount of dollars, as `core.limit_value` takes it (rounded to the cent, above 0).
     static func cloudCap(_ text: String) -> Result<Double?, FormProblem> {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return .success(nil) }
-        guard let value = Double(trimmed), value.isFinite, value >= 0 else {
-            return .failure(FormProblem("The model's daily budget is dollars: a number, 0 or more, or empty for the default."))
+        guard let value = Double(trimmed), value.isFinite, value >= 0.01 else {
+            return .failure(FormProblem("The model's daily budget is a positive amount of dollars (at least 0.01), or "
+                                        + "empty for the default."))
         }
         return .success(value)
     }
 
-    /// The cap as the field shows it: empty for no override.
+    /// The cap as the field shows it: empty for no override; dollars to the cent, trailing zeros dropped, in the
+    /// form `cloudCap` reads back whatever the Mac's locale (no conversion to Int, which traps past Int.max).
     static func text(_ cap: Double?) -> String {
         guard let cap else { return "" }
-        return cap == cap.rounded() ? String(Int(cap)) : String(cap)
+        guard cap.isFinite else { return String(cap) }
+        var text = String(format: "%.2f", cap)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text
     }
 
     /// The budgets this version cannot change from the app: (what, the supervisor setting, its default).

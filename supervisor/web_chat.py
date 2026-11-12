@@ -1353,8 +1353,8 @@ def _first_reply(name: str) -> None:
     paused until then (`shaft new --paused-until-first-reply`) left `.supervisor/first-reply-<name>`: with "resume" it
     is resumed now (`shaft resume`), and the marker goes only when that worked — a failed resume is tried again after
     the next reply; with "stay" only the marker goes. One at a time per instance: two replies ending together resume
-    it once. Never fails a reply."""
-    from . import actions
+    it once. The marker is read, acted on and removed under `core.first_reply_lock`, which `shaft first-reply` takes to
+    rewrite it: a choice changed meanwhile is the one applied, and never removed unread. Never fails a reply."""
     path = SUP_DIR / f"first-reply-{name}"
     if not path.exists():
         return
@@ -1362,27 +1362,39 @@ def _first_reply(name: str) -> None:
         lock = _first_reply_locks.setdefault(name, threading.Lock())
     with lock:
         try:
-            then = json.loads(path.read_text()).get("then")
-        except FileNotFoundError:                 # the other reply took it meanwhile
+            from . import core
+            with core.first_reply_lock(name):
+                _apply_first_reply(name, path)
+        except (OSError, ValueError) as e:          # the lock file: the marker stays for the next reply
+            log(f"web: could not lock {name}'s first-reply marker ({type(e).__name__}: {e}): tried again after the "
+                "next reply")
+
+
+def _apply_first_reply(name: str, path) -> None:
+    """_first_reply's work, under the marker's lock."""
+    from . import actions
+    try:
+        then = json.loads(path.read_text()).get("then")
+    except FileNotFoundError:                 # the other reply took it meanwhile
+        return
+    except (OSError, ValueError, AttributeError) as e:
+        log(f"web: {name}'s first-reply marker is unreadable ({type(e).__name__}: {e}): it stays, and so does the "
+            f"pause (shaft resume {name})")
+        return
+    if then == "resume":
+        try:
+            ok, last = actions.run_now(["resume", name], who="first reply")
+        except (Exception, SystemExit) as e:  # noqa: BLE001 — the reply is saved: this must not undo it
+            ok, last = False, f"{type(e).__name__}: {e}"
+        if not ok:
+            log(f"web: could not resume {name} after the operator's first reply ({last}): tried again after the "
+                "next one")
             return
-        except (OSError, ValueError, AttributeError) as e:
-            log(f"web: {name}'s first-reply marker is unreadable ({type(e).__name__}: {e}): it stays, and so does the "
-                f"pause (shaft resume {name})")
-            return
-        if then == "resume":
-            try:
-                ok, last = actions.run_now(["resume", name], who="first reply")
-            except (Exception, SystemExit) as e:  # noqa: BLE001 — the reply is saved: this must not undo it
-                ok, last = False, f"{type(e).__name__}: {e}"
-            if not ok:
-                log(f"web: could not resume {name} after the operator's first reply ({last}): tried again after the "
-                    "next one")
-                return
-            log(f"web: {name} resumed after the operator's first reply")
-        elif then != "stay":
-            log(f"web: {name}'s first-reply marker says then={then!r}, neither resume nor stay: it stays as it is")
-            return
-        path.unlink(missing_ok=True)
+        log(f"web: {name} resumed after the operator's first reply")
+    elif then != "stay":
+        log(f"web: {name}'s first-reply marker says then={then!r}, neither resume nor stay: it stays as it is")
+        return
+    path.unlink(missing_ok=True)
 
 
 def _comment_ids(turns: list[dict]) -> list[str]:

@@ -1103,7 +1103,10 @@ def _verb_said(rows: list[dict]) -> str:
 
 def _setup_instance(req: Request) -> Response:
     """`new --json --paused-until-first-reply`, then `config set`, then `drive set`: the instance as the wizard set it
-    up. No opening (that is /setup/hello, once access is granted). A step's refusal: 409 with its words and `done`."""
+    up. No opening (that is /setup/hello, once access is granted). A step's refusal: 409 with its words and `done`.
+    Asked again for an instance a setup created and nobody has answered yet (it exists and still has its first-reply
+    marker: `new` succeeded, then a later step was refused or the app quit before it heard), `new` is skipped and the
+    remaining steps run: Try again finishes it instead of being refused "already exists"."""
     import secrets as _secrets
     from . import actions, core, opconfig
     from .web_config import DRIVE_MAX               # the web Drive page's limit, the same here
@@ -1123,10 +1126,14 @@ def _setup_instance(req: Request) -> Response:
     def refused(said: str) -> Refusal:
         return Refusal(409, "refused", said, done=list(done))
 
-    code, rows = actions.run_json(["new", name, "--json", "--paused-until-first-reply", AUTONOMY[data["autonomy"]]],
-                                  actions.SLOW_S, who=who)
-    if code != 0 or not rows[-1].get("ok"):
-        raise refused(_verb_said(rows))
+    if name in core.instance_names() and (core.SUP_DIR / f"first-reply-{name}").exists():
+        paused = core.paused(name)                  # made by a setup, still waiting: finish it
+    else:
+        code, rows = actions.run_json(["new", name, "--json", "--paused-until-first-reply", AUTONOMY[data["autonomy"]]],
+                                      actions.SLOW_S, who=who)
+        if code != 0 or not rows[-1].get("ok"):
+            raise refused(_verb_said(rows))
+        paused = bool(rows[-1].get("paused"))
     done.append("new")
     ok, said = actions.run_now(["config", name, "set", f"OPERATOR_NAME={operator}", f"LLM_MODEL={model}"], who=who)
     if not ok:
@@ -1145,7 +1152,7 @@ def _setup_instance(req: Request) -> Response:
         if not ok:
             raise refused(said)
     done.append("drive")
-    return _json(200, {"instance": name, "done": done, "paused": bool(rows[-1].get("paused"))})
+    return _json(200, {"instance": name, "done": done, "paused": paused})
 
 
 def _setup_drives(req: Request) -> Response:

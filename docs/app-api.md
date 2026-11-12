@@ -1483,7 +1483,10 @@ Success: `{"instance": str, "done": ["new", "config", "drive"], "paused": bool}`
 ```
 
 An instance whose `new` succeeded stays created (and paused); the app shows the message and lets the operator fix the
-setting, or `shaft delete <name>`.
+setting and send the same request again, or `shaft delete <name>`. A request naming an instance that exists and still
+has its first-reply marker (a setup made it, and nobody has answered it yet: a later step was refused, or the app quit
+before it heard the answer) skips `new` and runs the remaining steps, `done` then listing all three; its first-reply
+choice is left as it is (§18.9 changes it). Any other existing name is `new`'s own refusal ("already exists").
 
 ### 18.2 `GET /setup/drives`
 
@@ -1593,10 +1596,12 @@ operator's first answered reply resumes the instance or leaves it paused, as `au
 `{"then": "resume"|"stay"}`: `first-reply <n> <then> --json`, the wizard's "How it works alone" choice. The wizard
 creates the instance when it leaves "Your instance" (with `autonomy` `"own"`, so the Access step has an instance to
 grant to), and this route changes what the operator's first answered reply does: `resume` (the scheduler takes it from
-there) or `stay` (it stays paused, talking only when talked to). The verb rewrites `.supervisor/first-reply-<n>`
-atomically, keeping when it was made; it claims the marker by a rename first, so when there is none (the first reply
-has happened already, or `<n>` was not created waiting for one) it is `409 refused` in the verb's words and nothing is
-written. An unknown instance: `404 not_found`. Success: `{"instance": <n>, "then": <then>}`.
+there) or `stay` (it stays paused, talking only when talked to). The verb rewrites `.supervisor/first-reply-<n>` in
+place (temporary file, then a rename over it), keeping when it was made, under a lock across processes
+(`core.first_reply_lock`) that the web service's first reply also holds while it reads the marker, acts on it and
+removes it: the reply applies the choice written last, and a rewrite never lands after the marker was consumed. When
+there is none (the first reply has happened already, or `<n>` was not created waiting for one) it is `409 refused` in
+the verb's words and nothing is written. An unknown instance: `404 not_found`. Success: `{"instance": <n>, "then": <then>}`.
 
 ## Appendix A. Implementation notes
 

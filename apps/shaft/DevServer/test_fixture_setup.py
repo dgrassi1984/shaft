@@ -87,7 +87,12 @@ class FixtureSetupTest(unittest.TestCase):
                 self.assertTrue(settings["paused"])
                 self.assertEqual(settings["operator_name"]["value"], "Ada")
                 self.assertEqual(settings["model"]["value"], "codex/gpt-6-astra")
-                err = api("/app/v1/setup/instance", "POST", {"name": "ledger", "operator": "Ada", "model": "m",
+                # Asked again while it waits for its first reply (the app quit before it heard): finished, no second new.
+                again = api("/app/v1/setup/instance", "POST", {"name": "ledger", "operator": "Ada",
+                                                               "model": "codex/gpt-6-astra", "drive": drives[0]["text"],
+                                                               "autonomy": "own"})
+                self.assertEqual(again["done"], ["new", "config", "drive"])
+                err = api("/app/v1/setup/instance", "POST", {"name": "wisp", "operator": "Ada", "model": "m",
                                                              "drive": "d", "autonomy": "own"}, expected=409)
                 self.assertIn("already exists", err["error"]["message"])
 

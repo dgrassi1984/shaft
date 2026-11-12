@@ -89,10 +89,13 @@ def _write_first_reply(name: str, then: str, created: str | None = None) -> None
 
 def cmd_first_reply(name: str, then: str, as_json: bool = False) -> int:
     """`shaft first-reply NAME resume|stay`: change what the operator's first answered reply does to an instance made
-    with `new --paused-until-first-reply` (the Mac app's "How it works alone" step). The marker is claimed by a rename
-    before it is rewritten, so a first reply that took it meanwhile leaves nothing to claim and the verb refuses rather
-    than leave a marker after the fact (which would resume the instance at some later reply). Refused (exit 1) when
-    there is no marker: the first reply has happened already, or the instance was not created waiting for one."""
+    with `new --paused-until-first-reply` (the Mac app's "How it works alone" step). Under `core.first_reply_lock`,
+    which the web service's first reply holds too while it reads, acts on and removes the marker: the marker is read
+    and replaced in place (temporary file, then os.replace: never a moment without it), keeping when it was made.
+    Refused (exit 1) when there is no marker: the first reply has happened already, or the instance was not created
+    waiting for one — never a marker after the fact, which would resume the instance at some later reply."""
+    from .core import first_reply_lock
+
     def say(ok: bool, message: str, code: int) -> int:
         if as_json:
             print(json.dumps({"ok": True, "name": name, "then": then} if ok else {"ok": False, "error": message}))
@@ -102,27 +105,20 @@ def cmd_first_reply(name: str, then: str, as_json: bool = False) -> int:
 
     if not NAME_RE.match(name) or name == "operator":
         return say(False, f"no instance named {name!r}", 2)
-    path, held = SUP_DIR / f"first-reply-{name}", SUP_DIR / f".first-reply-{name}.changing"
+    path = SUP_DIR / f"first-reply-{name}"
     try:
-        os.rename(path, held)
-    except FileNotFoundError:
-        return say(False, f"{name} is not waiting for its first reply (it was answered already, or {name} was not "
-                          f"created waiting for one): use shaft pause {name} or shaft resume {name} instead", 1)
+        with first_reply_lock(name):
+            try:
+                created = json.loads(path.read_text()).get("created")
+            except FileNotFoundError:
+                return say(False, f"{name} is not waiting for its first reply (it was answered already, or {name} "
+                                  f"was not created waiting for one): use shaft pause {name} or shaft resume {name} "
+                                  "instead", 1)
+            except (ValueError, AttributeError):
+                created = None                 # unreadable: replaced whole, as the consumer would have left it
+            _write_first_reply(name, then, created if isinstance(created, str) else None)
     except OSError as e:
         return say(False, f"could not change {name}'s first-reply marker: {e}", 1)
-    try:
-        try:
-            created = json.loads(held.read_text()).get("created")
-        except (OSError, ValueError, AttributeError):
-            created = None
-        _write_first_reply(name, then, created if isinstance(created, str) else None)
-    except OSError as e:
-        try:
-            os.rename(held, path)              # put the old one back: the instance keeps waiting as it was
-        except OSError:
-            pass
-        return say(False, f"could not change {name}'s first-reply marker: {e}", 1)
-    held.unlink(missing_ok=True)
     return say(True, f"{name}: after your first reply it will "
                      + ("work on its own" if then == "resume" else "stay paused, answering only when you talk to it"), 0)
 

@@ -847,6 +847,13 @@ def _grant_lock(name: str, lock_name: str):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def first_reply_lock(name: str):
+    """One holder at a time of `.supervisor/first-reply-<name>`, across processes: `shaft first-reply` reading and
+    rewriting it, and the web service's first answered reply reading it, acting on it (`shaft resume`) and removing
+    it. Without it a rewrite could land after the consumer read the old choice and be removed with it."""
+    return _grant_lock(name, "first-reply")
+
+
 def gdrive_lock(name: str):
     return _grant_lock(name, "gdrive")
 

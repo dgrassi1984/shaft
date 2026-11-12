@@ -145,6 +145,12 @@ struct SetupFormsTests {
         #expect(Budget.text(8) == "8")
         #expect(Budget.text(2.5) == "2.5")
         #expect(Budget.text(nil) == "")
+        #expect(Budget.text(1e20) == "100000000000000000000")   // past Int.max: no trap (fix round 1)
+        #expect(Budget.text(0.1) == "0.1")
+        // As core.limit_value: a positive amount, to the cent; 0 is refused (empty is the default).
+        if case .success = Budget.cloudCap("0") { Issue.record("0 is not a budget the server takes") }
+        if case .success = Budget.cloudCap("0.001") { Issue.record("rounds to 0 on the server") }
+        #expect(try Budget.cloudCap("0.01").get() == 0.01)
     }
 
     @Test func aCodexLoginURLLineOpensOnlyAWebPage() {
@@ -247,7 +253,9 @@ struct SetupStepsTests {
         #expect(f.setup.state.step == .access)
     }
 
-    @Test func aRefusalAfterNewKeepsTheInstanceAndSaysWhatWasNotDone() async throws {
+    /// Fix round 1: a refusal after `new` left no way on but Continue with the instance half set up. Now its name is
+    /// kept, the fields stay editable, and Try again sends the request again (the server finishes it, no second new).
+    @Test func aRefusalAfterNewKeepsTheNameAndTryAgainFinishesIt() async throws {
         let f = try Fixture(step: .instance) { state in
             state.instanceName = "ledger"
             state.model = "custom/nope"
@@ -258,12 +266,78 @@ struct SetupStepsTests {
         }
         f.setup.steps.createInstance(store: f.store, setup: f.setup)
         await f.settle()
-        #expect(f.setup.state.createdInstance == "ledger")     // never a second `new` that would say it exists
+        #expect(f.setup.state.startedInstance == "ledger")
+        #expect(f.setup.state.createdInstance == nil)          // not done: Continue does not just move on
         #expect(f.setup.state.step == .instance)
         let said = try #require(f.setup.steps.creating.failure)
         #expect(said.contains("ledger was created"))
         #expect(said.contains("LLM_MODEL: no such model"))
         #expect(said.contains("its drive"))
+        #expect(said.contains("Try again"))
+
+        f.setup.edit { $0.model = "custom/real" }              // fixed, then Try again
+        f.server.answer { request in
+            request.path == "/app/v1/setup/instance"
+                ? .init(200, #"{"instance": "ledger", "done": ["new", "config", "drive"], "paused": true}"#)
+                : .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
+        }
+        f.setup.steps.createInstance(store: f.store, setup: f.setup)
+        await f.settle()
+        let posts = f.server.requests.filter { $0.path == "/app/v1/setup/instance" }
+        #expect(posts.count == 2)
+        #expect(posts.last?.json?["name"] as? String == "ledger")
+        #expect(posts.last?.json?["model"] as? String == "custom/real")
+        #expect(f.setup.state.createdInstance == "ledger")
+        #expect(f.setup.state.startedInstance == nil)
+        #expect(f.setup.state.step == .access)
+        #expect(f.setup.steps.creating == .idle)
+    }
+
+    /// Fix round 1: a passed test stayed valid after a later save (a new key, another provider) failed, and Continue
+    /// stayed enabled on a provider nobody had tested.
+    @Test func aSaveOrRetestAfterAPassedTestNeedsANewPass() async throws {
+        let f = try Fixture(step: .model)
+        let provider = #"{"provider": "openrouter", "model": "openrouter/x/y", "changed": [], "covers": ["instances"], "off": [], "not_live": []}"#
+        let passed = #"{"provider": "openrouter", "ok": true, "models": [{"ok": true, "model": "openrouter/x/y", "error": null}]}"#
+        let failing = Answers(["/app/v1/setup/secret": .init(200, #"{"said": "OPENROUTER_API_KEY saved"}"#),
+                               "/app/v1/setup/provider": .init(200, provider),
+                               "/app/v1/setup/provider/check": .init(200, passed)])
+        f.server.answer { failing.answer($0) }
+        func canContinue() -> Bool {
+            let steps = f.setup.steps
+            return SetupContinue.enabled(.model, SetupContinue.Context(
+                saved: steps.saved, checked: steps.checked, checkPassed: steps.check?.ok == true,
+                current: try? steps.form.request().get()))
+        }
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup)
+        await f.settle()
+        f.setup.steps.test(store: f.store)
+        await f.settle()
+        #expect(canContinue())
+
+        // A new key that the server refuses: the earlier pass no longer counts.
+        failing.set("/app/v1/setup/secret", .init(409, #"{"error": {"code": "refused", "message": "cannot write .env"}}"#))
+        f.setup.steps.form.key = "sk-or-new"
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(f.setup.steps.saving == .failed("cannot write .env"))
+        #expect(f.setup.steps.check == nil)
+        #expect(f.setup.steps.saved == nil)
+        #expect(!canContinue())
+
+        // Saved again, then a retest the server cannot run: still no pass from before.
+        failing.set("/app/v1/setup/secret", .init(200, #"{"said": "OPENROUTER_API_KEY saved"}"#))
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup)
+        await f.settle()
+        f.setup.steps.test(store: f.store)
+        await f.settle()
+        #expect(canContinue())
+        failing.set("/app/v1/setup/provider/check", .init(409, #"{"error": {"code": "refused", "message": "no settings"}}"#))
+        f.setup.steps.test(store: f.store)
+        await f.settle()
+        #expect(f.setup.steps.testing == .failed("no settings"))
+        #expect(f.setup.steps.check == nil)
+        #expect(!canContinue())
     }
 
     /// Starting over (or the wizard ending) cancels the creation in flight: nothing it answers is recorded.
@@ -379,6 +453,17 @@ struct SetupStepsTests {
      "voice_mode":{"value":"off","choices":["on","off"]},
      "voice_effort":{"value":"","choices":["","low","medium","high"]}}
     """#
+}
+
+/// Answers by path that a test changes as it goes.
+final class Answers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var byPath: [String: SetupStub.Answer]
+    init(_ byPath: [String: SetupStub.Answer]) { self.byPath = byPath }
+    func set(_ path: String, _ answer: SetupStub.Answer) { lock.withLock { byPath[path] = answer } }
+    func answer(_ request: SetupStub.Request) -> SetupStub.Answer {
+        lock.withLock { byPath[request.path] } ?? .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
+    }
 }
 
 /// A one-shot gate a held answer waits on.

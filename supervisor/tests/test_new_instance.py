@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -267,6 +268,49 @@ class FirstReplyTest(NewInstanceCase):
         self.assertFalse(json.loads(out)["ok"])
         self.assertIn("not waiting for its first reply", json.loads(out)["error"])
         self.assertFalse((self.sup / "first-reply-ada").exists(), "no marker is made after the fact")
+
+    def test_a_rewrite_waits_for_a_consumer_holding_the_lock(self):
+        # Bug class: the verb rewrote the marker while a first reply was acting on the old one, which then removed the
+        # new choice (or the reply found no marker in the gap and was missed).
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        marker = self.sup / "first-reply-ada"
+        result = {}
+
+        def rewrite():
+            out = io.StringIO()
+            with mock.patch.object(cli, "print", create=True, side_effect=lambda *a, **k: out.write(" ".join(a))):
+                result["code"] = cli.cmd_first_reply("ada", "stay", True)
+            result["out"] = out.getvalue()
+        with core.first_reply_lock("ada"):                            # a first reply is acting on "resume"
+            worker = threading.Thread(target=rewrite)
+            worker.start()
+            worker.join(0.3)
+            self.assertTrue(worker.is_alive(), "the rewrite did not wait for the lock")
+            self.assertEqual(json.loads(marker.read_text())["then"], "resume")
+            marker.unlink()                                           # the reply consumed it
+        worker.join(5)
+        self.assertEqual(result["code"], 1)
+        self.assertIn("not waiting for its first reply", json.loads(result["out"])["error"])
+        self.assertFalse(marker.exists(), "no marker is left after the first reply")
+
+    def test_a_reply_waiting_on_the_lock_applies_the_choice_rewritten_meanwhile(self):
+        from supervisor import web_chat
+        for made, now, resumes in (("resume", "stay", 0), ("stay", "resume", 1)):
+            with self.subTest(made=made):
+                shutil.rmtree(self.sup, ignore_errors=True)
+                self.sup.mkdir()
+                cli._write_first_reply("ada", made)
+                with mock.patch.object(web_chat, "SUP_DIR", self.sup), \
+                        mock.patch.object(actions, "run_now", return_value=(True, "resumed")) as run_now:
+                    with core.first_reply_lock("ada"):                # `shaft first-reply` holds it
+                        reply = threading.Thread(target=web_chat._first_reply, args=("ada",))
+                        reply.start()
+                        reply.join(0.3)
+                        self.assertTrue(reply.is_alive(), "the reply did not wait for the lock")
+                        cli._write_first_reply("ada", now)            # the rewrite, under the lock
+                    reply.join(5)
+                self.assertEqual(run_now.call_count, resumes)
+                self.assertFalse((self.sup / "first-reply-ada").exists())
 
     def test_a_failed_write_puts_the_old_marker_back(self):
         self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
