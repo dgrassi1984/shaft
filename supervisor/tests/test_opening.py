@@ -13,7 +13,10 @@ import threading
 import time
 from unittest import mock
 
-from supervisor import actions, core, runner, web_chat, web_views
+import unittest
+
+from supervisor import actions, broker, core, runner, web_chat, web_views
+from supervisor.tests.test_background_messages import Fixture
 from supervisor.tests.test_web_chat import ME, ChatTest
 
 OPENING = "SETUP-ONLY: introduce yourself to the operator and ask what they want from you first."
@@ -185,6 +188,7 @@ class OpeningTest(ChatTest):
         retry = failure["retry"]
         self.assertIsNotNone(retry)
         self.assertEqual((retry["text"], retry["retry_of"], retry["confirm"]), (web_chat.OPENING_RETRY, 1, None))
+        self.assertEqual(failure["links"], [])                            # nothing ran: one tap, nothing to check
         self.assertNotIn("SETUP-ONLY", json.dumps(model))
         rendered = str(web_views.chat_feed("wisp", c, web_chat.from_rows("wisp")))
         self.assertIn("data-retry-of=\"1\"", rendered)
@@ -206,6 +210,46 @@ class OpeningTest(ChatTest):
         self.assertEqual(self.resumes(), [])                         # the welcome, even retried, never resumes it
         self.assertTrue(self.marker().exists())
         self.assertTrue(core.paused("wisp"))
+
+    def test_a_failed_opening_where_actions_may_have_run_asks_first_and_keeps_the_failed_try(self):
+        """As any Retry: when the request may have run tools (here the connection reset after it was sent), Retry asks
+        first and the failed try stays — in view and in the conversation; only a failure where nothing ran folds."""
+        self.paused_until_first_reply("resume")
+        conn = mock.Mock()
+        conn.request.side_effect = ConnectionResetError("reset by peer")
+        with mock.patch.object(web_chat, "_api_conn", return_value=conn):
+            c = self.open_and_wait()
+        self.assertFalse(c["turns"][-1]["note_retry"])
+        failure = web_chat.feed("wisp")["items"][0]["failure"]
+        retry = failure["retry"]
+        self.assertEqual((retry["text"], retry["retry_of"], retry["confirm"]),
+                         (web_chat.OPENING_RETRY, None, web_chat.RETRY_CONFIRM))
+        self.assertIn("Actions may already have run", failure["action"])
+        self.assertEqual([x["label"] for x in failure["links"]], ["Activity", "Services"])
+        rendered = str(web_views.chat_feed("wisp", c, web_chat.from_rows("wisp")))
+        self.assertIn("data-retry-confirm=", rendered)
+        self.assertNotIn("data-retry-of=", rendered)
+        self.assertNotIn("SETUP-ONLY", rendered)
+        # Retry after its confirm, as the page and the apps send it: no retry_of
+        chat, said = web_chat.send("wisp", ME, retry["text"], [], mid="m-again")
+        self.assertEqual(said, "sent to wisp")
+        c = self.wait_idle(chat["id"])
+        self.assertEqual([t.get("retried", False) for t in c["turns"]], [False, False, False, False])   # nothing folded
+        self.assertEqual([(t["role"], bool(t.get("hidden"))) for t in c["turns"]],
+                         [("user", True), ("assistant", False), ("user", True), ("assistant", False)])
+        self.assertEqual(self.api.chats()[-1][2]["messages"][-1],
+                         {"role": "user", "content": OPENING + "\n\n" + web_chat.DOCS_NOTE})
+        model = web_chat.feed("wisp")
+        self.assertEqual([(i["type"], bool(i["failure"])) for i in model["items"]],
+                         [("assistant", True), ("assistant", False)])        # the failed try in view, then the welcome
+        self.assertNotIn("SETUP-ONLY", json.dumps(model))
+        self.assertIn("m-again", model["mids"])
+        self.assertEqual(self.resumes(), [])
+        self.assertTrue(self.marker().exists())
+        # The old failure's Retry, once the welcome has come: refused, never sent as an operator message
+        with self.assertRaisesRegex(web_chat.Refused, "not asked for again"):
+            web_chat.send("wisp", ME, retry["text"], [], mid="m-late")
+        self.assertEqual(len(web_chat.load(c["id"])["turns"]), 4)
 
     def test_the_conversation_is_open_while_the_opening_replies(self):
         """The opening's reply is an API conversation like any (keyed by Main's id): the API registers it, so
@@ -232,6 +276,42 @@ class OpeningTest(ChatTest):
         self.wait_idle(chat["id"], 15)
 
 
+class ReadThreadTest(unittest.TestCase):
+    """The instance reading its Main (broker read_thread): every message is marked as written by its sender — the
+    opening by the setup, on the operator's behalf; never by the operator."""
+
+    def setUp(self):
+        self.f = Fixture()
+        self.f.make(self)
+        for p in (mock.patch("supervisor.feedback.by_target", return_value={}),
+                  mock.patch.object(web_chat, "_start"),                    # no relay: the turns are what is read
+                  mock.patch.object(web_chat, "_docs_now", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_read_thread_shows_the_opening_as_from_the_setup_never_the_operator(self):
+        chat = web_chat.opening("wisp", ME, OPENING)
+        with web_chat._lock(chat["id"]):                              # the welcome, then the operator's answer
+            c = web_chat.load(chat["id"])
+            c["state"], c["reply"] = "idle", None
+            c["turns"] += [{"role": "assistant", "content": "Hello, I am wisp.", "ts": "2099-01-01T10:00:01"},
+                           {"role": "user", "content": "hi wisp", "shown": "hi wisp", "ts": "2099-01-01T10:00:02"}]
+            web_chat.save(c)
+        read = broker.Broker("wisp", self.f.project, {}, self.f.project / "broker.log").call(
+            "read_thread", {"id": chat["id"]})
+        self.assertTrue(read["ok"], read)
+        out = read["result"]
+        self.assertTrue(out.startswith("setup, on the operator's behalf ("), out[:80])
+        self.assertIn("SETUP-ONLY", out[:out.index("\n\nwisp (")])               # the opening, under setup's name
+        self.assertEqual(out.count("\n\noperator ("), 1)                      # only the operator's own "hi wisp"
+        self.assertFalse(out.startswith("operator ("))
+        self.assertLess(out.index("\n\nwisp ("), out.index("\n\noperator ("))
+        self.assertTrue(out.endswith("hi wisp"), out[-80:])
+        # The API still reads the opening as a user message; only what the operator wrote counts as theirs
+        self.assertEqual([m["role"] for m in web_chat._api_messages(web_chat.load(chat["id"]))],
+                         ["user", "assistant", "user"])
+        self.assertEqual(web_chat.thread_mark(web_chat.load(chat["id"]))[0], 1)
+
+
 if __name__ == "__main__":
-    import unittest
     unittest.main()

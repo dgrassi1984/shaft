@@ -1791,17 +1791,19 @@ class Broker:
         if id:
             chat = web_chat.thread_of(self.name, self._thread_id(id) or id, writing=False)
             history = messages.history()
-            items = web_chat.dialogue(chat, history)
+            items = web_chat.dialogue(chat, history, senders=True)
             # Its own long answers are cut, and the view never starts after the operator's latest message: reading
             # a thread is what lets send_message answer in it (thread_reads), so what the operator said last is
-            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail)
-            lines = [f"operator ({ts}): {text}" if role == "user" else
+            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail).
+            # Each line names who wrote it: the setup's opening of a new instance is not the operator's.
+            lines = [f"operator ({ts}): {text}" if who == "operator" else
+                     f"setup, on the operator's behalf ({ts}): {text}" if who == web_chat.SETUP else
                      f"{self.name} ({ts}): " + (text if len(text) <= READ_THREAD_ITEM_CHARS else
                                                 text[:READ_THREAD_ITEM_CHARS]
                                                 + f" … [{len(text) - READ_THREAD_ITEM_CHARS} more characters cut]")
-                     for ts, role, text in items]
+                     for ts, role, text, who in items]
             out = "\n\n".join(lines)
-            said = [k for k, (_, role, _) in enumerate(items) if role == "user"]
+            said = [k for k, (_, _, _, who) in enumerate(items) if who == "operator"]
             keep = len("\n\n".join(lines[said[-1]:])) if said else 0
             self.thread_reads[chat["id"]] = web_chat.thread_mark(chat, history)
             return out[-max(READ_THREAD_CHARS, keep):]
