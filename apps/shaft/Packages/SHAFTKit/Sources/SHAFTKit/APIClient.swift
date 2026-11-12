@@ -514,6 +514,21 @@ public final class APIClient: Sendable {
         try await post("/app/v1/setup/telegram", json: ["name": name, "token": token])
     }
 
+    /// Where the instance's Telegram stands: its bot, the paired account, the service.
+    public func telegramStatus(_ instance: String) async throws -> TelegramStatus {
+        try await get("/app/v1/setup/telegram/status/\(instance)")
+    }
+
+    /// `telegram pair --json`: the code the operator sends to the bot; none when an account is paired already.
+    public func telegramPair(_ instance: String) async throws -> TelegramStatus {
+        try await post("/app/v1/setup/telegram/pair/\(instance)", json: EmptyBody())
+    }
+
+    /// `telegram on`: the Telegram service installed, or restarted to pick up a new bot (the verb's `actions.SLOW_S`).
+    public func telegramService() async throws -> SaidResponse {
+        try await post("/app/v1/setup/telegram/service", json: EmptyBody(), timeout: 120)
+    }
+
     /// What the operator has granted the instance (§18.6).
     public func access(_ instance: String) async throws -> AccessResponse {
         try await get("/app/v1/access/\(instance)")

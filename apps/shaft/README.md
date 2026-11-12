@@ -108,7 +108,8 @@ folder: OpenRouter is off until a key is set (only the key's name is kept, in `<
 contains "fail" fails its check, `new` makes the instance's folders here (paused until the first reply), and
 `first-reply` is the real verb; `test_fixture_setup.py` walks them from Model to Say hello. Access: `share` is the real
 check on the fixture's own instance (a folder inside the checkout is refused, as on a real server), `browser install`
-records a fake Chromium version, and `/setup/telegram` refuses a token without `:` or containing `bad`.
+records a fake Chromium version, `/setup/telegram` refuses a token without `:` or containing `bad`, `telegram on` writes
+a live service record (never launchd), and a pairing code is "sent" to the bot 3 s after the wizard asks for it.
 A Debug iOS build may load plain `http://` from this machine (`NSAllowsLocalNetworking`, added to the built
 Info.plist by a Debug-only build step in `project.yml`); a Release iOS build keeps App Transport Security whole. The
 Mac app gets `NSAllowsLocalNetworking` in every configuration (its setup wizard talks to the server on 127.0.0.1) and
@@ -191,7 +192,7 @@ opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --
 device-code sign-in, no terminal): the app opens the `{"url": …}` it relays in the browser once and shows the
 `{"code": …}` to enter there, copyable; Cancel terminates the command, which stops Codex. The Access step grants the
 non-Google rows (a folder, the browser, web search, Telegram) through `/access/<n>`, `/setup/secret` and
-`/setup/telegram`; a Debug build shows the Google rows inactive, a Release build leaves them out until the Google setup
+`/setup/telegram*` (the bot's token, the service on, the pairing code shown until the pairing lands); a Debug build shows the Google rows inactive, a Release build leaves them out until the Google setup
 is built.
 
 ### Voice against the fixture server

@@ -95,7 +95,7 @@ shaft grok login|status
 shaft codex login [--json]|status
 shaft model on|off|status
 shaft api on [--local]|off|status|key|inbox-key
-shaft telegram token <name>|pair|unpair|on|off|status
+shaft telegram token <name>|pair [--json]|unpair|on|off|status
 shaft embed on|off|status
 ```
 

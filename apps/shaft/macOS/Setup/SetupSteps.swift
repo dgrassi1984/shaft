@@ -46,8 +46,16 @@ final class SetupSteps {
     // MARK: Access
     /// What the server says is granted (`GET /access/<n>`), refreshed by each grant's answer.
     private(set) var access: AccessResponse?
+    /// Where the instance's Telegram stands (`GET /setup/telegram/status/<n>`): the row is on only once its bot is
+    /// saved, an account is paired and the service runs.
+    private(set) var telegram: TelegramStatus?
+    /// While the Telegram row waits for the pairing: the code the operator sends the bot as `/pair <code>`.
+    private(set) var telegramCode: String?
+    /// How often the Telegram row asks whether the pairing landed (tests shorten it).
+    @ObservationIgnored var telegramPoll: Duration = .seconds(2)
     private(set) var loadingAccess: Work = .idle
-    /// The instance whose rows were pre-checked: the operator's own ticks are never redone on a later visit.
+    /// The instance whose access was read and whose rows were pre-checked: Continue waits for it (a failed read would
+    /// otherwise skip the drive's suggestions without a word), and the operator's own ticks are never redone.
     private(set) var accessPrepared: String?
     /// What the chosen drive suggests (tagged "suggested"), and the rows ticked.
     private(set) var accessSuggested: Set<AccessRow> = []
@@ -121,7 +129,8 @@ final class SetupSteps {
          greeting) = (.idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle)
         (coverage, saved, check, checked, settings) = (nil, nil, nil, nil, nil)
         (loginURL, loginCode, signedIn, drives, capText) = (nil, nil, false, [], "")
-        (access, accessPrepared, accessSuggested, accessChecked, accessDone) = (nil, nil, [], [], [])
+        (access, telegram, telegramCode, accessPrepared, accessSuggested, accessChecked, accessDone) =
+            (nil, nil, nil, nil, [], [], [])
         (accessFolder, webKey, telegramToken, grantingRow, failedRow) = ("", "", "", nil, nil)
     }
 
@@ -237,7 +246,7 @@ final class SetupSteps {
                     self.signingIn = .failed(why)
                 default:
                     let said = result.said
-                    self.signingIn = .failed("shaft codex login failed (exit \(result.status))"
+                    self.signingIn = .failed("The Codex sign-in failed (exit \(result.status))"
                                              + (said.isEmpty ? "." : ": \(said)"))
                 }
             } catch {
@@ -341,19 +350,25 @@ final class SetupSteps {
         perform("access-read", \.loadingAccess, store: store) { [weak self] client, current in
             let presets = known.isEmpty ? try await client.setupDrives().drives : known
             let answer = try await client.access(name)
+            let telegram = try await client.telegramStatus(name)
             guard current(), let self else { return }
             if self.drives.isEmpty { self.drives = presets }
-            self.access = answer
+            (self.access, self.telegram) = (answer, telegram)
             guard self.accessPrepared != name else { return }
-            self.accessPrepared = name
             self.accessSuggested = AccessRow.suggested(by: presets.first { $0.id == drive })
-            self.accessChecked = self.accessSuggested.subtracting(AccessRow.granted(in: answer))
+            self.accessChecked = self.accessSuggested.subtracting(AccessRow.granted(in: answer, telegram: telegram))
+            self.accessPrepared = name
         }
+    }
+
+    /// Access was read for this instance and its suggestions ticked: what Continue on Access waits for.
+    func accessReady(_ instance: String?) -> Bool {
+        instance != nil && accessPrepared == instance
     }
 
     /// Granted already (by the server's word) or applied by this wizard.
     func isOn(_ row: AccessRow) -> Bool {
-        accessDone.contains(row) || AccessRow.granted(in: access).contains(row)
+        accessDone.contains(row) || AccessRow.granted(in: access, telegram: telegram).contains(row)
     }
 
     /// A folder chosen in the open panel: it is the folder row's, which it ticks.
@@ -366,7 +381,7 @@ final class SetupSteps {
     /// stops there with its real words (Try again sends what is left, never a row already applied); all applied, the
     /// wizard goes on. A key or a token is held only until its route has it.
     func applyAccess(store: InstancesStore?, setup: MacSetup) {
-        guard let name = setup.state.createdInstance else { return }
+        guard let name = setup.state.createdInstance, accessPrepared == name else { return }
         let rows = AccessRow.applied.filter { accessChecked.contains($0) && !isOn($0) }
         failedRow = nil
         perform("access", \.granting, store: store) { [weak self] client, current in
@@ -408,13 +423,56 @@ final class SetupSteps {
             _ = try await client.setupSecret(name: "SCRAPEBADGER_API_KEY", value: key)
             if current(), webKey.trimmingCharacters(in: .whitespacesAndNewlines) == key { webKey = "" }
         case .telegram:
-            let token = telegramToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty else { throw FormProblem("Paste the token @BotFather gave you, or untick Telegram.") }
-            _ = try await client.setupTelegram(name: name, token: token)
-            if current(), telegramToken.trimmingCharacters(in: .whitespacesAndNewlines) == token { telegramToken = "" }
+            try await applyTelegram(to: name, client: client, current: current)
         case .mail, .calendar, .drive, .chat:
             break                                     // the Google setup grants these
         }
+    }
+
+    /// Telegram, whole: the bot's token (when none is saved), the Telegram service on (restarted for a new bot, so it
+    /// reads it), then, with no account paired yet, a code the operator sends the bot as `/pair <code>`; the row waits
+    /// until the pairing lands (asking every `telegramPoll`) or the code expires. Cancel stops the wait.
+    private func applyTelegram(to name: String, client: APIClient, current: @escaping @MainActor () -> Bool) async throws {
+        var newBot = false
+        if telegram?.token != true {
+            let token = telegramToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { throw FormProblem("Paste the token @BotFather gave you, or untick Telegram.") }
+            _ = try await client.setupTelegram(name: name, token: token)
+            guard current() else { return }
+            if telegramToken.trimmingCharacters(in: .whitespacesAndNewlines) == token { telegramToken = "" }
+            newBot = true
+        }
+        if newBot || telegram?.service != true {
+            _ = try await client.telegramService()
+            guard current() else { return }
+        }
+        var status = try await client.telegramStatus(name)
+        guard current() else { return }
+        telegram = status
+        guard !status.paired else { return }
+        let pairing = try await client.telegramPair(name)
+        guard current() else { return }
+        telegram = pairing
+        guard !pairing.paired, let code = pairing.code else { return }
+        telegramCode = code
+        defer { if current() { telegramCode = nil } }
+        let until = ContinuousClock.now + .seconds(60 * (pairing.minutes ?? 10))
+        while !status.paired {
+            try await Task.sleep(for: telegramPoll)
+            guard current() else { return }
+            guard ContinuousClock.now < until else {
+                throw FormProblem("The code expired before it reached \(Self.botName(pairing.bot)): Try again for a "
+                                  + "new one.")
+            }
+            status = try await client.telegramStatus(name)
+            guard current() else { return }
+            telegram = status
+        }
+    }
+
+    /// The bot as the operator finds it in Telegram.
+    static func botName(_ bot: String?) -> String {
+        bot.map { "@" + $0 } ?? "the bot"
     }
 
     /// "Skip all": on to "How it works alone", granting nothing; a key or a token typed here is dropped.
@@ -431,7 +489,7 @@ final class SetupSteps {
         tasks["access"]?.cancel()
         tasks["access"] = nil
         if granting.running { granting = .idle }
-        grantingRow = nil
+        (grantingRow, telegramCode) = (nil, nil)
     }
 
     // MARK: - How it works alone

@@ -1447,6 +1447,9 @@ verb's **stdin**, never into its arguments, a log line or an answer.
 | POST | `/setup/provider` | `{provider, model?, judge_model?, base_url?, price_in?, price_out?, judge_price_in?, judge_price_out?, vision?}` | 200, the coverage (§18.4) |
 | POST | `/setup/provider/check` | `{provider}` | 200, one row per model (§18.4) |
 | POST | `/setup/telegram` | `{name, token}` | 200, `{"said": <the verb's line>}` (§18.5) |
+| GET | `/setup/telegram/status/<n>` | | 200, the Telegram status (§18.5) |
+| POST | `/setup/telegram/pair/<n>` | (empty) | 200, the status with `code` and `minutes` (§18.5) |
+| POST | `/setup/telegram/service` | (empty) | 200, `{"said": <the verb's line>}` (§18.5) |
 | GET | `/access/<n>` | | 200, the access object (§18.6) |
 | POST | `/access/<n>` | `{grant, action, alias?, what?, all?, writable?}` | 200, the fresh access object (§18.6) |
 | GET | `/google/<alias>/labels` | | 200, `{"alias", "labels": [str]}` (§18.7) |
@@ -1534,11 +1537,37 @@ minimal live call per configured model of the provider. `{"provider", "ok": bool
 `ok` is true when every model answered; a model that failed is a row with the provider's own error, not a refusal.
 A check that could not run at all is `409 refused`.
 
-### 18.5 `POST /setup/telegram`
+### 18.5 Telegram: `/setup/telegram`, its service and its pairing
 
-`{"name": <instance>, "token": <bot token>}`: `telegram token <name>` with the token on stdin (the verb asks Telegram
-who the bot is before it saves it). An unknown instance: `404 not_found`. A refused token: `409 refused` with the
-verb's line ("not saved: Telegram refused the token (…)"). Success: `{"said": <the verb's last line>}`.
+A bot works once three things hold: its token is saved, the Telegram service runs (restarted after a new bot, so it
+reads it), and the operator's Telegram account is paired with SHAFT's bots (one account for every bot). The wizard's
+Telegram row does all three, in that order.
+
+`POST /setup/telegram` `{"name": <instance>, "token": <bot token>}`: `telegram token <name>` with the token on stdin
+(the verb asks Telegram who the bot is before it saves it). An unknown instance: `404 not_found`. A refused token: `409
+refused` with the verb's line ("not saved: Telegram refused the token (…)"). Success: `{"said": <the verb's last
+line>}`.
+
+`POST /setup/telegram/service` (empty body): `telegram on` with `actions.SLOW_S`, which installs the Telegram service
+or restarts it. Refused (no bot yet, launchd failing): `409 refused` with the verb's line. Success: `{"said"}`.
+
+`GET /setup/telegram/status/<n>`, read in process (`setup.telegram_status`), never a token or a code:
+
+| Field | Type | |
+|---|---|---|
+| `instance` | str | |
+| `token` | bool | `<n>` has a bot token |
+| `bot` | str or null | its bot's username, when it has a token and Telegram told it |
+| `paired` | bool | an account is paired with SHAFT's bots |
+| `account` | str or null | that account's username (or id) |
+| `service` | bool | the Telegram service runs |
+| `pairing` | bool | a pairing code is out and not expired |
+
+`POST /setup/telegram/pair/<n>` (empty body): with no account paired, `telegram pair --json` issues a one-time code
+(`telegram.PAIR_MINUTES`, 10 minutes) and the answer is the status plus `code` and `minutes`; the operator sends
+`/pair <code>` to `<n>`'s bot from their account, and the running service pairs it. The wizard asks the status every
+2 s until `paired`. With an account paired already, no code is issued: `code` and `minutes` are null. No bot for `<n>`
+yet: `409 refused`. An unknown instance: `404 not_found`.
 
 ### 18.6 Access
 

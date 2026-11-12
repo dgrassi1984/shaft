@@ -1243,6 +1243,47 @@ def _setup_telegram(req: Request) -> Response:
     return _said(said)
 
 
+def _telegram_named(n: str) -> dict:
+    from . import setup
+    if n not in web._names():
+        raise Refusal(404, "not_found", f"No instance named {n}.")
+    return setup.telegram_status(n)
+
+
+def _setup_telegram_status(req: Request, n: str) -> Response:
+    """Where n's Telegram stands: its bot, the paired account, the service (setup.telegram_status). The wizard polls it
+    while the operator sends the pairing code."""
+    return _json(200, _telegram_named(n))
+
+
+def _setup_telegram_pair(req: Request, n: str) -> Response:
+    """`telegram pair --json`: a one-time code the operator sends to n's bot as `/pair <code>`. Already paired: no code
+    (one account talks to every bot). No bot yet: refused."""
+    from . import actions
+    if _body(req):
+        raise Refusal(400, "bad_request", "Send no fields.")
+    status = _telegram_named(n)
+    if not status["token"]:
+        raise Refusal(409, "refused", f"{n} has no Telegram bot yet: save its token first.")
+    if status["paired"]:
+        return _json(200, {**status, "code": None, "minutes": None})
+    code, rows = actions.run_json(["telegram", "pair", "--json"], who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {**_telegram_named(n), "code": rows[-1]["code"], "minutes": rows[-1]["minutes"]})
+
+
+def _setup_telegram_service(req: Request) -> Response:
+    """`telegram on`: installs (or restarts, to pick up a new bot) the Telegram service, through the verb."""
+    from . import actions
+    if _body(req):
+        raise Refusal(400, "bad_request", "Send no fields.")
+    ok, said = actions.run_now(["telegram", "on"], actions.SLOW_S, who=_who(req))
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _said(said)
+
+
 def _setup_autonomy(req: Request, n: str) -> Response:
     """`first-reply <n> resume|stay --json`: the wizard's "How it works alone" choice, after the instance was created
     (with "own", i.e. resume). Refused once the first reply has happened (no marker left)."""
@@ -1413,6 +1454,9 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/setup/provider", {"POST": _setup_provider}),
     (r"/setup/provider/check", {"POST": _setup_check}),
     (r"/setup/telegram", {"POST": _setup_telegram}),
+    (r"/setup/telegram/service", {"POST": _setup_telegram_service}),
+    (rf"/setup/telegram/pair/{N}", {"POST": _setup_telegram_pair}),
+    (rf"/setup/telegram/status/{N}", {"GET": _setup_telegram_status}),
     (rf"/setup/hello/{N}", {"POST": _setup_hello}),
     (rf"/setup/autonomy/{N}", {"POST": _setup_autonomy}),
     (rf"/access/{N}", {"GET": _get_access, "POST": _set_access}),

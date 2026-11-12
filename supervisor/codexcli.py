@@ -458,12 +458,16 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
         # (only one stream's order is known: the two are read apart)
         said: dict[str, list[str]] = {"out": [], "err": []}
         code_at: tuple[str, int] | None = None
-        while open_streams:
+        def over() -> str:
+            """Why the sign-in must end now, whatever Codex is doing: '' while it may go on."""
             if time.monotonic() > deadline:
-                return False, (f"Codex sign-in timed out after {round(limit / 60) or 1} min: the code was not entered "
-                               "in time. Sign in again for a new code.")
-            if os.getppid() != parent:
-                return False, "the app that started this sign-in quit"
+                return (f"Codex sign-in timed out after {round(limit / 60) or 1} min: the code was not entered in time. "
+                        "Sign in again for a new code.")
+            return "the app that started this sign-in quit" if os.getppid() != parent else ""
+
+        while open_streams:
+            if why := over():
+                return False, why
             if proc.poll() is not None:
                 exited = exited or time.monotonic()
                 if time.monotonic() - exited > 2:      # something it started keeps its output open: it is done
@@ -495,7 +499,11 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
                 expect_url = name
             expect_code = name if "one-time code" in low else None if expect_code == name else expect_code
             said[name].append(text)
-        status = proc.wait()
+        # Its output closed, but Codex may still run (and log in later): it stays under the same limits until it exits.
+        while (status := proc.poll()) is None:
+            if why := over():
+                return False, why
+            time.sleep(0.1)
         if status == 0 and (home / "auth.json").is_file():
             return True, ""
         def told(stream):          # its own words: on the stream with the prompt, only what came after the code

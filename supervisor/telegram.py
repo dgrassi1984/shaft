@@ -955,8 +955,11 @@ def serve() -> int:
 
 
 # -- operator commands -------------------------------------------------------------------------------------------
-def command(action: str, name: str | None = None) -> int:
+def command(action: str, name: str | None = None, as_json: bool = False) -> int:
     from . import autonomy
+    if as_json and action != "pair":
+        print(f"shaft telegram {action} has no --json", file=sys.stderr)
+        return 2
     if action == "serve":
         return serve()
     if action == "token":
@@ -980,8 +983,11 @@ def command(action: str, name: str | None = None) -> int:
         try:
             code = new_pairing_code()
         except TelegramError as e:
-            print(e)
+            print(json.dumps({"ok": False, "error": str(e)}) if as_json else e)
             return 1
+        if as_json:           # the Mac app's setup: it shows the code and waits for the pairing (docs/app-api.md §18.5)
+            print(json.dumps({"ok": True, "code": code, "minutes": PAIR_MINUTES}))
+            return 0
         bots = ", ".join(sorted(tokens())) or "(no bots yet: shaft telegram token <instance>)"
         print(f"Send this to any of the bots ({bots}) from your Telegram account, within {PAIR_MINUTES} minutes:\n\n"
               f"    /pair {code}\n\nOnly that account will be able to talk to them.")

@@ -1,0 +1,11 @@
+{
+  "instance": "wisp",
+  "token": true,
+  "bot": "wisp_bot",
+  "paired": false,
+  "account": null,
+  "service": true,
+  "pairing": false,
+  "code": "C0FFEE12",
+  "minutes": 10
+}

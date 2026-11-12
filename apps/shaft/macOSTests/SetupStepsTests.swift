@@ -121,6 +121,8 @@ struct SetupFormsTests {
         created.createdInstance = "ledger"
         context = SetupContinue.Context(state: created)
         #expect(SetupContinue.enabled(.instance, context))
+        #expect(!SetupContinue.enabled(.access, context))     // Access also waits for its read (fix round 1 of task 16)
+        context.accessReady = true
         #expect(SetupContinue.enabled(.access, context))
         #expect(SetupContinue.enabled(.hello, context))
         context.capText = "4.5"

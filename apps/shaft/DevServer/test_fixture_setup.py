@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -118,6 +119,23 @@ class FixtureSetupTest(unittest.TestCase):
                                             {"name": "ledger", "token": "123456:fixture-token-never-kept"})["said"])
                 after = api("/app/v1/access/ledger")
                 self.assertEqual((after["web_search"], after["telegram"]), (True, True))
+                # Telegram on, then a pairing code the fixture "sends" to the bot: the status shows it land.
+                status = api("/app/v1/setup/telegram/status/ledger")
+                self.assertEqual((status["token"], status["bot"], status["service"], status["paired"]),
+                                 (True, "ledger_fixture_bot", False, False))
+                self.assertIn("installed", api("/app/v1/setup/telegram/service", "POST", {})["said"])
+                mock.patch.object(fixture, "PAIR_AFTER_S", 0.2).start()     # stopped with the others below
+                pair = api("/app/v1/setup/telegram/pair/ledger", "POST", {})
+                self.assertRegex(pair["code"], r"^[0-9A-F]{8}$")
+                self.assertTrue(pair["pairing"])
+                for _ in range(100):
+                    status = api("/app/v1/setup/telegram/status/ledger")
+                    if status["paired"]:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual((status["paired"], status["account"], status["service"]),
+                                 (True, "fixture_operator", True))
+                self.assertIsNone(api("/app/v1/setup/telegram/pair/ledger", "POST", {})["code"])
                 for path in base.rglob("*"):
                     if path.is_file():
                         self.assertNotIn("fixture-token-never-kept", path.read_text(errors="ignore"), str(path))

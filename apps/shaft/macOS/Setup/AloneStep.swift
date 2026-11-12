@@ -89,8 +89,8 @@ struct AloneStepView: View {
                 Text("Nightly sleep").foregroundStyle(Color.textPrimary).frame(width: 130, alignment: .leading)
                 Text("from 04:00, every instance").foregroundStyle(Color.textSecondary)
             }
-            Text("Those three are supervisor settings for every instance (shaft settings, or the web's Settings page); "
-                 + "the sleep time is fixed in this version.")
+            Text("Those three are supervisor settings for every instance, kept at their defaults by this setup; the "
+                 + "sleep time is fixed in this version.")
                 .font(.caption).foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Label("Budgets are checks before work starts, not billing limits.", systemImage: "dollarsign.circle")

@@ -169,6 +169,32 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     public static let browser = AccessGrant(grant: "browser")
 }
 
+/// `GET /setup/telegram/status/<n>` (and `POST /setup/telegram/pair/<n>`, which adds `code` and `minutes`): where the
+/// instance's Telegram stands. `token`: it has a bot token; `bot`: the bot's username; `paired`: an account is paired
+/// with SHAFT's bots (one for all), `account` naming it; `service`: the Telegram service runs; `pairing`: a code is out.
+public struct TelegramStatus: Codable, Sendable, Equatable {
+    public var instance: String
+    public var token: Bool
+    public var bot: String?
+    public var paired: Bool
+    public var account: String?
+    public var service: Bool
+    public var pairing: Bool
+    /// The pairing answer only: the code to send the bot as `/pair <code>`, and how many minutes it lasts. Nil when an
+    /// account is paired already.
+    public var code: String?
+    public var minutes: Int?
+
+    public init(instance: String, token: Bool, bot: String? = nil, paired: Bool, account: String? = nil, service: Bool,
+                pairing: Bool = false, code: String? = nil, minutes: Int? = nil) {
+        (self.instance, self.token, self.bot, self.paired, self.account) = (instance, token, bot, paired, account)
+        (self.service, self.pairing, self.code, self.minutes) = (service, pairing, code, minutes)
+    }
+
+    /// The operator can talk with the instance there: a bot, a paired account, the service running.
+    public var ready: Bool { token && paired && service }
+}
+
 /// `GET /google/<alias>/labels`.
 public struct GoogleLabels: Codable, Sendable, Equatable {
     public var alias: String

@@ -23,7 +23,9 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
   template (<dir>/template/drive.md). Access (§18.6): `share` is the real check and setting on this folder, `browser
   install` only records a fake Chromium version in <dir>/setup.json, `tools <n> on|off <tool>` writes the instance's
   tool settings here, and `telegram token` keeps the instance's name (never the token), refusing a token without ":"
-  or containing "bad"; web search reads as set once SCRAPEBADGER_API_KEY was saved.
+  or containing "bad"; web search reads as set once SCRAPEBADGER_API_KEY was saved. `telegram on` writes a live
+  service record (never launchd); `telegram pair --json` issues a real code on this folder, and the fixture "sends" it
+  to the bot PAIR_AFTER_S (3 s) later, so the wizard sees the pairing land.
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
@@ -56,6 +58,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 ME = "operator@example.com"
+PAIR_AFTER_S = 3.0          # a pairing code "sent to the bot" this long after the wizard asked for it (tests shorten it)
 TOPIC = os.environ.get("SHAFT_APNS_TOPIC", "")
 INSTANCES = ("tundra", "wisp", "ada")
 
@@ -74,6 +77,7 @@ def setup(base: Path, port: int):
                             opconfig, version, web, web_chat, webpush, web_settings)
     from supervisor import __main__ as shaft_cli       # the real `first-reply` verb, on this folder (SUP_DIR below)
     from supervisor import setup as setup_access       # GET/POST /access answers (§18.6)
+    from supervisor import telegram as telegram_mod    # the real pairing state, on this folder (SUP_DIR above)
 
     # setup can be called again in the same test process after supervisor imports are cached.
     for module_name, module in list(sys.modules.items()):
@@ -155,6 +159,15 @@ def setup(base: Path, port: int):
             state["secrets"] = sorted({*state.get("secrets", []), args[2]})
             _write_json(setup_state, state)
             return 0, [{"ok": True, "name": args[2]}]
+        if args == ["telegram", "pair", "--json"]:          # the real code on this folder; "sent" PAIR_AFTER_S later
+            try:
+                code = telegram_mod.new_pairing_code()
+            except telegram_mod.TelegramError as e:
+                return 1, [{"ok": False, "error": str(e)}]
+            timer = threading.Timer(PAIR_AFTER_S, telegram_mod.try_pair, ({"id": 1, "username": "fixture_operator"}, code))
+            timer.daemon = True
+            timer.start()
+            return 0, [{"ok": True, "code": code, "minutes": telegram_mod.PAIR_MINUTES}]
         if args[:2] == ["provider", "use"] and len(args) >= 3:
             return provider_use(args[2], _flags(args[3:]), state)
         if args[:2] == ["provider", "check"] and len(args) >= 3:
@@ -264,7 +277,13 @@ def setup(base: Path, port: int):
             state = _read_json(setup_state)
             state["telegram"] = sorted({*state.get("telegram", []), name})
             _write_json(setup_state, state)
+            telegram_mod.remember_bot(name, f"{name}_fixture_bot")
             return True, f"saved: {name} answers on Telegram as @{name}_fixture_bot"
+        if args == ["telegram", "on"]:                    # never launchd: a live record of this process
+            if not _read_json(setup_state).get("telegram"):
+                return False, "no bot tokens yet: shaft telegram token <instance>"
+            _service_record(base, "telegram", os.getpid())
+            return True, "telegram installed (fixture): starts at login, restarted if it stops"
         if verb in ("limits", "channel", "pause", "resume"):
             name = args[1]
             if name not in names():
@@ -347,6 +366,9 @@ def setup(base: Path, port: int):
               # never the Mac's own Playwright cache: the version `browser install` recorded here
               mock.patch("supervisor.browser.version", side_effect=lambda: _read_json(setup_state).get("browser")),
               mock.patch.object(setup_access, "access", side_effect=access),
+              # secrets_env is empty here: the bots are those `telegram token` recorded (never the real .env)
+              mock.patch.object(telegram_mod, "tokens",
+                                side_effect=lambda: {n: "fixture" for n in _read_json(setup_state).get("telegram", [])}),
               mock.patch.object(web, "_live", side_effect=lambda n: _state(base).get(n, {})),
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),

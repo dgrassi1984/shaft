@@ -1535,6 +1535,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
+    p.add_argument("--json", action="store_true", help="pair: one JSON line with the code")
     p = sub.add_parser("grok", help="Grok plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
@@ -1974,7 +1975,7 @@ def main(argv: list[str]) -> int:
                            local=args.local, as_json=args.json)
     if args.cmd == "telegram":
         from . import telegram
-        return telegram.command(args.action, args.name)
+        return telegram.command(args.action, args.name, args.json)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
     if args.cmd == "embed":

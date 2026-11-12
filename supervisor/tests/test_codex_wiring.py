@@ -739,11 +739,19 @@ class CLITest(Case):
 
     # A fake `codex` (never the real login): it records how it was run, prints the device-code prompt as Codex 0.167
     # does (with colour codes), then waits for the code to be "entered" (the file `entered` in its CODEX_HOME), writes
-    # auth.json and exits 0. FAIL=1 makes it refuse after the prompt, EARLY=1 before it; HANG=1 makes it wait forever.
+    # auth.json and exits 0. FAIL=1 makes it refuse after the prompt, EARLY=1 before it; HANG=1 makes it wait forever;
+    # CLOSE=1 closes its output after the code and keeps running.
     FAKE_CODEX = r"""#!/bin/sh
 echo "$$" > "$CODEX_HOME/pid"
 printf '%s\n' "$@" > "$CODEX_HOME/args"
 if read -r line; then echo "stdin was open: $line" >&2; exit 3; fi
+if [ "${CLOSE:-}" = 1 ]; then
+  printf '1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n'
+  printf '2. Enter this one-time code (expires in 15 minutes)\n   WXYZ-12345\n'
+  exec >/dev/null 2>&1
+  while [ ! -f "$CODEX_HOME/entered" ]; do sleep 0.05; done
+  echo '{"tokens": {}}' > "$CODEX_HOME/auth.json"; exit 0
+fi
 if [ "${EARLY:-}" = 1 ]; then
   echo "Error: failed to request device code: device code login is not enabled for this Codex server." >&2; exit 1
 fi
@@ -835,6 +843,39 @@ echo "Successfully logged in"
         (home / "entered").touch()
         time.sleep(0.3)
         self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_times_out_when_codex_closes_its_output_and_keeps_running(self):
+        """Fix round 1: once both streams ended, the wait for Codex had no limit, so one that closed its output and
+        kept polling escaped the 10 minutes and the app's quit, and could still log in later."""
+        home = self.fake_codex(CLOSE="1")
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
+            started = time.monotonic()
+            code, rows = self.login_json()
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
+        self.assertIn("timed out", rows[-1]["error"])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((home / "pid").read_text()), 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_parent_quitting_stops_codex_after_its_output_closed(self):
+        home = self.fake_codex(CLOSE="1")
+        real, quit = os.getppid(), []                           # the app quits once the code is shown
+
+        def on_row(row):
+            if "code" in row:
+                time.sleep(0.3)                                 # Codex has closed its output by now
+                quit.append(True)
+        with mock.patch.object(codexcli.os, "getppid", side_effect=lambda: 1 if quit else real):
+            code, rows = self.login_json(on_row)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[1], {"code": "WXYZ-12345"})
+        self.assertEqual(rows[-1], {"ok": False, "error": "the app that started this sign-in quit"})
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((home / "pid").read_text()), 0)
 
     def test_codex_login_json_sigterm_stops_codex(self):
         """The app's Cancel terminates `shaft codex login --json`: Codex goes with it and no login is written later."""

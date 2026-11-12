@@ -4,7 +4,8 @@ import SwiftUI
 
 /// The wizard's Access step: what the new instance may reach beyond its own folder, every row optional. "Your Mac" (a
 /// folder you choose, the real browser) and "Elsewhere" (web search through a ScrapeBadger key, a Telegram bot); the
-/// rows the chosen drive suggests come ticked, tagged "suggested". Continue applies the ticked rows in order and stops
+/// rows the chosen drive suggests come ticked, tagged "suggested". Telegram is whole: the bot's token, the service on,
+/// and your account paired with the code shown here. Continue applies the ticked rows in order and stops
 /// at the first failure with its real words and Try again (SetupSteps.applyAccess); "Skip all", in the footer, goes on
 /// granting nothing. The Google rows are the next step of this build: a debug build shows them, inactive.
 struct AccessStepView: View {
@@ -44,7 +45,8 @@ struct AccessStepView: View {
             group("Elsewhere") {
                 row(.web, detail: "Search the web through ScrapeBadger. The key is SHAFT's, for every instance: "
                     + "\(name) never sees it.") { webSearch }
-                row(.telegram, detail: "Talk with \(name) from Telegram, through a bot of its own.") { telegram }
+                row(.telegram, detail: "Talk with \(name) from Telegram, through a bot of its own: you create the bot, "
+                    + "SHAFT turns it on and pairs your account.") { telegram }
             }
         }
         .onAppear(perform: prepare)
@@ -115,6 +117,15 @@ struct AccessStepView: View {
 
     @ViewBuilder
     private func applying(_ row: AccessRow) -> some View {
+        if row == .telegram, let code = steps.telegramCode {
+            pairing(code)
+        } else {
+            working(row)
+        }
+    }
+
+    @ViewBuilder
+    private func working(_ row: AccessRow) -> some View {
         HStack(spacing: Design.Space.s8) {
             ProgressView().controlSize(.small)
             Text(row == .browser ? "Installing the browser and turning it on: this can take a few minutes…"
@@ -176,19 +187,59 @@ struct AccessStepView: View {
         }
     }
 
+    @ViewBuilder
     private var telegram: some View {
-        VStack(alignment: .leading, spacing: Design.Space.s4) {
-            Text("In Telegram, message @BotFather, send /newbot, and paste the token it gives you here.")
+        if steps.telegram?.token == true {
+            Text("\(SetupSteps.botName(steps.telegram?.bot)) is saved. Continue turns Telegram on and pairs your "
+                 + "Telegram account with it.")
                 .font(.caption).foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            SecureField("Bot token", text: $steps.telegramToken)
-            Link("Open @BotFather", destination: Self.botFather).foregroundStyle(Color.brand)
-            Text("This saves the bot. Your Telegram account is paired with it, and Telegram turned on, afterwards: "
-                 + "shaft telegram pair, then shaft telegram on.")
-                .font(.caption).foregroundStyle(Color.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+        } else {
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
+                Text("In Telegram, message @BotFather, send /newbot, and paste the token it gives you here. Continue "
+                     + "then turns Telegram on and pairs your account with the bot.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecureField("Bot token", text: $steps.telegramToken)
+                Link("Open @BotFather", destination: Self.botFather).foregroundStyle(Color.brand)
+            }
         }
+    }
+
+    /// The pairing: the message to send the bot, copyable, and the bot in Telegram; the row waits until it lands.
+    @ViewBuilder
+    private func pairing(_ code: String) -> some View {
+        let bot = steps.telegram?.bot
+        let message = "/pair \(code)"
+        VStack(alignment: .leading, spacing: Design.Space.s8) {
+            Text("From your Telegram account, send \(SetupSteps.botName(bot)) this message:")
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Design.Space.s12) {
+                Text(message)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .textSelection(.enabled)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message, forType: .string)
+                }
+            }
+            if let bot, let link = URL(string: "https://t.me/\(bot)") {
+                Link("Open @\(bot) in Telegram", destination: link).foregroundStyle(Color.brand)
+            }
+            HStack(spacing: Design.Space.s8) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for your message… The code lasts \(steps.telegram?.minutes ?? 10) minutes; only the "
+                     + "account that sends it can talk to SHAFT's bots.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Cancel") { steps.cancelAccess() }
+            }
+        }
+        .padding(Design.Space.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .elevatedBlock()
     }
 
     #if DEBUG

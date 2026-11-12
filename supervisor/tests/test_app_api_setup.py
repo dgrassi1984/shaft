@@ -313,6 +313,106 @@ class SecretTest(SetupTest):
         self.error(self.api("/app/v1/setup/telegram", "POST", {"name": "nobody", "token": TOKEN}), 404, "not_found")
 
 
+class TelegramTest(SetupTest):
+    """The Telegram row after its token: the service on (`telegram on`), a pairing code (`telegram pair --json`), and the
+    status the wizard polls until the operator's account is paired. Never a launchd service or Telegram itself."""
+    def setUp(self):
+        super().setUp()
+        from supervisor import telegram, version
+        self.telegram = telegram
+        self.bots: set[str] = set()
+        self.service = False
+        for p in (mock.patch.object(telegram, "SUP_DIR", self.sup),
+                  mock.patch.object(telegram, "tokens", side_effect=lambda: {n: "t" for n in self.bots}),
+                  mock.patch.object(version, "service", side_effect=lambda name, stale=True:
+                                    {"pid": 1} if name == "telegram" and self.service else None),
+                  mock.patch("supervisor.autonomy.service", side_effect=AssertionError("launchd touched"))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_json(self, args, timeout=actions.RUN_NOW_S, who="top", input=None):
+        if args[:2] == ["telegram", "pair"]:
+            self.record(args, timeout, who, input)
+            if "telegram" in self.refuse:
+                return self.refuse["telegram"]
+            return 0, [{"ok": True, "code": "C0FFEE12", "minutes": 10}]
+        return super().run_json(args, timeout, who, input)
+
+    def status(self):
+        return self.get("/app/v1/setup/telegram/status/wisp")
+
+    def test_status_says_bot_pairing_and_service_never_a_token(self):
+        self.assertEqual(self.status(), {"instance": "wisp", "token": False, "bot": None, "paired": False,
+                                         "account": None, "service": False, "pairing": False})
+        self.bots.add("wisp")
+        self.telegram.remember_bot("wisp", "wisp_bot")
+        self.service = True
+        self.assertEqual(self.status(), {"instance": "wisp", "token": True, "bot": "wisp_bot", "paired": False,
+                                         "account": None, "service": True, "pairing": False})
+        self.telegram.new_pairing_code()
+        self.assertTrue(self.status()["pairing"])
+        self.telegram.try_pair({"id": 42, "username": "ada"}, "wrong")
+        self.assertFalse(self.status()["paired"])
+        self.error(self.api("/app/v1/setup/telegram/status/nobody"), 404, "not_found")
+        self.assertEqual(self.calls, [])                               # reading runs nothing
+
+    def test_pair_needs_a_bot_then_gives_a_code_until_paired(self):
+        err = self.error(self.api("/app/v1/setup/telegram/pair/wisp", "POST", {}), 409, "refused")
+        self.assertIn("save its token first", err["message"])
+        self.bots.add("wisp")
+        self.telegram.remember_bot("wisp", "wisp_bot")
+        r = self.get("/app/v1/setup/telegram/pair/wisp", method="POST", data={})
+        self.assertEqual((r["code"], r["minutes"], r["bot"], r["paired"]), ("C0FFEE12", 10, "wisp_bot", False))
+        self.assertEqual(self.verbs(), [["telegram", "pair", "--json"]])
+        self.assertEqual(self.calls[0]["who"], "app iphone-app")
+        # once an account is paired, no new code: every bot answers it already
+        self.telegram.update(lambda s: s.update(paired={"user_id": 42, "username": "ada"}))
+        r = self.get("/app/v1/setup/telegram/pair/wisp", method="POST", data={})
+        self.assertEqual((r["code"], r["paired"], r["account"]), (None, True, "ada"))
+        self.assertEqual(len(self.calls), 1)
+        self.error(self.api("/app/v1/setup/telegram/pair/wisp", "POST", {"code": "x"}), 400, "bad_request")
+        self.error(self.api("/app/v1/setup/telegram/pair/nobody", "POST", {}), 404, "not_found")
+
+    def test_a_refused_pairing_says_why(self):
+        self.bots.add("wisp")
+        self.refuse["telegram"] = (1, [{"ok": False, "error": "already paired with ada; `shaft telegram unpair` first"}])
+        err = self.error(self.api("/app/v1/setup/telegram/pair/wisp", "POST", {}), 409, "refused")
+        self.assertIn("already paired", err["message"])
+
+    def test_service_runs_telegram_on_through_the_verb(self):
+        said = self.get("/app/v1/setup/telegram/service", method="POST", data={})
+        self.assertEqual(said, {"said": "done"})
+        self.assertEqual(self.calls, [{"args": ["telegram", "on"], "timeout": actions.SLOW_S, "who": "app iphone-app",
+                                       "input": None}])
+        self.refuse["telegram"] = (False, "no bot tokens yet: shaft telegram token <instance>")
+        err = self.error(self.api("/app/v1/setup/telegram/service", "POST", {}), 409, "refused")
+        self.assertIn("no bot tokens", err["message"])
+        self.error(self.api("/app/v1/setup/telegram/service", "POST", {"x": 1}), 400, "bad_request")
+
+    def test_write_or_check_the_telegram_fixture(self):
+        self.bots.add("wisp")
+        self.telegram.remember_bot("wisp", "wisp_bot")
+        self.service = True
+        write_or_check_fixtures(self, {"setup-telegram-pair": self.get("/app/v1/setup/telegram/pair/wisp", method="POST",
+                                                                       data={})})
+
+    def test_pair_json_verb_prints_one_line(self):
+        out = io.StringIO()
+        with mock.patch.object(self.telegram, "SUP_DIR", self.sup), contextlib.redirect_stdout(out):
+            self.assertEqual(self.telegram.command("pair", None, as_json=True), 0)
+        row = json.loads(out.getvalue())
+        self.assertEqual(set(row), {"ok", "code", "minutes"})
+        self.assertTrue(row["ok"])
+        self.assertTrue(self.status()["pairing"])
+        self.telegram.update(lambda s: s.update(paired={"user_id": 42}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.telegram.command("pair", None, as_json=True), 1)
+        self.assertIn("already paired", json.loads(out.getvalue())["error"])
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(self.telegram.command("on", None, as_json=True), 2)
+
+
 class ProviderTest(SetupTest):
     def test_use_passes_every_field_as_its_flag(self):
         body = {"provider": "custom", "model": "big", "judge_model": "small", "base_url": "https://host/v1",
@@ -567,7 +667,9 @@ class HelloTest(SetupTest):
 # -- who may call them ------------------------------------------------------------------------------------------------
 ROUTES = [("POST", "/app/v1/setup/instance"), ("GET", "/app/v1/setup/drives"), ("POST", "/app/v1/setup/secret"),
           ("POST", "/app/v1/setup/provider"), ("POST", "/app/v1/setup/provider/check"),
-          ("POST", "/app/v1/setup/telegram"), ("POST", "/app/v1/setup/hello/wisp"),
+          ("POST", "/app/v1/setup/telegram"), ("POST", "/app/v1/setup/telegram/service"),
+          ("POST", "/app/v1/setup/telegram/pair/wisp"), ("GET", "/app/v1/setup/telegram/status/wisp"),
+          ("POST", "/app/v1/setup/hello/wisp"),
           ("POST", "/app/v1/setup/autonomy/wisp"), ("GET", "/app/v1/access/wisp"),
           ("POST", "/app/v1/access/wisp"), ("GET", "/app/v1/google/work/labels"),
           ("GET", "/app/v1/google/work/calendars")]

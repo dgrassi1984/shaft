@@ -21,8 +21,39 @@ struct SetupAccessTests {
     """#
     nonisolated static let notFound = SetupStub.Answer(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
 
+    /// `GET /setup/telegram/status/ledger` as the server answers it.
+    nonisolated static func telegram(token: Bool = false, paired: Bool = false, service: Bool = false,
+                                     code: String? = nil, minutes: Int = 10) -> String {
+        #"{"instance":"ledger","token":\#(token),"bot":\#(token ? #""ledger_bot""# : "null"),"paired":\#(paired),"#
+            + #""account":\#(paired ? #""ada""# : "null"),"service":\#(service),"pairing":\#(code != nil)"#
+            + (code.map { #","code":"\#($0)","minutes":\#(minutes)"# } ?? "") + "}"
+    }
+
+    /// The step's reads (the drives, the access, the Telegram status), or nil for any other request.
+    nonisolated static func read(_ request: SetupStub.Request, access: String = nothingGranted,
+                                 telegram: String = telegram()) -> SetupStub.Answer? {
+        guard request.method == "GET" else { return nil }
+        switch request.path {
+        case "/app/v1/setup/drives": return .init(200, drives)
+        case "/app/v1/access/ledger": return .init(200, access)
+        case "/app/v1/setup/telegram/status/ledger": return .init(200, telegram)
+        default: return nil
+        }
+    }
+
     func until(_ done: () -> Bool) async {
         for _ in 0..<800 where !done() { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    /// The step opened and read what is granted: Continue may run.
+    func prepared(_ f: Fixture) async {
+        f.setup.steps.prepareAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(f.setup.steps.accessReady("ledger"))
+    }
+
+    func posts(_ f: Fixture) -> [String] {
+        f.server.requests.filter { $0.method == "POST" }.map { $0.json?["grant"] as? String ?? $0.path }
     }
 
     // MARK: - Access
@@ -40,15 +71,8 @@ struct SetupAccessTests {
             state.drive = "builder"
         }
         let folderOn = Self.nothingGranted.replacingOccurrences(of: #""folder":null"#, with: #""folder":"/Users/ada/Notes""#)
-        f.server.answer { request in
-            switch request.path {
-            case "/app/v1/setup/drives": .init(200, Self.drives)
-            case "/app/v1/access/ledger": .init(200, folderOn)
-            default: Self.notFound
-            }
-        }
-        f.setup.steps.prepareAccess(store: f.store, setup: f.setup)
-        await f.settle()
+        f.server.answer { Self.read($0, access: folderOn) ?? Self.notFound }
+        await prepared(f)
         #expect(f.setup.steps.accessSuggested == [.web, .folder])
         #expect(f.setup.steps.accessChecked == [.web])
         #expect(f.setup.steps.isOn(.folder))
@@ -61,6 +85,42 @@ struct SetupAccessTests {
         #expect(f.setup.steps.accessChecked == [.telegram])
     }
 
+    /// Fix round 1: a failed first read left Continue on, which then applied nothing and moved on, skipping the drive's
+    /// suggestions without a word. Now Continue waits for a read that worked; Try again reads again; Skip all remains.
+    @Test func aFailedReadKeepsContinueOffUntilTryAgainReadsIt() async throws {
+        let f = try Fixture(step: .access) { state in
+            state.createdInstance = "ledger"
+            state.drive = "research"
+        }
+        let failing = Answers([:])
+        f.server.answer { request in
+            request.path == "/app/v1/access/ledger" && failing.answer(request).status == 409
+                ? failing.answer(request) : Self.read(request) ?? Self.notFound
+        }
+        failing.set("/app/v1/access/ledger", .init(409, #"{"error": {"code": "refused", "message": "cannot read the tool settings"}}"#))
+        let steps = f.setup.steps
+        func canContinue() -> Bool {
+            SetupContinue.enabled(.access, SetupContinue.Context(state: f.setup.state,
+                                                                 accessReady: steps.accessReady(f.setup.state.createdInstance)))
+        }
+        steps.prepareAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(steps.loadingAccess == .failed("cannot read the tool settings"))
+        #expect(!canContinue())
+        #expect(steps.accessChecked.isEmpty)
+        steps.applyAccess(store: f.store, setup: f.setup)          // even if called: nothing is sent, nothing moves
+        await f.settle()
+        #expect(posts(f).isEmpty)
+        #expect(f.setup.state.step == .access)
+
+        failing.set("/app/v1/access/ledger", .init(200, Self.nothingGranted))    // Try again
+        steps.prepareAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(steps.loadingAccess == .idle)
+        #expect(canContinue())
+        #expect(steps.accessChecked == [.web, .drive])
+    }
+
     @Test func accessAppliesTheTickedRowsInOrderAndStopsAtTheFirstFailure() async throws {
         let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
         let browserInstalled = Self.nothingGranted.replacingOccurrences(of: #""installed":null"#, with: #""installed":"1.64.0""#)
@@ -68,14 +128,19 @@ struct SetupAccessTests {
             "/app/v1/access/ledger": .init(409, #"{"error": {"code": "refused", "message": "browser install: Playwright could not download Chromium"}}"#),
             "/app/v1/setup/secret": .init(200, #"{"said": "SCRAPEBADGER_API_KEY saved"}"#),
             "/app/v1/setup/telegram": .init(200, #"{"said": "saved"}"#),
+            "/app/v1/setup/telegram/service": .init(200, #"{"said": "telegram installed"}"#),
         ])
+        let telegram = Answers(["status": .init(200, Self.telegram())])
         f.server.answer { request in
+            if request.path == "/app/v1/setup/telegram/status/ledger" { return telegram.answer(.init(method: "GET", path: "status", body: Data())) }
+            if let read = Self.read(request) { return read }
             // The folder is granted; the browser's install is refused until the test changes it.
             if request.path == "/app/v1/access/ledger", request.json?["grant"] as? String == "folder" {
                 return .init(200, Self.nothingGranted.replacingOccurrences(of: #""folder":null"#, with: #""folder":"/tmp/notes""#))
             }
             return answers.answer(request)
         }
+        await prepared(f)
         let steps = f.setup.steps
         steps.accessChecked = [.telegram, .web, .browser, .folder]   // ticked in any order
         steps.choose(folder: URL(fileURLWithPath: "/tmp/notes"))
@@ -83,25 +148,27 @@ struct SetupAccessTests {
         steps.telegramToken = "123:bot-token-never-kept"
         steps.applyAccess(store: f.store, setup: f.setup)
         await f.settle()
-        var posts = f.server.requests.filter { $0.method == "POST" }
-        #expect(posts.map { $0.json?["grant"] as? String ?? $0.path } == ["folder", "browser"])
-        #expect(posts[0].json as? [String: String] == ["grant": "folder", "action": "grant", "what": "/tmp/notes"])
+        var sent = f.server.requests.filter { $0.method == "POST" }
+        #expect(posts(f) == ["folder", "browser"])
+        #expect(sent[0].json as? [String: String] == ["grant": "folder", "action": "grant", "what": "/tmp/notes"])
         #expect(steps.granting == .failed("browser install: Playwright could not download Chromium"))
         #expect(steps.failedRow == .browser)
         #expect(steps.accessDone == [.folder])
         #expect(f.setup.state.step == .access)
         #expect(steps.webKey == "sb-key-never-kept")          // not sent yet: kept for Try again
 
-        // Try again: what is left, from the browser on; the folder is not granted twice.
+        // Try again: what is left, from the browser on; the folder is not granted twice. The account is paired
+        // already (another bot's pairing): Telegram needs its token and the service, no code.
         answers.set("/app/v1/access/ledger", .init(200, browserInstalled))
+        telegram.set("status", .init(200, Self.telegram(token: true, paired: true, service: true)))
         steps.applyAccess(store: f.store, setup: f.setup)
         await f.settle()
-        posts = f.server.requests.filter { $0.method == "POST" }
-        #expect(posts.map { $0.json?["grant"] as? String ?? $0.path }
-                == ["folder", "browser", "browser", "/app/v1/setup/secret", "/app/v1/setup/telegram"])
-        #expect(posts[2].json as? [String: String] == ["grant": "browser", "action": "grant"])
-        #expect(posts[3].json as? [String: String] == ["name": "SCRAPEBADGER_API_KEY", "value": "sb-key-never-kept"])
-        #expect(posts[4].json as? [String: String] == ["name": "ledger", "token": "123:bot-token-never-kept"])
+        sent = f.server.requests.filter { $0.method == "POST" }
+        #expect(posts(f) == ["folder", "browser", "browser", "/app/v1/setup/secret", "/app/v1/setup/telegram",
+                             "/app/v1/setup/telegram/service"])
+        #expect(sent[2].json as? [String: String] == ["grant": "browser", "action": "grant"])
+        #expect(sent[3].json as? [String: String] == ["name": "SCRAPEBADGER_API_KEY", "value": "sb-key-never-kept"])
+        #expect(sent[4].json as? [String: String] == ["name": "ledger", "token": "123:bot-token-never-kept"])
         #expect(steps.granting == .idle)
         #expect(steps.failedRow == nil)
         #expect(steps.accessDone == [.folder, .browser, .web, .telegram])
@@ -113,11 +180,12 @@ struct SetupAccessTests {
 
     @Test func aTickedRowWithoutItsInputStopsThereAndSendsNothing() async throws {
         let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
-        f.server.answer { _ in Self.notFound }
+        f.server.answer { Self.read($0) ?? Self.notFound }
+        await prepared(f)
         f.setup.steps.accessChecked = [.folder, .web]
         f.setup.steps.applyAccess(store: f.store, setup: f.setup)
         await f.settle()
-        #expect(f.server.requests.isEmpty)
+        #expect(posts(f).isEmpty)
         #expect(f.setup.steps.failedRow == .folder)
         #expect(f.setup.steps.granting == .failed("Choose the folder ledger may read, or untick it."))
         #expect(f.setup.state.step == .access)
@@ -127,11 +195,13 @@ struct SetupAccessTests {
         let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
         let gate = Gate()
         let installed = Self.nothingGranted.replacingOccurrences(of: #""installed":null"#, with: #""installed":"1.64.0""#)
-        f.server.answer { _ in .init(200, installed, hold: { await gate.wait() }) }
+        f.server.answer { Self.read($0) ?? .init(200, installed, hold: { await gate.wait() }) }
+        await prepared(f)
         let steps = f.setup.steps
+        let before = steps.access
         steps.accessChecked = [.browser]
         steps.applyAccess(store: f.store, setup: f.setup)
-        await until { !f.server.requests.isEmpty }
+        await until { !posts(f).isEmpty }
         #expect(steps.grantingRow == .browser)
         #expect(steps.busy)
         steps.cancelAccess()
@@ -141,10 +211,10 @@ struct SetupAccessTests {
         gate.open()                                            // the server's answer comes after all
         try await Task.sleep(for: .milliseconds(150))
         #expect(steps.accessDone.isEmpty)
-        #expect(steps.access == nil)
+        #expect(steps.access == before)
         #expect(steps.granting == .idle)
         #expect(f.setup.state.step == .access)
-        #expect(f.server.requests.count == 1)
+        #expect(posts(f).count == 1)
     }
 
     @Test func skipAllGrantsNothingAndDropsWhatWasTyped() async throws {
@@ -153,10 +223,89 @@ struct SetupAccessTests {
         f.setup.steps.accessChecked = [.web, .telegram]
         f.setup.steps.webKey = "sb-key"
         f.setup.steps.telegramToken = "1:t"
-        f.setup.steps.skipAccess(setup: f.setup)
+        f.setup.steps.skipAccess(setup: f.setup)           // no read needed: Skip all is the way past a failed one
         #expect(f.server.requests.isEmpty)
         #expect(f.setup.state.step == .alone)
         #expect((f.setup.steps.webKey, f.setup.steps.telegramToken) == ("", ""))
+    }
+
+    // MARK: - Telegram, whole
+
+    /// Fix round 1: the row saved the bot and told the operator to finish in a terminal. Now it saves the bot, turns
+    /// the service on, shows the code to send the bot, and waits until the pairing lands.
+    @Test func telegramSavesTheBotTurnsItOnAndWaitsForThePairing() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 3)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        let steps = f.setup.steps
+        steps.telegramPoll = .milliseconds(10)
+        #expect(!steps.isOn(.telegram))
+        steps.accessChecked = [.telegram]
+        steps.telegramToken = "123:bot-token"
+        steps.applyAccess(store: f.store, setup: f.setup)
+        await until { steps.telegramCode != nil }
+        #expect(steps.telegramCode == "CAFE0001")             // shown while the row waits
+        #expect(steps.grantingRow == .telegram)
+        #expect(steps.telegram?.bot == "ledger_bot")
+        await f.settle()
+        #expect(posts(f) == ["/app/v1/setup/telegram", "/app/v1/setup/telegram/service",
+                             "/app/v1/setup/telegram/pair/ledger"])
+        #expect(server.polls >= 3)
+        #expect(steps.granting == .idle)
+        #expect(steps.telegramCode == nil)
+        #expect(steps.telegram?.ready == true)
+        #expect(steps.isOn(.telegram))
+        #expect(f.setup.state.step == .alone)
+    }
+
+    @Test func aBotSavedBeforeIsTurnedOnAndPairedWithoutItsTokenAgain() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 1, token: true)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        f.setup.steps.telegramPoll = .milliseconds(10)
+        f.setup.steps.accessChecked = [.telegram]
+        f.setup.steps.applyAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(posts(f) == ["/app/v1/setup/telegram/service", "/app/v1/setup/telegram/pair/ledger"])
+        #expect(f.setup.state.step == .alone)
+    }
+
+    @Test func cancellingThePairingStopsTheWaitAndKeepsTheRowOff() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 100_000)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        let steps = f.setup.steps
+        steps.telegramPoll = .milliseconds(10)
+        steps.accessChecked = [.telegram]
+        steps.telegramToken = "123:bot-token"
+        steps.applyAccess(store: f.store, setup: f.setup)
+        await until { steps.telegramCode != nil }
+        steps.cancelAccess()
+        #expect(steps.telegramCode == nil)
+        #expect(!steps.busy)
+        let polled = server.polls
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(server.polls == polled)                       // nobody asks any more
+        #expect(!steps.accessDone.contains(.telegram))
+        #expect(f.setup.state.step == .access)
+    }
+
+    @Test func anExpiredCodeStopsAtTelegramWithTryAgain() async throws {
+        let f = try Fixture(step: .access) { $0.createdInstance = "ledger" }
+        let server = TelegramServer(pairedAfterPolls: 100_000, minutes: 0)
+        f.server.answer { server.answer($0) }
+        await prepared(f)
+        f.setup.steps.telegramPoll = .milliseconds(10)
+        f.setup.steps.accessChecked = [.telegram]
+        f.setup.steps.telegramToken = "123:bot-token"
+        f.setup.steps.applyAccess(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(f.setup.steps.failedRow == .telegram)
+        #expect(f.setup.steps.granting == .failed("The code expired before it reached @ledger_bot: Try again for a new one."))
+        #expect(f.setup.state.step == .access)
     }
 
     // MARK: - Codex sign-in without a terminal
@@ -322,5 +471,51 @@ final class LoginRunner: ProcessRunning, @unchecked Sendable {
         lock.withLock { _cancelled = true }
         if let late { onLine?(late) }
         throw CancellationError()
+    }
+}
+
+/// The Telegram routes of one instance, `ledger`, as the server would answer them: the token saved, the service on, a
+/// code issued, and the pairing landing after `pairedAfterPolls` status reads once the code is out.
+final class TelegramServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let pairedAfterPolls: Int
+    private let minutes: Int
+    private var token: Bool
+    private var service = false
+    private var paired = false
+    private var sincePair: Int?
+    private var _polls = 0
+
+    init(pairedAfterPolls: Int, token: Bool = false, minutes: Int = 10) {
+        (self.pairedAfterPolls, self.token, self.minutes) = (pairedAfterPolls, token, minutes)
+    }
+
+    /// Status reads since the code was issued.
+    var polls: Int { lock.withLock { _polls } }
+
+    func answer(_ request: SetupStub.Request) -> SetupStub.Answer {
+        lock.withLock {
+            switch (request.method, request.path) {
+            case ("GET", "/app/v1/setup/telegram/status/ledger"):
+                if let n = sincePair {
+                    sincePair = n + 1
+                    _polls += 1
+                    if n + 1 >= pairedAfterPolls { paired = true }
+                }
+                return .init(200, SetupAccessTests.telegram(token: token, paired: paired, service: service))
+            case ("POST", "/app/v1/setup/telegram"):
+                token = true
+                return .init(200, #"{"said": "saved"}"#)
+            case ("POST", "/app/v1/setup/telegram/service"):
+                service = true
+                return .init(200, #"{"said": "telegram installed"}"#)
+            case ("POST", "/app/v1/setup/telegram/pair/ledger"):
+                sincePair = 0
+                return .init(200, SetupAccessTests.telegram(token: token, paired: false, service: service,
+                                                            code: "CAFE0001", minutes: minutes))
+            default:
+                return SetupAccessTests.read(request) ?? SetupAccessTests.notFound
+            }
+        }
     }
 }

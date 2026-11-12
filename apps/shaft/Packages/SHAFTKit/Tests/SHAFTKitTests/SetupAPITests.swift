@@ -108,6 +108,27 @@ struct SetupAPITests {
         #expect(!request.url.absoluteString.contains("secret"))
     }
 
+    @Test func telegramPairStatusAndServiceDecodeTheServersAnswers() async throws {
+        let server = StubServer { request in
+            request.path.hasSuffix("/service") ? .json(200, #"{"said": "telegram installed"}"#)
+                : .json(200, Self.fixture("setup-telegram-pair"))
+        }
+        let pair = try await server.client.telegramPair("wisp")
+        #expect(pair.code == "C0FFEE12")
+        #expect(pair.minutes == 10)
+        #expect(pair.bot == "wisp_bot")
+        #expect(!pair.ready)                                   // not paired yet
+        let status = try await server.client.telegramStatus("wisp")
+        #expect(status.service)
+        _ = try await server.client.telegramService()
+        let requests = server.requests
+        #expect(requests.map { "\($0.method) \($0.path)" } == ["POST /app/v1/setup/telegram/pair/wisp",
+                                                              "GET /app/v1/setup/telegram/status/wisp",
+                                                              "POST /app/v1/setup/telegram/service"])
+        #expect(requests[0].json?.isEmpty == true)
+        #expect(requests[2].timeout >= 90)
+    }
+
     @Test func autonomyAndHelloNameTheInstance() async throws {
         let server = StubServer { request in
             request.path.hasPrefix("/app/v1/setup/autonomy/")

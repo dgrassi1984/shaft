@@ -291,13 +291,13 @@ enum AccessRow: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// What the server says is granted already (§18.6): such a row shows as on, and Continue does not send it again.
-    static func granted(in access: AccessResponse?) -> Set<AccessRow> {
-        guard let access else { return [] }
-        var on: Set<AccessRow> = []
+    /// Telegram is on only when it works: its bot saved, an account paired and the service running (`telegram`).
+    static func granted(in access: AccessResponse?, telegram: TelegramStatus? = nil) -> Set<AccessRow> {
+        var on: Set<AccessRow> = telegram?.ready == true ? [.telegram] : []
+        guard let access else { return on }
         if access.folder != nil { on.insert(.folder) }
         if access.browser.installed != nil, access.browser.run { on.insert(.browser) }
         if access.webSearch { on.insert(.web) }
-        if access.telegram { on.insert(.telegram) }
         if !access.mail.isEmpty { on.insert(.mail) }
         if !access.calendar.isEmpty { on.insert(.calendar) }
         if !access.drive.isEmpty { on.insert(.drive) }
@@ -322,6 +322,8 @@ enum SetupContinue {
         var current: ProviderRequest?
         /// "How it works alone": the model's daily cap as typed.
         var capText = ""
+        /// Access: what is granted was read for the created instance, and its suggestions ticked.
+        var accessReady = false
     }
 
     static func enabled(_ step: SetupWizardStep, _ c: Context) -> Bool {
@@ -339,7 +341,9 @@ enum SetupContinue {
                 && OneLine.problem(c.state.operatorName, "Your name") == nil
                 && OneLine.problem(c.state.model, "The model") == nil
                 && DriveText.problem(c.state.driveText) == nil
-        case .access: return c.state.createdInstance != nil
+        case .access:
+            // A failed read never lets Continue skip the drive's suggestions unseen: it shows Try again (and Skip all).
+            return c.state.createdInstance != nil && c.accessReady
         case .alone:
             guard c.state.createdInstance != nil, case .success = Budget.cloudCap(c.capText) else { return false }
             return true

@@ -142,6 +142,7 @@ struct SetupWizard: View {
         context.checkPassed = steps.check?.ok == true
         context.current = try? steps.form.request().get()
         context.capText = steps.capText
+        context.accessReady = steps.accessReady(setup.state.createdInstance)
         let enabled = SetupContinue.enabled(setup.state.step, context)
         let store = session.store
         switch setup.state.step {

@@ -3,6 +3,8 @@
   access(name)        what the operator has granted it, shaped for the app's Access step: from web_config.access (the
                       readers the CLI verbs use) plus the shared browser, the web-search key and a Telegram bot —
                       whether a key is set, never its value.
+  telegram_status(name)  where its Telegram stands for the app's Access step: its bot, whether an account is paired
+                      and whether the Telegram service runs (§18.5).
   opening_text(name)  the hidden opening the setup sends last (POST /app/v1/setup/hello/<n> → web_chat.opening): who
                       the operator is, its drive, what it may reach, and the request to introduce itself.
 """
@@ -31,6 +33,27 @@ def access(name: str) -> dict:
                                  "scopes": [google.SCOPE_NAMES[s] for s in google.SCOPES
                                             if s in google.scopes({"scope": data.get("scope")})]}
                                 for alias, data in sorted(a["google_accounts"].items())]}
+
+
+def telegram_status(name: str) -> dict:
+    """{instance, token, bot, paired, account, service, pairing}: whether `name` has a bot token (`bot`: its username,
+    when Telegram told it), whether an account is paired with SHAFT's bots (one for all), who, whether the Telegram
+    service runs, and whether a pairing code is out and not expired. Never a token or a code."""
+    from datetime import datetime
+    from . import telegram
+    from .version import service
+    st = telegram.load()
+    token = name in telegram.tokens()
+    paired = st.get("paired") or {}
+    pending = st.get("pairing") or {}
+    try:
+        open_code = bool(pending) and datetime.fromisoformat(pending["until"]) > datetime.now()
+    except (KeyError, TypeError, ValueError):
+        open_code = False
+    return {"instance": name, "token": token, "bot": ((st.get("bots") or {}).get(name) or None) if token else None,
+            "paired": bool(paired),
+            "account": (paired.get("username") or str(paired.get("user_id", ""))) or None if paired else None,
+            "service": bool(service("telegram", stale=False)), "pairing": open_code}
 
 
 def _granted(a: dict) -> list[str]:
