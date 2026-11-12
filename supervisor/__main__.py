@@ -1317,6 +1317,11 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p = sub.add_parser("secrets", help="the supervisor's .env secrets: set NAME (value on stdin), unset NAME, list "
+                                       "(names only)")
+    p.add_argument("action", choices=["set", "unset", "list"])
+    p.add_argument("name", nargs="?")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
                                       " (one write, one commit; --expect refuses if a value changed since you looked)")
     p.add_argument("name")
@@ -1756,6 +1761,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
+    if args.cmd == "secrets":
+        from . import opsecrets
+        return opsecrets.command(args.action, args.name, args.json)
     if args.cmd == "config":
         from . import opconfig
         return opconfig.config_command(args.name, args.action, args.items, args.expect, args.expect_unset)

@@ -33,7 +33,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env
+from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env, set_secret_env
 
 API_BASE, _ = knob(   # tests point it at a fake
     "SHAFT_TELEGRAM_API", "https://api.telegram.org", str, "the Telegram Bot API endpoint", group="Ports and paths",
@@ -957,7 +957,6 @@ def serve() -> int:
 # -- operator commands -------------------------------------------------------------------------------------------
 def command(action: str, name: str | None = None) -> int:
     from . import autonomy
-    from .api import _set_secret
     if action == "serve":
         return serve()
     if action == "token":
@@ -972,7 +971,7 @@ def command(action: str, name: str | None = None) -> int:
         except TelegramError as e:
             print(f"not saved: Telegram refused the token ({e})")
             return 1
-        _set_secret(token_key(name), tok)
+        set_secret_env(token_key(name), tok)
         remember_bot(name, me.get("username", ""))
         log(f"telegram: bot @{me.get('username')} set for {name}")
         print(f"{name} now talks through @{me.get('username')} — restart the service: shaft telegram on")

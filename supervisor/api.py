@@ -62,7 +62,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import tom
 from .core import (jsonl_lines, API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
-                   paused, port, safe_write, secrets_env, unlink_beneath, whole)
+                   paused, port, safe_write, secrets_env, set_secret_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, Warm, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
 
 PORT, _ = knob(
@@ -954,13 +954,6 @@ def _tailscale(*args: str) -> "subprocess.CompletedProcess":
     return subprocess.run([exe, *args], capture_output=True, text=True)
 
 
-def _set_secret(name: str, value: str) -> None:
-    path = SUP_DIR.parent / ".env"
-    lines = [l for l in (path.read_text().splitlines() if path.exists() else []) if not l.startswith(f"{name}=")]
-    path.write_text("\n".join(lines + [f"{name}={value}"]) + "\n")
-    path.chmod(0o600)
-
-
 def _outside_gui(r: "subprocess.CompletedProcess") -> bool:
     """The Mac app's CLI refuses to run outside the GUI session, as a launchd job is: it exits 0 and says so on stdout
     (web.tailnet_hosts). Nothing it was asked for happened."""
@@ -995,7 +988,7 @@ def command(action: str) -> int:
         key = secrets_env().get("SHAFT_INBOX_KEY")
         if not key:
             key = "sk-shaft-inbox-" + secrets.token_urlsafe(32)
-            _set_secret("SHAFT_INBOX_KEY", key)
+            set_secret_env("SHAFT_INBOX_KEY", key)
             log("api: inbox key created")
         print(key)
         print(f"  POST {url().removesuffix('/v1')}/v1/inbox/<instance>   (Authorization: Bearer <this key>)\n"
@@ -1005,16 +998,16 @@ def command(action: str) -> int:
     if action == "on":
         env = secrets_env()
         if not env.get("SHAFT_API_KEY"):
-            _set_secret("SHAFT_API_KEY", "sk-shaft-" + secrets.token_urlsafe(32))
+            set_secret_env("SHAFT_API_KEY", "sk-shaft-" + secrets.token_urlsafe(32))
         if not env.get("SHAFT_INBOX_KEY"):
-            _set_secret("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
+            set_secret_env("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
         if not env.get("SHAFT_API_LOGINS"):
             st = _tailscale_status() or {}
             me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
             if not me:
                 print("cannot read your Tailscale login (is Tailscale running?)")
                 return 1
-            _set_secret("SHAFT_API_LOGINS", me)
+            set_secret_env("SHAFT_API_LOGINS", me)
         was_running = autonomy.running("api")
         if autonomy.service("api", "on"):
             return 1

@@ -12,7 +12,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
-from supervisor import api
+from supervisor import api, core
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
 EVENTS = [{"type": "ready", "name": "shaft"}, {"type": "status", "phase": "waiting for the model"},
@@ -696,9 +696,10 @@ class InboxDoorbellTest(unittest.TestCase):
         self.assertEqual(len(self.inbox()), 2)
 
     def test_inbox_key_command_creates_the_key_once(self):
-        """Also the bug where api._set_secret used SUP_DIR without importing it (NameError on a first `api on`)."""
+        """Also the bug where the old api._set_secret used SUP_DIR without importing it (NameError on a first `api on`)."""
         env = {}
         with mock.patch.object(api, "secrets_env", lambda: env), mock.patch.object(api, "url", return_value="u/v1"), \
+                mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup), \
                 mock.patch("sys.stdout", new_callable=io.StringIO) as out, mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertEqual(api.command("inbox-key"), 0)
         key = out.getvalue().strip()

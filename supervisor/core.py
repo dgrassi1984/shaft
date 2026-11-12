@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import fcntl
 import hashlib
 import http.client
 import json
@@ -11,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 from datetime import datetime
 from pathlib import Path
@@ -322,6 +324,49 @@ def secrets_env() -> dict[str, str]:
             k, v = line.split("=", 1)
             out[k.strip()] = v.strip().strip('"\'')
     return out
+
+
+SECRET_NAMES_RE = re.compile(r"^(ANTHROPIC_API_KEY|OPENROUTER_API_KEY|SCRAPEBADGER_API_KEY|SHAFT_CUSTOM_API_KEY|"
+                             r"SHAFT_API_KEY|SHAFT_INBOX_KEY|SHAFT_API_LOGINS|TELEGRAM_TOKEN_[A-Z0-9_]+|"
+                             r"GMAIL_[A-Z0-9_]+_CLIENT_(ID|SECRET))$")
+
+
+def set_secret_env(name: str, value: str | None) -> None:
+    """The one writer of PROJECT/.env: set NAME=value (None removes it). Atomic (temp file + os.replace), serialised by
+    SUP_DIR/env.lock, mode 0600. A key keeps its line; a new one goes last; every other line is kept byte for byte."""
+    if not SECRET_NAMES_RE.match(name):
+        raise ValueError(f"{name!r} is not a secret name the supervisor stores")
+    if value is not None and ("\n" in value or "\r" in value or "\0" in value):
+        raise ValueError(f"the value for {name} must be a single line")
+    path = PROJECT / ".env"
+    SUP_DIR.mkdir(exist_ok=True)
+    with (SUP_DIR / "env.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = path.read_bytes().decode("utf-8").splitlines(keepends=True) if path.exists() else []
+        out: list[str] = []
+        done = False
+        for line in old:
+            if line.strip().startswith(f"{name}="):
+                if value is not None and not done:
+                    out.append(f"{name}={value}\n")
+                done = True
+                continue
+            out.append(line)
+        if value is not None and not done:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append(f"{name}={value}\n")
+        fd, tmp = tempfile.mkstemp(prefix=".env.", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write("".join(out).encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
