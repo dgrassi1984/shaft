@@ -1280,6 +1280,9 @@ class Broker:
                         elif body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
                             return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
                                                     label or body["model"])
+                        elif body.get("stream") and str(body.get("model", "")).startswith("custom/"):
+                            return self._llm_stream(cloudllm.custom_stream(broker.usage_name, body, broker.secrets),
+                                                    label or body["model"])
                         else:
                             reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
                             if label:

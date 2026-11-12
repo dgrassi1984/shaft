@@ -201,11 +201,24 @@ def model_names(s: str) -> list[str]:
     return [model_name(m) for m in s.split(",") if m.strip()]
 
 
+def custom_model(s: str) -> str:
+    """A custom/<model> name, accepted only when SHAFT_CUSTOM_PRICES declares its price: an unpriced model would
+    spend money the daily cap could not count."""
+    from . import cloudllm
+    if cloudllm.custom_price(s) is None:
+        raise ValueError(f"{s!r} has no price: declare it in SHAFT_CUSTOM_PRICES as "
+                         f"{{\"{s.removeprefix('custom/')}\": [input_usd_per_million, output_usd_per_million]}} "
+                         f"(0 is allowed), so the daily cap can count it")
+    return s
+
+
 def cloud_model(s: str) -> str:
-    """A model the supervisor calls itself: Claude (claude-…) on Anthropic's API, else openrouter/…."""
+    """A model the supervisor calls itself: Claude (claude-…) on Anthropic's API, openrouter/…, or a priced custom/…."""
     s = model_name(s)
+    if s.startswith("custom/"):
+        return custom_model(s)
     if not (s.startswith("claude-") or s.startswith("openrouter/")):
-        raise ValueError(f"must be a claude-… or openrouter/… model, not {s!r}")
+        raise ValueError(f"must be a claude-… or openrouter/… or custom/… model, not {s!r}")
     return s
 
 
@@ -213,9 +226,11 @@ def instance_model(s: str) -> str:
     """A cloud or registered plan model an instance or bake-off may run on."""
     from . import planchannel
     s = model_name(s)
+    if s.startswith("custom/"):
+        return custom_model(s)
     if not (s.startswith("claude-") or s.startswith("openrouter/") or planchannel.serves(s)):
         plans = " or ".join(f"{p}/…" for p in planchannel.PROVIDERS)
-        raise ValueError(f"must be a claude-… or openrouter/… or {plans} model, not {s!r}")
+        raise ValueError(f"must be a claude-… or openrouter/… or custom/… or {plans} model, not {s!r}")
     return s
 
 
@@ -240,6 +255,27 @@ def cloud_models(s: str) -> list[str]:
     if not out:
         raise ValueError("must name at least one model")
     return out
+
+
+def http_url(s: str) -> str:
+    """An http(s) URL with a host (or empty: not set)."""
+    from urllib.parse import urlsplit
+    s = s.strip()
+    if s and not ((u := urlsplit(s)).scheme in ("http", "https") and u.netloc):
+        raise ValueError(f"must be an http:// or https:// URL, not {s!r}")
+    return s
+
+
+def custom_prices(s: str) -> dict:
+    """{"<model>": [input_usd_per_million, output_usd_per_million]}: non-negative numbers, 0 allowed."""
+    v = json_object(s)
+    for model, p in v.items():
+        ok = (isinstance(p, list) and len(p) == 2
+              and all(isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x < float("inf") for x in p))
+        if not ok:
+            raise ValueError(f"the price of {model!r} must be [input_usd_per_million, output_usd_per_million], "
+                             f"two non-negative numbers, not {p!r}")
+    return {m: (float(p[0]), float(p[1])) for m, p in v.items()}
 
 
 def json_object(s: str) -> dict:

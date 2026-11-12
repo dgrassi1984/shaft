@@ -37,13 +37,15 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import math
 import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime
 
 from . import ledger
-from .core import NETWORK_ERRORS, SUP_DIR, knob, dollars, model_names, cloud_models, json_object
+from .core import (NETWORK_ERRORS, SUP_DIR, knob, dollars, model_names, cloud_models, json_object, http_url,
+                   custom_prices)
 
 _fallback_label: contextvars.ContextVar[str | None] = contextvars.ContextVar("cloudllm_fallback_label", default=None)
 
@@ -60,6 +62,26 @@ API = "https://api.anthropic.com/v1/messages"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 # 2026-11-04: "Reasoning is mandatory for this endpoint and cannot be disabled."
 OPENROUTER_MANDATORY_REASONING = {"openai/gpt-6.1-sol"}
+# A custom/<model> is any OpenAI-compatible endpoint the operator names. Its prices are declared, never guessed: an
+# unpriced model would spend money the daily cap could not count. Defined before CLOUD_MODELS, whose validator asks
+# custom_price(). The key is the secret SHAFT_CUSTOM_API_KEY (the project .env), which only the supervisor reads.
+CUSTOM_BASE_URL, _ = knob(
+    "SHAFT_CUSTOM_BASE_URL", "", http_url, "the OpenAI-compatible endpoint (an http(s) URL, e.g. https://host/v1) "
+    "that custom/<model> is called on: <url>/chat/completions, with the key SHAFT_CUSTOM_API_KEY",
+    group="Models and spend", services=("runs", "api"))
+CUSTOM_PRICES, _ = knob(
+    "SHAFT_CUSTOM_PRICES", "{}", custom_prices, "what each custom/<model> costs, in dollars per million tokens, as "
+    'JSON {"<model>": [input, output]} (0 is allowed): a custom model with no price is refused, so the daily cap '
+    "counts every call", group="Models and spend", services=("runs", "api", "web"))
+
+
+def custom_price(model: str) -> tuple[float, float] | None:
+    """The declared (input, output) dollars per million tokens of a custom/<model>, else None."""
+    if not model.startswith("custom/"):
+        return None
+    return CUSTOM_PRICES.get(model.removeprefix("custom/"))
+
+
 CLOUD_MODELS, _ = knob(
     "SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro", cloud_models, "the cloud "
     "models an instance may run on (through the broker)", group="Models and spend", services=("runs", "api", "web"))
@@ -266,12 +288,16 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
         return selfhosted.complete(instance, body)
     if model not in CLOUD_MODELS and not _fallback_label.get():
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
-    if not model.startswith("openrouter/") and model not in PRICES:   # unpriced = uncapped: refuse, never bill $0
+    if model.startswith("custom/"):
+        price = _custom_price_or_refuse(model)
+    elif not model.startswith("openrouter/") and model not in PRICES:   # unpriced = uncapped: refuse, never bill $0
         raise CloudError(403, f"model {model!r} has no price in cloudllm.PRICES ({sorted(PRICES)}), so the daily "
                               f"cap could not count it")
     spent = spent_today(instance)
     if spent >= (cap := daily_cap(instance)):
         raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
+    if model.startswith("custom/"):
+        return _custom(instance, body, _custom_key(secrets), price)
     if model.startswith("openrouter/"):
         return _openrouter(instance, body, secrets.get("OPENROUTER_API_KEY", ""))
     key = secrets.get("ANTHROPIC_API_KEY", "")
@@ -297,7 +323,7 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
 
 
 def _record(instance: str, model: str, tokens_in, tokens_out, usd: float | None, started: float, stop, error,
-            cache: dict | None = None) -> None:
+            cache: dict | None = None, extra: dict | None = None) -> None:
     """One cloud_usage row. `usd` None is unpriced: a self-hosted model (no price, never $0) or an OpenRouter reply
     without a cost. A self-hosted or Codex plan call spends no API dollars, so it adds nothing to the run's charges:
     the run's priced calls still sum. An OpenRouter call without a cost spent money nobody knows, so the run's
@@ -314,7 +340,7 @@ def _record(instance: str, model: str, tokens_in, tokens_out, usd: float | None,
     with USAGE.open("a") as f:
         f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,
                             "input_tokens": tokens_in, "output_tokens": tokens_out, **(cache or {}),
-                            "usd": cost, "unpriced": cost is None, "seconds": round(time.monotonic() - started, 1),
+                            **(extra or {}), "usd": cost, "unpriced": cost is None, "seconds": round(time.monotonic() - started, 1),
                             "stop_reason": stop, "error": error}) + "\n")
 
 
@@ -401,6 +427,26 @@ def decide(instance: str, model: str, state, questions: dict, secrets: dict) -> 
     return data
 
 
+def _open_stream(request) -> tuple[object | None, str | None]:
+    """(response, None) or (None, error): open a streaming POST, retrying only before the first byte (a started stream
+    cannot be replayed)."""
+    error, throttled = None, 0
+    for wait in (0, 10, 30):
+        time.sleep(wait)
+        try:
+            return urllib.request.urlopen(request(), timeout=600), None
+        except urllib.error.HTTPError as e:
+            throttled += e.code == 429
+            error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
+            if e.code not in (429, 500, 502, 503, 504, 529):
+                break
+        except NETWORK_ERRORS as e:
+            error = f"network: {e}"
+    if throttled:
+        error += f" [HTTP 429 responses: {throttled}]"
+    return None, error
+
+
 def openrouter_stream(instance: str, body: dict, secrets: dict):
     """A streaming OpenRouter call, passed through to the instance as it arrives: yields SSE lines (bytes).
     Opening errors raise CloudError (nothing sent yet); usage and cost come from the final chunk."""
@@ -413,29 +459,18 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
     key = secrets.get("OPENROUTER_API_KEY", "")
     if not key:
         raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
-    started, resp, throttled = time.monotonic(), None, 0
-    for wait in (0, 10, 30):   # retry only before the first byte: a started stream cannot be replayed
-        time.sleep(wait)
-        try:
-            resp = urllib.request.urlopen(_openrouter_request(body, key, stream=True), timeout=600)
-            break
-        except urllib.error.HTTPError as e:
-            throttled += e.code == 429
-            error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
-            if e.code not in (429, 500, 502, 503, 504, 529):
-                break
-        except NETWORK_ERRORS as e:
-            error = f"network: {e}"
+    started = time.monotonic()
+    resp, error = _open_stream(lambda: _openrouter_request(body, key, stream=True))
     if resp is None:
-        if throttled:
-            error += f" [HTTP 429 responses: {throttled}]"
         _record(instance, model, None, None, 0.0, started, None, error)
         raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error)}")
     return _relay(instance, _fallback_label.get() or model, resp, started)
 
 
-def _relay(instance: str, model: str, resp, started: float):
-    usage, finish, error = {}, None, None
+def _relay(instance: str, model: str, resp, started: float, custom: dict | None = None):
+    """Pass a stream through and record it. `custom` ({"price", "body"}) is a custom/ call: its cost is the declared
+    price times the usage the endpoint reports, or the worst-case reservation when it reports none."""
+    usage, finish, error, said = {}, None, None, 0
     try:
         with resp:
             for raw in resp:
@@ -453,11 +488,16 @@ def _relay(instance: str, model: str, resp, started: float):
                         error = json.dumps(chunk["error"])[:400]
                     for c in chunk.get("choices") or []:
                         finish = c.get("finish_reason") or finish
+                        said += _delta_chars(c.get("delta") or {}) if custom else 0
                 yield line + b"\n"
     except NETWORK_ERRORS as e:
         error = f"stream broken: {e!r}"
         raise
     finally:
+        if custom:
+            tin, tout, cost, extra = _custom_counts(custom["price"], custom["body"], usage, said)
+            _record(instance, model, tin, tout, cost, started, finish, error, extra=extra)
+            return
         from . import selfhosted
         hosted = not _fallback_label.get() and selfhosted.serves(model.split(" (", 1)[0])
         cost = None if hosted else usage.get("cost")
@@ -467,6 +507,97 @@ def _relay(instance: str, model: str, resp, started: float):
                 error or _unsaid({} if hosted else usage, finish),
                 cache={"cache_read_tokens": details.get("cached_tokens"),
                        "cache_write_tokens": details.get("cache_write_tokens", details.get("cache_write"))})
+
+
+def _delta_chars(delta: dict) -> int:
+    n = sum(len(delta.get(k) or "") for k in ("content", "reasoning", "reasoning_content"))
+    return n + sum(len(((c.get("function") or {}).get("arguments")) or "") for c in delta.get("tool_calls") or [])
+
+
+def _custom_price_or_refuse(model: str) -> tuple[float, float]:
+    if (price := custom_price(model)) is None:
+        raise CloudError(403, f"model {model!r} has no declared price in SHAFT_CUSTOM_PRICES "
+                              f"({json.dumps(CUSTOM_PRICES)}), so the daily cap could not count it")
+    return price
+
+
+def _custom_key(secrets: dict) -> str:
+    if not CUSTOM_BASE_URL:
+        raise CloudError(503, "no SHAFT_CUSTOM_BASE_URL set: a custom/ model has no endpoint to call")
+    if not (key := secrets.get("SHAFT_CUSTOM_API_KEY", "")):
+        raise CloudError(503, f"no SHAFT_CUSTOM_API_KEY in the supervisor's .env (endpoint {CUSTOM_BASE_URL})")
+    return key
+
+
+def _custom_request(body: dict, key: str, stream: bool) -> urllib.request.Request:
+    """The OpenAI-shaped request to the operator's endpoint, as the broker got it but for the model name (no custom/
+    prefix) and the knobs of other providers (template kwargs). A stream asks for its usage."""
+    req_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options", "chat_template_kwargs")}
+    req_body["model"] = body["model"].removeprefix("custom/")
+    if stream:
+        req_body.update(stream=True, stream_options={"include_usage": True})
+    return urllib.request.Request(CUSTOM_BASE_URL.rstrip("/") + "/chat/completions", data=json.dumps(req_body).encode(),
+                                  headers={"content-type": "application/json", "authorization": f"Bearer {key}"})
+
+
+def _custom_counts(price: tuple[float, float], body: dict, usage: dict, said: int) -> tuple:
+    """(tokens in, tokens out, dollars, row extras) of a custom/ call. The endpoint's usage when it gives both counts;
+    else the worst case, never $0: the prompt's characters / 3 in, and the request's max_tokens out (the reply's
+    characters / 3 when the request set none), marked `estimated`."""
+    pin, pout = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    extra = {}
+    if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in (pin, pout)):
+        chars = len(json.dumps(body.get("messages") or [])) + (len(json.dumps(body["tools"])) if body.get("tools") else 0)
+        cap = body.get("max_tokens") or body.get("max_completion_tokens")
+        pin = math.ceil(chars / 3)
+        pout = cap if isinstance(cap, int) and cap > 0 else math.ceil(said / 3)
+        extra = {"estimated": True}
+    return pin, pout, (pin * price[0] + pout * price[1]) / 1e6, extra
+
+
+def custom_stream(instance: str, body: dict, secrets: dict):
+    """A streaming call to the custom endpoint, passed through as it arrives: yields SSE lines (bytes). The refusals
+    of complete() apply (allowed, priced, under the cap) before any request; the cost is recorded when the stream ends."""
+    model = body.get("model")
+    if model not in CLOUD_MODELS and not _fallback_label.get():
+        raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
+    price = _custom_price_or_refuse(model)
+    spent = spent_today(instance)
+    if spent >= (cap := daily_cap(instance)):
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
+    key = _custom_key(secrets)
+    started = time.monotonic()
+    resp, error = _open_stream(lambda: _custom_request(body, key, stream=True))
+    if resp is None:
+        _record(instance, model, None, None, 0.0, started, None, error)
+        raise CloudError(502, f"custom endpoint call for {model} failed: {error}")
+    return _relay(instance, _fallback_label.get() or model, resp, started, custom={"price": price, "body": body})
+
+
+def _custom(instance: str, body: dict, key: str, price: tuple[float, float]) -> dict:
+    """An OpenAI-format request to the custom endpoint; cost from the declared price (see _custom_counts)."""
+    model = body["model"]
+    started = time.monotonic()
+    data, error = _send(_custom_request(body, key, stream=False))
+    usage = (data or {}).get("usage") or {}
+    finish = (((data or {}).get("choices") or [{}])[0] or {}).get("finish_reason")
+    message = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+    if data is None:   # nothing was generated: no charge
+        tin, tout, cost, extra = None, None, 0.0, {}
+    else:
+        tin, tout, cost, extra = _custom_counts(price, body, usage, len(message.get("content") or ""))
+    _record(instance, model, tin, tout, cost, started, finish, error, extra=extra)
+    if data is None:
+        raise CloudError(502, f"custom endpoint call for {model} failed: {error}")
+    if not data.get("choices"):
+        raise CloudError(502, f"custom endpoint call for {model} failed: no reply: "
+                              f"{json.dumps(data.get('error') or data)[:400]}")
+    for c in message.get("tool_calls") or []:
+        fn = c.get("function") or {}
+        if not isinstance(fn.get("arguments"), str):
+            fn["arguments"] = json.dumps(fn.get("arguments") or {}, ensure_ascii=False)
+    data["usage"] = {"prompt_tokens": tin, "completion_tokens": tout, "cost": cost}
+    return data
 
 
 def _unsaid(usage: dict, finish) -> str | None:
