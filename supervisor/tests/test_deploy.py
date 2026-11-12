@@ -354,6 +354,51 @@ class DeployTest(unittest.TestCase):
         git(self.project, "reset", "-q", "--hard", "v1.0.0")   # moved by hand since: not this deploy's business
         self.assertIsNone(self.check()["incomplete"])
 
+    def test_a_rerun_finishes_from_where_it_stopped_without_origin(self):
+        """Fix round 2: stopped at services (a conversation open), then origin became unreachable. Running the same
+        deploy again resumes at services: the fetches, merges, update and scheduler recorded done (and the checkout
+        still at the tags) are not repeated, so it finishes."""
+        self.open = {"alpha": {"web-1": "api"}}
+        self.assertEqual(self.deploy("v1.1.0")[0], 0)
+        state = json.loads((self.sup / "deploy-state.json").read_text())
+        self.assertEqual([k for k, v in state["steps"].items() if v == "ok"],
+                         ["preflight", "fetch", "main", "template", "update", "scheduler"])
+        git(self.project, "remote", "set-url", "origin", str(self.tmp / "gone.git"))
+        self.open = {}
+        self.svc.drain = None                                  # the scheduler has not drained yet: not asked again
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual(code, 0, rows)
+        self.assertEqual([r["step"] for r in rows], list(deploy.STEPS))
+        self.assertTrue(all(r["ok"] for r in rows), rows)
+        self.assertIn("finishing the deploy from its services step", rows[0]["detail"])
+        self.assertIn("done by the deploy this finishes", rows[1]["detail"])          # fetch: origin not asked
+        self.assertEqual((self.updated, self.svc.restarts), ([["alpha"]], 1))           # update and drain not redone
+        self.assertEqual(sorted(self.svc.kicked), ["api", "web"])
+        self.assertIsNone(self.check_local()["incomplete"])
+
+    def test_a_rerun_after_the_checkout_moved_runs_every_step(self):
+        """deploy-state.json is not trusted blindly: once the checkout no longer shows what it records, every step runs
+        again (here the fetch, which fails on the unreachable origin, instead of skipping to services)."""
+        self.open = {"alpha": {"web-1": "api"}}
+        self.deploy("v1.1.0")
+        git(self.project, "reset", "-q", "--hard", "v1.0.0")
+        git(self.project, "remote", "set-url", "origin", str(self.tmp / "gone.git"))
+        code, rows = self.deploy("v1.1.0")
+        self.assertEqual((code, [r["step"] for r in rows]), (1, ["preflight"]))
+        self.assertIn("git fetch origin --tags failed", rows[0]["error"])
+
+    def check_local(self) -> dict:
+        code, rows = self.deploy("--check", "--local")
+        self.assertEqual((code, len(rows)), (0, 1), rows)
+        return rows[0]
+
+    def test_a_local_check_needs_no_origin(self):
+        self.open = {"alpha": {"web-1": "api"}}
+        self.deploy("v1.1.0")
+        git(self.project, "remote", "set-url", "origin", str(self.tmp / "gone.git"))
+        self.assertEqual(self.check_local(), {"ok": True, "current": "v1.1.0", "latest": None, "template_tag": None,
+                                              "incomplete": "v1.1.0", "incomplete_step": "services"})
+
     # -- the restart barrier ----------------------------------------------------------------------------------------------
     def test_no_conversation_opens_between_the_look_and_the_restart(self):
         """Fix round 1: from the look at the open conversations until the old process is gone, a new conversation is

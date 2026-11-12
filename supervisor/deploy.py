@@ -23,6 +23,8 @@ not vX.Y.Z is exit 2. Only a loaded service whose code changed since it started 
 success is all ok and restarts nothing. Each step's outcome is kept in .supervisor/deploy-state.json, so `--check
 --json` (one line: the release the app may offer) also names a deploy left unfinished. While the services step looks at
 the open conversations and restarts, new conversations are refused for a moment (core.restart_barrier), so none is cut.
+Run again for the same TAG after it stopped, it finishes the deploy from the step it stopped at (_resume_from): the steps
+recorded done that the checkout still shows are not repeated, and origin is not asked again.
 """
 from __future__ import annotations
 
@@ -101,15 +103,17 @@ def _clean(repo, branch: str, what: str, release_ok: bool = False) -> None:
                          f"first: " + ", ".join(paths))
 
 
-def preflight(tag: str) -> str:
+def preflight(tag: str, fetch_tags: bool = True) -> str:
+    """`fetch_tags` False: a resumed deploy (_resume_from), whose tags were fetched by the run it finishes."""
     project, template = core.PROJECT, _template()
     _clean(project, "main", "the primary checkout", release_ok=True)
     if not (template / ".git").exists():
         raise StepFailed(f"the template worktree ({template}) is missing: `shaft setup` recreates it")
     _clean(template, "template", "the template worktree")
-    r = _git(project, "fetch", "--quiet", "origin", "--tags")
-    if r.returncode:
-        raise StepFailed(f"git fetch origin --tags failed: {_said(r)}")
+    if fetch_tags:
+        r = _git(project, "fetch", "--quiet", "origin", "--tags")
+        if r.returncode:
+            raise StepFailed(f"git fetch origin --tags failed: {_said(r)}")
     main_at, template_at = _commit(project, f"refs/tags/{tag}"), _commit(project, f"refs/tags/template-{tag}")
     if not main_at:
         raise StepFailed(f"{tag} is not a release tag on origin")
@@ -343,12 +347,39 @@ def _save_state(state: dict) -> None:
     os.replace(tmp, path)
 
 
+def _resume_from(tag: str, state: dict | None) -> str | None:
+    """The step an unfinished deploy of `tag` stopped at, when the run again may start there: the steps before it are
+    recorded done in deploy-state.json and the checkout still shows it (main and the template at the tags' commits,
+    read from git, not taken from the file). None: run every step."""
+    if not state or state.get("tag") != tag or state["steps"].get("verify") == "ok":
+        return None
+    first = next(s for s in STEPS if state["steps"].get(s) != "ok")
+    at = STEPS.index(first)
+    if at <= STEPS.index("fetch"):
+        return None                                    # nothing after the fetches to keep
+    checks = [(core.PROJECT, tag)] + ([(_template(), f"template-{tag}")] if at > STEPS.index("template") else [])
+    for repo, ref in checks:
+        target = _commit(repo, f"refs/tags/{ref}")
+        if not target or _commit(repo, "HEAD") != target:
+            return None
+    return first
+
+
 def _run(tag: str, order: tuple[str, ...]) -> int:
     kicked: dict[str, int | None] = {}
     before = _load_state()
-    state = before if order == SERVICES_ONLY and before and before.get("tag") == tag else {"tag": tag, "steps": {}}
+    resume = _resume_from(tag, before) if order == STEPS else None
+    keep = resume or (order == SERVICES_ONLY and before and before.get("tag") == tag)
+    state = before if keep else {"tag": tag, "steps": {}}
     steps = {"preflight": preflight, "fetch": fetch, "main": step_main, "template": step_template, "update": update,
              "scheduler": scheduler, "services": lambda t: services(t, kicked), "verify": lambda t: verify(t, kicked)}
+    if resume:
+        # Finishing a deploy: what it did and the checkout still shows is not done again, and nothing reaches origin
+        # (a deploy stopped at services finishes with origin unreachable). The local checks still run.
+        done = set(STEPS[:STEPS.index(resume)])
+        steps["preflight"] = lambda t: preflight(t, fetch_tags=False) + f"; finishing the deploy from its {resume} step"
+        for step in done - {"preflight"}:
+            steps[step] = lambda t, step=step: f"done by the deploy this finishes ({step} recorded, the checkout at {t})"
     for step in order:
         record: dict = {"step": step}
         try:
@@ -377,18 +408,25 @@ def _semver(tag: str) -> tuple[int, int, int] | None:
     return (int(m[1]), int(m[2]), int(m[3])) if m else None
 
 
-def check() -> int:
+def check(local: bool = False) -> int:
     """One line: the checked-out release (`current`, git describe of HEAD), the newest release on origin newer than it
     that has its template tag (`latest`, null when up to date), `template_tag`: false when origin has a newer
     vX.Y.Z still without template-vX.Y.Z (not deployable yet), true otherwise, and `incomplete` / `incomplete_step`:
     the release a deploy moved this checkout to without finishing, and the first step it did not finish (null when
-    none): running `shaft deploy <incomplete> --json` again finishes it."""
+    none): running `shaft deploy <incomplete> --json` again finishes it. `local`: origin is not asked (`latest` and
+    `template_tag` null): only what this checkout knows."""
     project = core.PROJECT
     d = _git(project, "describe", "--tags", "--match", "v[0-9]*", "--always", "HEAD")
     if d.returncode:
         _emit({"ok": False, "error": f"git describe failed: {_said(d)}"})
         return 1
     current = d.stdout.strip()
+    incomplete = _incomplete(project)
+    if local:   # no origin: only what this checkout knows (the app's recovery while the server is down)
+        _emit({"ok": True, "current": current, "latest": None, "template_tag": None,
+               "incomplete": incomplete[0] if incomplete else None,
+               "incomplete_step": incomplete[1] if incomplete else None})
+        return 0
     r = _git(project, "ls-remote", "--tags", "--refs", "origin", "v*", "template-v*")
     if r.returncode:
         _emit({"ok": False, "error": f"git ls-remote origin failed: {_said(r)}"})
@@ -400,7 +438,6 @@ def check() -> int:
             templates.add(v)
         elif (v := _semver(name)):
             releases[v] = name
-    incomplete = _incomplete(project)
     have = _semver(current.split("-", 1)[0])
     newer = [v for v in releases if have is None or v > have]
     deployable = [v for v in newer if v in templates]

@@ -1800,6 +1800,8 @@ def main(argv: list[str]) -> int:
                                       "web and telegram when no conversation is open); one JSON line per step")
     p.add_argument("tag", nargs="?", help="the release tag, vX.Y.Z (its template commit is template-vX.Y.Z)")
     p.add_argument("--check", action="store_true", help="only say the newest release on origin this could move to")
+    p.add_argument("--local", action="store_true",
+                   help="with --check: ask nothing of origin, only say a deploy left unfinished here")
     p.add_argument("--services-only", action="store_true",
                    help="only the services and verify steps: the retry after a deploy that waited for conversations")
     p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
@@ -2389,9 +2391,9 @@ def main(argv: list[str]) -> int:
         return install.run(args.operator, args.email)
     if args.cmd == "deploy":
         from . import deploy
-        if args.check == bool(args.tag) or (args.check and args.services_only):
-            parser.error("deploy takes TAG [--services-only], or --check alone")
-        return deploy.check() if args.check else deploy.run(args.tag, args.services_only)
+        if args.check == bool(args.tag) or (args.check and args.services_only) or (args.local and not args.check):
+            parser.error("deploy takes TAG [--services-only], or --check [--local]")
+        return deploy.check(args.local) if args.check else deploy.run(args.tag, args.services_only)
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":

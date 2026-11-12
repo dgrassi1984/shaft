@@ -51,6 +51,25 @@ public enum ServerLocation: Equatable, Sendable {
     }
 }
 
+/// The checkout this Mac's paired server was last seen to run from (`/app/v1/version`'s loopback `project`, matching
+/// the updater's own): kept in the app's settings (a path, not a secret), so a deploy that left the web service down
+/// can still be finished from the app after a relaunch.
+public struct VerifiedCheckout {
+    public var load: @MainActor () -> String?
+    public var save: @MainActor (String?) -> Void
+
+    public init(load: @escaping @MainActor () -> String?, save: @escaping @MainActor (String?) -> Void) {
+        self.load = load
+        self.save = save
+    }
+
+    @MainActor
+    public static func userDefaults(key: String = "SHAFT.updateServer.verifiedCheckout") -> VerifiedCheckout {
+        VerifiedCheckout(load: { UserDefaults.standard.string(forKey: key) },
+                         save: { value in UserDefaults.standard.set(value, forKey: key) })
+    }
+}
+
 /// Settings → Services → Update server (Mac): `shaft deploy --check --json` says whether a newer release is out (or a
 /// deploy was left unfinished), and `shaft deploy <tag> --json` moves this Mac's server onto it (docs/deploy.md), each
 /// step a row as it arrives. Both run as local processes in `checkout` with the installed server's Python
@@ -102,6 +121,7 @@ public final class ServerUpdater {
     public let checkout: URL
     @ObservationIgnored private let run: Run
     @ObservationIgnored private let locate: @MainActor () async -> ServerLocation
+    @ObservationIgnored private let verified: VerifiedCheckout
     @ObservationIgnored private let reachable: @MainActor () async -> Bool
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var generation = 0
@@ -110,26 +130,28 @@ public final class ServerUpdater {
     public static let reconnectTries = 90
 
     public init(repository: URL, checkout: URL, run: @escaping Run,
-                locate: @escaping @MainActor () async -> ServerLocation,
+                locate: @escaping @MainActor () async -> ServerLocation, verified: VerifiedCheckout,
                 reachable: @escaping @MainActor () async -> Bool,
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.repository = repository
         self.checkout = checkout
         self.run = run
         self.locate = locate
+        self.verified = verified
         self.reachable = reachable
         self.sleep = sleep
     }
 
     /// The installed server's `shaft`, through the Installer (its Python, its environment).
     public convenience init(installer: Installer, locate: @escaping @MainActor () async -> ServerLocation,
+                            verified: VerifiedCheckout = .userDefaults(),
                             reachable: @escaping @MainActor () async -> Bool) {
         self.init(repository: installer.configuration.repository, checkout: installer.configuration.server,
                   run: { [weak installer] args, onLine in
                       guard let installer else { throw CancellationError() }
                       return try await installer.shaft(args, onLine: onLine)
                   },
-                  locate: locate, reachable: reachable)
+                  locate: locate, verified: verified, reachable: reachable)
     }
 
     public var isBusy: Bool { check == .checking || phase == .running }
@@ -161,22 +183,31 @@ public final class ServerUpdater {
             guard let self else { return }
             let located = await self.locate()
             guard generation == self.generation else { return }
+            var local = false
             switch located {
             case .unreachable(let why):
-                self.check = .failed(why)
-                return
+                // A deploy may have left the web service down. Only a checkout the server was seen to run from may be
+                // finished from here, and only an unfinished deploy: nothing new is offered unverified.
+                guard let seen = self.verified.load(), Self.same(seen, self.checkout.path) else {
+                    self.check = .failed(why + " This app has not seen the server run from \(self.checkout.path), so it "
+                                         + "offers no update until the server answers.")
+                    return
+                }
+                local = true
             case .notSaid:
                 self.check = .unverified
                 return
             case .project(let project):
                 guard Self.same(project, self.checkout.path) else {
+                    self.verified.save(nil)
                     self.check = .elsewhere(project: project)
                     return
                 }
+                self.verified.save(Installer.canonical(project) ?? project)
             }
             let answer: Check
             do {
-                let r = try await self.run(["deploy", "--check", "--json"], nil)
+                let r = try await self.run(["deploy", "--check"] + (local ? ["--local"] : []) + ["--json"], nil)
                 answer = Self.checked(r)
             } catch {
                 guard generation == self.generation else { return }
@@ -184,7 +215,16 @@ public final class ServerUpdater {
                 return
             }
             guard generation == self.generation else { return }
-            self.check = answer
+            if local, case .incomplete = answer {
+                self.check = answer
+            } else if local, case .failed = answer {
+                self.check = answer
+            } else if local {
+                self.check = .failed("The server does not answer, and no unfinished update is left to finish here: "
+                                     + "it must answer before anything else is offered.")
+            } else {
+                self.check = answer
+            }
         }
     }
 

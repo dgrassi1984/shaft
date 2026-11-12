@@ -1670,7 +1670,11 @@ newer than `current` (git describe of the primary checkout); `template_tag` is f
 still without its template tag. `incomplete` is a release a deploy moved the checkout to without finishing (a step
 failed, or services waited), from `.supervisor/deploy-state.json`, with the first step it did not finish: the app then
 offers "Finish updating to vX.Y.Z", which runs `shaft deploy <incomplete> --json` again (the steps already done are
-skipped), also after a relaunch. With `latest`, it offers "Update server to vX.Y.Z" (and the release's page) and runs
+skipped, and origin is not asked again), also after a relaunch. The app remembers the checkout the server was last
+seen to run from (its own settings: a path, not a secret). When `/version` does not answer (a deploy may have left the
+web service down) and that remembered checkout is `~/SHAFT`, it runs `shaft deploy --check --local --json` (no origin;
+`latest` and `template_tag` null) and offers only "Finish updating" for a deploy left unfinished there; anything else,
+or no such record, offers nothing and says why. With `latest`, it offers "Update server to vX.Y.Z" (and the release's page) and runs
 `shaft deploy <latest> --json`, showing each step
 line `{"step", "ok", "detail"[, "error"]}` as it arrives (docs/deploy.md has the steps). The services line names what it
 restarted (`"restarted": [str]`); restarting the web service drops the app's connection, so it then shows

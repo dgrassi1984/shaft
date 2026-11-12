@@ -77,6 +77,14 @@ final class ScriptedShaft {
     }
 }
 
+/// The app's record of the checkout the server was seen to run from, in memory.
+@MainActor
+final class SeenCheckout {
+    var value: String?
+    init(_ value: String? = nil) { self.value = value }
+    var store: VerifiedCheckout { VerifiedCheckout(load: { self.value }, save: { self.value = $0 }) }
+}
+
 private func row(_ step: String, ok: Bool = true, detail: String = "done", extra: String = "") -> String {
     #"{"step":"\#(step)","ok":\#(ok),"detail":"\#(detail)"\#(extra)}"#
 }
@@ -89,12 +97,75 @@ struct ServerUpdaterTests {
     /// The checkout the updater would deploy in: a real folder, so its canonical path can be compared.
     let checkout = FileManager.default.temporaryDirectory.appending(path: "updater-checkout", directoryHint: .isDirectory)
 
-    private func updater(_ shaft: ScriptedShaft, located: ServerLocation? = nil,
+    private func updater(_ shaft: ScriptedShaft, located: ServerLocation? = nil, seen: SeenCheckout = SeenCheckout(),
                          reachable: @escaping @MainActor () async -> Bool = { true }) -> ServerUpdater {
         try? FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
         let location = located ?? .project(checkout.path)
         return ServerUpdater(repository: repository, checkout: checkout, run: { try await shaft.run($0, $1) },
-                             locate: { location }, reachable: reachable, sleep: { _ in })
+                             locate: { location }, verified: seen.store, reachable: reachable, sleep: { _ in })
+    }
+
+    @Test func aMatchingServerIsRememberedAndAnotherForgotten() async {
+        let seen = SeenCheckout()
+        let shaft = ScriptedShaft([ScriptedShaft.lines(0, #"{"ok":true,"current":"v0.61.0","latest":null,"template_tag":true}"#)])
+        let here = updater(shaft, seen: seen)
+        here.checkForUpdate()
+        await here.finished()
+        #expect(seen.value == Installer.canonical(checkout.path))
+        let other = updater(shaft, located: .project("/Users/someone/Development/shaft"), seen: seen)
+        other.checkForUpdate()
+        await other.finished()
+        #expect(seen.value == nil)
+    }
+
+    @Test func aServerLeftDownCanStillBeFinishedFromTheCheckoutItWasSeenIn() async {
+        // Fix round 2: the deploy left the web service down; after a relaunch /version does not answer.
+        let seen = SeenCheckout(Installer.canonical(checkout.path))
+        let finish = allSteps.map { row($0) } + [row("services"), row("verify")]
+        let shaft = ScriptedShaft([
+            ScriptedShaft.lines(0, #"{"ok":true,"current":"v0.61.0","latest":null,"template_tag":null,"incomplete":"v0.61.0","incomplete_step":"services"}"#),
+            { _ in ProcessResult(status: 0, stdout: Data(finish.joined(separator: "\n").utf8), stderr: Data()) },
+        ])
+        let updater = updater(shaft, located: .unreachable("Could not connect to the server."), seen: seen)
+        updater.checkForUpdate()
+        await updater.finished()
+        #expect(shaft.calls == [["deploy", "--check", "--local", "--json"]])   // origin and the web service not needed
+        #expect(updater.check == .incomplete(tag: "v0.61.0", step: "services", current: "v0.61.0"))
+        updater.update()
+        await updater.finished()
+        #expect(shaft.calls.last == ["deploy", "v0.61.0", "--json"])
+        #expect(updater.phase == .done)
+    }
+
+    @Test func aServerDownOffersNothingNewEvenFromItsCheckout() async {
+        let seen = SeenCheckout(Installer.canonical(checkout.path))
+        let shaft = ScriptedShaft([
+            ScriptedShaft.lines(0, #"{"ok":true,"current":"v0.60.0","latest":null,"template_tag":null,"incomplete":null,"incomplete_step":null}"#),
+        ])
+        let updater = updater(shaft, located: .unreachable("Could not connect to the server."), seen: seen)
+        updater.checkForUpdate()
+        await updater.finished()
+        guard case .failed(let why) = updater.check else {
+            Issue.record("expected nothing offered, got \(updater.check)")
+            return
+        }
+        #expect(why.contains("no unfinished update"))
+    }
+
+    @Test func aServerDownNeverSeenHereOffersNothingAndSaysWhy() async {
+        for seen in [SeenCheckout(), SeenCheckout("/Users/someone/Development/shaft")] {
+            let shaft = ScriptedShaft([])
+            let updater = updater(shaft, located: .unreachable("Could not connect to the server."), seen: seen)
+            updater.checkForUpdate()
+            await updater.finished()
+            guard case .failed(let why) = updater.check else {
+                Issue.record("expected nothing offered, got \(updater.check)")
+                continue
+            }
+            #expect(why.hasPrefix("Could not connect to the server."))
+            #expect(why.contains("has not seen the server run from"))
+            #expect(shaft.calls.isEmpty)
+        }
     }
 
     @Test func nothingIsOfferedForAServerRunningFromAnotherCheckout() async {
@@ -111,7 +182,11 @@ struct ServerUpdaterTests {
         let down = updater(shaft, located: .unreachable("Could not connect to the server."))
         down.checkForUpdate()
         await down.finished()
-        #expect(down.check == .failed("Could not connect to the server."))
+        guard case .failed(let why) = down.check else {
+            Issue.record("expected a failure, got \(down.check)")
+            return
+        }
+        #expect(why.hasPrefix("Could not connect to the server."))
         #expect(shaft.calls.isEmpty)                          // no `shaft deploy` ran for any of them
     }
 
