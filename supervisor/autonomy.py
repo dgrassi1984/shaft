@@ -101,10 +101,14 @@ def service(name: str, action: str) -> int:
         return 0
     SUP_DIR.mkdir(exist_ok=True)
     AGENTS.mkdir(parents=True, exist_ok=True)
+    # A fresh install keeps its own tools (uv) in PROJECT/.runtime/bin: the services and the runs they start find them.
+    runtime_bin = PROJECT / ".runtime" / "bin"
+    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if not runtime_bin.is_dir()
+                    else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
     path.write_bytes(plistlib.dumps({
         "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
         "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
-        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+        "EnvironmentVariables": {"PATH": service_path},
         "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}))
     # bootout returns before launchd has let go of the old job: a bootstrap right after it failed with
     # "5: Input/output error" and left the service unloaded (`shaft model on`, 2026-10-19; it worked a moment later).

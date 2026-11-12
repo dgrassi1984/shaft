@@ -287,7 +287,16 @@ def _said(text: str) -> None:
 
 
 def cmd_setup() -> int:
-    """Recreate missing worktrees from branches — e.g. after a fresh clone — and install the push guard."""
+    """Recreate missing worktrees from branches — e.g. after a fresh clone — and install the push guard.
+    A failing git (not a repository, no identity) says so and returns 1, never a traceback."""
+    try:
+        return _setup()
+    except subprocess.CalledProcessError as e:
+        print(f"setup failed: {(e.stderr or e.stdout or str(e)).strip()}", file=sys.stderr)
+        return 1
+
+
+def _setup() -> int:
     branches = git("for-each-ref", "--format=%(refname:short)", "refs/heads/template",
                    "refs/heads/instance/").stdout.split()
     remote = git("for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/template",
@@ -1548,6 +1557,11 @@ def main(argv: list[str]) -> int:
                    help="backfill, check: a copy of the project repository (git clone --mirror) instead of the real one")
     sub.add_parser("list", help="list instances")
     sub.add_parser("setup", help="create missing worktrees for template and instance branches")
+    p = sub.add_parser("install", help="the fresh-Mac install steps after the clone (git identity, setup, api and web "
+                                       "on this Mac only, scheduler); one JSON line per step with --json")
+    p.add_argument("--operator", required=True, help="your name (the git author when none is set)")
+    p.add_argument("--email", help="the git author's email (default: user@host.local)")
+    p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
     p = sub.add_parser("update", help="merge the template into instances (only when idle; gate-tested)")
     p.add_argument("names", nargs="*")
     p.add_argument("--all", action="store_true")
@@ -2114,6 +2128,9 @@ def main(argv: list[str]) -> int:
         return 0
     if args.cmd == "setup":
         return cmd_setup()
+    if args.cmd == "install":
+        from . import install
+        return install.run(args.operator, args.email)
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
