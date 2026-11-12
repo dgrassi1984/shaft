@@ -17,6 +17,11 @@ Any process on the Mac could forge the login header to 127.0.0.1; none can forge
 the port at all: a run's sandbox allows only the LLM, embed, broker and egress ports, and serve() refuses to listen
 on a port a run may reach.
 
+One exception, off by default: with SHAFT_WEB_LOCAL on, a request to /app/v1 (the native apps' API, app_api.py) whose
+Host is this Mac's loopback at the web port (local_hosts) skips the login and Host checks — the Mac app on this Mac,
+without Tailscale. It is marked `local`; app_api then needs the paired device's bearer for every route, acts as that
+device's recorded login (never the forgeable header) and refuses /pair. The pages stay tailnet-only.
+
 Every request must also name this host (Host is the tailnet name: no DNS rebinding), and every POST must come from
 this page — Sec-Fetch-Site same-origin, or an Origin naming this host — and carry the CSRF token derived from the
 browser's own cookie. Every response carries a Content-Security-Policy without inline script.
@@ -48,7 +53,7 @@ from pathlib import Path
 from . import apns, web_icons, web_pages
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
-from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
+from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, on_off, port, log, read_beneath
 
 PORT, _ = knob(   # not 8782: that is the embed port, which runs reach
     "SHAFT_WEB_PORT", "8785", port, "the web UI's local port (tailscale serve forwards to it)", group="Ports and paths",
@@ -60,6 +65,10 @@ WEB_HOSTS, _ = knob(
     "SHAFT_WEB_HOSTS", "", lambda s: {h.strip().lower() for h in s.split(",") if h.strip()},
     "the host names the web UI answers to, comma-separated (empty: the tailnet name `shaft web on` recorded)",
     group="Ports and paths", services=("web",), web=False)
+LOCAL, _ = knob(
+    "SHAFT_WEB_LOCAL", "off", on_off,
+    "on: the Mac app on this Mac reaches /app/v1 at 127.0.0.1 with a paired device's bearer, no Tailscale needed; "
+    "the pages stay tailnet-only", group="Ports and paths", services=("web",), web=False)
 PAIR_MINUTES = 10
 COOKIE = "shaft_device"
 COOKIE_DAYS = 400                                           # the longest a browser keeps a cookie
@@ -108,6 +117,11 @@ def allowed_hosts() -> set[str]:
         hosts = {str(h).lower() for h in recorded} if isinstance(recorded, list) and recorded else tailnet_hosts()
         _hosts.update(at=time.time(), hosts=hosts)
     return _hosts["hosts"]
+
+
+def local_hosts() -> set[str]:
+    """The names a loopback request to /app/v1 may carry when SHAFT_WEB_LOCAL is on (the Mac app on this Mac)."""
+    return {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 
 
 def url() -> str:
@@ -167,15 +181,22 @@ def _use_pairing(token: str, login: str, platform: str = "") -> tuple[str, str] 
         pending = _read("pairing.json")
         p = pending.pop(_digest(token), None)
         _write("pairing.json", pending)
-        if not p or p.get("expires", 0) <= time.time():
-            return None
-        dev, secret = secrets.token_hex(8), secrets.token_urlsafe(32)
+    if not p or p.get("expires", 0) <= time.time():
+        return None
+    return add_device(p["device"], login, platform)
+
+
+def add_device(name: str, login: str, platform: str = "") -> tuple[str, str]:
+    """Record a paired device — a browser, or a native app (`platform` "ios" or "macos") — acting as `login`:
+    (device id, secret). Only the secret's hash is kept; the secret is the cookie's or the bearer's, shown once."""
+    dev, secret = secrets.token_hex(8), secrets.token_urlsafe(32)
+    now = datetime.now().isoformat(timespec="seconds")
+    with _lock:
         devices = _read("devices.json")
-        now = datetime.now().isoformat(timespec="seconds")
-        devices[dev] = {"name": p["device"], "login": login, "created": now, "last_seen": now,
+        devices[dev] = {"name": name, "login": login, "created": now, "last_seen": now,
                         "hash": _digest(secret), **({"platform": platform} if platform else {})}
         _write("devices.json", devices)
-    log(f"web: {f'{platform} app' if platform else 'browser'} paired as {p['device']!r} ({dev}, tailnet user {login})")
+    log(f"web: {f'{platform} app' if platform else 'browser'} paired as {name!r} ({dev}, login {login})")
     return dev, secret
 
 
@@ -255,6 +276,7 @@ class Request:
     query: dict = field(default_factory=dict)
     set_cookies: list = field(default_factory=list)     # cookies to send with whatever the route answers
     device: str = ""                # the paired browser's id, once _route has checked its cookie
+    local: bool = False             # a loopback request to /app/v1 (SHAFT_WEB_LOCAL): no tailnet login, the bearer only
 
     def __post_init__(self):
         split = urllib.parse.urlsplit(self.target)
@@ -364,6 +386,12 @@ def respond(req: Request) -> Response:
 def _route(req: Request) -> Response:
     login = (req.headers.get("tailscale-user-login") or "").lower()
     app = req.path == "/app/v1" or req.path.startswith("/app/v1/")     # the native apps' JSON API (app_api.py)
+    if app and LOCAL and req.headers.get("host", "").lower() in local_hosts():
+        # The Mac app on this Mac, without Tailscale: no login header is read (any local process could forge one);
+        # app_api needs the paired bearer for every route, acts as that device's login, and refuses /pair.
+        req.local = True
+        from . import app_api
+        return app_api.route(req)
     if not login or login not in allowed_logins():
         log(f"web refused tailnet user {login or '(none)'} ({req.method} {req.path})")
         if app:

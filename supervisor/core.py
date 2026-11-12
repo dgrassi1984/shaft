@@ -135,6 +135,12 @@ def positive_int(s: str) -> int:
     return n
 
 
+def on_off(s: str) -> bool:
+    if s not in ("on", "off"):
+        raise ValueError(f"must be on or off, not {s!r}")
+    return s == "on"
+
+
 def whole(s: str) -> int:
     n = int(s)
     if n < 0:

@@ -11,6 +11,10 @@ under /app/v1/ here, and never reads a cookie for it; here every route but /pair
 (web.paired_device). A header sent only by the app carries no ambient credential, so there is no CSRF token: a page
 of another site can neither send it nor read an answer (no route sends CORS headers).
 
+On loopback (SHAFT_WEB_LOCAL on, Host 127.0.0.1 or localhost at the web port: web.local_hosts) web._route checks no
+login and marks the request local: the bearer is then the only credential, the identity is the device's recorded
+login (_login), never a header, and /pair is refused (local_pair) — such a device is made by `shaft web pair --local`.
+
 The long-poll (§4): GET /app/v1/chat/<n>?since=&live=&wait= holds the request — one thread of the web server's
 ThreadingHTTPServer — until either revision of the feed moves (web_chat.build: `version`, `live`), woken by every
 web_chat.save() and looking again every LOOK_S, or `wait` seconds pass (304). Held for the current chat, it marks the
@@ -150,14 +154,18 @@ N, CID = r"(?P<n>[A-Za-z0-9_-]+)", r"(?P<cid>web-[A-Za-z0-9]+)"
 def _route(req: Request) -> Response:
     path = req.path.removeprefix(PREFIX)
     if path == "/pair":
+        if req.local:                               # a loopback request has no tailnet login to pair as
+            log(f"app api refused a loopback pairing ({req.method} {req.path})")
+            raise Refusal(403, "local_pair", "Pair this Mac's app with shaft web pair --local, not with a link.")
         if req.method != "POST":
             raise Refusal(405, "method", f"{req.method} is not supported here: POST")
         return _pair(req)
     dev = device(req)
     if not dev:
-        log(f"app api refused a request without a paired bearer ({req.method} {req.path})")
-        raise Refusal(401, "unpaired", "This device is not paired: pair it again with a link from "
-                                       "shaft web pair --name <device>.")
+        log(f"app api refused a request without a paired bearer ({req.method} {req.path}{', loopback' * req.local})")
+        raise Refusal(401, "unpaired", "This device is not paired: pair it again with "
+                                       + ("shaft web pair --local." if req.local
+                                          else "a link from shaft web pair --name <device>."))
     req.device = dev
     for pattern, methods in ROUTES:
         if m := re.fullmatch(pattern, path):
@@ -188,6 +196,10 @@ def _str(data: dict, key: str, default: str | None = None) -> str:
 
 
 def _login(req: Request) -> str:
+    """Who acts: the tailnet login web._route checked, or on loopback (req.local) the paired device's recorded login —
+    never a header there, which any local process could send."""
+    if req.local:
+        return web.devices()[req.device]["login"].lower()
     return (req.headers.get("tailscale-user-login") or "").lower()
 
 

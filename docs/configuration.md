@@ -22,7 +22,7 @@ a command you run from a shell that sets it.
   A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
 - Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
   not registered, and on a `SHAFT_` variable read straight from the environment.
-- Ports, interpreter paths, `SHAFT_WEB_HOSTS` and `SHAFT_TELEGRAM_API` are set from a terminal only: a wrong value there
+- Ports, interpreter paths, `SHAFT_WEB_HOSTS`, `SHAFT_WEB_LOCAL` and `SHAFT_TELEGRAM_API` are set from a terminal only: a wrong value there
   cuts the web UI off or breaks a service. Secrets stay in `.env` (`shaft secret` for an instance's own keys).
 
 Sources: [settings registry and writes](../supervisor/settings.py),
@@ -177,6 +177,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_WEB_PORT` | `8785` | the web UI's local port (tailscale serve forwards to it) | [web.py](../supervisor/web.py) |
 | `SHAFT_WEB_HTTPS_PORT` | `8444` | the web UI's https port on the tailnet (tailscale serve) | [web.py](../supervisor/web.py) |
 | `SHAFT_WEB_HOSTS` | empty | the host names the web UI answers to, comma-separated (empty: the tailnet name `shaft web on` recorded) | [web.py](../supervisor/web.py) |
+| `SHAFT_WEB_LOCAL` | `off` | on: the Mac app on this Mac reaches /app/v1 at 127.0.0.1 with a paired device's bearer, no Tailscale needed; the pages stay tailnet-only | [web.py](../supervisor/web.py) |
 
 Special runtime variables are not settings: `SHAFT_PYTHON` selects the launcher
 interpreter ([bin/shaft](../bin/shaft)); `SHAFT_SUPERVISOR_DIR` redirects state

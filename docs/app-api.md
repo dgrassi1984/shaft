@@ -16,6 +16,8 @@ The API shows a chat exactly as the PWA's chat page shows it. One function says 
 - The web service (`shaft web on`), on the same port as the web UI: `https://<mac>.<tailnet>.ts.net:8444/app/v1/…`
   through `tailscale serve`. Tailnet only, never Funnel.
 - The app learns the base URL from the pairing link (§2): everything before `/pair`.
+- On loopback, off by default: with `SHAFT_WEB_LOCAL=on`, the Mac app on the same Mac reaches
+  `http://127.0.0.1:8785/app/v1/…` (or `localhost`, at `SHAFT_WEB_PORT`) without Tailscale (§1.2).
 
 ### 1.2 Auth
 
@@ -29,6 +31,12 @@ Every request passes three checks, in this order:
    against `.supervisor/web/devices.json` (the secret's SHA-256, compared in constant time). Refused when the header is
    missing or malformed, the device is unknown (never paired, or unpaired since) or the secret is wrong: `401 unpaired`.
    The app then shows its pairing screen. `POST /app/v1/pair` (§2) is the one route without a bearer.
+
+**On loopback** (`SHAFT_WEB_LOCAL=on`, `Host` one of `web.local_hosts()`: `127.0.0.1:<port>` or `localhost:<port>`),
+checks 1 and 2 are skipped and only `/app/v1` is served; the pages keep their refusals. The bearer (check 3) is then
+the only credential, and the request acts as the device's recorded `login`, never as a `Tailscale-User-Login` header,
+which any local process could send. Such a device is made by `shaft web pair --local`; `POST /app/v1/pair` on loopback
+is refused: `403 local_pair`.
 
 - `/app/v1` reads no cookie, and the web UI's routes accept no bearer. A browser page can never reach the API with an
   ambient credential, so there is no CSRF token and no origin check. No route sends CORS headers.
@@ -72,6 +80,7 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 | 403 | `login` | The tailnet login is missing or not in `SHAFT_API_LOGINS` | — |
 | 403 | `host` | `Host` is not in `web.allowed_hosts()` | — |
 | 403 | `pair_expired` | The pairing token is unknown, used, or older than 10 minutes | — |
+| 403 | `local_pair` | `POST /app/v1/pair` on loopback (§1.2): pair with `shaft web pair --local` | — |
 | 404 | `not_found` | No such route, instance, chat, turn, attachment, document | — |
 | 405 | `method` | The route exists, the method does not | — |
 | 409 | `refused` | Malformed comment post or thread ids, unavailable ratings, or a settings writer, service command, or action that refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, `voices.Refused` (§17), a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
@@ -140,7 +149,8 @@ Universal Clipboard carries it to the phone or iPad.
   | `name` | str | the name given to `shaft web pair --name` |
   | `login` | str | the tailnet login it was paired by |
 
-- **Errors:** `400 bad_request` (neither `link` nor `token`, or a bad `platform`); `403 pair_expired`.
+- **Errors:** `400 bad_request` (neither `link` nor `token`, or a bad `platform`); `403 pair_expired`; `403
+  local_pair` on loopback (§1.2).
 - **Effect:** the device is a paired device in `devices.json` (with `"platform"`), as a browser is: `shaft web status`
   lists it, `shaft web unpair` revokes it.
 
