@@ -47,7 +47,8 @@ Successful saves show the server's value; refused saves preserve the draft. Paus
 removes the instance override, so the default cap still applies. Loading, load errors and older servers each have an explicit state.
 
 `SessionRoot` asks `GET /app/v1/version` once per paired store (`InstancesStore.checkCompatibility`); a server below
-`ServerCompatibility.minimumServerAPI`, or one without the route, gets `NeedsNewerServer` instead of the chat (Check
+`ServerCompatibility.minimumServerAPI` (0: one without the route is api 0 and keeps working; only the Mac setup wizard
+needs `setupServerAPI`, 1) gets `NeedsNewerServer` instead of the chat (Check
 again, and again whenever the app comes to the front). On the Mac, Settings → Services also has Update server when the
 app is paired with this Mac's own install (`MacSetup.updater`: a loopback pairing and `~/SHAFT`), and only once
 `/version`'s loopback `project` is that checkout (else it says where the server runs from): on appear it runs

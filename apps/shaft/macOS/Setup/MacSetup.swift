@@ -149,7 +149,7 @@ final class MacSetup {
 
     /// Whether the paired server's web service answers: a refusal is an answer, a 5xx is whatever stands in for it while
     /// it restarts.
-    private static func reachability(of session: SHAFTSession) -> @MainActor () async -> Bool {
+    static func reachability(of session: SHAFTSession) -> @MainActor () async -> Bool {
         { [weak session] in
             guard let client = session?.store?.client else { return false }
             do {

@@ -19,10 +19,17 @@ struct ServerCompatibilityTests {
                 == .needsNewerServer(server: "v0.60.0"))
     }
 
-    @Test func aServerWithoutTheRouteNeedsANewerServer() {
+    /// Final review I1 (bug on aa5a7b51): a server from before `/app/v1/version` answered 404 there, read as "needs a
+    /// newer server", and a new app locked every existing install out for the whole session on every device. A 404 is
+    /// api 0: the everyday app works with it; only the setup wizard, whose routes came with api 1, needs more.
+    @Test func aServerWithoutTheRouteIsAPIZero() {
         let missing = APIError.server(status: 404, error: ServerError(code: "not_found", message: "Nothing at /app/v1/version."))
-        #expect(ServerCompatibility.verdict(.failure(missing)) == .needsNewerServer(server: nil))
-        #expect(ServerCompatibility.verdict(.failure(.http(status: 404, body: "<html>"))) == .needsNewerServer(server: nil))
+        #expect(ServerCompatibility.verdict(.failure(missing)) == .compatible(server: ""))
+        #expect(ServerCompatibility.verdict(.failure(.http(status: 404, body: "<html>"))) == .compatible(server: ""))
+        #expect(ServerCompatibility.verdict(.failure(missing), minimum: ServerCompatibility.setupServerAPI)
+                == .needsNewerServer(server: nil))
+        #expect(ServerCompatibility.verdict(.success(ServerVersion(server: "v0.60.0", api: 1)),
+                                            minimum: ServerCompatibility.setupServerAPI) == .compatible(server: "v0.60.0"))
     }
 
     @Test func anUnreachableServerBlocksNothing() {
@@ -32,8 +39,9 @@ struct ServerCompatibilityTests {
         #expect(ServerCompatibility.verdict(.failure(broken)) == .unknown("boom"))
     }
 
-    @Test func theAppNeedsAPIVersionOne() {
-        #expect(ServerCompatibility.minimumServerAPI == 1)
+    @Test func theEverydayAppTakesAnyServerAndTheWizardNeedsAPIOne() {
+        #expect(ServerCompatibility.minimumServerAPI == 0)
+        #expect(ServerCompatibility.setupServerAPI == 1)
         #expect(ServerCompatibility.message(for: "v0.40.0") == "This app needs a newer SHAFT server (the server runs v0.40.0).")
         #expect(ServerCompatibility.message(for: nil) == "This app needs a newer SHAFT server.")
     }
@@ -49,7 +57,7 @@ struct ServerCompatibilityTests {
                                    drafts: DraftStore(directory: folder.appending(path: "d")))
         #expect(store.compatibility == nil)
         await store.checkCompatibility()
-        #expect(store.compatibility == .needsNewerServer(server: nil))
+        #expect(store.compatibility == .compatible(server: ""))      // a pre-/version server keeps working (I1)
         server.setAnswer { _ in .json(200, #"{"server":"v0.61.0","api":1}"#) }
         await store.checkCompatibility()
         #expect(store.compatibility == .compatible(server: "v0.61.0"))

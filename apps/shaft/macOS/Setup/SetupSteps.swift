@@ -30,6 +30,10 @@ final class SetupSteps {
     /// What `/setup/provider` answered, and the request it answered.
     private(set) var coverage: ProviderUseResponse?
     private(set) var saved: ProviderRequest?
+    /// While Save restarts the services that still run on the old settings (`not_live`): what it does now.
+    private(set) var restarting: String?
+    /// How long a restart waits between tries for the web service to answer again (tests shorten it).
+    @ObservationIgnored var reconnectSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     private(set) var testing: Work = .idle
     private(set) var check: ProviderCheckResponse?
     private(set) var checked: ProviderRequest?
@@ -137,7 +141,7 @@ final class SetupSteps {
         form = ProviderForm()
         (saving, testing, signingIn, loadingDrives, creating, loadingAccess, granting, loadingSettings, savingAlone,
          greeting) = (.idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle)
-        (coverage, saved, check, checked, settings) = (nil, nil, nil, nil, nil)
+        (coverage, saved, check, checked, settings, restarting) = (nil, nil, nil, nil, nil, nil)
         (loginURL, loginCode, signedIn, drives, capText) = (nil, nil, false, [], "")
         (access, telegram, telegramCode, accessPrepared, accessSuggested, accessChecked, accessDone) =
             (nil, nil, nil, nil, [], [], [])
@@ -162,6 +166,7 @@ final class SetupSteps {
             let current = { @MainActor [weak self] in !Task.isCancelled && self?.generation == mine }
             var outcome: Work = .idle
             do {
+                try await self?.requireSetupServer(client, generation: mine)
                 try await body(client, current)
             } catch {
                 // A cancellation is work given up on purpose (stop, reset): nothing to show.
@@ -173,6 +178,31 @@ final class SetupSteps {
         }
     }
 
+    /// The wizard's generation whose server was found to speak the setup routes (`api` ≥ setupServerAPI).
+    @ObservationIgnored private var setupServerChecked: Int?
+
+    /// The setup routes came with `/app/v1` api 1: the wizard runs only against a server that has them (it installed
+    /// it), asked once per wizard. The everyday app works with older servers (ServerCompatibility.minimumServerAPI).
+    /// A check that cannot be made (unreachable, a 500) blocks nothing: the step's own call says what fails.
+    private func requireSetupServer(_ client: APIClient, generation mine: Int) async throws {
+        guard setupServerChecked != mine else { return }
+        let result: Result<ServerVersion, APIError>
+        do {
+            result = .success(try await client.version())
+        } catch {
+            guard let error = APIError.from(error) else { throw error }
+            result = .failure(error)
+        }
+        switch ServerCompatibility.verdict(result, minimum: ServerCompatibility.setupServerAPI) {
+        case .compatible:
+            if generation == mine { setupServerChecked = mine }
+        case .needsNewerServer(let server):
+            throw FormProblem(ServerCompatibility.message(for: server) + " Update it from Settings, then Try again.")
+        case .unknown:
+            return
+        }
+    }
+
     /// What a failure says on screen: a step's own problem as it is, the server's words otherwise.
     private static func said(_ api: APIError, _ error: any Error) -> String {
         (error as? FormProblem)?.message ?? api.message
@@ -181,7 +211,11 @@ final class SetupSteps {
     // MARK: - Model
 
     /// The key first (when one was typed), then the provider's preset. The key field clears once the key is saved.
-    func saveProvider(store: InstancesStore?, setup: MacSetup) {
+    /// Then the services still running on the old settings (`not_live`) are restarted through `installer` and the app
+    /// waits for the web service to answer again (`reachable`): only then is it saved, so Test checks what the
+    /// instances will run on. A failed restart shows its words; Try again saves and restarts again.
+    func saveProvider(store: InstancesStore?, setup: MacSetup, installer: Installer? = nil,
+                      reachable: (@MainActor () async -> Bool)? = nil) {
         guard !saving.running else { return }
         // Whatever was tested before no longer counts, whether this save works or not: Continue waits for a new test.
         forgetTest(saved: true)
@@ -201,6 +235,17 @@ final class SetupSteps {
             }
             let answer = try await client.setupProvider(request)
             guard current(), let self else { return }
+            if !answer.notLive.isEmpty {
+                guard let installer else {
+                    throw FormProblem("SHAFT is not installed on this Mac, so its services cannot be restarted: go "
+                                      + "back to Install.")
+                }
+                defer { if current() { self.restarting = nil } }
+                try await ServiceRestart.restart(answer.notLive, run: { try await installer.shaft($0) },
+                                                 reachable: reachable ?? { true }, sleep: self.reconnectSleep,
+                                                 progress: { if current() { self.restarting = $0 } })
+                guard current() else { return }
+            }
             self.coverage = answer
             self.saved = request
             setup.edit { state in

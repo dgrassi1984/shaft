@@ -235,6 +235,53 @@ struct SetupStepsTests {
         #expect(f.setup.steps.check == nil)
     }
 
+    /// Final review C2 (bug on aa5a7b51): the preset was saved but the running API kept the models it started with,
+    /// so the welcome failed with 403. Save restarts every service `not_live` names (web last) through the installed
+    /// server, waits for the web service to answer again, and only then counts as saved: Test cannot run before.
+    @Test func aSaveRestartsTheServicesStillOnTheOldSettingsBeforeTest() async throws {
+        let f = try Fixture(step: .model)
+        f.server.answer { request in
+            switch request.path {
+            case "/app/v1/setup/provider":
+                .init(200, #"{"provider": "openrouter", "model": "openrouter/x/y", "changed": ["SHAFT_CLOUD_MODELS"], "covers": ["instances"], "off": [], "not_live": ["api", "web"]}"#)
+            default: .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
+            }
+        }
+        let shaft = LoginRunner(lines: [#"{"ok": true}"#], status: 0)
+        let installer = try shaft.installer(home: f.home)
+        let probes = Probes()
+        f.setup.steps.form = ProviderForm(kind: .openrouter)
+        f.setup.steps.reconnectSleep = { _ in }
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup, installer: installer,
+                                   reachable: { probes.add(); return probes.count >= 2 })
+        await f.settle()
+        #expect(shaft.ran == [["api", "restart", "--json"], ["web", "restart", "--json"]])
+        #expect(probes.count == 2)                                          // waited for the web service
+        #expect(f.setup.steps.saving == .idle)
+        #expect(f.setup.steps.saved == ProviderRequest(provider: "openrouter"))
+        #expect(f.setup.steps.restarting == nil)
+
+        // A refused restart: not saved, the server's words, and Try again restarts again.
+        let refusing = LoginRunner(lines: [#"{"ok": false, "error": "wisp is replying in a conversation right now: try again when that reply finishes."}"#],
+                                   status: 1)
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup, installer: try refusing.installer(home: f.home),
+                                   reachable: { true })
+        await f.settle()
+        #expect(f.setup.steps.saving == .failed("wisp is replying in a conversation right now: try again when that reply finishes."))
+        #expect(f.setup.steps.saved == nil)                                 // Test waits for a save that restarted
+    }
+
+    /// Final review I1: only the wizard needs a server with the setup routes (api 1); an older one is said, not a 404.
+    @Test func theWizardSaysAServerWithoutTheSetupRoutesIsTooOld() async throws {
+        let f = try Fixture(step: .model)
+        f.server.version = .init(404, #"{"error": {"code": "not_found", "message": "Nothing at /app/v1/version."}}"#)
+        f.setup.steps.form = ProviderForm(kind: .openrouter)
+        f.setup.steps.saveProvider(store: f.store, setup: f.setup)
+        await f.settle()
+        #expect(f.setup.steps.saving == .failed("This app needs a newer SHAFT server. Update it from Settings, then Try again."))
+        #expect(f.server.requests.isEmpty)                                  // nothing was sent to it
+    }
+
     @Test func leavingYourInstanceCreatesItOnceThenOnlyMovesOn() async throws {
         let f = try Fixture(step: .instance) { state in
             state.instanceName = "ledger"
@@ -519,6 +566,14 @@ struct NoProcesses: ProcessRunning {
 }
 
 /// A server stand-in behind `URLProtocol`, its own host per test: the requests it saw and what it answers.
+/// How many times the wizard asked whether the web service answers.
+final class Probes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var count: Int { lock.withLock { n } }
+    func add() { lock.withLock { n += 1 } }
+}
+
 final class SetupStub: @unchecked Sendable {
     struct Request: Sendable {
         let method: String
@@ -568,7 +623,16 @@ final class SetupStub: @unchecked Sendable {
         return registry.withLock { servers[host] }
     }
 
+    /// `GET /app/v1/version`, answered here and not logged: a server with the setup routes (api 1), which the wizard
+    /// asks once (SetupSteps.requireSetupServer). Set to another answer to stand for an older server.
+    var version: Answer {
+        get { lock.withLock { _version } }
+        set { lock.withLock { _version = newValue } }
+    }
+    private var _version = Answer(200, #"{"server": "v0.60.0", "api": 1}"#)
+
     fileprivate func handle(_ request: Request) -> Answer {
+        if request.path == "/app/v1/version" { return version }
         let handler = lock.withLock {
             log.append(request)
             return self.handler

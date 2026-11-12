@@ -55,6 +55,10 @@ struct ModelStepView: View {
                 }
                 .disabled(steps.busy || !savedNow)
             }
+            if let restarting = steps.restarting {
+                // The saved models reach the running services only once they restart: Test waits for it.
+                Text(restarting).font(.callout).foregroundStyle(Color.textSecondary)
+            }
             if let failure = steps.saving.failure {
                 SetupFailure(message: failure, retry: save)
             }
@@ -81,7 +85,10 @@ struct ModelStepView: View {
     private var savedNow: Bool { steps.saved != nil && steps.saved == request }
     private var installed: Bool { FileManager.default.fileExists(atPath: Self.chatGPTApp.path) }
 
-    private func save() { steps.saveProvider(store: session.store, setup: setup) }
+    private func save() {
+        steps.saveProvider(store: session.store, setup: setup, installer: setup.installer(for: session),
+                           reachable: MacSetup.reachability(of: session))
+    }
     private func test() { steps.test(store: session.store) }
 
     @ViewBuilder

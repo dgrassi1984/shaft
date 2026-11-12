@@ -291,9 +291,9 @@ public final class Installer {
                 return
             }
         }
-        let said = asked.succeeded ? "" : " (xcode-select --install: \(asked.said))"
+        let said = asked.succeeded ? "" : " (the system said: \(asked.said))"
         throw InstallError("The Command Line Tools are still not installed\(said). Finish the install in the system dialog "
-                           + "(or run xcode-select --install in Terminal), then Try again.")
+                           + "(Try again opens it again if it closed), then Try again.")
     }
 
     /// `~/SHAFT`: cloned at the newest release that has its template tag, with the `template` branch at that tag. An
@@ -351,8 +351,9 @@ public final class Installer {
         if !(try await hasTemplateBranch()) {
             // A clone whose template fetch failed: finish it from the release it is at.
             guard let tag else {
-                throw InstallError("\(path) has no template branch and is not at a release tag: run "
-                                   + "git -C \(path) fetch origin tag template-<release> and branch -f template from it.")
+                throw InstallError("\(path) is a SHAFT checkout that is not at a release and has no template branch, "
+                                   + "so the app cannot finish it. Move that folder away (it is never deleted or "
+                                   + "overwritten), then Try again: the app installs a fresh copy.")
             }
             try await templateBranch(tag)
         }
