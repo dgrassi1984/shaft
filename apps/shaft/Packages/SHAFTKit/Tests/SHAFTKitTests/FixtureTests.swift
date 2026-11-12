@@ -98,7 +98,8 @@ struct FixtureTests {
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
                      "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from",
-                     "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-hello", "setup-errors",
+                     "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-autonomy", "setup-hello",
+                     "setup-errors",
                      "access", "google-labels", "google-calendars"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
@@ -243,6 +244,7 @@ enum FixtureShape {
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }
         if has("events", "badge") { return roundTrip(PushLatest.self) }
         if has("instance", "done", "paused") { return roundTrip(SetupInstanceResponse.self) }
+        if keys == ["instance", "then"] { return roundTrip(SetupAutonomyResponse.self) }
         if keys == ["drives"] { return roundTrip(DrivePresets.self) }
         if has("provider", "covers", "off") { return roundTrip(ProviderUseResponse.self) }
         if has("provider", "ok", "models") { return roundTrip(ProviderCheckResponse.self) }

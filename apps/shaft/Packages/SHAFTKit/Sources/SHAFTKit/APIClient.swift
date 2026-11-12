@@ -479,6 +479,46 @@ public final class APIClient: Sendable {
         var settings: InstanceSettings
     }
 
+    // MARK: Setup (§18)
+
+    /// The four starting drives.
+    public func setupDrives() async throws -> DrivePresets {
+        try await get("/app/v1/setup/drives")
+    }
+
+    /// One provider or tool key, into the server's `.env` on the verb's stdin. The answer never carries it.
+    public func setupSecret(name: String, value: String) async throws -> SaidResponse {
+        try await post("/app/v1/setup/secret", json: ["name": name, "value": value])
+    }
+
+    /// `provider use`: held up to the verb's own limit (`actions.SLOW_S`, 90 s) and a margin.
+    public func setupProvider(_ request: ProviderRequest) async throws -> ProviderUseResponse {
+        try await post("/app/v1/setup/provider", json: request, timeout: 120)
+    }
+
+    /// `provider check`: one live call per configured model, up to `2 × actions.SLOW_S`.
+    public func checkProvider(_ provider: String) async throws -> ProviderCheckResponse {
+        try await post("/app/v1/setup/provider/check", json: ["provider": provider], timeout: 200)
+    }
+
+    /// `new`, `config set` and `drive set` in a row: `new` alone may take `actions.SLOW_S`.
+    public func setupInstance(name: String, operator: String, model: String, drive: String,
+                              autonomy: String) async throws -> SetupInstanceResponse {
+        try await post("/app/v1/setup/instance",
+                       json: ["name": name, "operator": `operator`, "model": model, "drive": drive, "autonomy": autonomy],
+                       timeout: 240)
+    }
+
+    /// `first-reply`: `resume` (it works on its own after the first answered reply) or `stay`.
+    public func setupAutonomy(_ instance: String, then: String) async throws -> SetupAutonomyResponse {
+        try await post("/app/v1/setup/autonomy/\(instance)", json: ["then": then])
+    }
+
+    /// The hidden opening: the instance writes its welcome in Main, whose id the answer carries.
+    public func setupHello(_ instance: String) async throws -> NewThreadResponse {
+        try await post("/app/v1/setup/hello/\(instance)", json: EmptyBody())
+    }
+
     // MARK: Plumbing
 
     private struct EmptyBody: Encodable {}

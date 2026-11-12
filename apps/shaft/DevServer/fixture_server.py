@@ -14,7 +14,13 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 - the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json;
 - settings: config and tool settings belong to the fixture's instances, and writes run in process;
 - services: fake records start with this process's live pid; restarts change only those records. No CLI or launchd
-  is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub.
+  is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub;
+- the setup verbs behind /app/v1/setup/* (docs/app-api.md §18) the Mac app's wizard calls: `new` makes the instance's
+  folders here (paused, with its first-reply marker), `config set` and `drive set` write them, `first-reply` is the real
+  verb on this folder, `secrets set` keeps only the key's name in <dir>/setup.json (never its value), and `provider use`
+  and `provider check` answer as the real verbs would: OpenRouter covers everything once its key was set, and is off
+  with the missing key before; a check fails for a model whose name contains "fail". The drives come from a fixture
+  template (<dir>/template/drive.md).
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
@@ -63,6 +69,7 @@ def setup(base: Path, port: int):
     import supervisor
     from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
                             opconfig, version, web, web_chat, webpush, web_settings)
+    from supervisor import __main__ as shaft_cli       # the real `first-reply` verb, on this folder (SUP_DIR below)
 
     # setup can be called again in the same test process after supervisor imports are cached.
     for module_name, module in list(sys.modules.items()):
@@ -73,16 +80,31 @@ def setup(base: Path, port: int):
     mock.patch.object(core, "SETTINGS_FILE", base / "sup" / "settings.env").start()
 
     inst = base / "instances"
-    for name in INSTANCES:
+    template = base / "template"
+    template.mkdir(exist_ok=True)
+    if not (template / "drive.md").exists():
+        (template / "drive.md").write_text(TEMPLATE_DRIVE)
+
+    def make_instance(name: str) -> Path:
+        root = inst / name
         for d in ("shaft", ".git", "notes/docs", "inbox"):
-            (inst / name / d).mkdir(parents=True, exist_ok=True)
-        config = inst / name / "config.env"
+            (root / d).mkdir(parents=True, exist_ok=True)
+        config = root / "config.env"
         if not config.exists():
             config.write_text(f'LLM_MODEL="{cloudllm.CLOUD_MODELS[0]}"\nLLM_BASE_URL="broker"\n'
                               'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES="5"\nOPERATOR_NAME="Operator"\n')
-        choices = inst / name / "shaft" / "config.py"
+        choices = root / "shaft" / "config.py"
         if not choices.exists():
             choices.write_text('CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high")}\n')
+        return root
+
+    for name in INSTANCES:
+        make_instance(name)
+
+    def names() -> list[str]:
+        """The seeded instances, then those the setup wizard created here (`new`)."""
+        made = sorted(d.name for d in inst.iterdir() if d.name not in INSTANCES and (d / "shaft").is_dir())
+        return [*INSTANCES, *made]
     for name in ("api", "scheduler"):
         if not (base / "sup" / "services" / f"{name}.json").exists():
             _service_record(base, name, os.getpid())
@@ -94,10 +116,93 @@ def setup(base: Path, port: int):
         req.headers = {**req.headers, "tailscale-user-login": ME}
         return real_respond(req)
 
+    setup_state = base / "setup.json"            # the key names set (never their values) and the provider in use
+
     def run_json(args, timeout=60, who="top", input=None):
-        # The setup verbs (docs/app-api.md §18) have no fixture fakes yet: refused, never the real subprocess runner,
-        # which would run them against this checkout's own .env and instances.
+        # The setup verbs (docs/app-api.md §18), faked over this folder: never the real subprocess runner, which would
+        # run them against this checkout's own .env and instances. An unknown verb raises.
+        if not args:
+            raise ValueError("fixture command needs a verb")
+        state = _read_json(setup_state)
+        if args[0] == "new" and len(args) >= 2:
+            name = args[1]
+            then = args[args.index("--paused-until-first-reply") + 1] if "--paused-until-first-reply" in args else None
+            if not core.NAME_RE.match(name) or name == "operator":
+                return 2, [{"ok": False, "error": "instance names: lowercase letters, digits and '-', starting with a "
+                                                  "letter (not 'operator')"}]
+            if (inst / name).exists():
+                return 2, [{"ok": False, "error": f"instance {name!r} already exists"}]
+            if then:                                   # as `shaft new`: paused before its folders exist
+                core.set_paused(name, True, reason="waiting for the operator's first reply", note=False)
+                shaft_cli._write_first_reply(name, then)
+            root = make_instance(name)
+            (root / "drive.md").write_text((template / "drive.md").read_text())
+            return 0, [{"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
+                        "paused": bool(then)}]
+        if args[0] == "first-reply" and len(args) >= 3:
+            out: list[str] = []
+            with mock.patch.object(shaft_cli, "print", create=True,
+                                   side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = shaft_cli.cmd_first_reply(args[1], args[2], True)
+            return code, [json.loads(line) for line in out]
+        if args[:2] == ["secrets", "set"] and len(args) >= 3:
+            if not (input or "").strip():
+                return 1, [{"ok": False, "error": f"no value for {args[2]} on stdin"}]
+            state["secrets"] = sorted({*state.get("secrets", []), args[2]})
+            _write_json(setup_state, state)
+            return 0, [{"ok": True, "name": args[2]}]
+        if args[:2] == ["provider", "use"] and len(args) >= 3:
+            return provider_use(args[2], _flags(args[3:]), state)
+        if args[:2] == ["provider", "check"] and len(args) >= 3:
+            return provider_check(args[2], state)
         raise ValueError(f"the fixture server has no fake for {' '.join(args[:2])}")
+
+    def provider_use(provider: str, flags: dict, state: dict):
+        if provider == "custom":
+            for need, why in (("model", "custom needs --model (the model name on the endpoint)"),
+                              ("price_in", "custom needs --price-in and --price-out (dollars per million tokens): an "
+                                           "unpriced model would spend money the daily cap cannot count"),
+                              ("price_out", "custom needs --price-in and --price-out (dollars per million tokens): an "
+                                            "unpriced model would spend money the daily cap cannot count"),
+                              ("base_url", "custom needs --base-url (the OpenAI-compatible endpoint, e.g. https://host/v1)")):
+                if need not in flags:
+                    return 2, [{"ok": False, "error": why}]
+            model = "custom/" + flags["model"].removeprefix("custom/")
+        elif "model" in flags and provider == "openrouter" and not flags["model"].startswith("openrouter/"):
+            return 2, [{"ok": False, "error": f"--model for openrouter is an openrouter/… model, not {flags['model']!r}"}]
+        else:
+            model = flags.get("model") or {"openrouter": "openrouter/xiaomi/mimo-v2.6-pro",
+                                           "codex": "codex/gpt-6-astra"}[provider]
+        functions = ["instances", "judge", "judge2", "coder", "consult", "describe", "recap", "trial"]
+        off: dict[str, str] = {}
+        if provider == "openrouter" and "OPENROUTER_API_KEY" not in state.get("secrets", []):
+            off = {fn: "OPENROUTER_API_KEY is not set (shaft secrets set OPENROUTER_API_KEY)" for fn in functions}
+        if provider == "codex":
+            functions.remove("instances")          # an instance's own model is chosen per instance
+        if provider == "custom":
+            functions.remove("trial")              # `none`: a choice, not a gap
+            if not flags.get("vision"):
+                off["describe"] = f"{model} does not read images: mark it with SHAFT_CUSTOM_VISION"
+        judge = "custom/" + flags["judge_model"].removeprefix("custom/") if flags.get("judge_model") else None
+        state["provider"] = {"name": provider, "models": [m for m in (model, judge) if m]}
+        _write_json(setup_state, state)
+        return 0, [{"ok": True, "provider": provider, "model": model, "changed": ["SHAFT_JUDGE_MODELS"], "written": {},
+                    "covers": [fn for fn in functions if fn not in off], "off": off, "not_live": []}]
+
+    def provider_check(provider: str, state: dict):
+        used = state.get("provider") or {}
+        if used.get("name") != provider:
+            return 1, [{"ok": False, "model": None,
+                        "error": f"no {provider}/ model is configured: run shaft provider use {provider}"}]
+        rows = []
+        for model in used["models"]:
+            error = None
+            if provider == "openrouter" and "OPENROUTER_API_KEY" not in state.get("secrets", []):
+                error = "OpenRouter HTTP 401: No auth credentials found"
+            elif "fail" in model:
+                error = f"{model}: HTTP 404: the fixture's endpoint has no such model"
+            rows.append({"ok": error is None, "model": model, "error": error})
+        return (0 if all(r["ok"] for r in rows) else 1), rows
 
     def run_now(args, timeout=60, who="top", input=None):
         # Never fall through to actions' real subprocess runner, including for an unknown verb.
@@ -110,9 +215,26 @@ def setup(base: Path, port: int):
             with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
                 code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
             return code == 0, out[-1] if out else ""
+        if verb == "config" and len(args) >= 4 and args[2] == "set":
+            name = args[1]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            config = inst / name / "config.env"
+            lines = config.read_text().splitlines()
+            for pair in args[3:]:
+                key, _, value = pair.partition("=")
+                lines = [l for l in lines if not l.startswith(f"{key}=")] + [f'{key}="{value}"']
+            config.write_text("\n".join(lines) + "\n")
+            return True, f"{name}: saved {', '.join(p.partition('=')[0] for p in args[3:])}"
+        if verb == "drive" and len(args) >= 7 and args[2] == "set":          # the real verb, on this folder
+            out = []
+            with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = opconfig.drive_command(args[1], "set", args[args.index("--file") + 1],
+                                              args[args.index("--expect-sha") + 1])
+            return code == 0, out[-1] if out else ""
         if verb in ("limits", "channel", "pause", "resume"):
             name = args[1]
-            if name not in INSTANCES:
+            if name not in names():
                 raise ValueError(f"unknown fixture instance: {name}")
             # HTML web_config actions still use these commands; app settings write in process.
             if verb == "limits":
@@ -179,7 +301,9 @@ def setup(base: Path, port: int):
               mock.patch.object(web, "allowed_logins", return_value={ME}),
               mock.patch.object(web, "allowed_hosts", return_value=hosts),
               mock.patch.object(web, "url", return_value=f"http://127.0.0.1:{port}"),
-              mock.patch.object(web, "_names", return_value=list(INSTANCES)),
+              mock.patch.object(web, "_names", side_effect=names),
+              mock.patch.object(core, "TEMPLATE", template),
+              mock.patch("supervisor.browser.version", return_value=None),   # never the Mac's own Playwright cache
               mock.patch.object(web, "_live", side_effect=lambda n: _state(base).get(n, {})),
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),
@@ -215,6 +339,23 @@ def setup(base: Path, port: int):
             {"identifier": "fixture.voice.it", "name": "Example Italian", "language": "it-IT", "quality": "default"},
         ])
     return web, web_chat, messages, webpush
+
+
+TEMPLATE_DRIVE = "You were created with one innate drive: to improve yourself.\n"   # the fixture template's drive.md
+
+
+def _flags(args: list[str]) -> dict:
+    """`provider use`'s flags as the route passes them (--json dropped): {"model": …, "price_in": …, "vision": True}."""
+    out: dict = {}
+    rest = [a for a in args if a != "--json"]
+    while rest:
+        flag = rest.pop(0).removeprefix("--").replace("-", "_")
+        if flag == "vision":
+            out["vision"] = True
+        elif rest:
+            value = rest.pop(0)
+            out[flag] = float(value) if flag.startswith(("price", "judge_price")) else value
+    return out
 
 
 def _read_json(path: Path) -> dict:

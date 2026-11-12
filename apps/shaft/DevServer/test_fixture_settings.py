@@ -98,8 +98,8 @@ class FixtureSettingsTest(unittest.TestCase):
                 self.assertEqual(scheduler["drain"]["state"], "drained")
                 with self.assertRaises(ValueError):
                     actions.run_now(["unknown-fixture-verb"])
-                with self.assertRaises(ValueError):        # the setup verbs never reach the real runner here
-                    actions.run_json(["secrets", "set", "OPENROUTER_API_KEY", "--json"], input="x\n")
+                with self.assertRaises(ValueError):        # a JSON verb with no fake never reaches the real runner
+                    actions.run_json(["unknown-fixture-verb"])
                 with self.assertRaises(AssertionError):
                     autonomy._launchctl("print", "anything")
             finally:

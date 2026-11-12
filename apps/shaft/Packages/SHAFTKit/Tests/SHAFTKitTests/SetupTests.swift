@@ -427,8 +427,8 @@ struct SetupTests {
         #expect(!String(decoding: stored, as: UTF8.self).contains("s3cr3t-bearer"))
         // Only these fields exist: a new field is a deliberate decision that it is not a secret.
         let keys = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any]).keys
-        #expect(Set(keys).isSubset(of: ["step", "operatorName", "email", "provider", "instanceName", "drive", "driveText",
-                                        "autonomy"]), "\(keys)")
+        #expect(Set(keys).isSubset(of: ["step", "operatorName", "email", "provider", "model", "instanceName",
+                                        "createdInstance", "drive", "driveText", "autonomy"]), "\(keys)")
     }
 
     @Test func resumesAtThePersistedStep() throws {
@@ -445,7 +445,9 @@ struct SetupTests {
         state.operatorName = "Ada"
         state.email = "ada@example.com"
         state.provider = "openrouter"
+        state.model = "openrouter/x/model"
         state.instanceName = "tundra"
+        state.createdInstance = "tundra"
         state.drive = "research"
         state.driveText = "Read widely and report back."
         state.autonomy = "talk"

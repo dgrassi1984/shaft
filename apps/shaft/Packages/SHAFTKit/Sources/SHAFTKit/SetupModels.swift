@@ -26,9 +26,40 @@ public struct DrivePreset: Codable, Sendable, Equatable, Identifiable {
     public var suggests: [String]
 }
 
+/// `POST /setup/provider`: the provider's model fields. Which ones a provider takes is the verb's to decide (`custom`
+/// needs `model`, `baseUrl` and the prices); a nil field is not sent. The key itself is never here: it goes first, alone,
+/// through `POST /setup/secret`.
+public struct ProviderRequest: Codable, Sendable, Equatable {
+    public var provider: String
+    public var model: String?
+    public var judgeModel: String?
+    public var baseUrl: String?
+    public var priceIn: Double?
+    public var priceOut: Double?
+    public var judgePriceIn: Double?
+    public var judgePriceOut: Double?
+    public var vision: Bool?
+
+    public init(provider: String, model: String? = nil, judgeModel: String? = nil, baseUrl: String? = nil,
+                priceIn: Double? = nil, priceOut: Double? = nil, judgePriceIn: Double? = nil,
+                judgePriceOut: Double? = nil, vision: Bool? = nil) {
+        self.provider = provider
+        self.model = model
+        self.judgeModel = judgeModel
+        self.baseUrl = baseUrl
+        self.priceIn = priceIn
+        self.priceOut = priceOut
+        self.judgePriceIn = judgePriceIn
+        self.judgePriceOut = judgePriceOut
+        self.vision = vision
+    }
+}
+
 /// `POST /setup/provider`: what the provider's preset covers and what stays off, and why.
 public struct ProviderUseResponse: Codable, Sendable, Equatable {
     public var provider: String
+    /// The instance model it suggests: a new instance's `LLM_MODEL`.
+    public var model: String
     public var changed: [String]
     public var covers: [String]
     public var off: [Off]
@@ -51,6 +82,12 @@ public struct ProviderCheckResponse: Codable, Sendable, Equatable {
         public var model: String?
         public var error: String?
     }
+}
+
+/// `POST /setup/autonomy/<n>`: what the operator's first answered reply does, `resume` or `stay`.
+public struct SetupAutonomyResponse: Codable, Sendable, Equatable {
+    public var instance: String
+    public var then: String
 }
 
 /// `GET|POST /access/<n>`: what the operator has granted an instance. Keys are said set or not, never their values.
