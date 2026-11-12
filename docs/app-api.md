@@ -430,6 +430,11 @@ Native apps normalize this only for drawing; Copy and Reply keep the source.
 **`retried`**: a try that failed and was sent again by Retry (key `a<k>`): "The first try failed and was sent again
 (14:03)." Fields: `k`, `ts`. The question it answered is not an item.
 
+A new instance's Main opens with a request from setup that no feed shows (a hidden turn: no item, excerpt, title or
+`mids` entry), so its first item is the instance's welcome. When that reply fails, `retry` is
+`{"text": "Ask for the welcome again", "retry_of": k, "confirm": null}` and `action` says "Retry asks for the welcome
+again": sent back as any Retry (§6), it asks for the welcome again, still hidden, never as a message of the operator's.
+
 **`sent`**: a message or question the instance sent the operator (`send_message`) over the chat's span (key
 `s<file>`).
 
