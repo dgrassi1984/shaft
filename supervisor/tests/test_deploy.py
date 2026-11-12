@@ -510,5 +510,27 @@ class DeployTest(unittest.TestCase):
         self.assertIn("ls-remote", rows[0]["error"])
 
 
+class TemplateTagConventionTest(unittest.TestCase):
+    """A release records its template commit as `template-vX.Y.Z`: docs, `shaft deploy` and the app's installer agree."""
+
+    PROJECT = Path(__file__).resolve().parents[2]
+
+    def test_docs_state_the_tag_convention(self):
+        text = (self.PROJECT / "docs" / "deploy.md").read_text()
+        self.assertIn("template-vX.Y.Z", text)
+        self.assertIn("git tag template-vX.Y.Z", text)
+        self.assertIn("^{commit}", text)
+        self.assertNotIn("recorded template commit", text)  # nothing recorded it before the tag existed
+
+    def test_deploy_and_installer_use_the_same_tag_prefix(self):
+        py = (self.PROJECT / "supervisor" / "deploy.py").read_text()
+        swift = (self.PROJECT / "apps" / "shaft" / "Packages" / "SHAFTKit" / "Sources" / "SHAFTKit" / "Setup"
+                 / "Installer.swift").read_text()
+        self.assertIn('f"template-{tag}"', py)
+        self.assertIn('startswith("template-")', py)
+        self.assertIn('"template-\\(tag)"', swift)
+        self.assertIn('hasPrefix("template-")', swift)
+
+
 if __name__ == "__main__":
     unittest.main()

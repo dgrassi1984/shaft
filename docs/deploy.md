@@ -14,7 +14,10 @@ SHAFT runs from the primary checkout (the clone you installed from, on `main`) a
 
 `shaft deploy TAG --json` runs the steps and the checks below as one command, one JSON line per step (the Mac app's
 Settings → Services → Update server runs it, after `shaft deploy --check --json` found a newer release). Each release
-tag `vX.Y.Z` has a lightweight tag `template-vX.Y.Z` on its template commit: that is the `TEMPLATE_COMMIT` below. It
+tag `vX.Y.Z` has a lightweight tag `template-vX.Y.Z` on the template commit shipped with it (see [Cutting a
+release](#cutting-a-release)). A release without its `template-vX.Y.Z` cannot be installed or deployed by the app, nor by
+`shaft deploy`, which refuses it. `shaft deploy vX.Y.Z` does steps 1 to 3 below and the app's Update server runs it;
+resolve the template commit by hand with `git rev-parse template-vX.Y.Z^{commit}`. It
 stops where these steps say to stop, never forces a service, and restarts api, web and telegram only when no
 conversation is open: otherwise its services step says who it waits for, and `shaft deploy TAG --json
 --services-only` does that part later. `model` and `embed` stay manual (step 3). From its look at the open conversations until the old
@@ -28,13 +31,28 @@ PIDs, so a verify retried later checks those same services again: it passes only
 nothing. The Mac app installs the server as a clone detached at its release tag rather than on `main`; the command
 accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards it the same way.
 
+## Cutting a release
+
+Besides the annotated release tag `vX.Y.Z`, every release records its template commit as a lightweight tag:
+
+```bash
+git tag template-vX.Y.Z <template commit>
+git push origin vX.Y.Z template-vX.Y.Z
+```
+
+The template commit is the tip of the `template` branch that passed the gate with that release (`bin/shaft gate budget`
+tests committed supervisor and template code together). Tag it before or with the release tag and push both together:
+the app's installer clones at `vX.Y.Z` and fetches `template-vX.Y.Z`, and `shaft deploy vX.Y.Z` fast-forwards the template
+worktree to it, so a release pushed without it is not installable until the tag exists.
+
 ## Steps
 
 1. **Fast-forward the primary checkout and the template worktree** to the tagged commits. Only a fast-forward,
    which leaves untracked files alone.
 
    ```bash
-   # Set RELEASE_TAG to the exact release tag and TEMPLATE_COMMIT to its matching template commit.
+   # Set RELEASE_TAG to the exact release tag (vX.Y.Z).
+   TEMPLATE_COMMIT=$(git rev-parse "template-$RELEASE_TAG^{commit}")   # the template commit shipped with it
    cd <primary checkout>
    git fetch origin --tags
    git status -sb                       # on main; no tracked changes
@@ -44,7 +62,7 @@ accepts that checkout too (a detached HEAD at a `vX.Y.Z` tag) and fast-forwards 
    ```
 
    Stop if either is not on its branch, has tracked changes, or cannot fast-forward: that is someone's work.
-   Use the release's recorded template commit, not `origin/template` or another branch tip.
+   Use the commit of `template-vX.Y.Z`, not `origin/template` or another branch tip.
    Check that each resulting HEAD equals its selected commit. A fast-forward can succeed without moving
    an already newer checkout, so a successful merge alone does not prove the release is deployed.
 2. **Update the instances** from the template: `bin/shaft update --all`. It is gate-tested per instance; a busy
