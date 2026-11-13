@@ -9,6 +9,8 @@ Rules this module enforces:
 - Transient failures (backend restarting: 502/503/504, connection refused)
   are retried with backoff, but never after any text has already streamed.
 - Every call — including failed ones — is recorded in logs/llm_usage.jsonl.
+- Assembled replies get back the space a model drops between a word and a number (spacing.py), in the
+  answer and in every tool's text except code, queries and non-prose files.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import images, pausing
+from .spacing import respace
 
 
 class LLMError(Exception):
@@ -40,6 +43,13 @@ class Transient(LLMError):
 
 TRANSIENT_HTTP = {502, 503, 504}
 BACKOFF_S = (10, 30)  # waits before the 2nd and 3rd attempt
+# Tools whose arguments are code, queries or secrets: never respaced. Every other tool, my own plugins included,
+# gets its text respaced (spacing.py touches only boundaries that are never a name), so a tool I build is covered.
+CODE_TOOLS = {"run", "read_file", "list_files", "search_memory", "view_image", "http_request", "fetch_page",
+              "web_search", "secret_set", "secret_list", "secret_delete", "history", "gauges", "list_instances"}
+PROSE_FILES = (".md", ".markdown", ".txt")   # write_file/append_file elsewhere is code or data
+_NAMING_KEYS = {"path", "id", "name", "to", "project", "slug", "commitment_id",
+                "made_to", "conversation", "supersedes", "reopens"}
 
 
 @dataclass
@@ -214,6 +224,7 @@ class Client:
                         reply.tool_calls.append({"id": c.get("id") or f"call_{i}",
                                                  "name": fn.get("name") or "" if cut else fn["name"],
                                                  "arguments": fn.get("arguments") or "{}"})
+            _respace_reply(reply)
             return reply
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
@@ -309,6 +320,34 @@ class Client:
         self.usage_log.parent.mkdir(parents=True, exist_ok=True)
         with self.usage_log.open("a") as f:
             f.write(json.dumps(record) + "\n")
+
+
+def _respace_reply(reply: Reply) -> None:
+    """Repair assembled prose; preserve tool identifiers and unchanged argument JSON exactly."""
+    def prose(value):
+        if isinstance(value, str):
+            return respace(value)
+        if isinstance(value, list):
+            return [prose(item) for item in value]
+        if isinstance(value, dict):
+            return {key: item if key in _NAMING_KEYS or key.endswith("_id") else prose(item)
+                    for key, item in value.items()}
+        return value
+
+    reply.content = respace(reply.content or "")
+    for call in reply.tool_calls:
+        if call["name"] in CODE_TOOLS:
+            continue
+        try:
+            args = json.loads(call["arguments"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if call["name"] in {"append_file", "write_file"} and not (
+                isinstance(args, dict) and str(args.get("path", "")).lower().endswith(PROSE_FILES)):
+            continue
+        changed = prose(args)
+        if changed != args:
+            call["arguments"] = json.dumps(changed, ensure_ascii=False)
 
 
 def _move_leaked_thinking(reply: Reply) -> None:
