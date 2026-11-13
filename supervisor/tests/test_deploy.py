@@ -73,19 +73,31 @@ class FakeServices:
         return 0
 
 
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 class DeployTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-deploy-"))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        glob = self.tmp / "gitconfig"
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = Path(tempfile.mkdtemp(prefix="shaft-deploy-fixture-"))
+        cls.addClassCleanup(shutil.rmtree, cls.fixture, True)
+        glob = cls.fixture / "gitconfig"
         glob.write_text("[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n")
-        (self.tmp / "git-templates").mkdir()
+        (cls.fixture / "git-templates").mkdir()
         env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(glob), "GIT_CONFIG_NOSYSTEM": "1",
-                                           "GIT_TEMPLATE_DIR": str(self.tmp / "git-templates")})
+                                           "GIT_TEMPLATE_DIR": str(cls.fixture / "git-templates")})
         env.start()
-        self.addCleanup(env.stop)
-        self.origin, seed, self.project = self.tmp / "origin.git", self.tmp / "seed", self.tmp / "project"
-        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
+        cls.addClassCleanup(env.stop)
+        origin, seed, project = cls.fixture / "origin.git", cls.fixture / "seed", cls.fixture / "project"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
         subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
         commit(seed, "app.py", "1\n", "one")
         git(seed, "tag", "v1.0.0")
@@ -99,19 +111,32 @@ class DeployTest(unittest.TestCase):
         commit(seed, "agent.py", "2\n", "template two")
         git(seed, "tag", "template-v1.1.0")
         git(seed, "checkout", "-q", "main")
-        git(seed, "remote", "add", "origin", str(self.origin))
+        git(seed, "remote", "add", "origin", str(origin))
         git(seed, "push", "-q", "origin", "main", "template", "--tags")
-        self.seed = seed
-        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.project)], check=True)
-        git(self.project, "reset", "-q", "--hard", "v1.0.0")
-        git(self.project, "worktree", "add", "-q", "-b", "template", str(self.project / "template"), "template-v1.0.0")
+        subprocess.run(["git", "clone", "-q", str(origin), str(project)], check=True)
+        git(project, "reset", "-q", "--hard", "v1.0.0")
+        git(project, "worktree", "add", "-q", "-b", "template", str(project / "template"), "template-v1.0.0")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-deploy-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        shutil.copytree(self.fixture, self.tmp, dirs_exist_ok=True)
+        # Both remotes and both ends of the worktree link must stay inside this test's copy.
+        for relative in ("seed/.git/config", "project/.git/config", "project/template/.git",
+                         "project/.git/worktrees/template/gitdir"):
+            path = self.tmp / relative
+            path.write_text(path.read_text().replace(str(self.fixture), str(self.tmp)))
+        self.origin, self.seed, self.project = self.tmp / "origin.git", self.tmp / "seed", self.tmp / "project"
         self.sup = self.project / ".supervisor"
         self.svc = FakeServices()
         self.open: dict[str, dict] = {}
         self.updated: list[list[str]] = []
         self.update_answer = (0, "alpha: updated from template (abc1234)")
         self.behind = {"alpha": 2}
-        patches = [mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
+        clock = FakeClock()
+        patches = [mock.patch.object(deploy, "time", mock.Mock(wraps=deploy.time,
+                   monotonic=clock.monotonic, sleep=clock.sleep)),
+                   mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup),
                    mock.patch.object(core, "log"),
                    mock.patch.object(deploy, "_instances", lambda: sorted(self.behind)),
                    mock.patch.object(deploy, "_behind", lambda n: self.behind[n]),
