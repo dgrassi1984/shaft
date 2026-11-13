@@ -878,11 +878,12 @@ def _set_settings(req: Request, n: str) -> Response:
         _stale(n, current)
     who = _who(req)
     log(f"{who}: operator setting {field} for {n}")
+    notes = []
     try:
         if field in CONFIG_FIELDS:
             key = CONFIG_FIELDS[field]
             value = data["value"]
-            opconfig.set_values(n, {key: str(value) if value is not None else None}, {key: cfg.get(key)})
+            notes = opconfig.set_values(n, {key: str(value) if value is not None else None}, {key: cfg.get(key)})["notes"]
         elif field == "cloud_cap":
             value = "off" if data["value"] is None else str(data["value"])
             core._update_tool_settings(n, expect={"cloud_daily_usd": data["expect"]},
@@ -902,6 +903,7 @@ def _set_settings(req: Request, n: str) -> Response:
     except ValueError as e:
         raise Refusal(409, "refused", str(e)) from None
     return _json(200, {"settings": _settings(n),
+                       "notes": notes,
                        "applies": "next run" if field in ("model", "effort", "operator_name", "voice_effort") else "now"})
 
 

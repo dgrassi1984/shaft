@@ -101,6 +101,95 @@ class EffortChoicesTest(OpConfigTest):
 
 
 class SetTest(OpConfigTest):
+    def test_sol_at_ultra_switched_to_bonsai_resets_to_medium_with_a_note(self):
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}')
+        (self.root / "config.env").write_text(
+            'LLM_MODEL="codex/gpt-6.1-sol"\nLLM_REASONING_EFFORT="ultra"\nVOICE_REASONING_EFFORT="max"\n')
+        with mock.patch.object(opconfig, "safe_write", wraps=core.safe_write) as write:
+            result = opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+        values = core.config_values(self.text())
+        self.assertEqual((values["LLM_REASONING_EFFORT"], values["VOICE_REASONING_EFFORT"]), ("medium", ""))
+        self.assertEqual(result["notes"], [
+            "LLM_REASONING_EFFORT reset to medium: ternary-bonsai-2-27b-mlx does not take ultra",
+            "VOICE_REASONING_EFFORT reset to empty (its LLM_REASONING_EFFORT): ternary-bonsai-2-27b-mlx does not take max"])
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(self.committed, ["config"])
+
+    def test_bonsai_at_xhigh_switched_to_sol_keeps_xhigh(self):
+        from supervisor import codexcli
+        (self.root / "config.env").write_text(
+            'LLM_MODEL="ternary-bonsai-2-27b-mlx"\nLLM_REASONING_EFFORT="xhigh"\n')
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max", "ultra"], "default": "low"}}):
+            result = opconfig.set_values("wisp", {"LLM_MODEL": "codex/gpt-6.1-sol"})
+        self.assertEqual(core.config_values(self.text())["LLM_REASONING_EFFORT"], "xhigh")
+        self.assertEqual(result["notes"], [])
+
+    def test_model_without_effort_unsets_it_and_clears_voice(self):
+        (self.root / "config.env").write_text(CONFIG + 'VOICE_REASONING_EFFORT="xhigh"\n')
+        result = opconfig.set_values("wisp", {"LLM_MODEL": "openrouter/xiaomi/mimo-v2.6-pro"})
+        self.assertNotIn("LLM_REASONING_EFFORT", core.config_values(self.text()))
+        self.assertEqual(core.config_values(self.text())["VOICE_REASONING_EFFORT"], "")
+        self.assertEqual(result["notes"], [
+            "LLM_REASONING_EFFORT unset: openrouter/xiaomi/mimo-v2.6-pro takes no reasoning effort",
+            "VOICE_REASONING_EFFORT reset to empty (its LLM_REASONING_EFFORT): openrouter/xiaomi/mimo-v2.6-pro does not take xhigh"])
+
+    def test_unknown_choices_leave_efforts_alone(self):
+        (self.root / "shaft/config.py").write_text("CHOICES = dynamic()")
+        (self.root / "config.env").write_text(CONFIG + 'VOICE_REASONING_EFFORT="max"\n')
+        result = opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+        values = core.config_values(self.text())
+        self.assertEqual((values["LLM_REASONING_EFFORT"], values["VOICE_REASONING_EFFORT"]), ("medium", "max"))
+        self.assertEqual(result["notes"], [])
+
+    def test_explicit_effort_changes_override_resets_and_are_validated(self):
+        for value in ("low", None):
+            (self.root / "config.env").write_text(CONFIG.replace('EFFORT="medium"', 'EFFORT="ultra"'))
+            result = opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx",
+                                                 "LLM_REASONING_EFFORT": value, "VOICE_REASONING_EFFORT": None})
+            self.assertEqual(core.config_values(self.text()).get("LLM_REASONING_EFFORT"), value)
+            self.assertEqual(result["notes"], [])
+        with self.assertRaisesRegex(opconfig.Refused, "must be one of"):
+            opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx", "LLM_REASONING_EFFORT": "ultra"})
+
+    def test_reset_falls_back_to_model_default_then_first_choice(self):
+        for levels, default, expected in ((('low', 'xhigh'), 'xhigh', 'xhigh'), (('low', 'xhigh'), 'high', 'low')):
+            (self.root / "config.env").write_text(CONFIG.replace('EFFORT="medium"', 'EFFORT="ultra"'))
+            with mock.patch.object(opconfig, "model_efforts", return_value=(levels, default)):
+                opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+            self.assertEqual(core.config_values(self.text())["LLM_REASONING_EFFORT"], expected)
+
+    def test_reset_refuses_raced_efforts_and_preserves_callers_expect(self):
+        for key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"):
+            original = 'LLM_MODEL="codex/gpt-6.1-sol"\nLLM_REASONING_EFFORT="ultra"\nVOICE_REASONING_EFFORT="max"\n'
+            (self.root / "config.env").write_text(original)
+            snapshot = core.config_values(original)
+            (self.root / "config.env").write_text(core.config_with(original, key, f'{key}="low"'))
+            with mock.patch.object(opconfig, "instance_config", return_value=snapshot):
+                with self.assertRaisesRegex(opconfig.Refused, key + " changed since you looked"):
+                    opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+            self.assertEqual(core.config_values(self.text())["LLM_MODEL"], "codex/gpt-6.1-sol")
+        (self.root / "config.env").write_text(original)
+        with self.assertRaisesRegex(opconfig.Refused, "you saw 'low'"):
+            opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"}, {"LLM_REASONING_EFFORT": "low"})
+        self.assertEqual(self.committed, [])
+
+    def test_model_couples_both_effort_rows(self):
+        self.assertEqual(opconfig.coupled("LLM_MODEL"),
+                         ["LLM_BASE_URL", "LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"])
+
+    def test_unset_effort_and_unchanged_model_do_not_reset(self):
+        (self.root / "config.env").write_text('LLM_MODEL="codex/gpt-6.1-sol"\n')
+        result = opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+        self.assertNotIn("LLM_REASONING_EFFORT", core.config_values(self.text()))
+        self.assertEqual(result["notes"], [])
+        (self.root / "config.env").write_text(
+            'LLM_MODEL="ternary-bonsai-2-27b-mlx"\nLLM_REASONING_EFFORT="ultra"\n')
+        result = opconfig.set_values("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+        self.assertEqual(core.config_values(self.text())["LLM_REASONING_EFFORT"], "ultra")
+        self.assertEqual(result["notes"], [])
+
     def test_an_appended_key_starts_its_own_run_and_inherits_no_help_20261110(self):
         from supervisor.broker import Broker
         (self.root / "config.env").write_text('# Set your name here.\nOPERATOR_NAME="x"\n')

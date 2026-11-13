@@ -61,6 +61,22 @@ class SettingsTest(AppTest):
             self.assertEqual(empty["effort"]["choices"], [])
             self.assertEqual(empty["voice_effort"]["choices"], [""])
 
+    def test_model_save_returns_reset_notes_and_fresh_effort_choices(self):
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}')
+        (self.root / "config.env").write_text(
+            'LLM_MODEL="codex/gpt-6.1-sol"\nLLM_REASONING_EFFORT="ultra"\nVOICE_REASONING_EFFORT="max"\n')
+        model = "ternary-bonsai-2-27b-mlx"
+        with mock.patch.object(opconfig, "base_url_for", return_value=opconfig.LOCAL_URL):
+            response = self.save("model", model, "codex/gpt-6.1-sol")
+        self.assertEqual(response.status, 200)
+        got = json.loads(response.body)
+        self.assertEqual(got["settings"]["effort"], {"value": "medium", "choices": ["low", "medium", "xhigh"]})
+        self.assertEqual(got["settings"]["voice_effort"], {"value": "", "choices": ["", "low", "medium", "xhigh"]})
+        self.assertEqual(got["notes"], [
+            f"LLM_REASONING_EFFORT reset to medium: {model} does not take ultra",
+            f"VOICE_REASONING_EFFORT reset to empty (its LLM_REASONING_EFFORT): {model} does not take max"])
+
     def run_command(self, args, timeout=actions.RUN_NOW_S, who="top"):
         # Exercise the existing command's validation and writer, without spawning the CLI or any service.
         from supervisor import __main__ as cli
@@ -117,6 +133,7 @@ class SettingsTest(AppTest):
                 self.assertEqual(r.status, 200, r.body)
                 got = json.loads(r.body)
                 self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
+                self.assertEqual(got["notes"], [])
                 self.assertEqual(writer.call_args.args[2], {key: None if field.startswith("watch_") else str(expect)})
                 self.assertNotIn(self.fake.encode(), r.body)
         self.assertEqual(core.instance_config("wisp")["LLM_BASE_URL"], "broker")

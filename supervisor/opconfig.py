@@ -224,7 +224,7 @@ def _check(name: str, root: Path, key: str, value: str, model: str | None) -> No
 
 def coupled(key: str) -> list[str]:
     """Keys a set of `key` also writes (set_values): a page showing them must refresh them with it."""
-    return ["LLM_BASE_URL"] if key == "LLM_MODEL" else []
+    return ["LLM_BASE_URL", "LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"] if key == "LLM_MODEL" else []
 
 
 def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str | None] | None = None) -> dict:
@@ -236,6 +236,26 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
         changes["LLM_BASE_URL"] = base_url_for(changes["LLM_MODEL"])      # a model switch is never half-applied
     current = instance_config(name)
     model = changes.get("LLM_MODEL", current.get("LLM_MODEL"))
+    expect = dict(expect or {})
+    reset_notes = []
+    if changes.get("LLM_MODEL") is not None and model != current.get("LLM_MODEL"):
+        choices = effort_choices(root, model)
+        for key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"):
+            old = current.get(key)
+            if key in changes or not old or choices is None or old in choices:
+                continue
+            if key == "VOICE_REASONING_EFFORT":
+                changes[key] = ""
+                reset_notes.append(f"{key} reset to empty (its LLM_REASONING_EFFORT): {model} does not take {old}")
+            elif not choices:
+                changes[key] = None
+                reset_notes.append(f"{key} unset: {model} takes no reasoning effort")
+            else:
+                default = config_values(_template_text()).get(key)
+                model_default = model_efforts(model)[1]
+                changes[key] = default if default in choices else model_default if model_default in choices else choices[0]
+                reset_notes.append(f"{key} reset to {changes[key]}: {model} does not take {old}")
+            expect.setdefault(key, old)
     who = current.get("OPERATOR_NAME") or "operator"
     lines = {}
     for key, value in changes.items():
@@ -269,7 +289,7 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
     changed.sort()
     log(f"{name}: config.env {', '.join(f'{k}={changes[k]!r}' if changes[k] is not None else f'{k} unset' for k in changed)}"
         " by the operator")
-    notes = _notes(name, changes)
+    notes = reset_notes + _notes(name, changes)
     return {"changed": changed, "committed": _commit(name, root, "config"), "notes": notes}
 
 

@@ -109,6 +109,7 @@ public enum SettingValue: Codable, Sendable, Equatable {
 public struct SettingSave: Codable, Sendable, Equatable {
     public var settings: InstanceSettings
     public var applies: String
+    public var notes: [String]?
 }
 
 public struct ServicesResponse: Codable, Sendable, Equatable {

@@ -1168,7 +1168,7 @@ plugin grants or global settings.
 | Method | Route under `/app/v1` | Success |
 |---|---|---|
 | GET | `/settings/<n>` | 200, the settings object below |
-| POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
+| POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now", "notes": []}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
 | GET | `/services` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
@@ -1208,10 +1208,12 @@ or the scheduler default when missing or invalid.
 `POST /settings/<n>` takes exactly `{"field": str, "value": <new value>, "expect": <displayed value>}`.
 One field per request. Both values have the setting's type; booleans are not numbers. A missing field, extra field,
 unknown field, wrong type or non-finite number gives `400 bad_request`. Domain writers validate allowed values.
+The response includes `notes`, an empty list when there are none. A model switch resets incompatible efforts in
+the same write and reports each reset in `notes`. The fresh settings include the new model's effort choices.
 
 | `field` | Writer | `applies` |
 |---|---|---|
-| `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL` | `next run` |
+| `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL`, `LLM_REASONING_EFFORT`, `VOICE_REASONING_EFFORT` | `next run` |
 | `effort` | `opconfig.set_values`; null unsets the key | `next run` |
 | `wake_interval` | `opconfig.set_values`; the scheduler uses it on its next read | `now` |
 | `cloud_cap` | `core.limit_value` and `core._update_tool_settings` with `expect`; null removes the override | `now` |
