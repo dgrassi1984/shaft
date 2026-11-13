@@ -135,6 +135,60 @@ class LinkedLayoutTest(Case):
         self.assertIn("left off PATH", said.call_args.args[0])
 
 
+class RunPathTest(Case):
+    """Re-review residual 4 (bug on 126eeb07): pyenv.path_dirs caught the layout error uv_binary raised and went on
+    without the app's uv, so the broker's `run` never said why (and any uv PATH held was the one used). A wrong layout
+    is now the run's error, as a tool error, before any file is made; no runtime at all stays as it was."""
+
+    def broker(self):
+        from supervisor import broker
+        b = broker.Broker.__new__(broker.Broker)
+        b.root, b.env_root, b.name, b.counts = self.root, self.root, "ada", {}
+        b.shared, b.run_confined_to, b.egress = None, None, mock.Mock(port=0)
+        b.sandbox_env, b.mail_env, b.calendar_env, b.gdrive_env = lambda: {}, lambda: "", lambda: "", lambda: ""
+        b.gchat_env = lambda: ""
+        b._log = mock.Mock()
+        b.calls, b.max_calls, b.disabled, b.unavailable = 0, 100, set(), {}     # what Broker._call reads
+        return b
+
+    def link_bin_to_cache(self):
+        shutil.rmtree(self.runtime / "bin")
+        (self.runtime / "bin").symlink_to(self.runtime / "cache", target_is_directory=True)
+
+    def test_path_dirs_raises_the_layout_error_even_with_another_uv_on_path(self):
+        from supervisor import pyenv
+        self.link_bin_to_cache()
+        with mock.patch("shutil.which", return_value="/opt/homebrew/bin/uv"):
+            with self.assertRaisesRegex(core.RuntimeLayoutError, "bin is a link"):
+                pyenv.path_dirs(self.root, self.root)
+
+    def test_without_a_runtime_path_dirs_is_as_before(self):
+        from supervisor import pyenv
+        shutil.rmtree(self.runtime)
+        with mock.patch("shutil.which", return_value="/opt/homebrew/bin/uv"):
+            self.assertEqual(pyenv.path_dirs(self.root, self.root),
+                             [str(self.root / ".venv" / "bin"), str(self.root / ".uv" / "bin"), "/opt/homebrew/bin"])
+        with mock.patch("shutil.which", return_value=None):                  # no uv anywhere: still no error here
+            self.assertEqual(pyenv.path_dirs(self.root, self.root),
+                             [str(self.root / ".venv" / "bin"), str(self.root / ".uv" / "bin")])
+
+    def test_the_brokers_run_reports_the_layout_as_its_error_before_running_anything(self):
+        from supervisor import broker
+        self.link_bin_to_cache()
+        b = self.broker()
+        with mock.patch("shutil.which", return_value="/opt/homebrew/bin/uv"), \
+                mock.patch.object(broker.subprocess, "Popen", side_effect=AssertionError("ran")) as popen, \
+                mock.patch.object(tempfile, "mkstemp", side_effect=AssertionError("made a profile file")):
+            with self.assertRaisesRegex(core.RuntimeLayoutError, "uv: .*bin is a link"):
+                b._run("uv --version")
+            # as the instance sees it: the tool's error, the broker still answering
+            result = b._call("run", {"command": "uv --version"})
+        self.assertEqual(popen.call_count, 0)
+        self.assertEqual(result["ok"], False)
+        self.assertIn("RuntimeLayoutError: uv:", result["error"])
+        self.assertIn(f"{self.runtime / 'bin'} is a link", result["error"])
+
+
 class UvTest(Case):
     """pyenv finds the app's own uv first; a missing uv is said with the fix for the kind of install."""
 

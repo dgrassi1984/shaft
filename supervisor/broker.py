@@ -2153,6 +2153,7 @@ class Broker:
             raise ValueError(f"no directory {cwd!r} in your folder")
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         from .runner import RunRefused, _refused
+        env_dirs = pyenv.path_dirs(root, self.env_root)     # a broken app runtime: this run's error, before any file
         try:
             profile = sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
                                           job_state=self.run_confined_to)
@@ -2166,7 +2167,7 @@ class Broker:
         # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
         # interpreter's folder has no such name), then the system.
         system = [str(bindir)] if (bindir / "python3").exists() else [str(home), str(bindir)]
-        path = ":".join([*pyenv.path_dirs(root, self.env_root), *system, "/usr/bin:/bin:/usr/sbin:/sbin"])
+        path = ":".join([*env_dirs, *system, "/usr/bin:/bin:/usr/sbin:/sbin"])
         env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home),
                "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
                "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb",

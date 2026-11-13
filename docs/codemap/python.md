@@ -278,7 +278,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_review_mind.py` | `ReviewMindTest` | — |
 | `supervisor/tests/test_review_modules.py` | `ReviewModulesTest`, `FactRegressions`, `UnrecordedRegression`, `UsageRegression` | — |
 | `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `StrayDescendantsTest`, `LinkedCodeTest`, `ApprovedFileLinkedTest`, `HardLinkAndPipeTest`, `CommitTheGatedBytesTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
-| `supervisor/tests/test_runtime_sandbox.py` | `Case`, `RuleTest`, `LinkedLayoutTest`, `UvTest`, `ScriptInterpreterTest`, `RealPythonTest` | `standalone_python` |
+| `supervisor/tests/test_runtime_sandbox.py` | `Case`, `RuleTest`, `LinkedLayoutTest`, `RunPathTest`, `UvTest`, `ScriptInterpreterTest`, `RealPythonTest` | `standalone_python` |
 | `supervisor/tests/test_sandbox_refusal.py` | `UserFolderRefusalTest` | — |
 | `supervisor/tests/test_sandbox_temp.py` | `UserFolderTest` | `tiny_pdf` |
 | `supervisor/tests/test_sandbox_user_folder.py` | `UserFolderLookupTest` | — |

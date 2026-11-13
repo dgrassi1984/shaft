@@ -42,7 +42,7 @@ def uv_binary() -> str:
     try:
         folder = core.runtime_dir("bin")
     except core.RuntimeLayoutError as e:    # never a fallback to another uv: the layout is wrong, and that is said
-        raise RuntimeError(f"uv: {e}") from None
+        raise core.RuntimeLayoutError(f"uv: {e}") from None
     runtime = (folder or core.RUNTIME / "bin") / "uv"
     if folder is not None and runtime.is_file() and os.access(runtime, os.X_OK):
         return str(runtime)
@@ -64,12 +64,21 @@ def uv_env(root: Path) -> dict[str, str]:
 
 
 def path_dirs(root: Path, env_root: Path) -> list[str]:
-    """PATH entries ahead of the system's: the instance's environment and uv's tool links, then uv itself."""
+    """PATH entries ahead of the system's: the instance's environment and uv's tool links, then uv itself. A Mac-app
+    runtime laid out wrong (core.runtime_dir: a link where its folder belongs) raises core.RuntimeLayoutError with the
+    reason: the broker's `run` and a job report it as their error, rather than run on without the app's uv (and
+    whatever other uv PATH holds). That runtime's Python gets no sandbox read either, so nothing of it works until the
+    layout is fixed: saying so on the first command beats a "command not found" later. No uv at all (none in the
+    runtime, none on PATH) stays as it was: `uv` then fails as "command not found" inside run, and the environment
+    rebuild reports the missing binary."""
+    from . import core
     dirs = [str(Path(env_root) / ".venv" / "bin"), str(Path(root) / ".uv" / "bin")]
     try:
         dirs.append(str(Path(uv_binary()).parent))
+    except core.RuntimeLayoutError:
+        raise
     except RuntimeError:
-        pass   # `uv` then fails as "command not found" inside run; the rebuild reports the missing binary
+        pass
     return dirs
 
 

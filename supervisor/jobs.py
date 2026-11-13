@@ -352,7 +352,7 @@ def run(name: str, plugin: str) -> int:
 
 
 def _run(name: str, root: Path, job: dict) -> int:
-    from . import pyenv, sandbox
+    from . import core, pyenv, sandbox
     from .broker import Broker
     from .core import secrets_env
     plugin, long = job["plugin"], job["long"]
@@ -377,6 +377,10 @@ def _run(name: str, root: Path, job: dict) -> int:
     try:
         prof.write_text(sandbox.job_profile(root, HOME, state_dir, broker.shared, egress_port=broker.egress.port,
                                             broker_port=broker.port, env_root=broker.env_root))
+        try:
+            env_dirs = pyenv.path_dirs(root, broker.env_root)
+        except core.RuntimeLayoutError as e:          # the app's runtime laid out wrong: the job is refused, saying so
+            raise RunRefused(str(e)) from None
     except RunRefused as e:
         broker.stop()
         prof.unlink(missing_ok=True)
@@ -387,7 +391,7 @@ def _run(name: str, root: Path, job: dict) -> int:
         log(f"{name}: job {plugin} refused — {e}")
         return _refused(name, e)
     python = pyenv.python(broker.env_root)
-    env = {"PATH": ":".join([*pyenv.path_dirs(root, broker.env_root), str(Path(PYTHON).parent), "/usr/bin:/bin"]),
+    env = {"PATH": ":".join([*env_dirs, str(Path(PYTHON).parent), "/usr/bin:/bin"]),
            "HOME": str(home), "TMPDIR": str(home), "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
            "SHAFT_ROOT": str(root), "SHAFT_BROKER_URL": f"http://127.0.0.1:{broker.port}",
            "SHAFT_BROKER_TOKEN": broker.token, "SHAFT_JOB": plugin, "SHAFT_JOB_STATE": f".jobs/{plugin}",
