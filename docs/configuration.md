@@ -119,6 +119,17 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_CLAUDE_HOME` | `.supervisor/claude-home` | Private Claude Code configuration directory, mode 700 | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code CLI executable | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_MODELS` | `claudecode/claude-opus-5-5,claudecode/claude-sonnet-5-5` | Offered instance models, comma separated | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_WEEKLY_PCT` | `85` | Stop calls at this percentage of the weekly allowance | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_ANTIGRAVITY_HOME` | `.supervisor/agy-home` | Private Antigravity home, mode 700 | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_MODELS` | `antigravity/gemini-4-argon,antigravity/gemini-3.8-flash` | Offered instance models, comma separated | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -541,3 +552,50 @@ Usage rows keep token counts and API equivalent cost, with `usd=null`; message
 content and image data are not logged. A live failure uses the configured fallback;
 trial replays and bake-offs fail without fallback. Outages persist separately in
 `.supervisor/grok_outage.json`. Source: [grokcli.py](../supervisor/grokcli.py).
+
+### Claude plan channel
+
+Instance models in `SHAFT_CLAUDE_MODELS` use `LLM_BASE_URL="broker"`.
+Run `shaft claude login` first. Claude Code uses the operator's own subscription.
+SHAFT never reads or passes the credential. These models are not accepted for
+supervisor cloud jobs such as judging, image descriptions, consults or recaps.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SHAFT_CLAUDE_HOME` | `.supervisor/claude-home` | Private Claude Code configuration directory, mode 700 |
+| `SHAFT_CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code CLI executable |
+| `SHAFT_CLAUDE_MODELS` | `claudecode/claude-opus-5-5,claudecode/claude-sonnet-5-5` | Offered instance models, comma separated |
+| `SHAFT_CLAUDE_WEEKLY_PCT` | `85` | Stop calls at this percentage of the weekly allowance |
+| `SHAFT_CLAUDE_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
+| `SHAFT_CLAUDE_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+
+The allowance is shared with other Claude use. The broker saves observed weekly
+usage in `.supervisor/claudecode_rate.json`. At the ceiling, or after a channel
+failure, a live run uses the configured cloud fallback. Trials and bake-offs fail
+without fallback. Outages persist in `.supervisor/claudecode_outage.json`.
+Usage rows keep token counts and API equivalent cost with `usd=null`; costs views
+show the equivalent separately from money spent. Fallback calls are charged normally.
+See [Claude plan routing](local-model.md#claude-plan-routing) for the child sandbox.
+Source: [claudecli.py](../supervisor/claudecli.py), `Channel` and `child_env`.
+
+### Antigravity plan channel
+
+The Antigravity settings group controls Gemini models on the operator's Antigravity
+subscription. Run `shaft antigravity login` first and use `LLM_BASE_URL="broker"`.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SHAFT_ANTIGRAVITY_HOME` | `.supervisor/agy-home` | Private Antigravity home, mode 700 |
+| `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable |
+| `SHAFT_ANTIGRAVITY_MODELS` | `antigravity/gemini-4-argon,antigravity/gemini-3.8-flash` | Offered instance models, comma separated |
+| `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
+| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+
+SHAFT launches the unmodified CLI with a private home and never reads the token.
+ACP exposes no allowance percentage, so there is no weekly cap setting or rate file.
+Quota and login failures use the configured cloud fallback in live runs. Trials
+and bake-offs fail without fallback. Outages persist in
+`.supervisor/antigravity_outage.json`. Usage rows have `usd=null`; costs views show
+API equivalent only when the model has a price in `cloudllm.usd`, otherwise tokens.
+See [Antigravity plan routing](local-model.md#antigravity-plan-routing).
+Source: [agycli.py](../supervisor/agycli.py), `Channel`, `home` and `child_env`.

@@ -134,6 +134,28 @@ class RunTest(unittest.TestCase):
         self.assertEqual(rec["usage"], {"calls": 1})
         self.assertEqual(rec["usd"], 0.01)
 
+    def test_usage_counts_the_supervisors_late_rows(self):
+        """Bug 2026-11-12: a plan channel that reports a turn's usage when the turn ends books it after the instance's
+        last reply, so a replay of a real cycle on antigravity/ read 0 tokens though 471,589 were booked."""
+        dest = self.tmp / "y"
+        dest.mkdir()
+        zero = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "model_seconds": 0.0, "errors": 0}
+        with mock.patch.object(broker, "ReplayBroker", return_value=mock.Mock(trace=[])), \
+                mock.patch.object(trial, "secrets_env", return_value={}), \
+                mock.patch.object(trial, "_config", return_value={}), \
+                mock.patch.object(trial, "_llm_usage", side_effect=[zero, {**zero, "calls": 16}]), \
+                mock.patch.object(trial, "_cloud_usd", side_effect=[0.0, 0.0]), \
+                mock.patch.object(trial, "_cloud_tokens", side_effect=[(100, 10), (471_689, 2_136)]), \
+                mock.patch.object(trial, "_new_episodes", return_value=[result()["episode"]]), \
+                mock.patch.object(runner, "agent_command", return_value=(["fake"], {})), \
+                mock.patch.object(trial.subprocess, "Popen") as popen:
+            popen.return_value.wait.return_value = 0
+            rec = trial._replay_cycle(self.tmp, "y", self.state, {}, self.tmp, dest, kind="live",
+                                      clock=datetime.fromisoformat(self.state["t0"]), model="antigravity/gemini-4-argon",
+                                      cache={}, cache_lock=threading.Lock(), billed="y@trial:t", should_stop=lambda: False)
+        self.assertEqual((rec["usage"]["prompt_tokens"], rec["usage"]["completion_tokens"]), (471_589, 2_126))
+        self.assertEqual(rec["usage"]["calls"], 16)
+
     def test_experiment_endpoint_is_any_over_cycles(self):
         a, b = result(), result()
         b["episode"]["ended_by"] = "steps"

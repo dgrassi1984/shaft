@@ -179,3 +179,79 @@ Plan rows spend no API dollars (`usd=null`). Costs views show Grok's reported
 `costUsdTicks / 10^10` as **API equivalent**, not money spent; fallback calls are
 charged normally. Grok's own session files have best-effort 24-hour retention,
 at most once every ten minutes. See [configuration](configuration.md).
+
+## Claude plan routing
+
+Install Claude Code first. The default executable is `~/.local/bin/claude`;
+`SHAFT_CLAUDE_BIN` overrides it. Run `bin/shaft claude login`, then
+`bin/shaft config <name> set LLM_MODEL=claudecode/claude-opus-5-5`.
+`bin/shaft claude status` shows login, offered models, any outage and the last
+observed weekly percentage.
+
+The channel runs the unmodified `claude` binary in headless stream-json mode
+with the operator's own Claude subscription for personal use. Claude Code handles
+login and authentication. SHAFT never reads, copies, stores or passes the credential,
+and never calls Anthropic's API with subscription credentials.
+
+Each retained session has one process. Native tools, imported settings and slash
+commands are disabled. Only SHAFT tools are allowed through the standalone MCP
+bridge. The channel checks the advertised tools each turn and refuses other tool
+use. Changing the system prompt, tools, model or effort restarts the process and
+replays the transcript. Text and images are accepted; images smaller than 8×8 are refused.
+Held tool calls receive results through the bridge. Interrupts end the current turn.
+
+The child's sandbox denies the operator's home except for its configuration
+directory, required executable files and read access to the literal
+`~/Library/Keychains/login.keychain-db`. The CLI needs that keychain file and the
+operator's real `HOME` to find its login. SHAFT does not open the keychain file.
+The child can write its run folder and configuration directory. Its run folder has
+an empty `.git` directory to stop upward project instruction discovery.
+
+At the weekly ceiling, 85% by default, or after a channel failure, a live run uses
+`SHAFT_CLAUDE_FALLBACK_MODEL` for the rest of the run. Trials and bake-offs fail
+without fallback. Plan rows record `usd=null`; costs views show Claude's reported
+`total_cost_usd` as API equivalent, not money spent. Fallback calls cost API dollars.
+See [configuration](configuration.md#claude-plan-channel) for the `SHAFT_CLAUDE_*` settings.
+Source: [claudecli.py](../supervisor/claudecli.py), `Channel` and `_seatbelt`;
+[planbridge.py](../supervisor/planbridge.py), `serve`.
+
+
+## Antigravity plan routing
+
+Install Antigravity CLI first. The default executable is `~/.local/bin/agy`;
+`SHAFT_ANTIGRAVITY_BIN` overrides it. Run `bin/shaft antigravity login`, then
+`bin/shaft config <name> set LLM_MODEL=antigravity/gemini-4-argon`.
+`bin/shaft antigravity status` shows login, offered models and outages.
+
+The channel runs `agy acp --disable-telemetry --agent shaft` on the operator's
+subscription. The CLI handles Google sign-in under a private `HOME`. SHAFT checks
+only whether its token file exists. It never reads the credential or the operator's
+`~/.gemini` directory. The sandbox allows writes to the private home and run folder,
+with read access to executable dependencies and the MCP relay. Network access stays open.
+
+Each session writes a custom agent containing the system prompt and tool schemas.
+SHAFT owns the private home's MCP configuration and replaces it with the single
+`shaft` server on every session open. Permission requests allow only known SHAFT
+tools with object arguments. Native tools and client file or terminal requests cause
+a security failure. The inert `list_resources`, `read_resource` and `manage_task`
+notifications are counted without forwarding them to the broker.
+
+Model or effort changes restart the process. Low and medium effort map directly;
+high, xhigh and max map to high. Unspecified effort maps to medium. Text and images
+use ACP prompt blocks. Held calls receive their results through the MCP bridge.
+Cancellation waits for the turn's usage response and leaves the session reusable.
+Usage arrives once per turn; usage for an already recorded step gets a separate
+`late_usage` row. Because no usage marks where a model response starts, a tool call
+that begins less than half a second after the previous one completed counts as a
+parallel sibling of the same response; a later one opens a new response and counts
+against the instance's step budget. Text is buffered until completion to catch model
+errors reported as ordinary text. On close the session's brain folder, conversation
+database and annotation are deleted; the shared conversation summary database remains.
+
+ACP exposes no quota percentage. Live failures use `SHAFT_ANTIGRAVITY_FALLBACK_MODEL`;
+trials and bake-offs fail without fallback. Costs views show tokens unless
+`cloudllm.usd` has a model price, in which case they show API equivalent separately
+from money spent. The session log records the tier reported by ACP.
+See [configuration](configuration.md#antigravity-plan-channel).
+Source: [agycli.py](../supervisor/agycli.py), `Channel` and `_seatbelt`;
+[planbridge.py](../supervisor/planbridge.py), `serve`.

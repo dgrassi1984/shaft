@@ -98,6 +98,11 @@ def codex_rate() -> dict | None:
     return planchannel.saved_rate("codex")
 
 
+def claude_rate() -> dict | None:
+    """Latest weekly window of the Claude plan, including calls observed by another supervisor process."""
+    return planchannel.saved_rate("claudecode")
+
+
 def costs(days: int = 7, today: date | None = None) -> dict:
     """Spending per day for the last `days` days, by component, and today's spend against each cap.
 
@@ -122,9 +127,18 @@ def costs(days: int = 7, today: date | None = None) -> dict:
 
     unpriced = 0
     grok_equivalent = 0.0
+    claude_equivalent = 0.0
+    antigravity_equivalent, antigravity_tokens = None, 0
     for r in jsonl(SUP_DIR / "cloud_usage.jsonl"):
         if r.get("ts", "")[:10] == today.isoformat() and str(r.get("model", "")).startswith("grok/"):
             grok_equivalent += r.get("api_equivalent_usd", 0.0)
+        if r.get("ts", "")[:10] == today.isoformat() and str(r.get("model", "")).startswith("claudecode/"):
+            claude_equivalent += r.get("api_equivalent_usd", 0.0)
+        if r.get("ts", "")[:10] == today.isoformat() and str(r.get("model", "")).startswith("antigravity/"):
+            if r.get("api_equivalent_usd") is not None:
+                antigravity_equivalent = (antigravity_equivalent or 0.0) + r["api_equivalent_usd"]
+            else:
+                antigravity_tokens += (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
         if r.get("usd") is None:
             if planchannel.prefix(str(r.get("model", ""))) and " (fallback " not in r["model"]:
                 continue
@@ -166,7 +180,9 @@ def costs(days: int = 7, today: date | None = None) -> dict:
                      "trials": (used["usd"], trial.DAILY_USD), "trials_started": (used["started"], trial.TRIALS_PER_DAY)})
     return {"days": rows, "today": rows[-1], "caps": caps, "judge_today": judge_today,
             "judge_today_total": sum(judge_today.values()), "judge_alert": JUDGE_ALERT_USD,
-            "unpriced": unpriced, "codex_rate": codex_rate(), "grok_api_equivalent": grok_equivalent}
+            "unpriced": unpriced, "codex_rate": codex_rate(), "grok_api_equivalent": grok_equivalent,
+            "antigravity_api_equivalent": antigravity_equivalent, "antigravity_tokens": antigravity_tokens,
+            "claude_api_equivalent": claude_equivalent, "claude_rate": claude_rate()}
 
 
 # -- the judge's verdicts --------------------------------------------------------------------------------------

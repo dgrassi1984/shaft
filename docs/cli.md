@@ -99,6 +99,8 @@ run` runs one scheduled plugin now.
 
 ```text
 shaft web on [--local|--json] [--force]|restart [--json] [--force]|off|status|pair [--name N] [--local] [--json]|unpair <id|name>|--all
+shaft claude login|status
+shaft antigravity login|status
 shaft grok login|status
 shaft codex login [--json]|status
 shaft model on|off|status
@@ -148,8 +150,9 @@ are what the Mac app's Model step runs. See [secrets](configuration.md#superviso
 `shaft model` controls SHAFT's Bonsai 2 server on port 8780. It starts on demand and exits when idle. `shaft
 embed` controls the optional memory-search service.
 
-`shaft codex login` and `shaft grok login` authenticate the plan channels. Their `status` commands show login,
-offered models, and outages. Codex also shows observed weekly usage.
+`shaft codex login`, `shaft grok login`, `shaft claude login` and `shaft antigravity login` authenticate the plan channels.
+Their `status` commands show login,
+offered models, and outages. Codex and Claude also show observed weekly usage.
 
 `shaft codex login --json` signs in without a terminal (the Mac app's setup uses it). It runs `codex login
 --device-auth` in SHAFT's private Codex home with stdin closed and prints one JSON line for each event: `{"url"}` (the
@@ -174,6 +177,18 @@ For a Grok plan model, run `shaft grok login`, then `shaft config <name> set LLM
 replay and bake-off arms accept `grok/` models, including reasoning effort (for example `--arm
 grok/grok-4.7@high`). Trials fail without fallback. `shaft grok status` does not start the model process; the
 weekly pool is unavailable.
+
+For a Claude plan model, run `shaft claude login`, then
+`shaft config <name> set LLM_MODEL=claudecode/claude-opus-5-5`. `shaft claude status`
+shows login, offered models, any outage and the last observed weekly allowance.
+Trial replays and bake-off arms accept `claudecode/` models and fail without fallback.
+See [Claude plan routing](local-model.md#claude-plan-routing).
+
+For an Antigravity plan model, run `shaft antigravity login`, then
+`shaft config <name> set LLM_MODEL=antigravity/gemini-4-argon`.
+`shaft antigravity status` shows login, offered models and any outage.
+ACP exposes no allowance percentage. See
+[Antigravity plan routing](local-model.md#antigravity-plan-routing).
 
 ## Access grants
 

@@ -1014,8 +1014,16 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
              f"judge ${today['judge']:.2f}", f"coder ${today['coder']:.2f}"]
     if c.get("grok_api_equivalent"):
         parts.append(f"Grok plan: ${c['grok_api_equivalent']:.6f} API equivalent (not money spent)")
+    if c.get("antigravity_api_equivalent") is not None:
+        parts.append(f"Antigravity plan: ${c['antigravity_api_equivalent']:.6f} API equivalent (not money spent)")
+    if c.get("antigravity_tokens"):
+        parts.append(f"Antigravity plan: {c['antigravity_tokens']:,} tokens (no API price available)")
+    if c.get("claude_api_equivalent"):
+        parts.append(f"Claude plan: ${c['claude_api_equivalent']:.6f} API equivalent (not money spent)")
     if (rate := c.get("codex_rate")) is not None:
         parts.append(f"Codex plan: {rate['used_percent']}% of weekly allowance used")
+    if (rate := c.get("claude_rate")) is not None:
+        parts.append(f"Claude plan: {rate['used_percent']}% of weekly allowance used")
     if today["recaps"]:
         parts.append(f"recaps ${today['recaps']:.2f}")
     if today["other"]:
