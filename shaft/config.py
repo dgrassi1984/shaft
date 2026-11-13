@@ -24,7 +24,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_TALK": (int, 16384),   # a cut-off reply is retried once with twice this (llm.py)
     "WAKE_INTERVAL_MINUTES": (int, 120),   # read by the supervisor's scheduler (no default floor; 0 = never)
     "LLM_CONTEXT_TOKENS": (int, 262144),   # the model's context window (Bonsai 2: 262,144), for the status bar
-    "LLM_REASONING_EFFORT": (str, "medium"),   # medium thinks as much as a request needs; xhigh to the cap (OpenRouter: reasoning.effort)
+    "LLM_REASONING_EFFORT": (str, "medium"),   # Bonsai: medium thinks as much as needed; xhigh to the cap. Other models take other levels.
     "LLM_THINK_FOLLOWUP": (int, 1024),   # reasoning tokens after a tool result (local server; 0 = its own budget)
     "LLM_PRESENCE_PENALTY": (int, 15),   # tenths: 15 = 1.5 (Qwen's advice against loops in quantized models)
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
@@ -118,9 +118,11 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-# The values a setting accepts; anything else keeps the next source's value. LLM_REASONING_EFFORT: what the model server
-# accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
-CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
+# The values a setting accepts; anything else keeps the next source's value. LLM_REASONING_EFFORT lists every level
+# any model channel takes. The supervisor offers and accepts only the selected model's levels. Bonsai takes low,
+# medium and xhigh; its chat template raises on anything else. An operator cannot save a level the model rejects.
+# The rest: PLAN-consciousness's knobs.
+CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
            "DOUBTS": ("on", "off"), "LOOK_AHEAD": ("on", "off"),
            "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
