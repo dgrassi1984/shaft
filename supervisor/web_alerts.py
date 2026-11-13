@@ -73,8 +73,8 @@ def forward_new() -> int:
                 pushed += 1
         _write_cursor(after)
     _write_cursor(end)
-    from . import apns, pushes
-    if webpush.subscriptions() or (apns.configured() is None and apns.devices()):
+    from . import pushes
+    if webpush.can_wake():
         pushed += pushes.digest(webpush.notify)
     return pushed
 
