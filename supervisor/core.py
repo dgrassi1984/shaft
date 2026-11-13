@@ -34,6 +34,34 @@ INSTANCES = PROJECT / "instances"
 # (sandbox._runtime_reads): their agent, plugins and tests run on that Python, and `run` uses that uv.
 RUNTIME = PROJECT / ".runtime"
 RUNTIME_READABLE = ("bin", "python")
+
+
+class RuntimeLayoutError(RuntimeError):
+    """core.RUNTIME is not laid out as the Mac app makes it: a link where a folder belongs. Nothing of it is used."""
+
+
+def runtime_dir(name: str) -> Path | None:
+    """core.RUNTIME/<name> (bin or python), resolved, when the app's install made it; None when there is none. Every
+    profile reads it (sandbox._runtime_reads), so it must be what it says: a real folder directly inside a real runtime
+    folder, never a link — `.runtime/python -> ~` would open the whole home, `.runtime/bin -> .runtime/cache` uv's
+    cache. A symlinked `.runtime` itself is refused too (the app never makes one). Raises RuntimeLayoutError, naming
+    the link, otherwise."""
+    if name not in RUNTIME_READABLE:
+        raise ValueError(f"{name!r} is not a runtime folder instances read ({', '.join(RUNTIME_READABLE)})")
+    if RUNTIME.is_symlink():
+        raise RuntimeLayoutError(f"{RUNTIME} is a link (to {os.path.realpath(RUNTIME)}), not the folder the Mac app "
+                                 "makes: its runtime is not used")
+    entry = RUNTIME / name
+    if not entry.exists() and not entry.is_symlink():
+        return None
+    if entry.is_symlink() or not entry.is_dir():
+        raise RuntimeLayoutError(f"{entry} is " + (f"a link (to {os.path.realpath(entry)})" if entry.is_symlink()
+                                                   else "not a folder") + ", not the folder the Mac app makes: it is "
+                                 "not used")
+    real = entry.resolve()
+    if real != RUNTIME.resolve() / name:
+        raise RuntimeLayoutError(f"{entry} resolves to {real}, outside {RUNTIME.resolve()}: it is not used")
+    return real
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()

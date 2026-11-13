@@ -39,8 +39,12 @@ def uv_binary() -> str:
     """The Mac app's own uv (core.RUNTIME/bin, the pinned one it installed) when there is one, else uv on PATH (a
     Homebrew install). Missing: why, with the fix for the kind of install this is."""
     from . import core
-    runtime = core.RUNTIME / "bin" / "uv"
-    if runtime.is_file() and os.access(runtime, os.X_OK):
+    try:
+        folder = core.runtime_dir("bin")
+    except core.RuntimeLayoutError as e:    # never a fallback to another uv: the layout is wrong, and that is said
+        raise RuntimeError(f"uv: {e}") from None
+    runtime = (folder or core.RUNTIME / "bin") / "uv"
+    if folder is not None and runtime.is_file() and os.access(runtime, os.X_OK):
         return str(runtime)
     if (found := shutil.which("uv")):
         return found

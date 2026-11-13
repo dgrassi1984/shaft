@@ -20,7 +20,7 @@ SCOPE = {
     "install.py": None,
     "api.py": {"service_on", "restart", "json_verb", "command", "tailnet_problem"},
     "web.py": {"command", "restart", "_pair_local"},
-    "telegram.py": {"command"},
+    "telegram.py": {"command", "new_pairing_code"},
     "modelcall.py": {"available", "reads_images"},
     "codexcli.py": {"_start", "login_json", "login", "status"},
     "app_api.py": "app",       # every function: only the apps read /app/v1
@@ -50,8 +50,6 @@ ALLOWLIST = {
     ("telegram.py", "command", "has no --json"): "a usage error (exit 2) of a flag the app never sends",
     ("telegram.py", "command", "shaft telegram pair"): "pairing help printed by the terminal pair and status",
     ("telegram.py", "command", "shaft telegram token <instance>)"): "the terminal pair's list of bots",
-    ("telegram.py", "command", "the telegram service is not installed: run shaft telegram on first"):
-        "`telegram restart` is a terminal verb; the app runs `telegram on`",
 }
 
 

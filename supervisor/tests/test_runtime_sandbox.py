@@ -72,6 +72,69 @@ class RuleTest(Case):
                 self.assertNotIn(".runtime", prof)
 
 
+class LinkedLayoutTest(Case):
+    """Re-review residual 1 (bug on cb1de77d): the rule granted a recursive read on whatever .runtime/bin or
+    .runtime/python resolved to, so a link `.runtime/python -> ~` opened the whole home and `.runtime/bin ->
+    .runtime/cache` uv's cache. Only real folders directly inside a real (unlinked) .runtime get a rule; anything else
+    gets none, and the scheduler's PATH and pyenv refuse it, saying why."""
+
+    def relink(self, name: str, target: Path) -> None:
+        shutil.rmtree(self.runtime / name)
+        (self.runtime / name).symlink_to(target, target_is_directory=True)
+
+    def assert_no_rule_for(self, name: str, target: Path) -> None:
+        with mock.patch.object(core, "log") as said:
+            for kind, prof in self.profiles().items():
+                with self.subTest(link=name, target=str(target), profile=kind):
+                    self.assertNotIn(f'(allow file-read* (subpath "{target.resolve()}"))', prof)
+                    self.assertNotIn(f'(allow file-read* (subpath "{self.runtime / name}"))', prof)
+        self.assertTrue(any("is a link" in c.args[0] for c in said.call_args_list), said.call_args_list)
+
+    def test_a_link_out_of_the_runtime_gets_no_read_rule(self):
+        outside = Path(tempfile.mkdtemp(prefix="shaft-rt-outside-")).resolve()
+        self.addCleanup(shutil.rmtree, outside, True)
+        for name, target in (("python", self.home), ("bin", self.runtime / "cache"), ("python", outside)):
+            with self.subTest(name=name, target=str(target)):
+                self.relink(name, target)
+                self.assert_no_rule_for(name, target)
+                with self.assertRaisesRegex(core.RuntimeLayoutError, "is a link"):
+                    core.runtime_dir(name)
+                shutil.rmtree(self.runtime / name, ignore_errors=True)
+                (self.runtime / name).unlink(missing_ok=True)
+                (self.runtime / name).mkdir()
+        # The real layout: its rules as before.
+        prof = sandbox.profile(self.root, self.home, [])
+        self.assertIn(f'(allow file-read* (subpath "{self.runtime / "python"}"))', prof)
+
+    def test_a_linked_runtime_folder_is_refused_whole(self):
+        real = Path(tempfile.mkdtemp(prefix="shaft-rt-real-")).resolve()
+        self.addCleanup(shutil.rmtree, real, True)
+        for d in ("bin", "python"):
+            (real / d).mkdir()
+        linked = self.home / "SHAFT" / ".runtime-link"
+        linked.symlink_to(real, target_is_directory=True)
+        with mock.patch.object(core, "RUNTIME", linked), mock.patch.object(core, "log") as said:
+            prof = sandbox.profile(self.root, self.home, [])
+            self.assertNotIn(str(real), prof)
+            self.assertNotIn(str(linked), prof)
+            with self.assertRaisesRegex(core.RuntimeLayoutError, "is a link"):
+                core.runtime_dir("python")
+        self.assertTrue(said.called)
+
+    def test_pyenv_and_the_service_path_refuse_a_linked_bin_with_the_reason(self):
+        from supervisor import autonomy, pyenv
+        self.relink("bin", self.runtime / "cache")
+        (self.runtime / "cache" / "uv").write_text("#!/bin/sh\n")
+        (self.runtime / "cache" / "uv").chmod(0o755)
+        with mock.patch("shutil.which", return_value="/opt/homebrew/bin/uv"):
+            with self.assertRaisesRegex(RuntimeError, "is a link"):
+                pyenv.uv_binary()                      # never a silent fallback to another uv
+        with mock.patch.object(autonomy, "log") as said:
+            plist = autonomy._plist("scheduler")
+        self.assertNotIn(str(self.runtime), plist["EnvironmentVariables"]["PATH"])
+        self.assertIn("left off PATH", said.call_args.args[0])
+
+
 class UvTest(Case):
     """pyenv finds the app's own uv first; a missing uv is said with the fix for the kind of install."""
 

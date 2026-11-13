@@ -281,7 +281,7 @@ class ServicePathTest(Hermetic):
 
     def test_services_get_the_runtime_bin_on_PATH(self):
         path, root = self.plist_path(True)
-        self.assertEqual(path.split(":")[0], f"{root}/.runtime/bin")     # where uv lives, so runs find it
+        self.assertEqual(path.split(":")[0], f"{Path(root).resolve()}/.runtime/bin")     # where uv lives (resolved)
         self.assertIn("/opt/homebrew/bin", path.split(":"))
 
     def test_without_a_runtime_folder_the_PATH_is_unchanged(self):

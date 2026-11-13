@@ -282,6 +282,33 @@ struct SetupStepsTests {
         #expect(f.server.requests.isEmpty)                                  // nothing was sent to it
     }
 
+    /// Re-review residual 3: once the operator answered the welcome, Say hello's route is 409 already_answered. The
+    /// step is done then: the chat opens and the wizard ends, as after a 200; any other refusal still shows.
+    @Test func sayHelloTreatsAnAlreadyAnsweredWelcomeAsDone() async throws {
+        let f = try Fixture(step: .hello) { state in state.createdInstance = "ledger" }
+        f.server.answer { request in
+            request.path == "/app/v1/setup/hello/ledger"
+                ? .init(409, #"{"error": {"code": "already_answered", "message": "The welcome is already in your chat with ledger.", "chat": {"id": "web-1", "title": "ledger"}}}"#)
+                : .init(404, #"{"error": {"code": "not_found", "message": "no"}}"#)
+        }
+        let session = SHAFTSession(pairing: PairingStore(store: MemoryCredentialStore()),
+                                   outbox: try Outbox(directory: f.root.appending(path: "session-outbox")),
+                                   drafts: DraftStore(directory: f.root.appending(path: "session-drafts")))
+        var opened: [String] = []
+        f.setup.steps.sayHello(store: f.store, setup: f.setup, session: session, open: { opened.append($0) })
+        await f.settle()
+        #expect(opened == ["ledger"])
+        #expect(f.setup.steps.greeting == .idle)
+
+        let g = try Fixture(step: .hello) { state in state.createdInstance = "ledger" }
+        g.server.answer { _ in .init(409, #"{"error": {"code": "refused", "message": "ledger has a conversation already"}}"#) }
+        opened = []
+        g.setup.steps.sayHello(store: g.store, setup: g.setup, session: session, open: { opened.append($0) })
+        await g.settle()
+        #expect(opened.isEmpty)
+        #expect(g.setup.steps.greeting == .failed("ledger has a conversation already"))
+    }
+
     @Test func leavingYourInstanceCreatesItOnceThenOnlyMovesOn() async throws {
         let f = try Fixture(step: .instance) { state in
             state.instanceName = "ledger"

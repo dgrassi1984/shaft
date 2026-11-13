@@ -1329,6 +1329,8 @@ def _setup_telegram_pair(req: Request, n: str) -> Response:
         return _json(200, {**status, "code": None, "minutes": None})
     code, rows = actions.run_json(["telegram", "pair", "--json"], who=_who(req))
     if code != 0 or not rows[-1].get("ok"):
+        if (now := _telegram_named(n))["paired"]:   # paired meanwhile: as the check above, no code to send
+            return _json(200, {**now, "code": None, "minutes": None})
         raise Refusal(409, "refused", _verb_said(rows))
     return _json(200, {**_telegram_named(n), "code": rows[-1]["code"], "minutes": rows[-1]["minutes"]})
 
@@ -1360,12 +1362,16 @@ def _setup_autonomy(req: Request, n: str) -> Response:
 
 def _setup_hello(req: Request, n: str) -> Response:
     """The setup's last step: the hidden opening (setup.opening_text) to Main, which the instance answers with its
-    welcome. Asked again once it was sent, it answers that chat (the app's Try again completes); refused once Main
-    has a turn of another kind."""
+    welcome. Asked again once it was sent, it answers that chat (the app's Try again completes) until the operator has
+    written in it, then 409 already_answered (the wizard treats it as done); refused when Main has a conversation that
+    did not start with the opening."""
     from . import setup, web_chat
     log(f"{_who(req)}: operator asked {n} for its welcome")
     try:
         chat = web_chat.opening(n, _login(req), setup.opening_text(n))
+    except web_chat.AlreadyAnswered as e:            # the operator answered the welcome: nothing left to ask for
+        raise Refusal(409, "already_answered", f"The welcome is already in your chat with {n}.",
+                      chat={"id": e.chat["id"], "title": web_chat.title(e.chat)}) from None
     except web_chat.AlreadyOpened as e:              # Try again after the answer was lost: done already, not refused
         return _said(str(e), chat={"id": e.chat["id"], "title": web_chat.title(e.chat)})
     except web_chat.Refused as e:

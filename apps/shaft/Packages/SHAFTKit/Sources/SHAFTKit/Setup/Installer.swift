@@ -662,8 +662,14 @@ public final class Installer {
         return env
     }
 
+    /// Every `shaft` the app runs speaks to the app: its messages name what to do here, never a terminal command
+    /// (`SHAFT_APP_WORDING`, supervisor/actions.py), also for the verbs without `--json` (`telegram restart`,
+    /// `autonomy restart`).
+    static let appWording = ("SHAFT_APP_WORDING", "1")
+
     private func shaftEnvironment(_ python: URL) -> [String: String] {
         var env = baseEnvironment()
+        env[Self.appWording.0] = Self.appWording.1
         env["SHAFT_PYTHON"] = python.path
         env["PATH"] = configuration.runtimeBin.path + ":" + env["PATH", default: ""]
         return env

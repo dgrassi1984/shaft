@@ -111,8 +111,12 @@ def _plist(name: str) -> dict:
     label = svc["label"]
     # The Mac app's install keeps its own tools (uv) in core.RUNTIME/bin: the services and the runs they start find them.
     from . import core
-    runtime_bin = core.RUNTIME / "bin"
-    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if not runtime_bin.is_dir()
+    try:
+        runtime_bin = core.runtime_dir("bin")
+    except core.RuntimeLayoutError as e:     # a link where the app's folder belongs: not put on any PATH
+        log(f"service {name}: the runtime's bin/ is left off PATH: {e}")
+        runtime_bin = None
+    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if runtime_bin is None
                     else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
     return {
         "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),

@@ -428,6 +428,45 @@ class TelegramTest(SetupTest):
         err = self.error(self.api("/app/v1/setup/telegram/pair/wisp", "POST", {}), 409, "refused")
         self.assertIn("already paired", err["message"])
 
+    def test_paired_between_the_check_and_the_verb_is_the_paired_answer_not_a_refusal(self):
+        """Re-review residual 2 (bug on cb1de77d): the verb's "already paired … `shaft telegram unpair` first" reached
+        the wizard when an account paired between the route's check and the verb. The app has no Telegram unpair, so
+        that is the paired answer (no code), as when the check sees it first."""
+        self.bots.add("wisp")
+        self.telegram.remember_bot("wisp", "wisp_bot")
+
+        def paired_meanwhile(*a, **k):
+            self.telegram.update(lambda st: st.update(paired={"user_id": 42, "username": "ada"}))
+            return 1, [{"ok": False, "error": "Telegram is already paired with ada: every SHAFT bot answers that account."}]
+        with mock.patch.object(self, "run_json", side_effect=paired_meanwhile), \
+                mock.patch.object(actions, "run_json", side_effect=paired_meanwhile):
+            r = self.get("/app/v1/setup/telegram/pair/wisp", method="POST", data={})
+        self.assertEqual((r["code"], r["paired"], r["account"]), (None, True, "ada"))
+
+    def test_the_pair_and_restart_verbs_speak_the_apps_words_under_json_and_for_the_app(self):
+        """Re-review residual 2: `telegram pair --json` (already paired) and `telegram restart` (not installed, which
+        the wizard's ServiceRestart runs) named terminal commands to the app; the terminal keeps them."""
+        from supervisor import __main__ as cli
+        self.telegram.update(lambda s: s.update(paired={"user_id": 42, "username": "ada"}))
+
+        def run(*argv, app=False):
+            out, err = io.StringIO(), io.StringIO()
+            env = {"SHAFT_APP_WORDING": "1"} if app else {}
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.dict("os.environ", env), \
+                    mock.patch("supervisor.autonomy.installed", return_value=False):
+                code = cli.main(list(argv))
+            return code, out.getvalue() + err.getvalue()
+        code, said = run("telegram", "pair", "--json")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(said)["error"], "Telegram is already paired with ada: every SHAFT bot answers that "
+                                                    "account.")
+        self.assertIn("`shaft telegram unpair` first", run("telegram", "pair")[1])
+        self.bots.add("wisp")
+        code, said = run("telegram", "restart", app=True)
+        self.assertEqual((code, said.strip()), (1, "Telegram's service is not installed on this Mac, so there is "
+                                                   "nothing to restart."))
+        self.assertIn("run shaft telegram on first", run("telegram", "restart")[1])
+
     def test_service_runs_telegram_on_through_the_verb(self):
         said = self.get("/app/v1/setup/telegram/service", method="POST", data={})
         self.assertEqual(said, {"said": "done"})
@@ -724,6 +763,22 @@ class HelloTest(SetupTest):
         web_chat.save(chat)
         err = self.error(self.api("/app/v1/setup/hello/wisp", "POST", {}), 409, "refused")
         self.assertIn("conversation already", err["message"])
+
+    def test_hello_once_the_operator_answered_the_welcome_is_409_already_answered_with_the_chat(self):
+        """Re-review residual 3 (bug on cb1de77d): asked again after the operator had written in Main, the route still
+        answered 200 "asked … already", contrary to §18.8. Until they write, the chat; after, 409 already_answered."""
+        first = self.get("/app/v1/setup/hello/wisp", method="POST", data={})
+        chat = web_chat.load(first["chat"]["id"])
+        chat["turns"].append({"role": "assistant", "content": "Hello, I am wisp.", "ts": "2026-11-13T09:00:00"})
+        web_chat.save(chat)
+        self.assertEqual(self.get("/app/v1/setup/hello/wisp", method="POST", data={})["chat"], first["chat"])
+        chat = web_chat.load(first["chat"]["id"])
+        chat["turns"].append({"role": "user", "content": "hi wisp", "ts": "2026-11-13T09:01:00"})
+        web_chat.save(chat)
+        err = self.error(self.api("/app/v1/setup/hello/wisp", "POST", {}), 409, "already_answered")
+        self.assertEqual(err["message"], "The welcome is already in your chat with wisp.")
+        self.assertEqual(err["chat"], first["chat"])
+        self.assertEqual(sum(1 for t in web_chat.load(first["chat"]["id"])["turns"] if t.get("hidden")), 1)
 
 
 # -- who may call them ------------------------------------------------------------------------------------------------

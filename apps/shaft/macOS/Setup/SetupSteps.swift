@@ -646,11 +646,14 @@ final class SetupSteps {
 
     // MARK: - Say hello
 
-    /// The hidden opening; then the instance's chat opens (`open`) and the wizard ends.
+    /// The hidden opening; then the instance's chat opens (`open`) and the wizard ends. A server that says the welcome
+    /// was already answered in the chat (`409 already_answered`) means this step is done: the chat opens all the same.
     func sayHello(store: InstancesStore?, setup: MacSetup, session: SHAFTSession, open: @escaping @MainActor (String) -> Void) {
         guard let name = setup.state.createdInstance else { return }
         perform("hello", \.greeting, store: store) { client, current in
-            _ = try await client.setupHello(name)
+            do {
+                _ = try await client.setupHello(name)
+            } catch let error as APIError where error.code == "already_answered" {}
             guard current() else { return }
             await store?.refresh()
             guard current() else { return }

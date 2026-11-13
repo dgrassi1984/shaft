@@ -1586,7 +1586,8 @@ or restarts it. Refused (no bot yet, launchd failing): `409 refused` with the ve
 (`telegram.PAIR_MINUTES`, 10 minutes) and the answer is the status plus `code` and `minutes`; the operator sends
 `/pair <code>` to `<n>`'s bot from their account, and the running service pairs it. The wizard first waits (up to
 60 s, asking every 2 s) for `service`, then asks every 2 s until `paired`, and records Telegram done only when both
-hold. With an account paired already, no code is issued: `code` and `minutes` are null. No bot for `<n>`
+hold. With an account paired already (also one that paired between the route's look and the verb), no code is
+issued: `code` and `minutes` are null; the app has no Telegram unpair (the terminal's `shaft telegram unpair`). No bot for `<n>`
 yet: `409 refused`. An unknown instance: `404 not_found`.
 
 ### 18.6 Access
@@ -1644,7 +1645,9 @@ questions to start. The operator never sees it in the feed; the instance's reply
 operator's first answered reply resumes the instance or leaves it paused, as `autonomy` said (§18.1). Success:
 `{"said": "<n> is writing its welcome", "chat": {"id": <Main's id>, "title": <n>}}`. Asked again once the opening
 was sent (the app's Try again after it lost the answer), nothing is asked twice: `{"said": "<n> was asked for its welcome
-already", "chat"}`. Once Main has a turn of the operator's: `409 refused` ("… has a conversation already").
+already", "chat"}`, as long as the operator has not written in Main. Once they have: `409 already_answered` ("The
+welcome is already in your chat with <n>.", with `chat`), which the wizard treats as done (it opens the chat). Main
+holding a conversation that did not start with the opening: `409 refused` ("… has a conversation already").
 
 ### 18.9 `POST /setup/autonomy/<n>`
 

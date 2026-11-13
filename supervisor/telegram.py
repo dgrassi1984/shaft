@@ -305,8 +305,9 @@ def _digest(code: str) -> str:
 def new_pairing_code() -> str:
     st = load()
     if st.get("paired"):
-        raise TelegramError(f"already paired with {st['paired'].get('username') or st['paired']['user_id']}; "
-                            "`shaft telegram unpair` first")
+        who = st['paired'].get('username') or st['paired']['user_id']
+        raise TelegramError(core_say(f"already paired with {who}; `shaft telegram unpair` first",
+                                     f"Telegram is already paired with {who}: every SHAFT bot answers that account."))
     code = secrets.token_hex(4).upper()
     update(lambda s: s.update(pairing={"digest": _digest(code),
                                        "until": (datetime.now() + timedelta(minutes=PAIR_MINUTES)).isoformat()}))
@@ -1008,7 +1009,8 @@ def command(action: str, name: str | None = None, as_json: bool = False, force: 
                            "No Telegram bot is saved yet: save a bot's token first."))
             return 2
         if action == "restart" and not autonomy.installed("telegram"):
-            print("the telegram service is not installed: run shaft telegram on first")
+            print(core_say("the telegram service is not installed: run shaft telegram on first",
+                           "Telegram's service is not installed on this Mac, so there is nothing to restart."))
             return 1
         # A running service restarts, which cuts a Telegram reply still being written: as `api on` and `web on`, under
         # the restart barrier, refused while an instance is replying unless forced (api.service_on).

@@ -221,9 +221,13 @@ struct SetupTests {
         #expect(install.env["PATH"] == machine.server.appending(path: ".runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin")
         #expect(install.env["HOME"] == home.path)
         #expect(install.env["VIRTUAL_ENV"] == nil)
+        // Re-review residual 2: every `shaft` the app runs answers in the app's words, also the verbs without --json
+        // (`telegram restart`, `autonomy restart` from ServiceRestart).
+        #expect(install.env["SHAFT_APP_WORDING"] == "1")
         let pythonInstall = try #require(runner.calls.first { $0.args.starts(with: ["python", "install"]) })
         #expect(pythonInstall.env["UV_PYTHON_INSTALL_DIR"] == machine.server.appending(path: ".runtime/python").path)
         #expect(pythonInstall.args.contains("--no-bin"))
+        #expect(pythonInstall.env["SHAFT_APP_WORDING"] == nil)                // uv is not SHAFT
         // The configure step's lines are its sub-rows, in order.
         #expect(installer.subRows.map(\.step) == ["identity", "setup", "api", "web", "scheduler"])
         #expect(installer.subRows.allSatisfy { $0.ok })

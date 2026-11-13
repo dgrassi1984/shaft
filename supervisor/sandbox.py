@@ -182,10 +182,13 @@ def _runtime_reads(home: Path) -> list[str]:
     from . import core
     rules = []
     for name in core.RUNTIME_READABLE:
-        folder = core.RUNTIME / name
-        if not folder.is_dir():
+        try:
+            folder = core.runtime_dir(name)       # a real folder inside the real runtime, never a link out of it
+        except core.RuntimeLayoutError as e:
+            core.log(f"sandbox: no read rule for the runtime's {name}/: {e}")
             continue
-        folder = folder.resolve()
+        if folder is None:
+            continue
         rules.append(f"(allow file-read* (subpath {_q(folder)}))")
         if (meta := _ancestors_metadata(folder, Path(home).resolve())):
             rules.append(meta)
