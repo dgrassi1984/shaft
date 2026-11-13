@@ -105,9 +105,22 @@ def base_url_for(model: str) -> str | None:
     return None
 
 
-def effort_choices(root: Path) -> tuple[str, ...] | None:
-    """The reasoning efforts the instance's own code accepts (its shaft/config.py CHOICES), read as text: the
-    supervisor never imports agent code."""
+# Bonsai chat-template levels, probed 2026-11-13.
+BONSAI_EFFORTS = (("low", "medium", "xhigh"), "xhigh")
+
+
+def model_efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
+    from . import cloudllm, planchannel, selfhosted
+    if model and (model == config_values(_template_text()).get("LLM_MODEL")
+                  or (selfhosted.serves(model) and model.partition("/")[2] == "bonsai2")):
+        return BONSAI_EFFORTS
+    if planchannel.serves(model):
+        return planchannel.efforts(model)
+    return cloudllm.efforts(model) if model else None
+
+
+def effort_choices(root: Path, model: str | None) -> tuple[str, ...] | None:
+    """The instance's text-parsed CHOICES intersected with the model's canonical levels."""
     try:
         text = safe_read(root, "shaft/config.py")   # the instance writes it: never read through a link
     except (OSError, UnsafePath, ValueError):
@@ -122,7 +135,13 @@ def effort_choices(root: Path) -> tuple[str, ...] | None:
     except (ValueError, SyntaxError, RecursionError, MemoryError):
         return None
     got = choices.get("LLM_REASONING_EFFORT") if isinstance(choices, dict) else None
-    return tuple(str(c) for c in got) if isinstance(got, (tuple, list)) else None
+    if not isinstance(got, (tuple, list)):
+        return None
+    known = model_efforts(model) if model else None
+    if known is None:
+        return None
+    from .effortcatalog import ORDER
+    return tuple(level for level in ORDER if level in got and level in known[0])
 
 
 def fields(name: str) -> list[dict]:
@@ -137,7 +156,7 @@ def fields(name: str) -> list[dict]:
     order = list(dict.fromkeys([k for l in text.splitlines() if (k := _key(l))] +
                                [k for l in tmpl.splitlines() if (k := _key(l))] + list(VOICE_DEFAULTS) +
                                list(WATCH_KEYS.values())))
-    efforts = effort_choices(root)
+    efforts = effort_choices(root, values.get("LLM_MODEL", defaults.get("LLM_MODEL")))
     out = []
     for key in order:
         secret = bool(SECRET_KEY.search(key))
@@ -153,11 +172,11 @@ def fields(name: str) -> list[dict]:
             f["value"] = "(set, hidden)" if values.get(key) else "(empty)"
         if key == "LLM_MODEL":
             f["choices"] = [c["model"] for c in model_choices()]
-        elif key == "LLM_REASONING_EFFORT" and efforts:
+        elif key == "LLM_REASONING_EFFORT" and efforts is not None:
             f["choices"] = list(efforts)
         elif key == "VOICE_MODE":
             f["choices"] = list(VOICE_MODES)
-        elif key == "VOICE_REASONING_EFFORT" and efforts:
+        elif key == "VOICE_REASONING_EFFORT" and efforts is not None:
             f["choices"] = [""] + list(efforts)
         elif key in WATCH_KEYS.values():
             f["choices"] = list(WATCH_MODES)
@@ -181,21 +200,23 @@ def voice_mode(cfg: dict) -> str:
     return "on" if cfg.get("VOICE_MODE", VOICE_DEFAULTS["VOICE_MODE"]) == "on" else "off"
 
 
-def _check(name: str, root: Path, key: str, value: str) -> None:
+def _check(name: str, root: Path, key: str, value: str, model: str | None) -> None:
     if SECRET_KEY.search(key):
         raise Refused(f"{key} looks like a secret: keys go in with `shaft secret {name} set …`, never config.env")
     if key == "LLM_MODEL" and base_url_for(value) is None:
         raise Refused(f"{value!r} is not a model an instance may run on: "
                       + ", ".join(c["model"] for c in model_choices()))
-    if key == "LLM_REASONING_EFFORT" and (efforts := effort_choices(root)) and value not in efforts:
-        raise Refused(f"LLM_REASONING_EFFORT must be one of {', '.join(efforts)} (its shaft/config.py), not {value!r}")
+    if key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT") and value and effort_choices(root, model) == ():
+        raise Refused(f"{model} takes no reasoning effort its shaft/config.py accepts: unset {key}, not {value!r}")
+    if key == "LLM_REASONING_EFFORT" and (efforts := effort_choices(root, model)) is not None and value not in efforts:
+        raise Refused(f"LLM_REASONING_EFFORT must be one of {', '.join(efforts)} (its shaft/config.py and {model}), not {value!r}")
     if key == "VOICE_MODE" and value not in VOICE_MODES:
         raise Refused(f"VOICE_MODE is on or off, not {value!r}")
     if key in WATCH_KEYS.values() and value not in WATCH_MODES:
         raise Refused(f"{key} is {', '.join(WATCH_MODES[:-1])} or {WATCH_MODES[-1]}, not {value!r}")
-    if key == "VOICE_REASONING_EFFORT" and value and (efforts := effort_choices(root)) and value not in efforts:
+    if key == "VOICE_REASONING_EFFORT" and value and (efforts := effort_choices(root, model)) is not None and value not in efforts:
         raise Refused(f"VOICE_REASONING_EFFORT must be empty (its LLM_REASONING_EFFORT) or one of {', '.join(efforts)} "
-                      f"(its shaft/config.py), not {value!r}")
+                      f"(its shaft/config.py and {model}), not {value!r}")
     numeric = re.fullmatch(r"\d+", config_values(_template_text()).get(key, "") or "x")
     if numeric and not re.fullmatch(r"\d+", value):
         raise Refused(f"{key} is a whole number, not {value!r}")
@@ -203,7 +224,7 @@ def _check(name: str, root: Path, key: str, value: str) -> None:
 
 def coupled(key: str) -> list[str]:
     """Keys a set of `key` also writes (set_values): a page showing them must refresh them with it."""
-    return ["LLM_BASE_URL"] if key == "LLM_MODEL" else []
+    return ["LLM_BASE_URL", "LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"] if key == "LLM_MODEL" else []
 
 
 def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str | None] | None = None) -> dict:
@@ -213,7 +234,29 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
     changes = dict(changes)
     if "LLM_MODEL" in changes and changes["LLM_MODEL"] is not None and "LLM_BASE_URL" not in changes:
         changes["LLM_BASE_URL"] = base_url_for(changes["LLM_MODEL"])      # a model switch is never half-applied
-    who = instance_config(name).get("OPERATOR_NAME") or "operator"
+    current = instance_config(name)
+    model = changes.get("LLM_MODEL", current.get("LLM_MODEL"))
+    expect = dict(expect or {})
+    reset_notes = []
+    if changes.get("LLM_MODEL") is not None and model != current.get("LLM_MODEL"):
+        choices = effort_choices(root, model)
+        for key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"):
+            old = current.get(key)
+            if key in changes or not old or choices is None or old in choices:
+                continue
+            if key == "VOICE_REASONING_EFFORT":
+                changes[key] = ""
+                reset_notes.append(f"{key} reset to empty (its LLM_REASONING_EFFORT): {model} does not take {old}")
+            elif not choices:
+                changes[key] = None
+                reset_notes.append(f"{key} unset: {model} takes no reasoning effort")
+            else:
+                default = config_values(_template_text()).get(key)
+                model_default = model_efforts(model)[1]
+                changes[key] = default if default in choices else model_default if model_default in choices else choices[0]
+                reset_notes.append(f"{key} reset to {changes[key]}: {model} does not take {old}")
+            expect.setdefault(key, old)
+    who = current.get("OPERATOR_NAME") or "operator"
     lines = {}
     for key, value in changes.items():
         if value is None:
@@ -221,7 +264,7 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
                 raise Refused(f"{key} looks like a secret: `shaft secret {name} delete …`")
             lines[key] = None
             continue
-        _check(name, root, key, value)
+        _check(name, root, key, value, model)
         try:
             lines[key] = config_set_line(key, value, f"{who}, {date.today().isoformat()}")
         except ValueError as e:
@@ -246,7 +289,7 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
     changed.sort()
     log(f"{name}: config.env {', '.join(f'{k}={changes[k]!r}' if changes[k] is not None else f'{k} unset' for k in changed)}"
         " by the operator")
-    notes = _notes(name, changes)
+    notes = reset_notes + _notes(name, changes)
     return {"changed": changed, "committed": _commit(name, root, "config"), "notes": notes}
 
 

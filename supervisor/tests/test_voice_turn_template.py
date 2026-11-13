@@ -85,9 +85,13 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual((cfg.VOICE_MODE, cfg.VOICE_REASONING_EFFORT), ("off", ""))
         cfg = self.load(VOICE_MODE="on", VOICE_REASONING_EFFORT="low")
         self.assertEqual((cfg.VOICE_MODE, cfg.VOICE_REASONING_EFFORT), ("on", "low"))
-        cfg = self.load(VOICE_MODE="yes", VOICE_REASONING_EFFORT="max")
+        cfg = self.load(VOICE_MODE="yes", VOICE_REASONING_EFFORT="invalid")
         self.assertEqual((cfg.VOICE_MODE, cfg.VOICE_REASONING_EFFORT), ("off", ""))
         self.assertEqual(config.CHOICES["VOICE_REASONING_EFFORT"], config.CHOICES["LLM_REASONING_EFFORT"])
+        self.assertEqual(config.CHOICES["LLM_REASONING_EFFORT"], ("low", "medium", "high", "xhigh", "max", "ultra"))
+        for effort in ("low", "medium", "high", "xhigh", "max", "ultra"):
+            cfg = self.load(LLM_REASONING_EFFORT=effort, VOICE_REASONING_EFFORT=effort)
+            self.assertEqual((cfg.LLM_REASONING_EFFORT, cfg.VOICE_REASONING_EFFORT), (effort, effort))
 
     def test_the_supervisor_still_reads_the_efforts_without_importing_the_code(self):
         """Bug guarded: CHOICES no longer a plain literal (opconfig.effort_choices parses it with ast), which would
@@ -97,7 +101,9 @@ class VoiceConfigTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         (root / "shaft").mkdir()
         shutil.copy(Path(config.__file__), root / "shaft" / "config.py")
-        self.assertEqual(opconfig.effort_choices(root), tuple(config.CHOICES["LLM_REASONING_EFFORT"]))
+        self.assertEqual(opconfig.effort_choices(root, "claude-haiku-5-5"),
+                         tuple(e for e in ("low", "medium", "high", "xhigh", "max")
+                               if e in config.CHOICES["LLM_REASONING_EFFORT"]))
 
     def test_the_voice_note_never_tells_the_model_to_avoid_tools_or_documents(self):
         """Bug guarded: a "no tools" / "read-only" / "don't write" line in the note: gpt-6.1-sol obeys such lines

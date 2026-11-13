@@ -57,7 +57,7 @@ def parse_arm(spec: str, efforts: tuple[str, ...] | None) -> dict:
     if model not in CLOUD_MODELS and model not in planchannel.models():
         raise BakeoffError(f"{model} is not allowed for instances (SHAFT_CLOUD_MODELS={','.join(CLOUD_MODELS)})")
     if effort and efforts is not None and effort not in efforts:
-        raise BakeoffError(f"{spec}: the instance's code accepts LLM_REASONING_EFFORT {', '.join(efforts)}, "
+        raise BakeoffError(f"{spec}: the instance's code and {model} accept LLM_REASONING_EFFORT {', '.join(efforts)}, "
                            f"not {effort!r}")
     return {"label": spec, "model": model, "env": {"LLM_REASONING_EFFORT": effort} if effort else {}}
 
@@ -88,7 +88,12 @@ def create(name: str, arms: list[str], episodes: list[str], judge: str = DEFAULT
         bid = next(f"{bid}{s}" for s in ("", *(f"-{i}" for i in range(2, 100))) if not path(name, f"{bid}{s}").exists())
     if len(arms) < 2:
         raise BakeoffError("a bake-off needs a baseline and at least one candidate")
-    parsed = [parse_arm(a, effort_choices(INSTANCES / name)) for a in arms]
+    def arm_model(spec: str) -> str:   # the model as parse_arm resolves it, so a shorthand arm is checked too
+        try:
+            return instance_model(spec.partition("@")[0])
+        except ValueError:
+            return ""                      # parse_arm refuses it with the reason
+    parsed = [parse_arm(a, effort_choices(INSTANCES / name, arm_model(a))) for a in arms]
     if len({a["label"] for a in parsed}) != len(parsed):
         raise BakeoffError("the same arm twice")
     judge = cloud_model(judge)

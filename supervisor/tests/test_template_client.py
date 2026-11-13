@@ -155,7 +155,7 @@ class ReasoningEffortTest(unittest.TestCase):
         with unittest.mock.patch("sys.stderr", err):
             bad = config.load(root, environ={"LLM_REASONING_EFFORT": "maximum"})
         self.assertEqual(bad.LLM_REASONING_EFFORT, "medium")
-        self.assertIn("must be one of medium, xhigh, low", err.getvalue())
+        self.assertIn("must be one of low, medium, high, xhigh, max, ultra", err.getvalue())
         Client.from_config(cfg).complete([{"role": "user", "content": "x"}], 100, "test", think=False)
         self.assertNotIn("reasoning_effort", fake.requests[-1]["chat_template_kwargs"])
 

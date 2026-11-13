@@ -526,3 +526,28 @@ def as_sse(reply: dict) -> bytes:
         for chunk in chunks:
             chunk["model"] = label
     return b"".join(b"data: " + json.dumps(c).encode() + b"\n\n" for c in chunks) + b"data: [DONE]\n\n"
+
+
+# Claude API reasoning levels, probed 2026-11-13.
+CLAUDE_EFFORTS = (("low", "medium", "high", "xhigh", "max"), None)
+
+
+def _effort_listing() -> dict:
+    from . import effortcatalog
+    with urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=10) as response:
+        data = json.load(response)
+    models = {}
+    for item in data["data"]:
+        reasoning = item.get("reasoning") or {}
+        models[item["id"]] = effortcatalog.entry(reasoning.get("supported_efforts") or [],
+                                                 reasoning.get("default_effort"))
+    return models
+
+
+def efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
+    from . import effortcatalog
+    if model.startswith("claude-") and model in CLOUD_MODELS:
+        return CLAUDE_EFFORTS
+    if model.startswith("openrouter/"):
+        return effortcatalog.lookup("openrouter", model[len("openrouter/"):], _effort_listing)
+    return None
