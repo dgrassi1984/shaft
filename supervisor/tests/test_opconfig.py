@@ -5,6 +5,7 @@ free, by its run otherwise, never undone by the gate as the instance's (kiln, 20
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import tempfile
 import threading
@@ -16,12 +17,13 @@ from unittest import mock
 
 from supervisor import core, opconfig
 from supervisor.tests import test_config_writers as cw
+from supervisor.cloudllm import _effort_listing as real_listing
 
 TEMPLATE = ('# A local server, or "broker".\nLLM_BASE_URL="http://127.0.0.1:8780/v1"   # SHAFT\'s own\n'
             'LLM_MODEL="ternary-bonsai-2-27b-mlx"\nLLM_API_KEY=""\n# How hard I think.\nLLM_REASONING_EFFORT="medium"\n'
             '# How often I wake.\nWAKE_INTERVAL_MINUTES=120\n\nOPERATOR_NAME="the operator"\n')
 CONFIG = ('# SHAFT instance configuration\n\n# A local server, or "broker".\nLLM_BASE_URL="broker"\n'
-          'LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"\nLLM_API_KEY="sk-secret-value"\n# How hard I think.\n'
+          'LLM_MODEL="openrouter/openai/gpt-6.1-sol"\nLLM_API_KEY="sk-secret-value"\n# How hard I think.\n'
           'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES=5   # the operator, 2026-10-17 (floor 5)\n'
           'CUSTOM_KNOB=yes\n\nOPERATOR_NAME="the operator"\n')
 AGENT_CONFIG = 'CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low")}\n'
@@ -45,9 +47,14 @@ class OpConfigTest(unittest.TestCase):
                   mock.patch.object(opconfig, "TEMPLATE", self.dir / "template"),
                   mock.patch.object(core, "SUP_DIR", self.dir / "sup"),
                   mock.patch.object(opconfig, "_commit", side_effect=lambda n, r, w: self.committed.append(w) or True),
-                  mock.patch("supervisor.cloudllm.CLOUD_MODELS", ["claude-haiku-5-5", "openrouter/xiaomi/mimo-v2.6-pro"]),
+                  mock.patch("supervisor.cloudllm.CLOUD_MODELS", ["claude-haiku-5-5", "openrouter/xiaomi/mimo-v2.6-pro",
+                                                                   "openrouter/openai/gpt-6.1-sol"]),
                   mock.patch("supervisor.selfhosted.SERVERS", {"gpu": {"url": "http://x"}}),
                   mock.patch("supervisor.autonomy.wake_floor", return_value=5),
+                  # OpenRouter's /models as probed 2026-11-13: mimo reports no levels
+                  mock.patch("supervisor.cloudllm._effort_listing", return_value={
+                      "xiaomi/mimo-v2.6-pro": {"levels": [], "default": None},
+                      "openai/gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max"], "default": "medium"}}),
                   mock.patch.object(opconfig, "log")):
             p.start()
             self.addCleanup(p.stop)
@@ -64,10 +71,10 @@ class EffortChoicesTest(OpConfigTest):
             '    "LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),\n'
             '    "OTHER": ("on", "off"),\n'
             '}\n')
-        self.assertEqual(opconfig.effort_choices(self.root), ("medium", "xhigh", "low"))
+        self.assertEqual(opconfig.effort_choices(self.root, "claude-haiku-5-5"), ("low", "medium", "xhigh"))
         field = next(f for f in opconfig.fields("wisp") if f["key"] == "LLM_REASONING_EFFORT")
-        self.assertEqual(field["choices"], ["medium", "xhigh", "low"])
-        with self.assertRaisesRegex(opconfig.Refused, "must be one of medium, xhigh, low"):
+        self.assertEqual(field["choices"], ["low", "medium", "xhigh"])
+        with self.assertRaisesRegex(opconfig.Refused, "must be one of low, medium, xhigh"):
             opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "invalid"})
         self.assertEqual(self.text(), CONFIG)
 
@@ -75,22 +82,22 @@ class EffortChoicesTest(OpConfigTest):
         for text in ('CHOICES = {', 'CHOICES = make_choices()', 'CHOICES = []',
                      'CHOICES = {"LLM_REASONING_EFFORT": "medium"}', 'X = {}'):
             (self.root / "shaft/config.py").write_text(text)
-            self.assertIsNone(opconfig.effort_choices(self.root), text)
+            self.assertIsNone(opconfig.effort_choices(self.root, "claude-haiku-5-5"), text)
         for operation in ("parse", "literal_eval"):
             for failure in (RecursionError, MemoryError):
                 with self.subTest(operation=operation, failure=failure.__name__):
                     (self.root / "shaft/config.py").write_text(AGENT_CONFIG)
                     with mock.patch.object(opconfig.ast, operation, side_effect=failure):
-                        self.assertIsNone(opconfig.effort_choices(self.root))
+                        self.assertIsNone(opconfig.effort_choices(self.root, "claude-haiku-5-5"))
         (self.root / "shaft/config.py").unlink()
-        self.assertIsNone(opconfig.effort_choices(self.root))
+        self.assertIsNone(opconfig.effort_choices(self.root, "claude-haiku-5-5"))
         (self.root / "shaft/config.py").symlink_to(self.dir / "template/config.env")
-        self.assertIsNone(opconfig.effort_choices(self.root))
+        self.assertIsNone(opconfig.effort_choices(self.root, "claude-haiku-5-5"))
 
     def test_annotated_choices_and_existing_single_line_choices(self):
-        self.assertEqual(opconfig.effort_choices(self.root), ("medium", "xhigh", "low"))
+        self.assertEqual(opconfig.effort_choices(self.root, "claude-haiku-5-5"), ("low", "medium", "xhigh"))
         (self.root / "shaft/config.py").write_text('CHOICES: dict = {"LLM_REASONING_EFFORT": ["low"]}\n')
-        self.assertEqual(opconfig.effort_choices(self.root), ("low",))
+        self.assertEqual(opconfig.effort_choices(self.root, "claude-haiku-5-5"), ("low",))
 
 
 class SetTest(OpConfigTest):
@@ -152,7 +159,7 @@ class SetTest(OpConfigTest):
     def test_what_set_config_refuses_is_refused_here(self):
         for key, value, why in (("lower", "1", "UPPER_CASE"), ("X", 'say "hi"', "double quotes"),
                                 ("X", "a\nLLM_MODEL=x", "one line"), ("LLM_MODEL", "gpt-9", "not a model"),
-                                ("LLM_REASONING_EFFORT", "max", "must be one of medium, xhigh, low"),
+                                ("LLM_REASONING_EFFORT", "max", "must be one of low, medium, xhigh"),
                                 ("WAKE_INTERVAL_MINUTES", "ten", "whole number"),
                                 ("LLM_API_KEY", "sk-new", "looks like a secret"),
                                 ("WATCH_GCHAT", "wakeup", "off, inbox or wake"),
@@ -211,7 +218,7 @@ class FieldsTest(OpConfigTest):
         self.assertEqual(list(fs)[:3], ["LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"])
         self.assertEqual(fs["LLM_API_KEY"]["value"], "(set, hidden)")
         self.assertNotIn("sk-secret-value", repr(fs))
-        self.assertEqual(fs["LLM_REASONING_EFFORT"]["choices"], ["medium", "xhigh", "low"])
+        self.assertEqual(fs["LLM_REASONING_EFFORT"]["choices"], ["low", "medium", "xhigh"])
         self.assertIn("gpu/bonsai2", fs["LLM_MODEL"]["choices"])
         self.assertIn("ternary-bonsai-2-27b-mlx", fs["LLM_MODEL"]["choices"])
         self.assertEqual(fs["LLM_REASONING_EFFORT"]["help"], "How hard I think.")
@@ -397,3 +404,187 @@ class LinkedWorktreeTest(unittest.TestCase):
         self.assertEqual(core._git_common_dir(main), main / ".git")
         admin = core._worktree_admin_dir(inst, branch)                 # it raised SystemExit before
         self.assertEqual(admin, core._worktree_admin_dir(inst, main))
+
+
+class ModelEffortsTest(OpConfigTest):
+    def test_sol_was_offered_only_medium_xhigh_low(self):
+        from supervisor import codexcli
+        levels = ("low", "medium", "high", "xhigh", "max", "ultra")
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": list(levels), "default": "low"}}) as listing:
+            (self.root / "shaft/config.py").write_text(f'CHOICES = {{"LLM_REASONING_EFFORT": {levels!r}}}')
+            self.assertEqual(opconfig.effort_choices(self.root, "codex/gpt-6.1-sol"), levels)
+            self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (levels, "low"))
+            listing.assert_called_once_with()
+            self.assertEqual(opconfig.effort_choices(self.root, "ternary-bonsai-2-27b-mlx"),
+                             ("low", "medium", "xhigh"))
+            self.assertEqual(opconfig.model_efforts("gpu/bonsai2"), (("low", "medium", "xhigh"), "xhigh"))
+            (self.root / "shaft/config.py").write_text(AGENT_CONFIG)
+            self.assertEqual(opconfig.effort_choices(self.root, "codex/gpt-6.1-sol"), ("low", "medium", "xhigh"))
+
+    def test_openrouter_no_levels_canonical_order_and_forbidden_levels(self):
+        import io
+        from supervisor import cloudllm, effortcatalog
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "high", "max", "none", "minimal")}')
+        payload = {"data": [{"id": "xiaomi/mimo-v2.6-pro"},
+                            {"id": "z-ai/glm", "reasoning": {"supported_efforts":
+                             ["max", "high", "low", "none", "minimal"], "default_effort": "high"}}]}
+        # Remove the fixture's synthetic listing: exercise the HTTP response parser.
+        with mock.patch.object(cloudllm, "_effort_listing", side_effect=lambda: real_listing()), \
+                mock.patch.object(cloudllm.urllib.request, "urlopen", return_value=io.StringIO(json.dumps(payload))) as get:
+            self.assertEqual(opconfig.effort_choices(self.root, "openrouter/xiaomi/mimo-v2.6-pro"), ())
+            self.assertEqual(opconfig.effort_choices(self.root, "openrouter/z-ai/glm"), ("low", "high", "max"))
+            self.assertEqual(opconfig.model_efforts("openrouter/z-ai/glm"), (("low", "high", "max"), "high"))
+            get.assert_called_once_with("https://openrouter.ai/api/v1/models", timeout=10)
+        self.assertEqual(effortcatalog.entry(["minimal", "none"], "none"), {"levels": [], "default": None})
+
+    def test_live_cache_fresh_stale_failure_and_missing_failure(self):
+        from datetime import datetime, timezone
+        from supervisor import codexcli, effortcatalog
+        path = core.SUP_DIR / "effort_catalog.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        catalog = {"codex": {"fetched_at": datetime.now(timezone.utc).isoformat(),
+                             "models": {"gpt-6.1-sol": {"levels": ["low", "max"], "default": "low"}}}}
+        path.write_text(json.dumps(catalog))
+        with mock.patch.object(codexcli, "_effort_listing", side_effect=OSError("offline")) as fetch, \
+                mock.patch.object(core, "log") as log:
+            self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            fetch.assert_not_called()
+            catalog["codex"]["fetched_at"] = "2000-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(catalog))
+            self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            self.assertEqual(json.loads(path.read_text()), catalog)
+            self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            fetch.assert_called_once_with()
+            log.assert_called_once()
+            path.unlink()
+            effortcatalog._failures.clear()
+            self.assertIsNone(opconfig.model_efforts("codex/gpt-6.1-sol"))
+
+    def test_fixed_provider_tables_and_unknown_models(self):
+        expected = {
+            "claude-haiku-5-5": (("low", "medium", "high", "xhigh", "max"), None),
+            "claudecode/claude-opus-5-5": (("low", "medium", "high", "xhigh", "max"), None),
+            "antigravity/gemini-4-argon": (("low", "medium", "high"), "medium"),
+            "grok/grok-4.7": (("low", "medium", "high", "xhigh"), None)}
+        for model, result in expected.items():
+            with self.subTest(model=model):
+                self.assertEqual(opconfig.model_efforts(model), result)
+        self.assertIsNone(opconfig.model_efforts("unknown/model"))
+        self.assertIsNone(opconfig.effort_choices(self.root, None))
+
+    def test_refresh_preserves_other_provider_catalog_and_missing_model_is_unknown(self):
+        from supervisor import codexcli
+        path = core.SUP_DIR / "effort_catalog.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        other = {"fetched_at": "2000-01-01T00:00:00+00:00", "models": {}}
+        path.write_text(json.dumps({"openrouter": other}))
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": ["low", "max"], "default": "low"}}) as fetch:
+            self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            self.assertIsNone(opconfig.model_efforts("codex/not-listed"))
+            fetch.assert_called_once_with()
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["openrouter"], other)
+        self.assertEqual(saved["codex"]["models"]["gpt-6.1-sol"], {"levels": ["low", "max"], "default": "low"})
+        self.assertNotEqual(saved["codex"]["fetched_at"], other["fetched_at"])
+
+    def test_set_validates_both_efforts_for_the_effective_model(self):
+        from supervisor import codexcli
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}')
+        (self.root / "config.env").write_text('LLM_MODEL="ternary-bonsai-2-27b-mlx"\n')
+        for key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"):
+            with self.assertRaisesRegex(opconfig.Refused, "shaft/config.py and ternary-bonsai"):
+                opconfig.set_values("wisp", {key: "high"})
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": ["low", "high", "max", "ultra"], "default": "low"}}):
+            opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "ultra", "VOICE_REASONING_EFFORT": "max",
+                                         "LLM_MODEL": "codex/gpt-6.1-sol"})
+        self.assertIn('LLM_REASONING_EFFORT="ultra"', self.text())
+        self.assertIn('VOICE_REASONING_EFFORT="max"', self.text())
+
+    def test_bakeoff_uses_each_arms_model_intersection(self):
+        from supervisor import bakeoff, codexcli
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}')
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max", "ultra"], "default": "low"}}):
+            self.assertEqual(bakeoff.parse_arm("codex/gpt-6.1-sol@max", opconfig.effort_choices(
+                self.root, "codex/gpt-6.1-sol"))["env"], {"LLM_REASONING_EFFORT": "max"})
+            with self.assertRaisesRegex(bakeoff.BakeoffError, "claude-haiku-5-5"):
+                bakeoff.parse_arm("claude-haiku-5-5@ultra", opconfig.effort_choices(
+                    self.root, "claude-haiku-5-5"))
+        # Exercise create's per-arm lookup before any replay or state preparation.
+        with mock.patch.object(opconfig, "effort_choices", side_effect=[("max",), ("low",)]) as choices:
+            with self.assertRaises(bakeoff.BakeoffError):
+                bakeoff.create("wisp", [" codex/gpt-6.1-sol @max", "claude-haiku-5-5@ultra"], [])
+            self.assertEqual([call.args[1] for call in choices.call_args_list],
+                             ["codex/gpt-6.1-sol", "claude-haiku-5-5"])
+
+    def test_codex_catalog_reuses_launch_and_initialize_without_weekly_rate_check(self):
+        from supervisor import codexcli
+        home = self.dir / "codex-home"
+        home.mkdir()
+        (home / "auth.json").write_text("{}")
+        channel = codexcli._CatalogChannel("effort-catalog", "effort-catalog", lambda message: None)
+        channel.deadline = time.monotonic() + 15
+        with mock.patch.object(codexcli, "HOME", home), \
+                mock.patch.object(codexcli, "_prune_logs"), \
+                mock.patch.object(codexcli, "_seatbelt", side_effect=lambda argv, *args: argv), \
+                mock.patch.object(codexcli.subprocess, "Popen") as launch, \
+                mock.patch.object(channel, "_start_workers"), \
+                mock.patch.object(channel, "_request", return_value={}) as request, \
+                mock.patch.object(channel, "_send") as send:
+            channel._start_server()
+            self.addCleanup(shutil.rmtree, channel._folder, True)
+            self.assertEqual(launch.call_args.args[0][0], codexcli.BIN)
+            self.assertEqual(launch.call_args.args[0][-1], "app-server")
+            self.assertEqual(launch.call_args.kwargs["env"]["CODEX_HOME"], str(home))
+            request.assert_called_once_with("initialize", {"clientInfo": {"name": "shaft", "version": "1"},
+                                                          "capabilities": {"experimentalApi": True}})
+            send.assert_called_once_with({"method": "initialized"})
+
+    def test_codex_listing_initializes_paginates_and_closes(self):
+        from supervisor import codexcli
+        responses = [{"data": [{"model": "gpt-6.1-sol", "supportedReasoningEfforts": [
+            {"reasoningEffort": level, "description": "effort"} for level in ("ultra", "low", "minimal")],
+            "defaultReasoningEffort": "low"}], "nextCursor": "page2"},
+            {"data": [{"model": "gpt-6-luna", "supportedReasoningEfforts": [
+                {"reasoningEffort": "medium", "description": "effort"}], "defaultReasoningEffort": "medium"}]}]
+        with mock.patch.object(codexcli._CatalogChannel, "_start_server") as start, \
+                mock.patch.object(codexcli._CatalogChannel, "_request", side_effect=responses) as request, \
+                mock.patch.object(codexcli._CatalogChannel, "close") as close:
+            self.assertEqual(codexcli._effort_listing(), {
+                "gpt-6.1-sol": {"levels": ["low", "ultra"], "default": "low"},
+                "gpt-6-luna": {"levels": ["medium"], "default": "medium"}})
+            start.assert_called_once_with()
+            self.assertEqual(request.call_args_list, [mock.call("model/list", {"includeHidden": True}),
+                mock.call("model/list", {"includeHidden": True, "cursor": "page2"})])
+            close.assert_called_once_with()
+        with mock.patch.object(codexcli._CatalogChannel, "_start_server", side_effect=OSError("offline")), \
+                mock.patch.object(codexcli._CatalogChannel, "close") as close:
+            with self.assertRaises(OSError):
+                codexcli._effort_listing()
+            close.assert_called_once_with()
+
+    def test_known_empty_intersection_is_exposed_and_refuses_explicit_effort(self):
+        with mock.patch.object(opconfig, "model_efforts", return_value=((), None)):
+            fields = {f["key"]: f for f in opconfig.fields("wisp")}
+            self.assertEqual(fields["LLM_REASONING_EFFORT"]["choices"], [])
+            self.assertEqual(fields["VOICE_REASONING_EFFORT"]["choices"], [""])
+            with self.assertRaises(opconfig.Refused):
+                opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": "low"})
+        self.assertIsNone(opconfig.model_efforts("unknown/model"))
+
+    def test_a_model_with_no_levels_says_so_instead_of_an_empty_list(self):
+        """Bug guarded: OpenRouter mimo reports no levels, and the refusal read "must be one of  (…)"."""
+        mimo = "openrouter/xiaomi/mimo-v2.6-pro"
+        (self.root / "config.env").write_text(CONFIG.replace("openrouter/openai/gpt-6.1-sol", mimo))
+        self.assertEqual(opconfig.effort_choices(self.root, mimo), ())
+        for key in ("LLM_REASONING_EFFORT", "VOICE_REASONING_EFFORT"):
+            with self.assertRaisesRegex(opconfig.Refused, f"{mimo} takes no reasoning effort .*: unset {key}"):
+                opconfig.set_values("wisp", {key: "medium"})
+        opconfig.set_values("wisp", {"LLM_REASONING_EFFORT": None})   # unsetting is what it offers
+        self.assertNotIn("LLM_REASONING_EFFORT=", self.text())

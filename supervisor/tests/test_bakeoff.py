@@ -30,7 +30,7 @@ class BakeoffTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         for p in (mock.patch.object(bakeoff, "DIR", self.tmp),
                   mock.patch.object(cloudllm, "CLOUD_MODELS", MODELS),
-                  mock.patch.object(opconfig, "effort_choices", return_value=("medium", "xhigh", "low")),
+                  mock.patch.object(opconfig, "effort_choices", autospec=True, return_value=("low", "medium", "xhigh")),
                   mock.patch.object(trial, "live_episodes", return_value=EPS),
                   mock.patch.object(trial, "_starts", return_value=[]),
                   mock.patch.object(trial, "state_of", side_effect=lambda p, n, ep, s: {

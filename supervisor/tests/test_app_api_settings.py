@@ -29,6 +29,9 @@ class SettingsTest(AppTest):
         for p in (mock.patch.object(opconfig, "TEMPLATE", self.tmpl),
                   mock.patch.object(opconfig, "_commit", return_value=False),
                   mock.patch.object(opconfig, "log"),
+                  mock.patch.object(cloudllm, "_effort_listing", return_value={   # /models, probed 2026-11-13
+                      "xiaomi/mimo-v2.6-pro": {"levels": [], "default": None},
+                      "openai/gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max"], "default": "medium"}}),
                   mock.patch.object(autonomy, "SUP_DIR", self.sup),
                   mock.patch.object(runner, "SUP_DIR", self.sup),
                   mock.patch.object(core, "instance_names", return_value=["wisp"]),
@@ -40,6 +43,23 @@ class SettingsTest(AppTest):
                   mock.patch.object(opconfig, "base_url_for", side_effect=lambda m: "broker" if m == "new-model" else None)):
             p.start()
             self.addCleanup(p.stop)
+
+    def test_effort_and_voice_choices_follow_the_selected_model(self):
+        from supervisor import codexcli
+        (self.root / "shaft/config.py").write_text(
+            'CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}')
+        with mock.patch.object(codexcli, "_effort_listing", return_value={
+                "gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max", "ultra"], "default": "low"}}):
+            cfg = {"LLM_MODEL": "codex/gpt-6.1-sol"}
+            sol = app_api._settings("wisp", cfg)
+            self.assertEqual(sol["effort"]["choices"], ["low", "medium", "high", "xhigh", "max", "ultra"])
+            self.assertEqual(sol["voice_effort"]["choices"], ["", "low", "medium", "high", "xhigh", "max", "ultra"])
+        bonsai = app_api._settings("wisp", {"LLM_MODEL": "ternary-bonsai-2-27b-mlx"})
+        self.assertEqual(bonsai["effort"]["choices"], ["low", "medium", "xhigh"])
+        with mock.patch.object(opconfig, "model_efforts", return_value=((), None)):
+            empty = app_api._settings("wisp", {"LLM_MODEL": "openrouter/xiaomi/mimo-v2.6-pro"})
+            self.assertEqual(empty["effort"]["choices"], [])
+            self.assertEqual(empty["voice_effort"]["choices"], [""])
 
     def run_command(self, args, timeout=actions.RUN_NOW_S, who="top"):
         # Exercise the existing command's validation and writer, without spawning the CLI or any service.
@@ -67,16 +87,16 @@ class SettingsTest(AppTest):
             "watch_mail": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_calendar": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_gchat": {"value": "off", "choices": ["off", "inbox", "wake"]},
-            "model": {"value": "openrouter/xiaomi/mimo-v2.6-pro", "choices": [
+            "model": {"value": "openrouter/openai/gpt-6.1-sol", "choices": [
                 {"model": "new-model", "label": "New model"},
-                {"model": "openrouter/xiaomi/mimo-v2.6-pro", "label": "openrouter/xiaomi/mimo-v2.6-pro"}]},
-            "effort": {"value": "medium", "choices": ["medium", "xhigh", "low"]},
+                {"model": "openrouter/openai/gpt-6.1-sol", "label": "openrouter/openai/gpt-6.1-sol"}]},
+            "effort": {"value": "medium", "choices": ["low", "medium", "xhigh"]},
             "wake_interval": {"value": 5, "floor": 1, "effective": 5},
             "cloud_cap": {"value": None, "spent_today": 0.25},
             "channel": {"value": "auto", "choices": ["auto", "web", "telegram"]},
             "operator_name": {"value": "the operator"},
             "voice_mode": {"value": "off", "choices": ["on", "off"]},             # not in its config.env: the defaults
-            "voice_effort": {"value": "", "choices": ["", "medium", "xhigh", "low"]}})
+            "voice_effort": {"value": "", "choices": ["", "low", "medium", "xhigh"]}})
         self.assertIs(type(got["wake_interval"]["floor"]), int)
         self.assertNotIn(self.fake.encode(), r.body)
         self.assertNotIn(b"base_url", r.body)
@@ -84,7 +104,7 @@ class SettingsTest(AppTest):
 
     def test_each_config_field_uses_writer_and_reports_when_it_applies(self):
         for field, value, expect, key, applies in (
-                ("model", "new-model", "openrouter/xiaomi/mimo-v2.6-pro", "LLM_MODEL", "next run"),
+                ("model", "new-model", "openrouter/openai/gpt-6.1-sol", "LLM_MODEL", "next run"),
                 ("effort", "low", "medium", "LLM_REASONING_EFFORT", "next run"),
                 ("operator_name", "Ada", "the operator", "OPERATOR_NAME", "next run"),
                 ("wake_interval", 0, 5, "WAKE_INTERVAL_MINUTES", "now"),
@@ -170,7 +190,7 @@ class SettingsTest(AppTest):
 
     def test_refused_values_keep_the_writers_message(self):
         for field, value, expect, message in (("effort", "impossible", "medium", "must be one of"),
-                                               ("model", "unknown", "openrouter/xiaomi/mimo-v2.6-pro", "not a model"),
+                                               ("model", "unknown", "openrouter/openai/gpt-6.1-sol", "not a model"),
                                                ("operator_name", "two\nlines", "the operator", "one line")):
             err = self.error(self.save(field, value, expect), 409, "refused")
             self.assertIn(message, err["message"])
@@ -217,7 +237,7 @@ class SettingsTest(AppTest):
         fields = {f["key"]: f for f in opconfig.fields("wisp")}
         self.assertEqual((fields["VOICE_MODE"]["choices"], fields["VOICE_MODE"]["default"], fields["VOICE_MODE"]["set"]),
                          (["on", "off"], "off", False))
-        self.assertEqual(fields["VOICE_REASONING_EFFORT"]["choices"], ["", "medium", "xhigh", "low"])
+        self.assertEqual(fields["VOICE_REASONING_EFFORT"]["choices"], ["", "low", "medium", "xhigh"])
         self.assertTrue(fields["VOICE_MODE"]["help"])
         from supervisor import web_config
         row = str(web_config.config_row("wisp", fields["VOICE_MODE"]))

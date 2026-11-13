@@ -822,7 +822,7 @@ def _settings(n: str, cfg: dict | None = None) -> dict:
     choices = [{"model": c["model"], "label": c["label"]} for c in opconfig.model_choices()]
     if model not in [c["model"] for c in choices]:
         choices.append({"model": model, "label": model})
-    efforts = opconfig.effort_choices(core.instance_root(n))
+    efforts = opconfig.effort_choices(core.instance_root(n), model)
     raw = cfg.get("WAKE_INTERVAL_MINUTES", "")
     try:
         minutes = int(raw) if raw else autonomy.WAKE_DEFAULT_MIN

@@ -1194,8 +1194,14 @@ plugin grants or global settings.
 | `voice_effort` | `{"value": str, "choices": [str] or null}`: `VOICE_REASONING_EFFORT`, the reasoning effort on spoken turns. `""` (also when not set) means its `effort`. Choices are `""` and the effort choices; null when those are |
 
 Model choices come from `opconfig.model_choices()`. A current model absent from that list is appended with its
-model name as its label. Effort choices come from the instance's own `shaft/config.py`, parsed as text without
-importing or executing it. Unavailable choices are null. Wake `effective` comes from `autonomy.wake_interval`,
+model name as its label. Effort choices are the intersection of the instance's own `shaft/config.py` CHOICES
+(parsed as text without importing or executing it) and the selected model's levels, ordered low, medium, high,
+xhigh, max, ultra. The supervisor reads Codex levels from app-server `model/list` and OpenRouter levels from
+`GET /api/v1/models`. These live listings are cached in `effort_catalog.json` under the supervisor state directory
+for `SHAFT_EFFORT_CATALOG_HOURS` (default 24 hours). A failed refresh retains cached data; without cached data the
+levels are unknown. Bonsai, Claude, Antigravity and Grok use provider tables probed on 2026-11-13. The supervisor
+never offers none or minimal. Unknown choices are null; a model that accepts no levels has an empty list.
+Wake `effective` comes from `autonomy.wake_interval`,
 including its floor and invalid-value fallback; zero means no scheduled wakes. `value` is the configured interval,
 or the scheduler default when missing or invalid.
 

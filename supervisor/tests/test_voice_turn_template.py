@@ -97,7 +97,9 @@ class VoiceConfigTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         (root / "shaft").mkdir()
         shutil.copy(Path(config.__file__), root / "shaft" / "config.py")
-        self.assertEqual(opconfig.effort_choices(root), tuple(config.CHOICES["LLM_REASONING_EFFORT"]))
+        self.assertEqual(opconfig.effort_choices(root, "claude-haiku-5-5"),
+                         tuple(e for e in ("low", "medium", "high", "xhigh", "max")
+                               if e in config.CHOICES["LLM_REASONING_EFFORT"]))
 
     def test_the_voice_note_never_tells_the_model_to_avoid_tools_or_documents(self):
         """Bug guarded: a "no tools" / "read-only" / "don't write" line in the note: gpt-6.1-sol obeys such lines

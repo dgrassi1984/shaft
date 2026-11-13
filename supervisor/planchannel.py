@@ -62,6 +62,10 @@ def serves(model: str | None) -> bool:
     return prefix(model) is not None and bool(model.partition("/")[2])
 
 
+def efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
+    return provider(model).efforts(model) if serves(model) else None
+
+
 def models() -> list[str]:
     return [m for prefix in PROVIDERS for m in provider(prefix).models()]
 
