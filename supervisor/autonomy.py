@@ -109,8 +109,9 @@ def _plist(name: str) -> dict:
     """What `service(name, "on")` writes: one builder for it and for service_current."""
     svc = SERVICES[name]
     label = svc["label"]
-    # A fresh install keeps its own tools (uv) in PROJECT/.runtime/bin: the services and the runs they start find them.
-    runtime_bin = PROJECT / ".runtime" / "bin"
+    # The Mac app's install keeps its own tools (uv) in core.RUNTIME/bin: the services and the runs they start find them.
+    from . import core
+    runtime_bin = core.RUNTIME / "bin"
     service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if not runtime_bin.is_dir()
                     else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
     return {

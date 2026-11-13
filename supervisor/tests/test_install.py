@@ -270,7 +270,8 @@ class ServicePathTest(Hermetic):
             (tmp / ".runtime" / "bin").mkdir(parents=True)
         agents = tmp / "agents"
         ok = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with mock.patch.object(autonomy, "PROJECT", tmp), mock.patch.object(autonomy, "AGENTS", agents), \
+        with mock.patch.object(autonomy, "PROJECT", tmp), mock.patch.object(core, "RUNTIME", tmp / ".runtime"), \
+                mock.patch.object(autonomy, "AGENTS", agents), \
                 mock.patch.object(autonomy, "SUP_DIR", tmp / ".supervisor"), mock.patch.object(autonomy, "log"), \
                 mock.patch.object(autonomy, "_launchctl", return_value=ok), \
                 contextlib.redirect_stdout(io.StringIO()):

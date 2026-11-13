@@ -110,7 +110,8 @@ until a release carries one, use the [terminal quickstart](#quickstart-cloud-onl
 3. **Install** runs and shows each step:
    - git, from Apple's Command Line Tools: macOS asks you to install them in its own dialog when they are missing;
    - the server, cloned into `~/SHAFT` at the newest release that has its template tag;
-   - `uv` (a pinned, checksum-verified download) and Python 3.12, both into `~/SHAFT/.runtime`;
+   - `uv` (a pinned, checksum-verified download) and Python 3.12, both into `~/SHAFT/.runtime` (instances read its
+     `bin/` and `python/`, never write them: [SECURITY.md](SECURITY.md));
    - `shaft install`: a git identity for that clone if you have none, the worktrees, and the API, web and scheduler
      services, installed for this Mac only (local mode: no Tailscale, nothing exposed);
    - the app paired with that server over `127.0.0.1` (`shaft web pair --local`), no link to paste.

@@ -29,6 +29,11 @@ NETWORK_ERRORS = (urllib.error.URLError, OSError, http.client.HTTPException)
 # launchd jobs must not depend on one.
 PYTHON = str(getattr(sys, "_base_executable", None) or sys.executable)
 INSTANCES = PROJECT / "instances"
+# The Mac app's install keeps its own tools here: uv in bin/, the Python 3.12 that runs SHAFT in python/ (uv's
+# UV_PYTHON_INSTALL_DIR), uv's cache in cache/. A Homebrew install has no such folder. Instances read bin/ and python/
+# (sandbox._runtime_reads): their agent, plugins and tests run on that Python, and `run` uses that uv.
+RUNTIME = PROJECT / ".runtime"
+RUNTIME_READABLE = ("bin", "python")
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()

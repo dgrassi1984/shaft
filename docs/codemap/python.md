@@ -126,6 +126,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_app_api_settings.py` | `SettingsTest` | — |
 | `supervisor/tests/test_app_api_setup.py` | `SetupTest`, `CreateTest`, `DrivesTest`, `SecretTest`, `TelegramTest`, `ProviderTest`, `AutonomyTest`, `AccessTest`, `HelloTest`, `BearerTest`, `LocalOnlyTest`, `UnpairedMeanwhileTest`, `SetupFixturesTest` | — |
 | `supervisor/tests/test_app_version.py` | `AppVersionTest` | — |
+| `supervisor/tests/test_app_wording.py` | `AppWordingTest` | `offenders` |
 | `supervisor/tests/test_attachments.py` | `BrokerAttachmentsTest`, `TelegramAttachmentsTest`, `SameSecondTest` | — |
 | `supervisor/tests/test_autonomy.py` | `SleepDueTest`, `WakeTest`, `GateWarmTest` | — |
 | `supervisor/tests/test_autonomy_gaps_supervisor.py` | `A2Test`, `A4Test`, `A5Test`, `ReplayLedgerTest`, `ConfidenceBackfillTest`, `OldTemplateCompatibilityTest`, `A8Test` | `judgment` |

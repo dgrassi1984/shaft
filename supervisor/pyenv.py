@@ -36,11 +36,19 @@ def python(env_root: Path) -> str:
 
 
 def uv_binary() -> str:
-    found = shutil.which("uv")
-    if not found:
-        raise RuntimeError(f"uv is not installed on the supervisor's PATH ({os.environ.get('PATH', '')}): "
-                           "`brew install uv`, then restart the SHAFT services")
-    return found
+    """The Mac app's own uv (core.RUNTIME/bin, the pinned one it installed) when there is one, else uv on PATH (a
+    Homebrew install). Missing: why, with the fix for the kind of install this is."""
+    from . import core
+    runtime = core.RUNTIME / "bin" / "uv"
+    if runtime.is_file() and os.access(runtime, os.X_OK):
+        return str(runtime)
+    if (found := shutil.which("uv")):
+        return found
+    if core.RUNTIME.is_dir():       # installed by the Mac app: it has no terminal to point at
+        raise RuntimeError(f"uv is missing from SHAFT's runtime ({runtime}): open the SHAFT app on this Mac and run "
+                           "Install again (it puts uv back)")
+    raise RuntimeError(f"uv is not installed on the supervisor's PATH ({os.environ.get('PATH', '')}): "
+                       "`brew install uv`, then restart the SHAFT services")
 
 
 def uv_env(root: Path) -> dict[str, str]:
