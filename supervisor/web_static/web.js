@@ -797,7 +797,7 @@
   }
   function savePasted(form) {
     if (!form.dataset.draft) return;
-    const files = [...form.querySelector("input[type=file]").files].filter(f => !form._inflight?.has(f));
+    const files = [...(form.querySelector("input[type=file]") || { files: [] }).files].filter(f => !form._inflight?.has(f));
     const records = pastedRecords(files);
     try {
       if (records.length) localStorage.setItem(pastedKey(form), JSON.stringify(records));
@@ -806,6 +806,8 @@
   }
   function restorePasted(form, records) {
     if (!Array.isArray(records)) return;
+    const input = form.querySelector("input[type=file]");
+    if (!input) return;
     const all = new DataTransfer();
     for (const record of records) {
       if (typeof record.name === "string" && typeof record.text === "string") {
@@ -813,7 +815,7 @@
       }
     }
     form._attachments = all;
-    form.querySelector("input[type=file]").files = all.files;
+    input.files = all.files;
     savePasted(form);
     picked(form);
   }
