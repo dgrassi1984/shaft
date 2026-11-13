@@ -55,14 +55,14 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
       n.setAttribute=(k,v)=>{(n.attrs||={})[k]=v;};
       const classes=new Set();n.classList.toggle=k=>{if(classes.has(k)){classes.delete(k);return false;}classes.add(k);return true;};
       Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
-  const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
+  const context={document,URL,URLSearchParams,Event,AbortController,File:require("node:buffer").File,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wisp/chat'},
     window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
     setTimeout(fn){timers.push(fn);},clearTimeout(){},setInterval(){},
     DataTransfer:class {constructor(){this.files=[];this.items={add:f=>this.files.push(f)};}},
-    FormData:class {constructor(){this.text=box.value;this.mid=mid.value;this.queue=queue.value;this.files=[...files.files];}},
+    FormData:class {set(k,v){this[k]=v;}constructor(){this.text=box.value;this.mid=mid.value;this.queue=queue.value;this.files=[...files.files];}},
     DOMParser:class {parseFromString(t){return {body:{textContent:t}};}},
     fetch(u,o){payload=o.body;return new Promise((a,b)=>{resolve=a;reject=b;});}};
   vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
@@ -76,6 +76,8 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
     resize:height=>{viewport.height=height;viewportHandlers.resize();},
     load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
     pick:async(...fs)=>{files.files=fs;await emit('change',files);},
+    async pasteText(text,fs=[]) {let prevented=false;await emit('paste',box,{clipboardData:{files:fs,getData:()=>text},
+      preventDefault(){prevented=true;}});return prevented;},
     paste:(...fs)=>emit('paste',box,{clipboardData:{files:fs}}),
     drop:(...fs)=>emit('drop',box,{dataTransfer:{types:['Files'],files:fs}}),
     remove:k=>emit('click',{closest:q=>q==='[data-unpick]'?{dataset:{unpick:String(k)},closest:()=>form}:null}),
@@ -97,6 +99,94 @@ const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'tex
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_long_paste_attaches_a_text_file_and_short_paste_stays_inline(self):
+        self.run_composer(r"""
+const p=page();const text='é'.repeat(2001);
+assert.equal(await p.pasteText(text),true);assert.equal(p.box.value,'');
+assert.equal(p.files.files.length,1);assert.equal(await p.files.files[0].text(),text);
+assert.equal(p.files.files[0].type,'text/plain');
+assert.match(p.files.files[0].name,/^pasted-text-\d{8}-\d{6}[.]txt$/);
+assert.match(p.chips.children[0].children[0].textContent,/pasted-text-/);
+for(const short of ['a'.repeat(2000),'line\n'.repeat(20),'line\r\n'.repeat(20),' '.repeat(5000),'👩‍💻'.repeat(2000)]) {
+ const q=page();assert.equal(await q.pasteText(short),false);assert.equal(q.files.files.length,0);
+}
+const q=page();assert.equal(await q.pasteText(Array(21).fill('line').join('\n')),true);
+const r=page();await r.pasteText(text,[A]);assert.deepEqual(r.files.files,[A]);
+""")
+
+    def test_pasted_text_draft_survives_reload_and_removal_updates_storage(self):
+        self.run_composer(r"""
+const text='saved'.repeat(500);const p=page();await p.pasteText(text);
+const records=JSON.parse(storage.get('shaft.pasted.wisp'));
+assert.deepEqual(records,[{name:p.files.files[0].name,text}]);
+const q=page();await q.load();assert.equal(q.box.value,'');
+assert.equal(await q.files.files[0].text(),text);assert.equal(q.files.files[0].name,records[0].name);
+await q.remove(0);assert.equal(storage.get('shaft.pasted.wisp'),undefined);
+const r=page();await r.load();assert.equal(r.files.files.length,0);
+""")
+
+    def test_pending_pasted_text_restores_and_only_real_files_need_reattaching(self):
+        self.run_composer(r"""
+const text='pending'.repeat(400);const p=page();await p.pasteText(text);await p.pick(A);
+const sending=p.send();await Promise.resolve();const id=p.payload().mid;p.fail();await sending;
+const attempt=JSON.parse(storage.get('shaft.pending.wisp'));
+assert.deepEqual(attempt.files,['a.txt']);assert.equal(attempt.pasted[0].text,text);
+// The pending attempt also holds the bytes if the separate draft copy is absent.
+storage.delete('shaft.pasted.wisp');
+const q=page();await q.load();assert.equal(q.mid.value,id);assert.equal(await q.files.files[0].text(),text);
+assert.match(q.toast(),/attach a[.]txt again/);assert.equal(q.toast().includes('pasted-text-'),false);
+const retry=q.send();await Promise.resolve();assert.equal(await q.payload().files[0].text(),text);
+q.answer();await retry;assert.equal(storage.get('shaft.pasted.wisp'),undefined);
+assert.equal(storage.get('shaft.pending.wisp'),undefined);
+const r=page();await r.load();assert.equal(r.files.files.length,0);
+""")
+
+    def test_delivered_pasted_text_is_not_restored_and_later_pastes_survive_send(self):
+        self.run_composer(r"""
+const p=page();await p.pasteText('first'.repeat(500));let sending=p.send();await Promise.resolve();
+const id=p.payload().mid;p.fail();await sending;
+const q=page([id]);await q.load();assert.equal(q.files.files.length,0);
+assert.equal(storage.get('shaft.pasted.wisp'),undefined);
+storage.clear();const r=page();await r.pasteText('first'.repeat(500));sending=r.send();await Promise.resolve();
+await r.pasteText('later'.repeat(500));r.answer();await sending;
+const t=page();await t.load();assert.equal(t.files.files.length,1);assert.equal(await t.files.files[0].text(),'later'.repeat(500));
+""")
+
+    def test_unicode_white_space_pastes_stay_inline_but_zero_width_spaces_attach(self):
+        self.run_composer(r"""
+const p=page();assert.equal(await p.pasteText('\u0085'.repeat(5000)),false);
+assert.equal(p.files.files.length,0);
+const text='\u200b'.repeat(2001);assert.equal(await p.pasteText(text),true);
+assert.equal(await p.files.files[0].text(),text);
+""")
+
+    def test_inflight_paste_is_not_restored_after_text_or_attachment_edits(self):
+        self.run_composer(r"""
+for (const edit of ['text','file']) {
+ storage.clear();const p=page();const text='sending'.repeat(400);await p.pasteText(text);
+ const sending=p.send();await Promise.resolve();
+ assert.equal(JSON.parse(storage.get('shaft.pending.wisp')).pasted[0].text,text);
+ if(edit==='text')await p.type('next');else await p.pasteText('next'.repeat(600));
+ assert.equal(storage.get('shaft.pending.wisp'),undefined);
+ const saved=JSON.parse(storage.get('shaft.pasted.wisp')||'[]');
+ assert.deepEqual(saved.map(f=>f.text),edit==='text'?[]:['next'.repeat(600)]);
+ const q=page();await q.load();assert.equal(q.files.files.length,edit==='text'?0:1);
+ if(edit==='file')assert.equal(await q.files.files[0].text(),'next'.repeat(600));
+ p.answer();await sending;
+}
+""")
+
+    def test_failed_inflight_paste_returns_to_the_persisted_draft(self):
+        self.run_composer(r"""
+const p=page();const text='retry'.repeat(500);await p.pasteText(text);
+const sending=p.send();await Promise.resolve();
+assert.equal(storage.get('shaft.pasted.wisp'),undefined);
+await p.type('edited');p.fail();await sending;
+assert.equal(await p.files.files[0].text(),text);
+assert.deepEqual(JSON.parse(storage.get('shaft.pasted.wisp')).map(f=>f.text),[text]);
+const q=page();await q.load();assert.equal(await q.files.files[0].text(),text);
+""")
 
     def test_issue_21_quotes_save_grow_and_reset_identity(self):
         """Reverting #21 loses the restored quote or keeps the old retry identity. iPhone review I17:

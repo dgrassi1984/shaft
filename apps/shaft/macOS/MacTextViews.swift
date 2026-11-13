@@ -1,4 +1,5 @@
 import AppKit
+import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -8,7 +9,8 @@ import UniformTypeIdentifiers
 /// The composer's main field (web-and-api.md, "The web UI"): Return sends, Shift- or Option-Return is a new line,
 /// Cmd-Return queues after the reply (sent now when idle). An input method's Return confirms what it composes, as
 /// typed. It grows with its text up to `maxHeight`, then scrolls; one line sits centred in the capsule. Pictures and files pasted or dropped on it go to
-/// `onPaste` (attachments); text pastes as text.
+/// `onPaste` (attachments). Long text pastes become text files; short text stays inline.
+/// Paste and Match Style always inserts text inline. Text drops stay inline.
 struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
@@ -179,7 +181,7 @@ final class ComposerNSTextView: NSTextView {
     // MARK: Files in: paste and drop
 
     /// What the pasteboard holds as attachments: files (a copy in Finder), or a picture with no text (a screenshot
-    /// copied). Text, even with a picture beside it (a copy from a web page), pastes as text.
+    /// copied). Text stays inline on drop; `pasteAttachments(on:)` also turns long text into a file on paste.
     static func attachments(on board: NSPasteboard) -> [NSItemProvider] {
         if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
@@ -192,45 +194,42 @@ final class ComposerNSTextView: NSTextView {
         guard board.string(forType: .string) == nil else { return [] }
         for (type, uti) in [(NSPasteboard.PasteboardType.png, UTType.png), (.tiff, .tiff)] {
             if let data = board.data(forType: type) {
-                return [picture(data, type: uti)]
+                return [ItemImport.fileProvider(data: data, type: uti, name: "pasted")]
             }
         }
         return []
     }
 
-    /// A pasted picture as a file representation, which `ItemImport` reads (and converts to PNG/JPEG for the web).
-    private static func picture(_ data: Data, type: UTType) -> NSItemProvider {
-        let provider = NSItemProvider()
-        provider.suggestedName = "pasted"
-        provider.registerFileRepresentation(for: type, visibility: .all, openInPlace: false) { done in
-            let url = FileManager.default.temporaryDirectory
-                .appending(path: "SHAFT-paste-\(UUID().uuidString).\(type.preferredFilenameExtension ?? "png")")
-            do {
-                try data.write(to: url)
-                done(url, false, nil)
-            } catch {
-                done(nil, false, error)
-            }
-            return nil
+    /// Files and pictures win over text; only a paste turns long text into an attachment.
+    static func pasteAttachments(on board: NSPasteboard) -> [NSItemProvider] {
+        let files = attachments(on: board)
+        if !files.isEmpty { return files }
+        if let text = board.string(forType: .string), PastedText.belongsInFile(text) {
+            return [ItemImport.textFile(text)]
         }
-        return provider
+        return []
     }
 
     override func paste(_ sender: Any?) {
         if !pasteFiles(from: .general) { super.paste(sender) }
     }
 
-    /// Attach what `board` holds as files; false when it holds text (or nothing) to paste.
+    /// Attach files, pictures or long text; false for short text or an empty board.
     @discardableResult
     func pasteFiles(from board: NSPasteboard) -> Bool {
-        let files = Self.attachments(on: board)
+        let files = Self.pasteAttachments(on: board)
         guard !files.isEmpty else { return false }
         coordinator?.paste(files)
         return true
     }
 
+    /// Menu validation checks long text without copying its UTF-8 bytes or building a provider.
+    static func hasPasteAttachments(on board: NSPasteboard) -> Bool {
+        !attachments(on: board).isEmpty || board.string(forType: .string).map(PastedText.belongsInFile) == true
+    }
+
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
-        if item.action == #selector(paste(_:)), !Self.attachments(on: .general).isEmpty { return true }
+        if item.action == #selector(paste(_:)), Self.hasPasteAttachments(on: .general) { return true }
         return super.validateUserInterfaceItem(item)
     }
 

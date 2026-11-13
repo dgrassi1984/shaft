@@ -189,6 +189,9 @@ targets:
     platform: macOS
     sources:
       - path: macOSTests
+      - path: macOS/MacTextViews.swift
+      - path: Shared/Platform/TextViews.swift
+      - path: Shared/Attachments/ItemImport.swift
       - path: Shared/Design/Design.swift
       - path: Shared/Design/Appearance.swift
       - path: Shared/Markdown/RenderedText.swift

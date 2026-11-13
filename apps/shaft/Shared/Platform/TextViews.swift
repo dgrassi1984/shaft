@@ -1,3 +1,4 @@
+import SHAFTKit
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -17,8 +18,8 @@ enum ComposerKey {
 
 /// The composer's main field. The keyboard rules of the PWA: on the on-screen keyboard Return is a new line and the
 /// Send arrow sends; on a hardware keyboard Return sends (after its autocorrection), Shift- or Option-Return is a new
-/// line and Cmd-Return queues. It grows with its text up to `maxHeight`, then scrolls; a pasted picture or file goes to
-/// `onPaste`.
+/// line and Cmd-Return queues. It grows with its text up to `maxHeight`, then scrolls; a pasted picture, file or long text goes to
+/// `onPaste`. Short text pastes stay inline.
 struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
@@ -188,7 +189,7 @@ final class ComposerUITextView: UITextView {
         insertText("\n")
     }
 
-    // Pictures and files pasted become attachments; text pastes as text.
+    // Pictures, files and long text pastes become attachments; short text stays inline.
     private var pasteHasFiles: Bool {
         let board = UIPasteboard.general
         return board.hasImages || (!board.hasStrings && !board.hasURLs && board.numberOfItems > 0)
@@ -202,6 +203,8 @@ final class ComposerUITextView: UITextView {
     override func paste(_ sender: Any?) {
         if pasteHasFiles {
             coordinator?.paste(UIPasteboard.general.itemProviders)
+        } else if let text = UIPasteboard.general.string, PastedText.belongsInFile(text) {
+            coordinator?.paste([ItemImport.textFile(text)])
         } else {
             super.paste(sender)
         }

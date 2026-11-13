@@ -548,12 +548,16 @@
     if (form.dataset.draft && mid) {
       try {
         localStorage.setItem(draftKey(form), typed);
-        // files: their names — a reload cannot keep the files themselves, so it says to attach them again
+        // Keep pasted text bytes; other files need to be attached again after a reload.
         localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed, cid: destination,
                                                                 ...(replyIdentity ? {in_reply_to: replyIdentity.value} : {}),
-                                                                files: sentFiles.map(f => f.name) }));
+                                                                files: sentFiles.filter(f => !pastedTexts.has(f)).map(f => f.name),
+                                                                pasted: pastedRecords(sentFiles) }));
       } catch (e) { /* no storage: retry still works in this page */ }
     }
+    // In-flight pasted text belongs to the pending attempt, not to the next draft.
+    form._inflight = new Set(sentFiles);
+    savePasted(form);
     const shown = form.dataset.draft ? pending(form, sentMid) : null;
     // The field empties as the "sending…" bubble appears: for a second the text was in both (iPad review P8). Its draft
     // and the attempt stay saved; a send that fails puts the text back (unsent()).
@@ -648,6 +652,8 @@
       if (shown) { shown.remove(); unsent(); }
       toast(lostAnswer(form, e, waitMs), true);
     } finally {
+      delete form._inflight;
+      savePasted(form);
       clearTimeout(limit);
       buttons.forEach(b => { b.disabled = false; });
       delete form.dataset.busy;
@@ -742,6 +748,7 @@
     form._attachments = all;
     input.files = all.files;
     composerChanged(form);
+    savePasted(form);
     picked(form);
   }
 
@@ -762,10 +769,64 @@
     const form = ev.target.closest("form[data-files]");
     if (form && ev.target.type === "file") addFiles(form, [...ev.target.files]);
   });
+  // Twin of SHAFTKit/PastedText.swift. A trailing newline does not add a line.
+  const PASTE_MAX_CHARS = 2000, PASTE_MAX_LINES = 20;
+  const pastedTexts = new WeakMap();
+  const pasteCharacters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  function pastedTextBelongsInFile(text) {
+    if (/^\p{White_Space}*$/u.test(text)) return false;
+    const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+    if (lines > PASTE_MAX_LINES) return true;
+    let characters = 0;
+    for (const _ of pasteCharacters.segment(text)) {
+      if (++characters > PASTE_MAX_CHARS) return true;
+    }
+    return false;
+  }
+  function pastedFile(text, name) {
+    const file = new File([text], name, { type: "text/plain" });
+    pastedTexts.set(file, text);
+    return file;
+  }
+  function pastedName(date) {
+    const two = n => String(n).padStart(2, "0");
+    return `pasted-text-${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}.txt`;
+  }
+  function pastedRecords(files) {
+    return [...files].filter(f => pastedTexts.has(f)).map(f => ({ name: f.name, text: pastedTexts.get(f) }));
+  }
+  function savePasted(form) {
+    if (!form.dataset.draft) return;
+    const files = [...form.querySelector("input[type=file]").files].filter(f => !form._inflight?.has(f));
+    const records = pastedRecords(files);
+    try {
+      if (records.length) localStorage.setItem(pastedKey(form), JSON.stringify(records));
+      else localStorage.removeItem(pastedKey(form));
+    } catch (e) { /* no storage: attachments still work in this page */ }
+  }
+  function restorePasted(form, records) {
+    if (!Array.isArray(records)) return;
+    const all = new DataTransfer();
+    for (const record of records) {
+      if (typeof record.name === "string" && typeof record.text === "string") {
+        all.items.add(pastedFile(record.text, record.name));
+      }
+    }
+    form._attachments = all;
+    form.querySelector("input[type=file]").files = all.files;
+    savePasted(form);
+    picked(form);
+  }
   document.addEventListener("paste", (ev) => {
     const form = ev.target.closest && ev.target.closest("form[data-files]");
+    if (!form) return;
     const files = [...(ev.clipboardData && ev.clipboardData.files || [])];
-    if (form && files.length) { ev.preventDefault(); addFiles(form, files); }
+    if (files.length) { ev.preventDefault(); addFiles(form, files); return; }
+    const text = ev.clipboardData?.getData("text/plain") || "";
+    if (pastedTextBelongsInFile(text)) {
+      ev.preventDefault();
+      addFiles(form, [pastedFile(text, pastedName(new Date()))]);
+    }
   });
 
   // Drop anywhere on a page with a composer: a file dropped beside it must attach, never open in the tab instead.
@@ -804,6 +865,7 @@
     box.style.height = `${Math.min(box.scrollHeight + 2, box.className === "quoteanswer" ? 128 : Infinity, Math.round((window.visualViewport?.height || window.innerHeight) * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
+  const pastedKey = (form) => `shaft.pasted.${form.dataset.draft}`;
   const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
   function composerChanged(form) {
     delete form._pendingCid;
@@ -901,7 +963,7 @@
     const old = key.slice(0, -5), marker = `shaft.main-migrated.${old}`;
     try {
       if (localStorage.getItem(marker)) return;
-      const kinds = ["draft", "quote", "pending"];
+      const kinds = ["draft", "quote", "pending", "pasted"];
       const legacy = kinds.map(kind => localStorage.getItem(`shaft.${kind}.${old}`));
       const occupied = kinds.some(kind => localStorage.getItem(`shaft.${kind}.${key}`) !== null);
       const pending = legacy[2] === null ? null : JSON.parse(legacy[2]);
@@ -930,9 +992,13 @@
     try {
       if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
       const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
+      restorePasted(form, JSON.parse(localStorage.getItem(pastedKey(form)) || "null")
+                          ?? (attempt?.text === box.value ? attempt.pasted : []));
       if (attempt && attempt.text === box.value && typeof attempt.mid === "string") {
         if (delivered(form, attempt.mid)) {
           box.value = "";
+          restorePasted(form, []);
+          localStorage.removeItem(pastedKey(form));
           localStorage.removeItem(draftKey(form));
           localStorage.removeItem(pendingKey(form));
         } else {
@@ -944,7 +1010,7 @@
             form.append(field);
           }
           const files = Array.isArray(attempt.files) ? attempt.files.filter(f => typeof f === "string") : [];
-          // Files cannot outlive a reload: sent again as it stands, it would go without them, unsaid
+          // Ordinary files cannot outlive a reload; pasted text was restored above.
           if (files.length) toast(`Not sent yet, and its files could not be kept: attach ${files.join(", ")} again`, true);
         }
       }
@@ -971,8 +1037,10 @@
     form.querySelector("input[name=in_reply_to]")?.remove();
     try {
       localStorage.removeItem(draftKey(form));
+      localStorage.removeItem(pastedKey(form));
       localStorage.removeItem(pendingKey(form));
     } catch (e) { /* none */ }
+    savePasted(form);
     grow(form.querySelector("textarea[name=text]"));
   }
 

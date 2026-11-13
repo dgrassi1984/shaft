@@ -8,6 +8,28 @@ import UniformTypeIdentifiers
 /// so nothing depends on a loan from the system once it is attached. A HEIC photo goes as JPEG: the server shows
 /// `.jpg .png .gif .webp` as pictures (§4.4).
 enum ItemImport {
+    static func textFile(_ text: String, at date: Date = .now) -> NSItemProvider {
+        fileProvider(data: Data(text.utf8), type: .plainText, name: PastedText.fileName(at: date))
+    }
+
+    /// Give pasted bytes a file representation for the existing attachment importer.
+    static func fileProvider(data: Data, type: UTType, name: String) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = name
+        provider.registerFileRepresentation(for: type, visibility: .all, openInPlace: false) { done in
+            let url = FileManager.default.temporaryDirectory
+                .appending(path: "SHAFT-paste-\(UUID().uuidString).\(type.preferredFilenameExtension ?? "bin")")
+            do {
+                try data.write(to: url)
+                done(url, false, nil)
+            } catch {
+                done(nil, false, error)
+            }
+            return nil
+        }
+        return provider
+    }
+
     /// Attach what item providers hold (a paste, a drop): files by their file representation, pictures as data.
     @MainActor
     static func attach(_ providers: [NSItemProvider], to chat: ChatStore) async -> Int {
