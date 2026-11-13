@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-from supervisor import judge, judge_probe, metrics, trial
+from supervisor import judge, judge_probe, metrics, modelcall, trial
 from supervisor.tests import test_measurement as measurement
 from supervisor.tests.test_judge2 import _reply
 
@@ -76,7 +76,7 @@ class AnticipatedTest(unittest.TestCase):
         for value in (True, False, None, "true", 1, [], {}):
             with self.subTest(value=value):
                 verdict = {**measurement.JudgingTest.VERDICT, "anticipated": value}
-                with mock.patch.object(judge, "secrets_env", return_value={"OPENROUTER_API_KEY": "k"}), \
+                with mock.patch.object(modelcall, "secrets_env", return_value={"OPENROUTER_API_KEY": "k"}), \
                      mock.patch.object(judge, "_log"), \
                      mock.patch("supervisor.cloudllm._send", return_value=_reply(json.dumps(verdict))) as send:
                     out = judge.ask_second(metrics.JUDGE_SYSTEM, "case", metrics.JUDGE_SCHEMA, "test")

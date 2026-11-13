@@ -33,7 +33,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env
+from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env, set_secret_env
+from .core import say as core_say
 
 API_BASE, _ = knob(   # tests point it at a fake
     "SHAFT_TELEGRAM_API", "https://api.telegram.org", str, "the Telegram Bot API endpoint", group="Ports and paths",
@@ -304,8 +305,9 @@ def _digest(code: str) -> str:
 def new_pairing_code() -> str:
     st = load()
     if st.get("paired"):
-        raise TelegramError(f"already paired with {st['paired'].get('username') or st['paired']['user_id']}; "
-                            "`shaft telegram unpair` first")
+        who = st['paired'].get('username') or st['paired']['user_id']
+        raise TelegramError(core_say(f"already paired with {who}; `shaft telegram unpair` first",
+                                     f"Telegram is already paired with {who}: every SHAFT bot answers that account."))
     code = secrets.token_hex(4).upper()
     update(lambda s: s.update(pairing={"digest": _digest(code),
                                        "until": (datetime.now() + timedelta(minutes=PAIR_MINUTES)).isoformat()}))
@@ -955,9 +957,14 @@ def serve() -> int:
 
 
 # -- operator commands -------------------------------------------------------------------------------------------
-def command(action: str, name: str | None = None) -> int:
+def command(action: str, name: str | None = None, as_json: bool = False, force: bool = False) -> int:
     from . import autonomy
-    from .api import _set_secret
+    if force and action not in ("on", "restart"):
+        print(f"--force goes with on or restart, not {action}", file=sys.stderr)
+        return 2
+    if as_json and action != "pair":
+        print(f"shaft telegram {action} has no --json", file=sys.stderr)
+        return 2
     if action == "serve":
         return serve()
     if action == "token":
@@ -972,17 +979,21 @@ def command(action: str, name: str | None = None) -> int:
         except TelegramError as e:
             print(f"not saved: Telegram refused the token ({e})")
             return 1
-        _set_secret(token_key(name), tok)
+        set_secret_env(token_key(name), tok)
         remember_bot(name, me.get("username", ""))
         log(f"telegram: bot @{me.get('username')} set for {name}")
-        print(f"{name} now talks through @{me.get('username')} — restart the service: shaft telegram on")
+        print(core_say(f"{name} now talks through @{me.get('username')} — restart the service: shaft telegram on",
+                       f"{name} now talks through @{me.get('username')}"))
         return 0
     if action == "pair":
         try:
             code = new_pairing_code()
         except TelegramError as e:
-            print(e)
+            print(json.dumps({"ok": False, "error": str(e)}) if as_json else e)
             return 1
+        if as_json:           # the Mac app's setup: it shows the code and waits for the pairing (docs/app-api.md §18.5)
+            print(json.dumps({"ok": True, "code": code, "minutes": PAIR_MINUTES}))
+            return 0
         bots = ", ".join(sorted(tokens())) or "(no bots yet: shaft telegram token <instance>)"
         print(f"Send this to any of the bots ({bots}) from your Telegram account, within {PAIR_MINUTES} minutes:\n\n"
               f"    /pair {code}\n\nOnly that account will be able to talk to them.")
@@ -992,11 +1003,19 @@ def command(action: str, name: str | None = None) -> int:
         log("telegram: unpaired by the operator")
         print("unpaired: the bots answer nobody until `shaft telegram pair`")
         return 0
-    if action == "on":
+    if action in ("on", "restart"):
         if not tokens():
-            print("no bot tokens yet: shaft telegram token <instance>")
+            print(core_say("no bot tokens yet: shaft telegram token <instance>",
+                           "No Telegram bot is saved yet: save a bot's token first."))
             return 2
-        return autonomy.service("telegram", "on")
+        if action == "restart" and not autonomy.installed("telegram"):
+            print(core_say("the telegram service is not installed: run shaft telegram on first",
+                           "Telegram's service is not installed on this Mac, so there is nothing to restart."))
+            return 1
+        # A running service restarts, which cuts a Telegram reply still being written: as `api on` and `web on`, under
+        # the restart barrier, refused while an instance is replying unless forced (api.service_on).
+        from .api import service_on
+        return service_on("telegram", force)
     if action == "off":
         return autonomy.service("telegram", "off")
     autonomy.service("telegram", "status")

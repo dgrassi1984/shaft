@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from supervisor import battery, cloudllm, judge, metrics, panel, selfhosted, trial
+from supervisor import battery, cloudllm, judge, metrics, modelcall, panel, selfhosted, trial
 
 
 class JudgeReviewTest(unittest.TestCase):
@@ -23,7 +23,7 @@ class JudgeReviewTest(unittest.TestCase):
             rooms.append(json.loads(req.data)["max_tokens"])
             return reply, None
 
-        with mock.patch.object(judge, "secrets_env", return_value={"OPENROUTER_API_KEY": "test"}), \
+        with mock.patch.object(modelcall, "secrets_env", return_value={"OPENROUTER_API_KEY": "test"}), \
                 mock.patch.object(cloudllm, "_send", side_effect=send), mock.patch.object(judge, "_log"), \
                 mock.patch.object(trial, "judge_case", return_value="case"):
             with self.assertRaises(judge.JudgeError):
@@ -38,9 +38,9 @@ class JudgeReviewTest(unittest.TestCase):
             rooms.append(json.loads(req.data)["max_tokens"])
             return io.BytesIO(json.dumps(reply).encode())
 
-        with mock.patch.object(judge, "secrets_env", return_value={"ANTHROPIC_API_KEY": "test"}), \
-                mock.patch.object(judge.urllib.request, "urlopen", side_effect=send), \
-                mock.patch.object(judge.time, "sleep"), mock.patch.object(judge, "_log"):
+        with mock.patch.object(modelcall, "secrets_env", return_value={"ANTHROPIC_API_KEY": "test"}), \
+                mock.patch.object(modelcall.urllib.request, "urlopen", side_effect=send), \
+                mock.patch.object(modelcall.time, "sleep"), mock.patch.object(judge, "_log"):
             with self.assertRaises(judge.JudgeError):
                 judge.ask("system", "case", {}, "row19", model="claude-sonnet-5-5")
         self.assertEqual(rooms, [16000, 32000])
@@ -52,9 +52,13 @@ class JudgeReviewTest(unittest.TestCase):
             self.assertEqual(judge.rotation(), "rotation:openrouter/other/model")
             # Only when no other judge may grade (the run gets no second judgment then): graded, never stuck.
             self.assertEqual(judge.pick(exclude=["openrouter/other/model"]), "anthropic/claude-sonnet-5.5")
-        with mock.patch.object(judge, "JUDGE_MODELS", ["openrouter/other/model"]):
+        with mock.patch.object(judge, "JUDGE_MODELS", ["openrouter/other/model"]):   # one model, the instance's:
+            self.assertEqual(judge.pick(exclude=["openrouter/other/model"]), "openrouter/other/model")   # graded,
+            self.assertEqual(judge.independence("openrouter/other/model", ["other/model"]),            # and marked
+                             {"independence": "same-model"})
+        with mock.patch.object(judge, "JUDGE_MODELS", ["openrouter/other/model", "openrouter/second/model"]):
             with self.assertRaises(judge.NoJudgeLeft):
-                judge.pick(exclude=["openrouter/other/model"])
+                judge.pick(exclude=["openrouter/other/model", "openrouter/second/model"])
 
     def test_row20_default_pool_leaves_out_the_default_second_judge(self):
         from supervisor.core import KNOBS

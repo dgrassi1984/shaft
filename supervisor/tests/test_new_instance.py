@@ -1,0 +1,354 @@
+"""`shaft new`: it refuses before creating anything when git has no identity, reports one JSON line with --json, and can
+leave the instance paused until the operator's first reply. Git is isolated from this Mac's own config."""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from supervisor import __main__ as cli
+from supervisor import actions, core, mind
+
+IDENTITY = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
+def git(cwd, *a):
+    return subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, text=True, check=True).stdout
+
+
+class NewInstanceCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-new-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.project, self.sup = self.tmp / "p", self.tmp / "p" / ".supervisor"
+        (self.tmp / "gitconfig").write_text("[user]\n\tuseConfigOnly = true\n")   # no identity is guessed from the host
+        (self.tmp / "tpl").mkdir()
+        env = {"GIT_CONFIG_GLOBAL": str(self.tmp / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_TEMPLATE_DIR": str(self.tmp / "tpl"), **IDENTITY}
+        patch = mock.patch.dict(os.environ, env)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.project.mkdir()
+        git(self.project, "init", "-q", "-b", "main")
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
+        tpl = self.project / "template"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "template", str(tpl))
+        (tpl / "shaft").mkdir()
+        (tpl / "shaft" / "agent.py").write_text("v = 1\n")
+        (tpl / ".gitignore").write_text("self/\nmemory/\nnotes/\n")
+        git(tpl, "add", "-A")
+        git(tpl, "commit", "-q", "-m", "template: first")
+        for target, value in ((core, "PROJECT"), (core, "INSTANCES"), (core, "SUP_DIR"), (cli, "PROJECT"),
+                              (cli, "INSTANCES"), (cli, "SUP_DIR")):
+            p = mock.patch.object(target, value, {"PROJECT": self.project, "INSTANCES": self.project / "instances",
+                                                  "SUP_DIR": self.sup}[value])
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_new(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["new", *args])
+        return code, out.getvalue(), err.getvalue()
+
+
+class NewInstanceTest(NewInstanceCase):
+    def drop_identity(self):
+        p = mock.patch.dict(os.environ, {}, clear=False)
+        p.start()
+        self.addCleanup(p.stop)
+        for k in IDENTITY:
+            os.environ.pop(k, None)
+
+    def test_new_without_a_git_identity_refuses_before_touching_anything(self):
+        # Bug: the branch commit failed after the worktree existed, leaving a half-made instance.
+        self.drop_identity()
+        code, out, err = self.run_new("ada")
+        self.assertEqual(code, 2)
+        self.assertIn("shaft install", err)
+        self.assertIn("user.email", err)
+        self.assertFalse((self.project / "instances").exists())
+        self.assertEqual(git(self.project, "branch", "--list", "instance/ada").strip(), "")
+        self.assertEqual(git(self.project, "worktree", "list").count("\n"), 2)   # main and template only
+        self.assertFalse(mind.exists("ada"))
+        code, out, err = self.run_new("ada", "--json")
+        self.assertEqual(code, 2)
+        self.assertEqual(out.count("\n"), 1)
+        self.assertFalse(json.loads(out)["ok"])
+        # --json is the Mac app's wizard: its own terms, no git config or shaft command (final review I6)
+        self.assertEqual(json.loads(out)["error"], "SHAFT has no name to sign the instance's first commit with: go back "
+                                                   "to Install and run it again (it sets one), then Try again.")
+
+    def test_new_with_a_repo_local_identity_succeeds(self):
+        self.drop_identity()
+        git(self.project, "config", "user.name", "x")
+        git(self.project, "config", "user.email", "x@x")
+        self.assertEqual(self.run_new("ada")[0], 0)
+
+    def test_new_json_reports_name_branch_worktree(self):
+        code, out, err = self.run_new("ada", "--json")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.count("\n"), 1)
+        self.assertEqual(json.loads(out), {"ok": True, "name": "ada", "branch": "instance/ada",
+                                           "worktree": str(self.project / "instances" / "ada"), "paused": False})
+        self.assertTrue((self.project / "instances" / "ada" / "self" / "self.md").exists())
+        code, out, _ = self.run_new("ada", "--json")          # a refusal keeps the exit code and says why
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(out)["ok"], False)
+        self.assertIn("already exists", json.loads(out)["error"])
+
+    def test_new_without_json_keeps_the_human_line(self):
+        code, out, _ = self.run_new("ada")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "created ada (branch instance/ada, worktree instances/ada)\n")
+
+    def test_new_paused_creates_the_pause_flag_with_a_reason(self):
+        for then in ("resume", "stay"):
+            name = f"ada-{then}"
+            code, out, _ = self.run_new(name, "--json", "--paused-until-first-reply", then)
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(out)["paused"])
+            self.assertTrue(core.paused(name))
+            marker = self.sup / f"first-reply-{name}"
+            data = json.loads(marker.read_text())
+            self.assertEqual(data["then"], then)
+            self.assertTrue(data["created"])
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            self.assertIn("waiting for the operator's first reply",
+                          (self.project / "instances" / name / "memory" / "journal.md").read_text())
+
+    def test_new_paused_is_in_force_before_the_worktree_exists(self):
+        # Bug class: pausing after creation let a scheduler tick wake the new instance first (it finds one by `shaft/`).
+        seen = []
+        real = cli.git
+
+        def spy(*a, **k):
+            if a[:2] == ("worktree", "add"):
+                seen.append((core.paused("ada"), (self.sup / "first-reply-ada").exists()))
+            return real(*a, **k)
+        with mock.patch.object(cli, "git", spy):
+            self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 0)
+        self.assertEqual(seen, [(True, True)])
+
+    def test_failed_creation_leaves_no_pause_flag_or_marker(self):
+        git(self.project, "branch", "-m", "template", "gone")        # no template branch: the worktree add fails
+        code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "resume")
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(out)["ok"])
+        self.assertIn("template", json.loads(out)["error"])
+        self.assertFalse(core.paused("ada"))
+        self.assertEqual([p.name for p in self.sup.iterdir()], [])
+
+    def test_failure_after_the_worktree_keeps_the_instance_paused(self):
+        with mock.patch.object(cli.mind, "init", side_effect=OSError("mind store unwritable")):
+            code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        error = json.loads(out)["error"]
+        # --json is the Mac app's setup: what to do there, never a terminal command (final review I6)
+        self.assertEqual(error, "ada was only partly created (mind store unwritable). Choose another name: ada stays "
+                                "paused and never runs.")
+        self.assertTrue(core.paused("ada"))
+        self.assertTrue((self.sup / "first-reply-ada").exists())
+        self.assertTrue((self.project / "instances" / "ada").exists())
+        shutil.rmtree(self.project / "instances" / "ada")
+        git(self.project, "worktree", "prune")
+        git(self.project, "branch", "-D", "instance/ada")
+        with mock.patch.object(cli.mind, "init", side_effect=OSError("mind store unwritable")):
+            code, out, err = self.run_new("ada", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        self.assertIn("half-created and paused (mind store unwritable); remove it with `shaft delete ada`", err)
+
+    def test_a_mind_store_failure_is_a_half_created_answer_not_a_traceback(self):
+        """Final review M1: mind.init/mind.commit raise MindError (a RuntimeError), which `new` did not catch: the
+        verb crashed after the worktree existed and the app's JSON contract broke."""
+        with mock.patch.object(cli.mind, "commit", side_effect=cli.mind.MindError("git commit on the store: locked")):
+            code, out, err = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual((code, out.count("\n")), (1, 1), err)
+        self.assertIn("ada was only partly created (git commit on the store: locked)", json.loads(out)["error"])
+        self.assertTrue(core.paused("ada"))
+
+    def test_git_failing_after_it_made_the_worktree_keeps_the_instance_paused(self):
+        real = cli.git
+
+        def fake(*a, **k):
+            if a[:2] == ("worktree", "add"):
+                real(*a, **k)       # the worktree exists, then a hook-like failure
+                raise subprocess.CalledProcessError(1, ["git"], stderr="post-checkout hook failed")
+            return real(*a, **k)
+        with mock.patch.object(cli, "git", fake):
+            code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        self.assertIn("Choose another name", json.loads(out)["error"])
+        self.assertNotIn("shaft ", json.loads(out)["error"])
+        self.assertIn("post-checkout hook failed", json.loads(out)["error"])
+        self.assertTrue(core.paused("ada"))
+        self.assertTrue((self.sup / "first-reply-ada").exists())
+
+    def test_a_failed_cleanup_stays_inside_the_json_contract(self):
+        git(self.project, "branch", "-m", "template", "gone")
+        with mock.patch.object(Path, "unlink", side_effect=PermissionError("denied")):
+            code, out, err = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(out.count("\n"), 1)
+        error = json.loads(out)["error"]
+        self.assertIn("could not remove", error)
+        self.assertIn("denied", error)
+        self.assertIn("template", error)
+
+    def test_failed_creation_keeps_a_flag_it_did_not_make(self):
+        self.sup.mkdir()
+        (self.sup / "paused-ada").write_text("2026-01-01T00:00:00")
+        git(self.project, "branch", "-m", "template", "gone")
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 1)
+        self.assertTrue((self.sup / "paused-ada").exists())
+
+    def test_missing_template_with_json_is_a_json_failure_not_a_traceback(self):
+        git(self.project, "branch", "-m", "template", "gone")
+        code, out, err = self.run_new("ada", "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn("template", json.loads(out)["error"])
+
+    def test_unknown_parent_with_json_is_a_usage_refusal(self):
+        code, out, err = self.run_new("ada", "--from", "nobody", "--json")
+        self.assertEqual((code, err), (2, ""))
+        self.assertIn("no instance named 'nobody'", json.loads(out)["error"])
+
+    def test_the_marker_temp_is_private_even_beside_a_loose_file(self):
+        self.sup.mkdir()
+        (self.sup / "first-reply-ada.tmp").write_text("x")
+        (self.sup / "first-reply-ada.tmp").chmod(0o666)
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "stay")[0], 0)
+        self.assertEqual((self.sup / "first-reply-ada").stat().st_mode & 0o777, 0o600)
+
+    def test_new_without_the_flag_is_not_paused(self):
+        self.run_new("ada")
+        self.assertFalse(core.paused("ada"))
+        self.assertFalse((self.sup / "first-reply-ada").exists())
+
+    def test_new_paused_rejects_an_unknown_choice(self):
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(io.StringIO()):
+            self.run_new("ada", "--paused-until-first-reply", "maybe")
+        self.assertEqual(e.exception.code, 2)
+
+    def test_new_reports_a_failed_marker_write_and_cleans_up(self):
+        with mock.patch.object(cli, "_write_first_reply", side_effect=OSError("disk full")):
+            code, out, _ = self.run_new("ada", "--json", "--paused-until-first-reply", "stay")
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", json.loads(out)["error"])
+        self.assertFalse(core.paused("ada"))      # and nothing half-made was left
+
+
+class FirstReplyTest(NewInstanceCase):
+    """`shaft first-reply NAME resume|stay`: the wizard's "How it works alone" choice after the instance exists."""
+
+    def first_reply(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["first-reply", *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_it_rewrites_the_marker_keeping_when_it_was_made(self):
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        marker = self.sup / "first-reply-ada"
+        made = json.loads(marker.read_text())["created"]
+        code, out, err = self.first_reply("ada", "stay", "--json")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), {"ok": True, "name": "ada", "then": "stay"})
+        self.assertEqual(json.loads(marker.read_text()), {"then": "stay", "created": made})
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(core.paused("ada"))                            # still waiting: only the choice changed
+        self.assertEqual(sorted(p.name for p in self.sup.iterdir() if "first-reply" in p.name), ["first-reply-ada"])
+        self.assertEqual(self.first_reply("ada", "resume", "--json")[0], 0)
+        self.assertEqual(json.loads(marker.read_text())["then"], "resume")
+
+    def test_the_first_reply_then_does_what_was_chosen(self):
+        from supervisor import web_chat
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        self.assertEqual(self.first_reply("ada", "stay")[0], 0)
+        with mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(actions, "run_now") as run_now:
+            web_chat._first_reply("ada")
+        run_now.assert_not_called()                                    # "stay": no shaft resume
+        self.assertFalse((self.sup / "first-reply-ada").exists())
+
+    def test_refused_once_the_first_reply_has_happened(self):
+        # Bug class: rewriting a consumed marker would resume the instance at some later reply, after the fact.
+        self.assertEqual(self.run_new("ada")[0], 0)                    # not created waiting for a first reply
+        code, out, err = self.first_reply("ada", "resume", "--json")
+        self.assertEqual((code, err), (1, ""))
+        self.assertFalse(json.loads(out)["ok"])
+        self.assertIn("not waiting for its first reply", json.loads(out)["error"])
+        self.assertFalse((self.sup / "first-reply-ada").exists(), "no marker is made after the fact")
+
+    def test_a_rewrite_waits_for_a_consumer_holding_the_lock(self):
+        # Bug class: the verb rewrote the marker while a first reply was acting on the old one, which then removed the
+        # new choice (or the reply found no marker in the gap and was missed).
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        marker = self.sup / "first-reply-ada"
+        result = {}
+
+        def rewrite():
+            out = io.StringIO()
+            with mock.patch.object(cli, "print", create=True, side_effect=lambda *a, **k: out.write(" ".join(a))):
+                result["code"] = cli.cmd_first_reply("ada", "stay", True)
+            result["out"] = out.getvalue()
+        with core.first_reply_lock("ada"):                            # a first reply is acting on "resume"
+            worker = threading.Thread(target=rewrite)
+            worker.start()
+            worker.join(0.3)
+            self.assertTrue(worker.is_alive(), "the rewrite did not wait for the lock")
+            self.assertEqual(json.loads(marker.read_text())["then"], "resume")
+            marker.unlink()                                           # the reply consumed it
+        worker.join(5)
+        self.assertEqual(result["code"], 1)
+        self.assertIn("not waiting for its first reply", json.loads(result["out"])["error"])
+        self.assertFalse(marker.exists(), "no marker is left after the first reply")
+
+    def test_a_reply_waiting_on_the_lock_applies_the_choice_rewritten_meanwhile(self):
+        from supervisor import web_chat
+        for made, now, resumes in (("resume", "stay", 0), ("stay", "resume", 1)):
+            with self.subTest(made=made):
+                shutil.rmtree(self.sup, ignore_errors=True)
+                self.sup.mkdir()
+                cli._write_first_reply("ada", made)
+                with mock.patch.object(web_chat, "SUP_DIR", self.sup), \
+                        mock.patch.object(actions, "run_now", return_value=(True, "resumed")) as run_now:
+                    with core.first_reply_lock("ada"):                # `shaft first-reply` holds it
+                        reply = threading.Thread(target=web_chat._first_reply, args=("ada",))
+                        reply.start()
+                        reply.join(0.3)
+                        self.assertTrue(reply.is_alive(), "the reply did not wait for the lock")
+                        cli._write_first_reply("ada", now)            # the rewrite, under the lock
+                    reply.join(5)
+                self.assertEqual(run_now.call_count, resumes)
+                self.assertFalse((self.sup / "first-reply-ada").exists())
+
+    def test_a_failed_write_puts_the_old_marker_back(self):
+        self.assertEqual(self.run_new("ada", "--paused-until-first-reply", "resume")[0], 0)
+        with mock.patch.object(cli, "_write_first_reply", side_effect=OSError("disk full")):
+            code, out, _ = self.first_reply("ada", "stay", "--json")
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", json.loads(out)["error"])
+        self.assertEqual(json.loads((self.sup / "first-reply-ada").read_text())["then"], "resume")
+
+    def test_a_name_that_is_not_an_instance_name_is_a_usage_refusal(self):
+        for name in ("operator", "../x", "Ada"):
+            with self.subTest(name=name):
+                code, out, _ = self.first_reply(name, "stay", "--json")
+                self.assertEqual(code, 2)
+                self.assertFalse(json.loads(out)["ok"])
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(io.StringIO()):
+            self.first_reply("ada", "maybe")
+        self.assertEqual(e.exception.code, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

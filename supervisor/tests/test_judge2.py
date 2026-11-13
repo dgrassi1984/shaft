@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, judge, metrics
+from supervisor import broker, cloudllm, core, judge, metrics, modelcall
 
 VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quality": "checkable",
            "failure_mode": "exit code not shown", "reasoning": "Step 5 piped the test through tail.",
@@ -79,7 +79,7 @@ class SecondJudgeTest(unittest.TestCase):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-j2-"))
         self.addCleanup(shutil.rmtree, self.sup, True)
         for p in (mock.patch.object(judge, "SUP_DIR", self.sup),
-                  mock.patch.object(judge, "secrets_env", lambda: {"OPENROUTER_API_KEY": "k"})):
+                  mock.patch.object(modelcall, "secrets_env", lambda: {"OPENROUTER_API_KEY": "k"})):
             p.start()
             self.addCleanup(p.stop)
         self.sent = []
@@ -155,6 +155,28 @@ class SecondJudgeTest(unittest.TestCase):
         self.ask(_reply(json.dumps(VERDICT)[:40], finish="length"), _reply(json.dumps(VERDICT)))
         self.assertNotIn("assistant", [m["role"] for m in self.sent[1]["messages"]])
         self.assertEqual(len(self.sent[1]["messages"]), 2)                # the same question, more room
+
+    def test_judge2_may_be_codex_or_custom(self):
+        """An operator with only a ChatGPT plan or only a custom endpoint still gets the cross-check."""
+        parse = core.KNOBS["SHAFT_JUDGE2_MODEL"].parse
+        with mock.patch.object(cloudllm, "CUSTOM_PRICES", {"m": (1.0, 2.0)}):
+            self.assertEqual(parse("custom/m"), "custom/m")
+            with self.assertRaisesRegex(ValueError, "SHAFT_CUSTOM_PRICES"):
+                parse("custom/unpriced")
+        self.assertEqual(parse("codex/gpt-6-astra"), "codex/gpt-6-astra")
+        for model in ("codex/gpt-6-astra", "custom/m"):
+            answer = modelcall.Answer(json.dumps(VERDICT), {}, 0.0, model)
+            with mock.patch.object(judge, "JUDGE2_MODEL", model), \
+                    mock.patch.object(modelcall, "ask", return_value=answer) as ask:
+                self.assertEqual(judge.ask_second("sys", "case", metrics.JUDGE_SCHEMA, "second example"), VERDICT)
+            self.assertEqual(ask.call_args.args[0], model)
+            self.assertEqual(ask.call_args.kwargs["max_tokens"], judge.JUDGE2_MAX_TOKENS)
+        with mock.patch.object(judge, "JUDGE2_MODEL", "codex/gpt-6-astra"), mock.patch.object(judge, "JUDGE2_EVERY", 4):
+            with mock.patch.object(modelcall, "available", return_value="Codex login missing: run shaft codex login"):
+                self.assertFalse(judge.second_available())
+            with mock.patch.object(modelcall, "available", return_value=None) as available:
+                self.assertTrue(judge.second_available())
+            available.assert_called_with("codex/gpt-6-astra")
 
     def test_the_ceiling_leaves_room_for_the_measured_reasoning(self):
         self.assertGreater(judge.JUDGE2_MAX_TOKENS, 22928)                # the most reasoning measured, 2026-10-15

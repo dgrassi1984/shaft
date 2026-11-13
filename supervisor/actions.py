@@ -180,16 +180,58 @@ def log_name(who: str) -> str:
     return f"{who}-actions.log"
 
 
-def run_now(args: list[str], timeout: float = RUN_NOW_S, who: str = "top") -> tuple[bool, str]:
-    """A quick subcommand: (it succeeded, its last line of output — or why it failed)."""
+APP_WORDING = "SHAFT_APP_WORDING"     # set for a verb an app's route runs: its messages in the app's words (core.say)
+
+
+def _run(args: list[str], timeout: float, who: str, input: str | None):
+    """The subcommand run once, logged by its args alone: `input` (a secret, for the setup routes) goes to its stdin and
+    is never logged, never in argv. None leaves stdin as it always was. TimeoutExpired is the caller's. A verb run for
+    an app (`who` "app <device>", app_api) says what to do in the app, never a terminal command: the app shows its
+    words as they are."""
     log(f"{who}: operator ran {say(args)}")
+    extra = {} if input is None else {"input": input}
+    if who.startswith("app "):
+        extra["env"] = {**os.environ, APP_WORDING: "1"}
+    return subprocess.run(_cli(args), cwd=PROJECT, capture_output=True, text=True, timeout=timeout, **extra)
+
+
+def run_now(args: list[str], timeout: float = RUN_NOW_S, who: str = "top",
+            input: str | None = None) -> tuple[bool, str]:
+    """A quick subcommand: (it succeeded, its last line of output — or why it failed). `input`: its stdin (_run)."""
     try:
-        r = subprocess.run(_cli(args), cwd=PROJECT, capture_output=True, text=True, timeout=timeout)
+        r = _run(args, timeout, who, input)
     except subprocess.TimeoutExpired:
         return False, f"{say(args)}: still running after {timeout:.0f}s"
     out = [l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
     last = out[-1].strip() if out else ("done" if r.returncode == 0 else f"exit {r.returncode}")
     return r.returncode == 0, last
+
+
+def run_json(args: list[str], timeout: float = RUN_NOW_S, who: str = "top",
+             input: str | None = None) -> tuple[int, list[dict]]:
+    """A subcommand that answers in JSON (--json: one object per stdout line): (its exit code, every line parsed).
+    A line that is not a JSON object, a timeout, or no output at all is a failure: one {"ok": false, "error"} row
+    with what was printed (stderr's last line when stdout said nothing), and a nonzero code. `input`: its stdin."""
+    try:
+        r = _run(args, timeout, who, input)
+    except subprocess.TimeoutExpired:
+        return -1, [{"ok": False, "error": f"{say(args)}: still running after {timeout:.0f}s"}]
+    rows = []
+    for line in (l.strip() for l in r.stdout.splitlines()):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if not isinstance(row, dict):
+            return r.returncode or 1, [{"ok": False, "error": f"{say(args)} printed what is not JSON: {line}"}]
+        rows.append(row)
+    if not rows:
+        err = [l.strip() for l in r.stderr.splitlines() if l.strip()]
+        return r.returncode or 1, [{"ok": False, "error": err[-1] if err else f"{say(args)}: exit {r.returncode}, "
+                                                                              "no answer"}]
+    return r.returncode, rows
 
 
 def run_detached(args: list[str], who: str = "top") -> str:
@@ -252,11 +294,13 @@ GUARDED_CLI = ("api", "model", "embed", "autonomy")   # the shaft verbs whose on
 
 
 def cli_guard(cmd: str, action: str, force: bool) -> str:
-    """The same guard for `shaft <cmd> on|off` typed in a terminal, which both panels also run: empty to go ahead,
-    else why it is refused. Only a running service can hurt a run; a forced one is logged, like the panels'."""
+    """The same guard for `shaft <cmd> on|off` (and `shaft api restart`) typed in a terminal, which both panels also run:
+    empty to go ahead, else why it is refused. Only a running service can hurt a run; a forced one is logged, like the
+    panels'."""
     from .autonomy import running
     service = "scheduler" if cmd == "autonomy" else cmd
-    if action not in ("on", "off") or not running(service):
+    guarded = ("on", "off", "restart") if cmd == "api" else ("on", "off")   # `autonomy restart` drains: never guarded
+    if action not in guarded or not running(service):
         return ""
     why = service_guard(cmd, "off" if action == "off" else "restart")
     if why and force:

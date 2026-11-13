@@ -4,7 +4,7 @@
     "body": {
       "error": {
         "code": "unpaired",
-        "message": "This device is not paired: pair it again with a link from shaft web pair --name <device>."
+        "message": "This device is not paired: pair it again with a new link from SHAFT on your Mac (Settings, Services, Use SHAFT from iPhone/iPad)."
       }
     }
   },
@@ -31,7 +31,7 @@
     "body": {
       "error": {
         "code": "pair_expired",
-        "message": "This pairing link is used, unknown or older than 10 minutes: make a new one with shaft web pair."
+        "message": "This pairing link is used, unknown or older than 10 minutes: make a new one in SHAFT on your Mac (Settings, Services, Use SHAFT from iPhone/iPad)."
       }
     }
   },

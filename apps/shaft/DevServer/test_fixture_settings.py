@@ -96,8 +96,20 @@ class FixtureSettingsTest(unittest.TestCase):
                 self.assertTrue(scheduler["running"])
                 self.assertNotEqual(scheduler["pid"], os.getpid())
                 self.assertEqual(scheduler["drain"]["state"], "drained")
+                # §19: the version gate's route, and an older server for driving the app's "needs a newer server".
+                from supervisor import app_api
+                self.assertEqual(api("/app/v1/version"), {"server": "fixture", "api": app_api.API_VERSION})
+                fixture.act(base, web, chat, messages, push, "version", ["0", "v0.40.0"])
+                self.assertEqual(api("/app/v1/version"), {"server": "v0.40.0", "api": 0})
+                fixture.act(base, web, chat, messages, push, "version", ["missing"])
+                self.assertEqual(api("/app/v1/version", expected=404)["error"]["code"], "not_found")
+                self.assertEqual(request("/app/v1/version")[0], 401)   # still the device check first
+                fixture.act(base, web, chat, messages, push, "version", [])
+                self.assertEqual(api("/app/v1/version")["api"], app_api.API_VERSION)
                 with self.assertRaises(ValueError):
                     actions.run_now(["unknown-fixture-verb"])
+                with self.assertRaises(ValueError):        # a JSON verb with no fake never reaches the real runner
+                    actions.run_json(["unknown-fixture-verb"])
                 with self.assertRaises(AssertionError):
                     autonomy._launchctl("print", "anything")
             finally:

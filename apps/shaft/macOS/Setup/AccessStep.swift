@@ -1,0 +1,283 @@
+import AppKit
+import SHAFTKit
+import SwiftUI
+
+/// The wizard's Access step: what the new instance may reach beyond its own folder, every row optional. "Your Mac" (a
+/// folder you choose, the real browser) and "Elsewhere" (web search through a ScrapeBadger key, a Telegram bot); the
+/// rows the chosen drive suggests come ticked, tagged "suggested". Telegram is whole: the bot's token, the service on,
+/// and your account paired with the code shown here. Continue applies the ticked rows in order and stops
+/// at the first failure with its real words and Try again (SetupSteps.applyAccess); "Skip all", in the footer, goes on
+/// granting nothing. "Google" ticks what may be read there (mail labels, calendars, Drive, Chat) and "Set up Google…"
+/// opens the guided setup that grants them (GoogleSetupSheet); a ticked Google row still off stops Continue, saying so.
+struct AccessStepView: View {
+    let setup: MacSetup
+    let session: SHAFTSession
+    @Bindable var steps: SetupSteps
+    @State private var settingUpGoogle = false
+
+    static let botFather = URL(string: "https://t.me/BotFather")!
+    static let scrapeBadger = URL(string: "https://scrapebadger.com")!
+
+    var body: some View {
+        let name = setup.state.createdInstance ?? "your instance"
+        VStack(alignment: .leading, spacing: Design.Space.s16) {
+            Text("Access").font(.largeTitle.bold()).foregroundStyle(Color.textPrimary)
+            Text("What \(name) may reach beyond its own folder. Everything here is optional: the rows your drive "
+                 + "suggests are ticked, and you can grant more, or take it back, at any time.")
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Label("Anything \(name) reads can leave your Mac.", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(Color.warning)
+                .fixedSize(horizontal: false, vertical: true)
+            if steps.loadingAccess.running {
+                ProgressView().controlSize(.small)
+            }
+            if let failure = steps.loadingAccess.failure {
+                SetupFailure(message: failure, retry: prepare)
+            }
+
+            group("Your Mac") {
+                row(.folder, detail: "\(name) reads it, never writes it: it sees it as shared/.") { folder }
+                row(.browser, detail: "Chromium, shared by every instance, used from inside its run tool. The first "
+                    + "install downloads it: a few minutes.") { browser }
+            }
+            google
+            group("Elsewhere") {
+                row(.web, detail: "Search the web through ScrapeBadger. The key is SHAFT's, for every instance: "
+                    + "\(name) never sees it.") { webSearch }
+                row(.telegram, detail: "Talk with \(name) from Telegram, through a bot of its own: you create the bot, "
+                    + "SHAFT turns it on and pairs your account.") { telegram }
+            }
+        }
+        .onAppear(perform: prepare)
+        .sheet(isPresented: $settingUpGoogle) {
+            GoogleSetupSheet(setup: setup, session: session, steps: steps) { settingUpGoogle = false }
+        }
+    }
+
+    private func prepare() { steps.prepareAccess(store: session.store, setup: setup) }
+    private func apply() { steps.applyAccess(store: session.store, setup: setup) }
+
+    private func group<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.s12) {
+            Text(title).font(.headline).foregroundStyle(Color.textPrimary)
+            content()
+        }
+        .padding(Design.Space.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .elevatedBlock()
+    }
+
+    /// One row: its tick (or "On" once granted), the "suggested" tag, a line about it, its own field, and while it is
+    /// applied its progress, or the failure that stopped Continue there.
+    private func row<Extra: View>(_ row: AccessRow, detail: String, @ViewBuilder extra: () -> Extra) -> some View {
+        let on = steps.isOn(row)
+        let ticked = steps.accessChecked.contains(row)
+        return VStack(alignment: .leading, spacing: Design.Space.s4) {
+            HStack(spacing: Design.Space.s8) {
+                if on {
+                    Label(row.title, systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(Color.textPrimary)
+                    Text("On").font(.caption).foregroundStyle(Color.brand)
+                } else {
+                    Toggle(row.title, isOn: checked(row))
+                        .toggleStyle(.checkbox)
+                        .foregroundStyle(Color.textPrimary)
+                        .disabled(steps.granting.running)
+                }
+                if steps.accessSuggested.contains(row) {
+                    Text("suggested")
+                        .font(.caption)
+                        .foregroundStyle(Color.brand)
+                        .padding(.horizontal, Design.Space.s8)
+                        .overlay(Capsule().strokeBorder(Color.brand, lineWidth: 1))
+                }
+            }
+            Text(detail).font(.callout).foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if ticked, !on {
+                extra()
+                    .disabled(steps.granting.running)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 480, alignment: .leading)
+            }
+            if steps.grantingRow == row {
+                applying(row)
+            }
+            if steps.failedRow == row, let failure = steps.granting.failure {
+                SetupFailure(message: failure, retry: apply)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func checked(_ row: AccessRow) -> Binding<Bool> {
+        Binding(get: { steps.accessChecked.contains(row) },
+                set: { tick in
+                    if tick { steps.accessChecked.insert(row) } else { steps.accessChecked.remove(row) }
+                })
+    }
+
+    @ViewBuilder
+    private func applying(_ row: AccessRow) -> some View {
+        if row == .telegram, let code = steps.telegramCode {
+            pairing(code)
+        } else {
+            working(row)
+        }
+    }
+
+    @ViewBuilder
+    private func working(_ row: AccessRow) -> some View {
+        HStack(spacing: Design.Space.s8) {
+            ProgressView().controlSize(.small)
+            Text(row == .browser ? "Installing the browser and turning it on: this can take a few minutes…"
+                 : row == .telegram ? (steps.telegramStarting ? "Starting the Telegram service…" : "Saving the bot…")
+                 : "Granting…")
+                .foregroundStyle(Color.textSecondary)
+            if row == .browser || row == .telegram {
+                Button("Cancel") { steps.cancelAccess() }
+            }
+        }
+        if row == .browser {
+            Text("Cancel stops the wait here; an install the server has started finishes there.")
+                .font(.caption).foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: Rows' own fields
+
+    private var folder: some View {
+        HStack(spacing: Design.Space.s12) {
+            Button(steps.accessFolder.isEmpty ? "Choose a folder…" : "Choose another…", action: chooseFolder)
+            if !steps.accessFolder.isEmpty {
+                Text(steps.accessFolder)
+                    .font(Design.Text.code)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "Share"
+        panel.message = "The folder \(setup.state.createdInstance ?? "your instance") may read"
+        if panel.runModal() == .OK, let url = panel.url {
+            steps.choose(folder: url)
+        }
+    }
+
+    @ViewBuilder
+    private var browser: some View {
+        if let installed = steps.access?.browser.installed {
+            Text("Chromium \(installed) is installed; Continue turns on the run tool of "
+                 + "\(setup.state.createdInstance ?? "your instance").")
+                .font(.caption).foregroundStyle(Color.textSecondary)
+        }
+    }
+
+    private var webSearch: some View {
+        VStack(alignment: .leading, spacing: Design.Space.s4) {
+            SecureField("ScrapeBadger key", text: $steps.webKey)
+            Link("Get a key at scrapebadger.com", destination: Self.scrapeBadger).foregroundStyle(Color.brand)
+        }
+    }
+
+    @ViewBuilder
+    private var telegram: some View {
+        if steps.telegram?.token == true {
+            Text("\(SetupSteps.botName(steps.telegram?.bot)) is saved. Continue turns Telegram on and pairs your "
+                 + "Telegram account with it.")
+                .font(.caption).foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
+                Text("In Telegram, message @BotFather, send /newbot, and paste the token it gives you here. Continue "
+                     + "then turns Telegram on and pairs your account with the bot.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecureField("Bot token", text: $steps.telegramToken)
+                Link("Open @BotFather", destination: Self.botFather).foregroundStyle(Color.brand)
+            }
+        }
+    }
+
+    /// The pairing: the message to send the bot, copyable, and the bot in Telegram; the row waits until it lands.
+    @ViewBuilder
+    private func pairing(_ code: String) -> some View {
+        let bot = steps.telegram?.bot
+        let message = "/pair \(code)"
+        VStack(alignment: .leading, spacing: Design.Space.s8) {
+            Text("From your Telegram account, send \(SetupSteps.botName(bot)) this message:")
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Design.Space.s12) {
+                Text(message)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .textSelection(.enabled)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message, forType: .string)
+                }
+            }
+            if let bot, let link = URL(string: "https://t.me/\(bot)") {
+                Link("Open @\(bot) in Telegram", destination: link).foregroundStyle(Color.brand)
+            }
+            HStack(spacing: Design.Space.s8) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for your message… The code lasts \(steps.telegram?.minutes ?? 10) minutes; only the "
+                     + "account that sends it can talk to SHAFT's bots.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Cancel") { steps.cancelAccess() }
+            }
+        }
+        .padding(Design.Space.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .elevatedBlock()
+    }
+
+    /// The Google rows: what may be read there, each through the guided setup (a project and an OAuth client of the
+    /// operator's own in Google Cloud, a sign-in, then the pickers).
+    private var google: some View {
+        let progress = setup.state.google
+        let problem = GoogleScopes.problem(chosen: steps.googleChosen, signedIn: progress.isDone(.signIn))
+        return group("Google — one-time setup, about 10 minutes, guided") {
+            row(.mail, detail: "Gmail, one label at a time: \(name) reads what you file there, never sends.") {
+                EmptyView()
+            }
+            row(.calendar, detail: "The calendars you pick, each read-only or also able to change events.") {
+                EmptyView()
+            }
+            row(.drive, detail: "Drive, read-only: its own files, or also those shared with you.") { EmptyView() }
+            row(.chat, detail: "Google Chat, read-only (Google Workspace accounts).") { EmptyView() }
+            HStack(spacing: Design.Space.s12) {
+                Button(progress.resume == nil ? "Google is set up — grant more…"
+                       : progress.done.isEmpty ? "Set up Google…" : "Continue the Google setup…") {
+                    settingUpGoogle = true
+                }
+                .disabled(steps.googleChosen.isEmpty || problem != nil || steps.granting.running)
+                if steps.googleChosen.isEmpty {
+                    Text("Tick what \(name) may read in Google first.")
+                        .font(.caption).foregroundStyle(Color.textSecondary)
+                }
+            }
+            if let problem {
+                Text(problem)
+                    .font(.callout).foregroundStyle(Color.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var name: String { setup.state.createdInstance ?? "your instance" }
+}

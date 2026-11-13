@@ -101,11 +101,22 @@ makes an instance send a message or a question (with its push), change its state
 past the 80-turn window (`long`). Settings writes stay in the fixture's own instance files. Service restarts change
 fake records only; no CLI or launchd runs. `act ... services busy "<name> replying"` makes the API refuse a restart
 and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
-finishes a pending drain with a new fake pid. Cancel is available in the app. Run
+finishes a pending drain with a new fake pid. Cancel is available in the app. `act ... version 0` (or `version
+missing`) answers `GET /app/v1/version` as an older server would, so the app shows "This app needs a newer SHAFT
+server" at its next session; `act ... version` restores the real answer. Update server itself runs `shaft deploy`
+locally, which a fixture run has not: it shows only for a loopback pairing with `~/SHAFT` installed. Run
 `python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
-A Debug build may load plain `http://` from this machine (`NSAllowsLocalNetworking`,
-added to the built Info.plist by a Debug-only build step in `project.yml`); a Release build keeps App Transport
-Security whole.
+The setup wizard's routes (`/app/v1/setup/*`, docs/app-api.md §18) answer as the real verbs would, over the fixture's
+folder: OpenRouter is off until a key is set (only the key's name is kept, in `<dir>/setup.json`), a model whose name
+contains "fail" fails its check, `new` makes the instance's folders here (paused until the first reply), and
+`first-reply` is the real verb; `test_fixture_setup.py` walks them from Model to Say hello. Access: `share` is the real
+check on the fixture's own instance (a folder inside the checkout is refused, as on a real server), `browser install`
+records a fake Chromium version, `/setup/telegram` refuses a token without `:` or containing `bad`, `telegram on` writes
+a live service record (never launchd), and a pairing code is "sent" to the bot 3 s after the wizard asks for it.
+A Debug iOS build may load plain `http://` from this machine (`NSAllowsLocalNetworking`, added to the built
+Info.plist by a Debug-only build step in `project.yml`); a Release iOS build keeps App Transport Security whole. The
+Mac app gets `NSAllowsLocalNetworking` in every configuration (its setup wizard talks to the server on 127.0.0.1) and
+runs outside the App Sandbox (hardened runtime only); its notification extension stays sandboxed.
 
 For a simulator build that keeps the Keychain entitlement, sign it locally (never registers anything with Apple):
 
@@ -160,6 +171,41 @@ This is a manual reproduction procedure; no current failure rate is established.
 A process started directly stays behind other apps: start the app with `open -n` (`--env` for the variables, `--stdout`
 for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
 `capture`, since another app may take it back; `capture` logs whether the window has the keys and where the pointer is.
+
+### The setup wizard in a dev run
+
+An unpaired Mac app chooses its first screen from `~/SHAFT` (`macOS/Setup/SetupGate.swift`): no `~/SHAFT/.git` opens
+the setup wizard (Welcome, Install, then on the pairing Install made: Model, Your instance, Access, How it works alone
+and Say hello, which opens the new instance's chat; its Welcome's "Connect to an existing SHAFT" is the pasted-link
+pairing), and an install that is there is paired with on its own (`shaft web pair --local`, no link). A loopback pairing the
+server no longer knows (`401 unpaired`) is deleted and paired again once on its own; a second loss shows the error.
+
+Debug builds only, these move the install away from the real `~/SHAFT` and the newest release:
+
+| Variable | Effect |
+|---|---|
+| `SHAFT_DEV_HOME=<absolute path>` | the home the server goes into (`<path>/SHAFT`). With `SHAFT_DEV_DIR` and without this, `<SHAFT_DEV_DIR>/home`: a dev run never reaches the real `~/SHAFT` |
+| `SHAFT_DEV_SERVER_REPO`, `SHAFT_DEV_SERVER_REF`, `SHAFT_DEV_TEMPLATE_REF` | clone that origin at that branch or tag, and make that ref the `template` branch, instead of the newest tagged release. All three or none: a partial set stops the app at launch, naming what is missing |
+| `SHAFT_DEV_SETUP=<step>` | open the wizard at a step after Install (`model`, `instance`, `access`, `alone`, `hello`) on the run's own pairing: with `SHAFT_DEV_DIR` and `SHAFT_DEV_PAIR` (a fixture server's link) its steps run against the fixture, with nothing installed |
+
+The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
+which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step the
+wizard goes on to Model while the server has no instance (or this wizard made one already); a server with instances
+opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install (Codex's
+device-code sign-in, no terminal): the app opens the `{"url": …}` it relays in the browser once and shows the
+`{"code": …}` to enter there, copyable; Cancel terminates the command, which stops Codex. The Access step grants the
+non-Google rows (a folder, the browser, web search, Telegram) through `/access/<n>`, `/setup/secret` and
+`/setup/telegram*` (the bot's token, the service on, the pairing code shown until the pairing lands). Its Google
+rows (mail labels, calendars, Drive, Chat) are granted by "Set up Google…" (`macOS/Setup/GoogleStep.swift`): five
+cards into Google Cloud (a project, the APIs, the audience published In production, the Data Access scopes, a Desktop
+app client), then the client's JSON dropped or chosen and sent on `shaft google client google --json`'s stdin, the
+sign-in through `shaft google login google <address> --client google --json` (the app opens its `{"url"}`; Cancel
+terminates it; a client sent meanwhile ends it), and the pickers (`/google/google/labels|calendars`), which start
+from the server's grants: Apply reads `/access/<n>` again and sends only the difference, in order (a cleared control
+is a revocation, "can change events" cleared a `revoke` with `writable`). Where it
+got is kept in `setup.state` (never the JSON); a ticked Google row still off stops Continue on Access. Against the
+fixture server those two commands cannot run (nothing is installed): `fixture_server.py act google` signs the account
+in on the fixture's folder instead, so the pickers and grants can be driven.
 
 ### Voice against the fixture server
 
@@ -289,7 +335,8 @@ the app normally keeps its preferences as well as its Keychain item, so this ins
 On the Mac: `shaft web pair --name iphone-app` prints a link that works once, for 10 minutes. Paste it into the app
 (Universal Clipboard carries it from the Mac). The app takes the server's address from the link and keeps the bearer
 in the Keychain. `shaft web status` lists the device; `shaft web unpair <device>` revokes it, and the app then shows
-its pairing screen again.
+its pairing screen again. The Mac app pairs with the SHAFT installed on the same Mac without a link (above, "The setup
+wizard in a dev run"); its pasted-link pairing is the wizard's "Connect to an existing SHAFT".
 
 ### Push
 
@@ -305,3 +352,44 @@ its pairing screen again.
 - A push carries the title only. The notification service extension fetches the body from `/app/v1/push/latest`
   with the shared credential, within its time limit; on any failure the title shows alone.
 - The simulator receives remote pushes too (Xcode 14+ on Apple silicon), so the iOS extension can be tried there.
+
+## Release a signed build
+
+`Scripts/release-mac.sh` makes the Mac app's download: a Developer ID signed, notarized, stapled
+`build/release/SHAFT-<version>.dmg` (with an Applications shortcut). It uploads nothing; attach the file to the release
+yourself.
+
+One-time setup, with your paid Apple Developer team:
+
+1. A **Developer ID Application** certificate in your login keychain (Xcode → Settings → Accounts → Manage
+   Certificates → + → Developer ID Application). `security find-identity -v -p codesigning` must list it.
+2. A **notary profile**, so the script never sees an Apple ID password:
+
+   ```bash
+   xcrun notarytool store-credentials shaft-notary --apple-id <your Apple ID> --team-id <TEAMID>
+   # it asks for an app-specific password (account.apple.com → Sign-In and Security) and stores it in the keychain
+   ```
+
+3. **Provisioning profiles.** A Developer ID app that uses push (`com.apple.developer.aps-environment`) or a
+   team keychain group needs a provisioning profile that grants it, for the app *and* for the notification extension
+   (`<prefix>.shaft` and `<prefix>.shaft.NotificationService`). In the developer portal, both App IDs need Push
+   Notifications (the app) and Keychain Sharing capabilities; the script lets Xcode create and embed the Developer ID
+   profiles at export (`-allowProvisioningUpdates`, using the account signed in to Xcode). The entitlement's
+   value is the build setting `SHAFT_APS_ENVIRONMENT` in `project.yml`: `development` for every everyday build (Release
+   included, signed with your Apple Development identity), and the release script passes
+   `SHAFT_APS_ENVIRONMENT=production` for its archive. It checks the exported bundles and fails if a profile is missing,
+   the app's does not grant production push, or the signed app's `aps-environment` is not `production`.
+
+Then, from a clean checkout on a release tag:
+
+```bash
+# Working directory: apps/shaft/
+Scripts/release-mac.sh --notary-profile shaft-notary
+```
+
+Options: `--team TEAMID` (default: `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
+`--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the preconditions and
+prints every command, signing and contacting Apple for nothing), `--self-test` (checks the script's entitlement readers
+on synthetic plists; signs nothing). It stops at the first failed step, and when Apple
+rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
+SHA-256.

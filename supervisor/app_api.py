@@ -11,6 +11,11 @@ under /app/v1/ here, and never reads a cookie for it; here every route but /pair
 (web.paired_device). A header sent only by the app carries no ambient credential, so there is no CSRF token: a page
 of another site can neither send it nor read an answer (no route sends CORS headers).
 
+On loopback (SHAFT_WEB_LOCAL on, Host 127.0.0.1 or localhost at the web port: web.local_hosts, and none of the headers
+tailscale serve's proxy adds: web.PROXY_HEADERS) web._route checks no login and marks the request local: the bearer
+is then the only credential, the identity is the device's recorded login (_login), never a header, and /pair is
+refused (local_pair) — such a device is made by `shaft web pair --local`.
+
 The long-poll (§4): GET /app/v1/chat/<n>?since=&live=&wait= holds the request — one thread of the web server's
 ThreadingHTTPServer — until either revision of the feed moves (web_chat.build: `version`, `live`), woken by every
 web_chat.save() and looking again every LOOK_S, or `wait` seconds pass (304). Held for the current chat, it marks the
@@ -26,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -38,6 +44,8 @@ from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
 
 PREFIX = "/app/v1"
+API_VERSION = 1                     # GET /app/v1/version's `api`: bumped on every breaking change to /app/v1 (an app
+#                                     refuses a server below the version it needs: docs/app-api.md §19)
 WAIT_MAX = 25                       # a long-poll is held at most this long (s): under URLSession's 60 s timeout
 LOOK_S = 0.5                        # a held long-poll looks at the feed again this often, saved or not
 WATCH_EVERY_S = 2.0                 # and marks its device watching again this often (web_chat.WATCH_S is 6)
@@ -150,14 +158,17 @@ N, CID = r"(?P<n>[A-Za-z0-9_-]+)", r"(?P<cid>web-[A-Za-z0-9]+)"
 def _route(req: Request) -> Response:
     path = req.path.removeprefix(PREFIX)
     if path == "/pair":
+        if req.local:                               # a loopback request has no tailnet login to pair as
+            log(f"app api refused a loopback pairing ({req.method} {req.path})")
+            raise Refusal(403, "local_pair", "This Mac's app pairs with the server on this Mac directly, not with a "
+                                             "link: open SHAFT on this Mac and it pairs itself.")
         if req.method != "POST":
             raise Refusal(405, "method", f"{req.method} is not supported here: POST")
         return _pair(req)
     dev = device(req)
     if not dev:
-        log(f"app api refused a request without a paired bearer ({req.method} {req.path})")
-        raise Refusal(401, "unpaired", "This device is not paired: pair it again with a link from "
-                                       "shaft web pair --name <device>.")
+        log(f"app api refused a request without a paired bearer ({req.method} {req.path}{', loopback' * req.local})")
+        raise _unpaired(req)
     req.device = dev
     for pattern, methods in ROUTES:
         if m := re.fullmatch(pattern, path):
@@ -187,7 +198,24 @@ def _str(data: dict, key: str, default: str | None = None) -> str:
     return value
 
 
+def _unpaired(req: Request) -> Refusal:
+    """Only the apps read /app/v1, and an app has no terminal: what to do is said in the apps' own terms."""
+    return Refusal(401, "unpaired", "This app is no longer paired with the server on this Mac: pair it again on the "
+                                    "screen SHAFT shows." if req.local else
+                                    "This device is not paired: pair it again with a new link from SHAFT on your Mac "
+                                    "(Settings, Services, Use SHAFT from iPhone/iPad).")
+
+
 def _login(req: Request) -> str:
+    """Who acts: the tailnet login web._route checked, or on loopback (req.local) the paired device's recorded login —
+    never a header there, which any local process could send. A device unpaired since its bearer was checked (or a
+    record without a login) is refused as unpaired, not acted for."""
+    if req.local:
+        login = (web.devices().get(req.device) or {}).get("login")
+        if not isinstance(login, str) or not login:
+            log(f"app api refused a loopback request: device {req.device} has no record now ({req.method} {req.path})")
+            raise _unpaired(req)
+        return login.lower()
     return (req.headers.get("tailscale-user-login") or "").lower()
 
 
@@ -216,7 +244,8 @@ def _pair(req: Request) -> Response:
     got = web._use_pairing(token, _login(req), platform)
     if not got:
         raise Refusal(403, "pair_expired", "This pairing link is used, unknown or older than "
-                                           f"{web.PAIR_MINUTES} minutes: make a new one with shaft web pair.")
+                                           f"{web.PAIR_MINUTES} minutes: make a new one in SHAFT on your Mac "
+                                           "(Settings, Services, Use SHAFT from iPhone/iPad).")
     dev, secret = got
     return _json(200, {"device": dev, "secret": secret, "name": web.devices()[dev]["name"], "login": _login(req)})
 
@@ -812,7 +841,13 @@ CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
 
 
 def _who(req: Request) -> str:
-    return f"app {web.devices()[req.device]['name']}"
+    """The paired device acting, for the log and the CLI's `who`. A device unpaired since its bearer was checked is
+    refused as unpaired (401), not answered with a crash."""
+    record = web.devices().get(req.device) or {}
+    if not isinstance(record.get("name"), str) or not record["name"]:
+        log(f"app api refused a request: device {req.device} has no record now ({req.method} {req.path})")
+        raise _unpaired(req)
+    return f"app {record['name']}"
 
 
 def _settings(n: str, cfg: dict | None = None) -> dict:
@@ -1023,6 +1058,21 @@ def _services_response() -> Response:
                        "version": version.service_version(version.service("web", stale=False))})
 
 
+def _version(req: Request) -> Response:
+    """§19: what the app checks before anything else. `server` is the release this web process runs: its own service
+    record when launchd runs it, else (a web started by hand, a test) the checkout's describe. On loopback only (the
+    Mac app on the same Mac), `project` is the checkout it runs from: the app updates the server only from there. A
+    tailnet client never learns a path on the Mac."""
+    from . import core, version
+    rec = version.service("web", stale=False)
+    server = (version.service_version(rec) if rec and rec.get("pid") == os.getpid()
+              else version.commit_describe(version.supervisor_commit()))
+    answer: dict = {"server": server, "api": API_VERSION}
+    if req.local:
+        answer["project"] = str(core.PROJECT.resolve())
+    return _json(200, answer)
+
+
 def _get_services(req: Request) -> Response:
     return _services_response()
 
@@ -1038,7 +1088,9 @@ def _service_action(req: Request, service: str, act: str) -> Response:
         if act == "restart" and service == "api":
             if why := actions.service_guard("api", "restart"):
                 raise Refusal(409, "busy", why)
-            args, timeout = ["api", "on"], actions.SLOW_S
+            # `api restart`, never `api on`: on a local-only Mac that would need Tailscale, and on a tailnet-ready one
+            # it would expose the API (tailscale serve) as a side effect of a restart
+            args, timeout = ["api", "restart"], actions.SLOW_S
         else:
             if act == "restart" and (_pending_drain() or autonomy.draining_now()):
                 return _services_response()
@@ -1050,6 +1102,383 @@ def _service_action(req: Request, service: str, act: str) -> Response:
     if not ok:
         raise Refusal(409, "refused", said)
     return _services_response()
+
+
+# -- setup (§18) ------------------------------------------------------------------------------------------------------
+# The Mac app's setup wizard. Each state change runs the CLI verb an operator would type, as the paired device (_who):
+# JSON verbs through actions.run_json, the others through actions.run_now. A secret goes on the verb's stdin (input=),
+# never in argv, a log line or an answer.
+SETUP_SECRETS = ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "SCRAPEBADGER_API_KEY", "SHAFT_CUSTOM_API_KEY")
+AUTONOMY = {"own": "resume", "talk": "stay"}      # §18.1: what the first reply does to the paused new instance
+BROWSER_INSTALL_S = 900                           # `browser install` downloads Chromium: the request is held this long
+PROVIDERS = ("openrouter", "codex", "custom")
+PROVIDER_FLAGS = {"model": str, "judge_model": str, "base_url": str, "price_in": float, "price_out": float,
+                  "judge_price_in": float, "judge_price_out": float, "vision": bool}
+ALIAS = r"(?P<alias>[a-z][a-z0-9-]{0,30})"        # google.ALIAS_RE
+
+
+def _local_only(req: Request) -> None:
+    """The routes that change where every model call goes or what holds a key (the provider keys and preset, the
+    custom endpoint, a Telegram bot and its service) answer only the Mac app on the Mac that runs SHAFT (loopback): a
+    device paired over the tailnet could otherwise point every instance's model traffic at a server of its choosing."""
+    if not req.local:
+        log(f"app api refused a setup change from a tailnet device ({req.method} {req.path})")
+        raise Refusal(403, "local_only", "Do this on the Mac that runs SHAFT.")
+
+
+def _text(data: dict, key: str, most: int = 500) -> str:
+    """A required, non-empty, single-line string field."""
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip() or len(value) > most or "\n" in value or "\r" in value:
+        raise Refusal(400, "bad_request", f"{key} must be one non-empty line of at most {most} characters.")
+    return value
+
+
+def _verb_said(rows: list[dict]) -> str:
+    """What a JSON verb said when it refused: its own `error`."""
+    last = rows[-1] if rows else {}
+    return str(last.get("error") or last or "refused")
+
+
+def _setup_instance(req: Request) -> Response:
+    """`new --json --paused-until-first-reply`, then `config set`, then `drive set`: the instance as the wizard set it
+    up. No opening (that is /setup/hello, once access is granted). A step's refusal: 409 with its words and `done`.
+    Asked again for an instance a setup created and nobody has answered yet (it exists and still has its first-reply
+    marker: `new` succeeded, then a later step was refused or the app quit before it heard), `new` is skipped and the
+    remaining steps run: Try again finishes it instead of being refused "already exists"."""
+    import secrets as _secrets
+    from . import actions, core, opconfig
+    from .web_config import DRIVE_MAX               # the web Drive page's limit, the same here
+    data = _body(req)
+    if set(data) != {"name", "operator", "model", "drive", "autonomy"}:
+        raise Refusal(400, "bad_request", "Send name, operator, model, drive and autonomy.")
+    name, operator, model = _text(data, "name", 31), _text(data, "operator"), _text(data, "model")
+    drive = data["drive"]
+    if not isinstance(drive, str) or not drive.strip() or len(drive) > DRIVE_MAX:
+        raise Refusal(400, "bad_request", f"drive must be the drive's text, at most {DRIVE_MAX} characters.")
+    if not isinstance(data["autonomy"], str) or data["autonomy"] not in AUTONOMY:
+        raise Refusal(400, "bad_request", "autonomy must be own or talk.")
+    who = _who(req)
+    log(f"{who}: operator set up instance {name}")
+    done: list[str] = []
+
+    def refused(said: str) -> Refusal:
+        return Refusal(409, "refused", said, done=list(done))
+
+    if name in core.instance_names() and (core.SUP_DIR / f"first-reply-{name}").exists():
+        if (missing := _unfinished(name)):          # `new` stopped halfway: nothing to finish, the name is taken
+            raise refused(f"{name} was only partly created ({missing}), so the setup cannot finish it. Choose another "
+                          f"name: {name} stays paused and never runs.")
+        paused = core.paused(name)                  # made by a setup, still waiting: finish it
+    else:
+        code, rows = actions.run_json(["new", name, "--json", "--paused-until-first-reply", AUTONOMY[data["autonomy"]]],
+                                      actions.SLOW_S, who=who)
+        if code != 0 or not rows[-1].get("ok"):
+            raise refused(_verb_said(rows))
+        paused = bool(rows[-1].get("paused"))
+    done.append("new")
+    ok, said = actions.run_now(["config", name, "set", f"OPERATOR_NAME={operator}", f"LLM_MODEL={model}"], who=who)
+    if not ok:
+        raise refused(said)
+    done.append("config")
+    text = drive.replace("\r\n", "\n")
+    now, sha = opconfig.drive(name)                 # what `shaft new` left (the template's drive.md): its sha, not none
+    if (now or "").rstrip("\n") != text.rstrip("\n"):
+        tmp = core.SUP_DIR / "web" / f"drive-{_secrets.token_hex(6)}.md"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text)
+        try:
+            ok, said = actions.run_now(["drive", name, "set", "--file", str(tmp), "--expect-sha", sha], who=who)
+        finally:
+            tmp.unlink(missing_ok=True)
+        if not ok:
+            raise refused(said)
+    done.append("drive")
+    return _json(200, {"instance": name, "done": done, "paused": paused})
+
+
+def _unfinished(name: str) -> str | None:
+    """None when `shaft new` finished `name`, else what is missing. Its last step is the mind store's first commit,
+    with the creation's own message, made after the instance branch's creation commit and the store itself: a store
+    whose history starts with that commit proves all three. A worktree with a first-reply marker alone is a `new` that
+    failed halfway (its commit, a hook, the store), not an instance waiting for its remaining setup steps."""
+    from . import mind
+    if mind.head(name) is None:
+        return "its memory store was never made" if not mind.exists(name) else "its memory store has no first commit"
+    first = mind.git(name, "log", "--reverse", "--format=%s", mind.BRANCH, check=False).stdout.splitlines()
+    return None if first and first[0].startswith(f"{name}: created ") else "its memory store has no creation commit"
+
+
+def _setup_drives(req: Request) -> Response:
+    from . import drive_presets
+    try:
+        return _json(200, {"drives": drive_presets.presets()})
+    except drive_presets.Missing as e:
+        raise Refusal(409, "refused", str(e)) from None
+
+
+def _setup_secret(req: Request) -> Response:
+    """`secrets set NAME --json`, the value on its stdin: only the provider and tool keys (SETUP_SECRETS) — the
+    server's own auth, Google clients and Telegram tokens have their own verbs."""
+    _local_only(req)
+    from . import actions
+    data = _body(req)
+    if set(data) != {"name", "value"} or data.get("name") not in SETUP_SECRETS:
+        raise Refusal(400, "bad_request", f"name must be one of {', '.join(SETUP_SECRETS)}, with its value.")
+    value = data["value"]
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+        raise Refusal(400, "bad_request", "value must be the key, one non-empty line.")
+    code, rows = actions.run_json(["secrets", "set", data["name"], "--json"], who=_who(req), input=value + "\n")
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _said(f"{data['name']} saved")
+
+
+def _provider(data: dict) -> str:
+    provider = data.get("provider")
+    if provider not in PROVIDERS:
+        raise Refusal(400, "bad_request", f"provider must be one of {', '.join(PROVIDERS)}.")
+    return provider
+
+
+def _setup_provider(req: Request) -> Response:
+    """`provider use PROVIDER --json` with the given flags: the answer's coverage, `off` as a list."""
+    _local_only(req)
+    from . import actions
+    data = _body(req)
+    provider = _provider(data)
+    args = ["provider", "use", provider, "--json"]
+    for key, value in data.items():
+        if key == "provider":
+            continue
+        kind = PROVIDER_FLAGS.get(key)
+        flag = "--" + key.replace("_", "-")
+        if kind is bool and type(value) is bool:
+            args += [flag] if value else []
+        elif kind is float and type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            args += [flag, str(value)]
+        elif kind is str and isinstance(value, str) and value.strip() and "\n" not in value:
+            args += [flag, value]
+        else:
+            raise Refusal(400, "bad_request", f"{key} is not a provider field of its type "
+                                              f"({', '.join(PROVIDER_FLAGS)}).")
+    code, rows = actions.run_json(args, actions.SLOW_S, who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    r = rows[-1]
+    # The running services that still hold another value of the preset: the wizard restarts them before Test.
+    late = sorted({svc for svcs in r["not_live"].values() for svc in svcs})
+    return _json(200, {"provider": r["provider"], "model": r["model"], "changed": r["changed"], "covers": r["covers"],
+                       "off": [{"function": f, "why": why} for f, why in r["off"].items()], "not_live": late})
+
+
+def _setup_check(req: Request) -> Response:
+    """`provider check PROVIDER --json`: one live call per configured model; a failed model is a row, not an error."""
+    _local_only(req)
+    from . import actions
+    data = _body(req)
+    if set(data) != {"provider"}:
+        raise Refusal(400, "bad_request", "Send the provider alone.")
+    provider = _provider(data)
+    code, rows = actions.run_json(["provider", "check", provider, "--json"], actions.SLOW_S * 2, who=_who(req))
+    if not all("model" in r for r in rows):          # the verb could not check at all
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {"provider": provider, "ok": code == 0 and all(r.get("ok") for r in rows),
+                       "models": [{"ok": bool(r.get("ok")), "model": r["model"], "error": r.get("error")} for r in rows]})
+
+
+def _setup_telegram(req: Request) -> Response:
+    """`telegram token NAME`, the token on its stdin."""
+    _local_only(req)
+    from . import actions
+    data = _body(req)
+    if set(data) != {"name", "token"}:
+        raise Refusal(400, "bad_request", "Send name and token.")
+    name, token = _text(data, "name", 31), _text(data, "token")
+    if name not in web._names():
+        raise Refusal(404, "not_found", f"No instance named {name}.")
+    ok, said = actions.run_now(["telegram", "token", name], who=_who(req), input=token + "\n")
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _said(said)
+
+
+def _telegram_named(n: str) -> dict:
+    from . import setup
+    if n not in web._names():
+        raise Refusal(404, "not_found", f"No instance named {n}.")
+    return setup.telegram_status(n)
+
+
+def _setup_telegram_status(req: Request, n: str) -> Response:
+    """Where n's Telegram stands: its bot, the paired account, the service (setup.telegram_status). The wizard polls it
+    while the operator sends the pairing code."""
+    return _json(200, _telegram_named(n))
+
+
+def _setup_telegram_pair(req: Request, n: str) -> Response:
+    """`telegram pair --json`: a one-time code the operator sends to n's bot as `/pair <code>`. Already paired: no code
+    (one account talks to every bot). No bot yet: refused."""
+    from . import actions
+    if _body(req):
+        raise Refusal(400, "bad_request", "Send no fields.")
+    status = _telegram_named(n)
+    if not status["token"]:
+        raise Refusal(409, "refused", f"{n} has no Telegram bot yet: save its token first.")
+    if status["paired"]:
+        return _json(200, {**status, "code": None, "minutes": None})
+    code, rows = actions.run_json(["telegram", "pair", "--json"], who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        if (now := _telegram_named(n))["paired"]:   # paired meanwhile: as the check above, no code to send
+            return _json(200, {**now, "code": None, "minutes": None})
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {**_telegram_named(n), "code": rows[-1]["code"], "minutes": rows[-1]["minutes"]})
+
+
+def _setup_telegram_service(req: Request) -> Response:
+    """`telegram on`: installs (or restarts, to pick up a new bot) the Telegram service, through the verb."""
+    _local_only(req)
+    from . import actions
+    if _body(req):
+        raise Refusal(400, "bad_request", "Send no fields.")
+    ok, said = actions.run_now(["telegram", "on"], actions.SLOW_S, who=_who(req))
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _said(said)
+
+
+def _setup_autonomy(req: Request, n: str) -> Response:
+    """`first-reply <n> resume|stay --json`: the wizard's "How it works alone" choice, after the instance was created
+    (with "own", i.e. resume). Refused once the first reply has happened (no marker left)."""
+    from . import actions
+    data = _body(req)
+    if set(data) != {"then"} or data["then"] not in AUTONOMY.values():
+        raise Refusal(400, "bad_request", "Send then: resume or stay.")
+    code, rows = actions.run_json(["first-reply", n, data["then"], "--json"], who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {"instance": n, "then": data["then"]})
+
+
+def _setup_hello(req: Request, n: str) -> Response:
+    """The setup's last step: the hidden opening (setup.opening_text) to Main, which the instance answers with its
+    welcome. Asked again once it was sent, it answers that chat (the app's Try again completes) until the operator has
+    written in it, then 409 already_answered (the wizard treats it as done); refused when Main has a conversation that
+    did not start with the opening."""
+    from . import setup, web_chat
+    log(f"{_who(req)}: operator asked {n} for its welcome")
+    try:
+        chat = web_chat.opening(n, _login(req), setup.opening_text(n))
+    except web_chat.AlreadyAnswered as e:            # the operator answered the welcome: nothing left to ask for
+        raise Refusal(409, "already_answered", f"The welcome is already in your chat with {n}.",
+                      chat={"id": e.chat["id"], "title": web_chat.title(e.chat)}) from None
+    except web_chat.AlreadyOpened as e:              # Try again after the answer was lost: done already, not refused
+        return _said(str(e), chat={"id": e.chat["id"], "title": web_chat.title(e.chat)})
+    except web_chat.Refused as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _said(f"{n} is writing its welcome", chat={"id": chat["id"], "title": web_chat.title(chat)})
+
+
+# -- access (§18.6) ---------------------------------------------------------------------------------------------------
+GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
+                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"}}
+GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat"}
+
+
+def _get_access(req: Request, n: str) -> Response:
+    from . import setup
+    return _json(200, setup.access(n))
+
+
+def _access_args(n: str, data: dict) -> list[list[str]]:
+    """The verbs one access change runs, in order (the browser's and the calendar's write upgrade: _set_access)."""
+    from . import google
+    grant, action = data.get("grant"), data.get("action")
+    if not isinstance(grant, str) or grant not in GRANT_FIELDS or action not in ("grant", "revoke"):
+        raise Refusal(400, "bad_request", f"grant must be one of {', '.join(GRANT_FIELDS)}; action grant or revoke.")
+    fields = GRANT_FIELDS[grant]
+    if set(data) - fields - {"grant", "action"} or any(type(data[k]) is not bool for k in ("writable", "all")
+                                                        if k in data):
+        raise Refusal(400, "bad_request", f"{grant} takes {', '.join(sorted(fields)) or 'no other field'} "
+                                          "(writable and all are true or false).")
+    if grant == "folder":
+        return [["share", n, "off" if action == "revoke" else _text(data, "what", 4096)]]
+    if grant == "browser":
+        return []
+    alias = _text(data, "alias", 31)
+    if not google.ALIAS_RE.fullmatch(alias):
+        raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")
+    verb = GRANT_VERBS[grant]
+    if grant in ("drive", "chat"):
+        return [[verb, n, action, alias] + (["--all"] if action == "grant" and data.get("all") else [])]
+    op = action
+    if data.get("writable") and not (grant == "calendar" and action == "grant"):   # granted first, then upgraded
+        op += "-draft" if grant == "mail" else "-write"
+    return [[verb, n, op, alias, _text(data, "what")]]
+
+
+def _set_access(req: Request, n: str) -> Response:
+    """One grant or revocation through its CLI verb (§18.6), then the fresh access."""
+    from . import actions, browser, calendar, core, google, setup
+    data = _body(req)
+    runs = _access_args(n, data)
+    who = _who(req)
+    log(f"{who}: operator {data['action']} {data['grant']} for {n}")
+    if data["grant"] == "calendar" and data["action"] == "grant" and data.get("writable"):
+        # the calendar this request names, resolved to its ID once: the read grant and the write upgrade both name that
+        # ID — never one inferred from the stored grants, which another request's grant may reorder meanwhile
+        try:
+            cid = calendar.grant_id(data["alias"], data["what"])
+        except (google.AccountError, google.ApiError) as e:
+            raise Refusal(409, "refused", f"not granted: {e}") from None
+        runs = [["calendar", n, "grant", data["alias"], cid], ["calendar", n, "grant-write", data["alias"], cid]]
+    if data["grant"] == "browser":
+        if data["action"] == "revoke":
+            raise Refusal(409, "refused", "The browser is shared by every instance and reached from inside run: there "
+                                          f"is none to take back from {n} alone (only turning off its run tool would, "
+                                          "which also stops it running its own code).")
+        if not browser.version():
+            ok, said = actions.run_now(["browser", "install"], BROWSER_INSTALL_S, who=who)
+            if not ok:
+                raise Refusal(409, "refused", said)
+        if "run" in core.disabled_tools(n):
+            runs = [["tools", n, "on", "run"]]
+    for args in runs:
+        ok, said = actions.run_now(args, who=who)
+        if not ok:
+            raise Refusal(409, "refused", said)
+    return _json(200, setup.access(n))
+
+
+def _google_account(alias: str, scope: str):
+    from . import core, google
+    try:
+        return google.Account(alias, core.secrets_env()).require(scope)
+    except google.AccountError as e:
+        raise Refusal(409, "refused", str(e)) from None
+
+
+def _google_labels(req: Request, alias: str) -> Response:
+    """The account's Gmail labels, by name: what a mail grant may name."""
+    from . import google, mail
+    acct = _google_account(alias, google.GMAIL)
+    try:
+        names = sorted(mail.labels(acct), key=str.casefold)
+    except (google.AccountError, google.ApiError) as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"alias": alias, "labels": names})
+
+
+def _google_calendars(req: Request, alias: str) -> Response:
+    """The account's calendars, primary first: what a calendar grant may name (by id)."""
+    from . import calendar, google
+    acct = _google_account(alias, google.CALENDAR)
+    try:
+        cals = calendar.calendars(acct)
+    except (google.AccountError, google.ApiError) as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"alias": alias, "calendars": [{k: c[k] for k in ("id", "title", "primary", "access")}
+                                                     for c in cals]})
 
 
 ROUTES: list[tuple[str, dict]] = [
@@ -1064,6 +1493,7 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/voices/report", {"POST": _report_voices}),            # before /voices/<n>: "report" is not an instance
     (rf"/voices/{N}", {"GET": _voices, "POST": _set_voice}),
     (rf"/voices/{N}/proposals/(?P<pid>[A-Za-z0-9_-]{{1,64}})", {"POST": _decide_voice}),
+    (r"/version", {"GET": _version}),
     (r"/services", {"GET": _get_services}),
     (r"/services/(?P<service>api|scheduler)/(?P<act>restart)", {"POST": _service_action}),
     (r"/services/(?P<service>scheduler)/(?P<act>cancel)", {"POST": _service_action}),
@@ -1089,4 +1519,18 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/push/register", {"POST": _register, "DELETE": _unregister}),
     (r"/push/status", {"GET": _push_status}),
     (r"/push/latest", {"GET": _latest}),
+    (r"/setup/instance", {"POST": _setup_instance}),
+    (r"/setup/drives", {"GET": _setup_drives}),
+    (r"/setup/secret", {"POST": _setup_secret}),
+    (r"/setup/provider", {"POST": _setup_provider}),
+    (r"/setup/provider/check", {"POST": _setup_check}),
+    (r"/setup/telegram", {"POST": _setup_telegram}),
+    (r"/setup/telegram/service", {"POST": _setup_telegram_service}),
+    (rf"/setup/telegram/pair/{N}", {"POST": _setup_telegram_pair}),
+    (rf"/setup/telegram/status/{N}", {"GET": _setup_telegram_status}),
+    (rf"/setup/hello/{N}", {"POST": _setup_hello}),
+    (rf"/setup/autonomy/{N}", {"POST": _setup_autonomy}),
+    (rf"/access/{N}", {"GET": _get_access, "POST": _set_access}),
+    (rf"/google/{ALIAS}/labels", {"GET": _google_labels}),
+    (rf"/google/{ALIAS}/calendars", {"GET": _google_calendars}),
 ]

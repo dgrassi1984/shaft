@@ -15,6 +15,9 @@ public final class InstancesStore {
     public private(set) var pendingNotes: [String: [PendingNote]] = [:]
     public private(set) var notesError: [String: APIError] = [:]
     public private(set) var moving: Set<String> = []
+    /// What `GET /app/v1/version` said of the server (§19), nil until asked. `.needsNewerServer` takes the session's place.
+    public private(set) var compatibility: ServerCompatibility.Verdict?
+    @ObservationIgnored private var compatibilityGeneration = 0
     @ObservationIgnored private var orderRevisions: [String: Int] = [:]
     @ObservationIgnored private var instancesRev: OrderRevision?
     @ObservationIgnored private var listGeneration = 0
@@ -85,6 +88,23 @@ public final class InstancesStore {
             guard let error = APIError.from(error) else { return }
             report(error)
         }
+    }
+
+    /// Ask the server whether it speaks the `/app/v1` this app needs (§19): once per session, and again after the server
+    /// was updated. An older answer arriving after a newer request is dropped.
+    public func checkCompatibility() async {
+        compatibilityGeneration += 1
+        let generation = compatibilityGeneration
+        let result: Result<ServerVersion, APIError>
+        do {
+            result = .success(try await client.version())
+        } catch {
+            guard let error = APIError.from(error) else { return }
+            if error.isUnpaired { report(error) }
+            result = .failure(error)
+        }
+        guard generation == compatibilityGeneration else { return }
+        compatibility = ServerCompatibility.verdict(result)
     }
 
     /// Poll the list while it is on screen (§3: "every few seconds"), and the threads of each instance whose row moved.

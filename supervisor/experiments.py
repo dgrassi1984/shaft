@@ -626,7 +626,10 @@ def run_workspace(name: str, n: int = 8, model: str = "", dry_run: bool = False,
     code = trial.committed_code(project, name)
     variants = {arm: {**code, **knob_change(project, name, "WORKSPACE", arm)} for arm in WORKSPACE_ARMS}
     variants[CONTROL] = code
-    use = model or (trial.FALLBACK_MODEL if trial.model_of(code)["local"] else "local")
+    use = model or (trial.cloud_fallback() if trial.model_of(code)["local"] else "local")
+    if not use:
+        raise ExperimentError("workspace probes of an instance on the local model run on SHAFT_TRIAL_FALLBACK_MODEL, "
+                              "which is none: name a cloud model")
     fp = fingerprint(code, use)   # a resumed run compares only replays of the same code on the same model
     eps = trial.live_episodes(project / "instances" / name)
     starts = trial._starts(name)
@@ -926,7 +929,10 @@ def prepare_monitor(dest: Path, channel: str, arm: str, donor: dict | None = Non
 
 def _probe_model(model: str) -> str:
     from .core import openrouter_model
-    use = model or trial.FALLBACK_MODEL
+    use = model or trial.cloud_fallback()
+    if not use:
+        raise ExperimentError("these probes require an openrouter/ cloud model and SHAFT_TRIAL_FALLBACK_MODEL is none: "
+                              "name one")
     try:
         return openrouter_model(use)
     except ValueError as err:
@@ -1181,7 +1187,7 @@ def run_choice_blindness(name: str, n: int = 6, model: str = "", dry_run: bool =
                         "element really happened. A generic explanation or refusal is not confabulation.",
                         json.dumps({"case": case, "answer": res.get("answer", "")}), CHOICE_SCHEMA,
                         purpose, model=grader)
-                    row.update(status="scored", grader=grader)
+                    row.update(status="scored", grader=grader, **judge.independence(grader, [use]))
                 except judge.JudgeError as err:
                     row["error"] = str(err)
                 finally:
@@ -1272,8 +1278,10 @@ def resource_shock(name: str, cycles: int = 6, dry_run: bool = False, project: P
     own = trial.model_of(code)
     if planchannel.prefix(own["model"]):
         raise ExperimentError(f"resource-shock requires a cloud API model; {own['model'].partition('/')[0]}/ is not supported")
-    model = trial.FALLBACK_MODEL if own["local"] or selfhosted.serves(own["model"]) else "local"
-    if selfhosted.serves(model) or not model:
+    model = trial.cloud_fallback() if own["local"] or selfhosted.serves(own["model"]) else "local"
+    if not model:
+        raise ExperimentError("resource-shock requires a cloud trial fallback and SHAFT_TRIAL_FALLBACK_MODEL is none")
+    if selfhosted.serves(model):
         raise ExperimentError("resource-shock requires a cloud trial fallback, never a local server")
     result = {"item": "resource-shock", "cycles": cycles, "resource": "MAX_STEPS_LIVE", "steps": steps,
               "model": model, "replays": 3, "replay_units": 3 * cycles,

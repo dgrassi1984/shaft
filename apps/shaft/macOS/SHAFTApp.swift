@@ -13,14 +13,14 @@ struct SHAFTApp: App {
 
     var body: some Scene {
         Window("SHAFT", id: MacRoot.windowID) {
-            MacRoot(model: delegate.model, state: delegate.state)
+            MacRoot(model: delegate.model, state: delegate.state, setup: delegate.setup)
                 .modifier(MacAppearance())
         }
         .defaultSize(width: 1100, height: 760)
         .commands { MacCommands(state: delegate.state, menu: delegate.state.menu) }
 
         Settings {
-            MacSettings(model: delegate.model)
+            MacSettings(model: delegate.model, setup: delegate.setup)
                 .modifier(MacAppearance())
         }
     }
@@ -30,6 +30,8 @@ struct SHAFTApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = MacDevSession.model() ?? AppModel()
     let state = MacState()
+    /// The setup gate: the wizard, or pairing with this Mac's SHAFT without a link.
+    let setup = MacSetup()
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 
@@ -117,14 +119,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
-/// The Settings window (⌘,): the server, this device, notifications and Unpair (Shared's SettingsView).
+/// The Settings window (⌘,): the server, this device, notifications, Update server and Unpair (Shared's SettingsView).
 struct MacSettings: View {
     let model: AppModel
+    let setup: MacSetup
 
     var body: some View {
         Group {
             if let session = model.session {
                 SettingsView(session: session)
+                    .environment(\.serverUpdater, setup.updater(for: session))
+                    .environment(\.phoneAccess, setup.phoneAccess(for: session))
             } else {
                 MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
             }

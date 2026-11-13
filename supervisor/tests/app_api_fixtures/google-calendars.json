@@ -1,0 +1,17 @@
+{
+  "alias": "work",
+  "calendars": [
+    {
+      "id": "me@example.com",
+      "title": "me@example.com",
+      "primary": true,
+      "access": "owner"
+    },
+    {
+      "id": "team@group.calendar.google.com",
+      "title": "Team",
+      "primary": false,
+      "access": "reader"
+    }
+  ]
+}

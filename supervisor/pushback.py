@@ -79,13 +79,15 @@ def outcome(name: str, since: str = "", days: int = 3, write: bool = False) -> s
         case = (metrics._case(ep, provenance=metrics._provenance_evidence(name, ep))
                 + "\n\n## Later episodes (including conversations)\n" + _evidence(later)
                 + "\n\n## Later operator messages\n" + _evidence(replies))
-        by = judge.pick(exclude=metrics.own_models(name, ep))
+        own = metrics.own_models(name, ep)
+        by = judge.pick(exclude=own)
         result = judge.ask(OUTCOME_SYSTEM, case, OUTCOME_SCHEMA, purpose=f"pushback outcome {name}", model=by)
         problem = judge._valid(result, OUTCOME_SCHEMA)
         if problem or not result["reason"].strip():
             raise judge.JudgeError(f"invalid pushback outcome: {problem or 'empty reason'}")
         rec = {"episode_ts": stamp, "scored_at": now.isoformat(timespec="seconds"),
-               "as_of": now.isoformat(timespec="seconds"), "days": days, "judge": by, **result}
+               "as_of": now.isoformat(timespec="seconds"), "days": days, "judge": by,
+               **judge.independence(by, own), **result}
         _path(name).parent.mkdir(parents=True, exist_ok=True)
         with _path(name).open("a") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

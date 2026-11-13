@@ -20,7 +20,7 @@ WHO = "web"
 TEXT_MAX = 8000                       # a message to an instance, at most (it goes into its inbox as a file)
 KILL_WAIT_S = 20                      # a kill from here waits this long for its runs to settle (the page waits 30 s)
 DELETABLE = ("idle", "paused by you")
-NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web on|off in a terminal"}
+NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web restart (or off) in a terminal"}
 
 
 class Refused(Exception):
@@ -103,6 +103,9 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         if svc in NOT_FROM_HERE:
             raise Refused(NOT_FROM_HERE[svc])
         args = ["autonomy" if svc == "scheduler" else svc, op]
+        from . import autonomy
+        if svc == "api" and op == "on" and autonomy.installed("api"):
+            args = ["api", "restart"]           # as it is: `api on` would run tailscale serve and add logins
         running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
         args = _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
         if svc in ("api", "scheduler"):

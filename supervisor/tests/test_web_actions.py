@@ -290,10 +290,11 @@ class AGuardTheOperatorForces(ActionsTest):
 
     def test_forced_it_runs_and_is_logged(self):
         self.assertEqual(self.act("service", service="scheduler", op="on", force="1")[0], 200)
-        self.assertEqual(self.act("service", service="api", op="on", force="1")[0], 200)
+        with mock.patch("supervisor.autonomy.installed", return_value=True):
+            self.assertEqual(self.act("service", service="api", op="on", force="1")[0], 200)
         self.assertEqual(self.act("autonomy", op="off", force="1")[0], 200)
         self.assertEqual([r[1] for r in self.ran],   # the CLI guards them too: forced, they say so
-                         [["autonomy", "on", "--force"], ["api", "on", "--force"], ["autonomy", "off", "--force"]])
+                         [["autonomy", "on", "--force"], ["api", "restart", "--force"], ["autonomy", "off", "--force"]])
         self.assertEqual(len(self.logged), 3)
         self.assertIn("web: operator forced shaft autonomy on past the guard: the scheduler's runs", self.logged[0])
         self.assertIn("tundra (live since 14:06), wisp (live since 14:08)", self.logged[0])
@@ -311,6 +312,17 @@ class AGuardTheOperatorForces(ActionsTest):
         out = str(web_actions.service_buttons("model", False, runs, runs))
         self.assertIn(">Start</button>", out)
         self.assertNotIn("orce", out)
+
+    def test_api_restart_from_the_panel_keeps_the_mode_it_runs_in(self):
+        """Bug (2026-11-12): the panel's API restart ran `shaft api on`, which on a local-only Mac needs Tailscale and on a
+        tailnet-ready one turns on `tailscale serve`. An installed API restarts as it is (`api restart`); only a missing
+        one is installed with `api on`."""
+        self.running = []
+        with mock.patch("supervisor.autonomy.installed", return_value=True):
+            self.assertEqual(self.act("service", service="api", op="on")[0], 200)
+        with mock.patch("supervisor.autonomy.installed", return_value=False):
+            self.assertEqual(self.act("service", service="api", op="on")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["api", "restart"], ["api", "on"]])
 
     def test_the_web_ui_cannot_be_forced_to_restart_itself(self):
         status, body = self.act("service", service="web", op="on", force="1")

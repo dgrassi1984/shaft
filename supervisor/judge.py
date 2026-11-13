@@ -5,29 +5,29 @@ model at random from SHAFT_JUDGE_MODELS, never the model the judged instance run
 on MiMo). Haiku 5.5 left on 2026-10-16: on the same cycles it called 54% of wisp's claims unsupported where the blind
 GLM judge called 4%, Sonnet 21% and Opus 17%. Sonnet 5.5 left on 2026-10-20 for cost
 ($12-25 a day); MiMo and GLM 5.3 Flash since. DeepSeek V4.1 Flash is reserved for the independent second judge.
-The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
+The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Every judge
+call is modelcall.ask, whatever the provider: Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
 `fallbacks: "default"`); "openrouter/…" models go through OpenRouter under the instances' data policy
-(cloudllm.OPENROUTER_PROVIDER: no data collection, zero retention), with the schema in the instructions and the
-answer checked here. Muse Spark was left out: its only provider keeps prompts. Raw HTTP: the supervisor stays
-dependency-free by design (it is the trust anchor); keys come from PROJECT/.env.
+(cloudllm.OPENROUTER_PROVIDER: no data collection, zero retention), "custom/…" models to the operator's endpoint at
+their declared prices and "codex/…" models to a ChatGPT plan, each with the schema in the instructions and the
+answer checked here (_valid). Muse Spark was left out: its only provider keeps prompts. An operator whose one provider
+offers one model has one judge: the instance's own model then grades it, and the verdict says so
+(independence: same-model) — never as a stand-in for a judge whose key is missing.
 """
 from __future__ import annotations
 
 import json
 import random
-import re
 import time
-import urllib.error
-import urllib.request
 
-from . import core
-from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model, positive_int, secrets_env, whole
+from . import modelcall
+from .core import SUP_DIR, any_model, any_models, knob, positive_int, whole
 
 JUDGE_MODELS, JUDGE_SRC = knob(
     "SHAFT_JUDGE_MODELS",
     "openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash",
-    cloud_models, "the judge pool: picks at random, excluding the instance's model and the second judge",
+    any_models, "the judge pool: picks at random, excluding the instance's model and the second judge",
     group="Judging", services=("runs", "api", "web"))   # web: its stats count verdicts by the judges in the pool
 # Every live run was judged: 250+ a day at ~$0.07 a Sonnet judgment cost $12-25 a day (2026-10-17/19, #45). Which
 # runs are judged is drawn at random when a run is first up for judging, and a run left out is recorded apart
@@ -36,7 +36,6 @@ JUDGE_MODELS, JUDGE_SRC = knob(
 JUDGE_EVERY, _ = knob(
     "SHAFT_JUDGE_EVERY", "2", positive_int, "the main judge grades one live run in this many (1: every run)",
     group="Judging", services=("runs", "api"))          # api: record(kind='judgments') in a conversation says so
-API = "https://api.anthropic.com/v1/messages"
 
 
 class JudgeError(Exception):
@@ -67,21 +66,33 @@ def same_model(a: str | None, b: str | None) -> bool:
 
 
 class NoJudgeLeft(JudgeError):
-    """Every judge of the pool is one of the judged instance's own models: this judgment cannot be made, others can."""
+    """Every judge of a pool of several models is one of the judged instance's own models: this judgment cannot be
+    made, others can."""
 
 
 def pick(exclude=(), rng=random, avoid=()) -> str:
     """One judge for one judgment: at random from the pool, never one of `exclude` (the judged instance's models).
     The second judge's model is left out of the main rotation, and `avoid` too, while another judge is left: the
     cross-check stays independent. A pool that still lists it (a SHAFT_JUDGE_MODELS saved before 2026-11-03) uses it
-    only when no other judge may grade; that run then gets no second judgment (metrics.judge_pending)."""
+    only when no other judge may grade; that run then gets no second judgment (metrics.judge_pending).
+    A pool of one model that is the instance's own (the operator's one provider offers one model) is that model:
+    the caller records independence() with the verdict. A pool of several models, all the instance's, has no judge."""
     pool = [m for m in JUDGE_MODELS if not any(same_model(m, x) for x in exclude)]
+    if not pool and JUDGE_MODELS and all(same_model(m, JUDGE_MODELS[0]) for m in JUDGE_MODELS):
+        return JUDGE_MODELS[0]
     main = [m for m in pool if not same_model(m, JUDGE2_MODEL)]
     pool = [m for m in main if not any(same_model(m, x) for x in avoid)] or main or pool
     if not pool:
-        raise NoJudgeLeft(f"no judge left in SHAFT_JUDGE_MODELS={JUDGE_MODELS} once the instance's own model "
-                          f"{[x for x in exclude if x]} is left out: an instance is never judged by its own model")
+        raise NoJudgeLeft(f"no judge left in SHAFT_JUDGE_MODELS={JUDGE_MODELS} once the instance's own models "
+                          f"{[x for x in exclude if x]} are left out: while the pool holds other models, an instance "
+                          f"is never judged by its own model")
     return rng.choice(pool)
+
+
+def independence(model: str, exclude=()) -> dict:
+    """What a verdict records about its judge's independence: {"independence": "same-model"} when the judge is one of
+    the judged instance's own models (pick: a one-model pool), else nothing."""
+    return {"independence": "same-model"} if any(same_model(model, x) for x in exclude) else {}
 
 
 def rotation() -> str:
@@ -89,105 +100,69 @@ def rotation() -> str:
     return "rotation:" + ",".join(m for m in JUDGE_MODELS if not same_model(m, JUDGE2_MODEL))
 
 
-def _key_for(model: str) -> tuple[str, str]:
-    name = "OPENROUTER_API_KEY" if model.startswith("openrouter/") else "ANTHROPIC_API_KEY"
-    return name, secrets_env().get(name, "")
+def unavailable() -> str | None:
+    """None when every model of the rotation can be called, else why one cannot (a missing one would fail a share of
+    judgments at random). The rotation is pick()'s: the pool less the second judge, or the whole pool when that is
+    all it holds (an operator whose one provider offers one model)."""
+    pool = [m for m in JUDGE_MODELS if not same_model(m, JUDGE2_MODEL)] or list(JUDGE_MODELS)
+    if not pool:
+        return "SHAFT_JUDGE_MODELS is empty"
+    for m in pool:
+        if (reason := modelcall.available(m)):
+            return f"judge {m}: {reason}"
+    return None
 
 
 def available() -> bool:
-    """Every model of the rotation has its key (a missing one would fail a share of judgments at random)."""
-    pool = [m for m in JUDGE_MODELS if not same_model(m, JUDGE2_MODEL)]
-    return bool(pool) and all(_key_for(m)[1] for m in pool)
+    return unavailable() is None
 
 
 def ask(system: str, prompt: str, schema: dict, purpose: str, max_tokens: int = 16000,
         effort: str = "medium", model: str | None = None, exclude=()) -> dict:
     """One judgment by `model` (else one picked from the rotation, never one of `exclude`). Returns the parsed JSON
-    object matching `schema`. Callers that record who judged pick() first and pass the model. This layer owns the
-    length retries: an answer cut off at `max_tokens` is asked once more with twice the room, then fails; callers
-    add none of their own (a trial pair's judgment asked 16k+32k+32k+64k when both layers retried, review E5)."""
+    object matching `schema`. Callers that record who judged pick() first and pass the model. The call is modelcall's,
+    for every provider; it owns the length retries: an answer cut off at `max_tokens` is asked once more with twice
+    the room, then fails; callers add none of their own (a trial pair's judgment asked 16k+32k+32k+64k when both
+    layers retried, review E5)."""
     model = model or pick(exclude)
-    if model.startswith("openrouter/"):
-        return _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort)
+    return _ask(model, system, prompt, schema, purpose, max_tokens, effort, label=f"judge {model}")
+
+
+def _ask(model, system, prompt, schema, purpose, max_tokens, effort, label) -> dict:
     try:
-        return _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort)
-    except JudgeError as e:
-        if "hit max_tokens=" not in str(e):
-            raise
-    return _ask_claude(model, system, prompt, schema, purpose, max_tokens * 2, effort)
-
-
-def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> dict:
-    key = secrets_env().get("ANTHROPIC_API_KEY")
-    if not key:
-        raise JudgeError(f"no ANTHROPIC_API_KEY in {core.PROJECT / '.env'}; the judge {model} is unavailable")
-    body = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-        "fallbacks": "default",
-    }
-    req = urllib.request.Request(API, data=json.dumps(body).encode(), headers={
-        "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
-        "anthropic-beta": "server-side-fallback-2026-07-01"})
-    started, last_error = time.monotonic(), None
-    for attempt, wait in enumerate((0, 15, 60)):
-        time.sleep(wait)
-        try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                data = json.load(resp)
-            break
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:500]
-            last_error = f"HTTP {e.code}: {detail}"
-            if e.code not in (429, 500, 502, 503, 504, 529):
-                _log(purpose, model, None, time.monotonic() - started, last_error)
-                raise JudgeError(last_error) from e
-        except NETWORK_ERRORS as e:
-            last_error = f"network: {e}"
-    else:
-        _log(purpose, model, None, time.monotonic() - started, last_error)
-        raise JudgeError(f"judge {model} unreachable after retries: {last_error}")
-
-    usage = data.get("usage") or {}
-    stop = data.get("stop_reason")
-    if stop == "refusal":
-        _log(purpose, model, usage, time.monotonic() - started, "refusal")
-        raise JudgeError(f"judge {model} refused ({(data.get('stop_details') or {}).get('category')})")
-    if stop == "max_tokens":
-        _log(purpose, model, usage, time.monotonic() - started, "max_tokens")
-        raise JudgeError(f"judge {model} hit max_tokens={max_tokens}: no answer yet")
-    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-    try:
-        out = json.loads(text)
-    except ValueError as e:
-        _log(purpose, model, usage, time.monotonic() - started, f"bad json: {text[:200]}")
-        raise JudgeError(f"judge {model} returned non-JSON: {text[:200]!r}") from e
+        answer = modelcall.ask(model, system, [{"role": "user", "content": prompt}], max_tokens=max_tokens,
+                               effort=effort, schema=schema, purpose=purpose, check=_valid,
+                               log=lambda c: _log(purpose, c.model, c.usage, c.seconds, c.error, c.usd, c.provider,
+                                                  c.reasoning, c.seen))
+    except modelcall.ModelCallError as e:
+        raise JudgeError(f"{label}: {e}") from e
+    out = json.loads(answer.text)
     normalize_anticipated(out)
-    _log(purpose, data.get("model") or model, usage, time.monotonic() - started, None)
     return out
-
-
-SEEN_CHARS = 400   # the end of an unusable answer, kept in its usage line: where a dropped field shows
 
 
 def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoning=None, seen=None) -> None:
     """One line per judge call in judge_usage.jsonl: Claude calls are priced from their tokens (cloudllm.PRICES),
-    OpenRouter calls carry OpenRouter's own `usd`; an answer that was not usable carries what it ended with."""
+    OpenRouter calls carry OpenRouter's own `usd`, custom/ calls their declared price, codex/ calls plan usage
+    ($0, `plan` true); an answer that was not usable carries what it ended with."""
     SUP_DIR.mkdir(exist_ok=True)
     usage = usage or {}
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "purpose": purpose, "model": model,
            "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
            "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
            "seconds": round(seconds, 1), "error": error}
-    if model.startswith("openrouter/"):
-        rec.update(provider=provider, reasoning_tokens=reasoning)   # kept when OpenRouter's usage had no cost too
-    else:
+    if model.startswith("claude-"):
         from . import cloudllm
         rec.update(cloudllm.billed(usage))
         usd = cloudllm.usd(model, rec)
+        if usd is None and usage.get("priced_as"):     # a server-side fallback's unpriced id (modelcall._claude)
+            usd, rec["priced_as"] = cloudllm.usd(usage["priced_as"], rec), usage["priced_as"]
+    else:
+        rec.update(provider=provider, reasoning_tokens=reasoning)   # kept when OpenRouter's usage had no cost too
+        if usage.get("plan"):
+            rec["plan"] = True
+        if usage.get("estimated"):
+            rec["estimated"] = True
     rec.update(usd=usd, unpriced=usd is None)
     if seen is not None:
         rec["seen"] = seen
@@ -201,12 +176,13 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 # judge too and it graded four runs twice, agreeing with itself (#45); DeepSeek V4.1 Flash since, which no instance runs
 # on. Its model is left out of the main rotation (pick: there only when no other judge may grade, then that run gets
 # no second judgment), so the cross-check stays an independent family; the agreement
-# in stats.md counts only the current second judge against another model (metrics._second_section). Through
-# OpenRouter, under the same data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita,
-# DeepInfra if Novita is down, no data collection or retention); the schema is in the instructions and the answer is
-# checked here (_ask_openrouter).
+# in stats.md counts only the current second judge against another model (metrics._second_section). By default
+# through OpenRouter, under the same data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita,
+# DeepInfra if Novita is down, no data collection or retention); any model modelcall can call may be it (a custom/ or
+# codex/ one for an operator with only that provider). Off Anthropic the schema is in the instructions and the answer
+# is checked here (_valid).
 JUDGE2_MODEL, _ = knob(
-    "SHAFT_JUDGE2_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", openrouter_model, "the second judge, which "
+    "SHAFT_JUDGE2_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", any_model, "the second judge, which "
     "grades a sample of cycles again to measure the judges' agreement", group="Judging", services=("runs", "api"))
 JUDGE2_EVERY, _ = knob(
     "SHAFT_JUDGE2_EVERY", "4", whole, "the second judge grades one cycle in this many (0: never)", group="Judging",
@@ -218,7 +194,7 @@ JUDGE2_MAX_TOKENS = 32000
 
 
 def second_available() -> bool:
-    return JUDGE2_EVERY > 0 and bool(secrets_env().get("OPENROUTER_API_KEY"))
+    return JUDGE2_EVERY > 0 and modelcall.available(JUDGE2_MODEL) is None
 
 
 def normalize_anticipated(verdict: object) -> None:
@@ -228,99 +204,15 @@ def normalize_anticipated(verdict: object) -> None:
 
 
 def _valid(out: object, schema: dict) -> str:
-    """'' if `out` matches the (flat) schema, else what is wrong."""
+    """'' if `out` matches the (flat) schema, else what is wrong (modelcall.valid). The optional `anticipated` is kept
+    only as a boolean and never asked for again."""
     if not isinstance(out, dict):
         return "not a JSON object"
     normalize_anticipated(out)
-    for k, spec in schema["properties"].items():
-        if k == "anticipated":
-            continue
-        if k not in out:
-            return f"missing {k}"
-        v, t = out[k], spec.get("type")
-        if isinstance(t, list):
-            if all(_valid({k: v}, {"properties": {k: {**spec, "type": kind}}}) for kind in t):
-                return f"{k} is not a {t}"
-            continue
-        if t == "string" and not isinstance(v, str) or t == "boolean" and not isinstance(v, bool) or \
-                t == "integer" and (not isinstance(v, int) or isinstance(v, bool)) or \
-                t == "number" and (not isinstance(v, (int, float)) or isinstance(v, bool)) or \
-                t == "array" and not isinstance(v, list) or t == "object" and not isinstance(v, dict) or \
-                t == "null" and v is not None:
-            return f"{k} is not a {t}"
-        if "enum" in spec and v not in spec["enum"]:
-            return f"{k}={v!r} not in {spec['enum']}"
-    return ""
-
-
-def _json_in(text: str) -> object:
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    start, end = text.find("{"), text.rfind("}")
-    return json.loads(text[start:end + 1]) if start >= 0 and end > start else json.loads(text)
+    props = {k: v for k, v in schema["properties"].items() if k != "anticipated"}
+    return modelcall.valid(out, {**schema, "properties": props})
 
 
 def ask_second(system: str, prompt: str, schema: dict, purpose: str) -> dict:
     """One blind judgment by the second judge, checked against `schema`."""
-    return _ask_openrouter(JUDGE2_MODEL, system, prompt, schema, purpose, JUDGE2_MAX_TOKENS, None, label="second judge")
-
-
-def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, label=None) -> dict:
-    """A judgment through OpenRouter, checked against `schema`. An answer cut off for length is never parsed nor
-    shown back: it is asked again once with twice the room. A finished answer that does not match is shown back to
-    the model with what is wrong, and the whole object asked for again: GLM 5.3 Flash ended its JSON after
-    difficulty_reason in 14 of 84 attempts (2026-10-14/15), having settled novelty in its reasoning; asked blind
-    again it re-judged the case from scratch (2-4 min) and dropped it as often, while shown its answer it returned
-    the whole object, the other fields unchanged, in about a minute."""
-    from . import cloudllm
-    label = label or f"judge {model}"
-    key = secrets_env().get("OPENROUTER_API_KEY")
-    if not key:
-        raise JudgeError(f"no OPENROUTER_API_KEY in {core.PROJECT / '.env'}; the {label} is unavailable")
-    fields = json.dumps(schema["properties"], ensure_ascii=False)
-    instructions = (f"{system}\n\nAnswer with ONE JSON object and nothing else, with exactly these fields "
-                    f"(JSON schema of each): {fields}")
-    retried_length, problem, unusable, think = False, "", "", True
-    for attempt in range(3):
-        started = time.monotonic()
-        messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
-        if problem:
-            if unusable.strip():
-                messages.append({"role": "assistant", "content": unusable})
-            messages.append({"role": "user", "content": f"That answer is not usable: {problem}. Answer again with "
-                                                        f"the whole JSON object, every one of these fields: "
-                                                        f"{', '.join(schema['properties'])}."})
-        body = {"model": model, "max_tokens": max_tokens, "messages": messages}
-        if not think:
-            body["reasoning"] = {"enabled": False}
-        elif effort:
-            body["reasoning"] = {"effort": effort}
-        data, error = cloudllm._send(cloudllm._openrouter_request(body, key, stream=False))
-        usage = (data or {}).get("usage") or {}
-        cost = float(usage["cost"]) if usage.get("cost") is not None else None
-        reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
-        if error or not data:
-            _log(purpose, model, usage, time.monotonic() - started, error or "no response", cost, None, reasoning)
-            raise JudgeError(f"{label}: {error}{cloudllm._policy_hint(error or '')}")
-        choice = data["choices"][0]
-        if choice.get("finish_reason") == "length":       # no answer yet: never parsed, asked once with more room
-            _log(purpose, model, usage, time.monotonic() - started, f"length at {max_tokens}", cost,
-                 data.get("provider"), reasoning)
-            if retried_length:
-                raise JudgeError(f"{label} ran out of room twice (max_tokens {max_tokens})")
-            retried_length, max_tokens = True, max_tokens * 2
-            # Cut off still thinking (no text): more room only buys more thinking — mimo's provider ignores effort
-            # and reasoning.max_tokens (probed 2026-10-30) — so the retry answers without it.
-            think = bool(((choice.get("message") or {}).get("content") or "").strip())
-            continue
-        text = (choice.get("message") or {}).get("content") or ""
-        try:
-            out = _json_in(text)
-            problem = _valid(out, schema)
-        except ValueError:
-            problem = "not valid JSON"
-        _log(purpose, model, usage, time.monotonic() - started, problem or None, cost, data.get("provider"), reasoning,
-             seen=text[-SEEN_CHARS:] if problem else None)
-        if not problem:
-            return out
-        unusable = text
-    raise JudgeError(f"{label} gave no usable answer: {problem}")
+    return _ask(JUDGE2_MODEL, system, prompt, schema, purpose, JUDGE2_MAX_TOKENS, None, label="second judge")

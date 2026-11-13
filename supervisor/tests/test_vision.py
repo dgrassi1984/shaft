@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import battery, broker, cloudllm, core, metrics, runner, trial, vision
+from supervisor import battery, broker, cloudllm, core, metrics, modelcall, runner, trial, vision
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "template"
 
@@ -178,29 +178,32 @@ class DescribeTest(Case):
         self.photo.write_bytes(png(64, 48))
         (self.root / "secrets").mkdir()
         (self.root / "secrets" / "x.png").write_bytes(png(8, 8))
-        self.calls = []
+        self.calls, self.billed = [], []
 
-        def complete(instance, body, secrets, remembered):
-            self.calls.append((instance, body))
-            return {"choices": [{"message": {"content": "A red rectangle."}, "finish_reason": self.finish.pop(0)
-                                 if self.finish else "stop"}]}
-        self.finish: list[str] = []
-        p = mock.patch.object(cloudllm, "complete", complete)
-        p.start()
-        self.addCleanup(p.stop)
+        def ask(model, system, messages, **kw):     # modelcall: each attempt reaches the caller's log
+            self.calls.append((kw["purpose"], {"model": model, "messages": messages, **kw}))
+            kw["log"](modelcall.Call(model, {"input_tokens": 900, "output_tokens": 40}, 0.0001, 0.5, None, "end_turn"))
+            return modelcall.Answer("A red rectangle.", {}, 0.0001, model)
+        for p in (mock.patch.object(modelcall, "ask", ask), mock.patch.object(modelcall, "available", return_value=None),
+                  mock.patch.object(cloudllm, "spent_today", return_value=0.0),
+                  mock.patch.object(cloudllm, "_record", lambda *a, **kw: self.billed.append(a))):
+            p.start()
+            self.addCleanup(p.stop)
 
     def broker(self, **kw):
         return broker.Broker("wisp", self.root.parent, {}, self.root / "b.log", root=self.root, **kw)
 
     def test_describe_image_confined_and_billed(self):
-        b = self.broker(usage_name="wisp")
+        b = self.broker(usage_name="example")
         r = b.call("describe_image", {"path": "attachments/from-operator/20261016-091200/photo-1.png",
                                       "question": "what colour?"})
         self.assertTrue(r["ok"], r)
         self.assertIn("[described by claude-haiku-5-5, not seen by you", r["result"])
         self.assertIn("A red rectangle.", r["result"])
-        instance, body = self.calls[0]
-        self.assertEqual(instance, "wisp")                                   # billed to the instance, in its cap
+        purpose, body = self.calls[0]
+        self.assertEqual(purpose, "describe_image example")
+        self.assertEqual([(a[0], a[1], a[2], a[3], a[4]) for a in self.billed],      # billed to the instance, in
+                         [("example", broker.DESCRIBE_MODEL, 900, 40, 0.0001)])          # its cloud ledger and cap
         self.assertEqual(body["model"], broker.DESCRIBE_MODEL)
         self.assertIn("what colour?", body["messages"][0]["content"][1]["text"])
         outside = Path(tempfile.mkdtemp(prefix="shaft-vision-out-")) / "o.png"
@@ -217,13 +220,25 @@ class DescribeTest(Case):
         self.assertEqual(len(self.calls), 1)                                 # nothing refused reached the model
 
     def test_a_cut_description_is_asked_again_then_refused(self):
+        """modelcall asks a cut description again once with twice the room (test_modelcall); cut twice, the instance
+        is told to ask a narrower question."""
         b = self.broker()
-        self.finish = ["length", "stop"]
         self.assertTrue(b.call("describe_image", {"path": str(self.photo.relative_to(self.root))})["ok"])
-        self.assertEqual([c[1]["max_tokens"] for c in self.calls], [2000, 8000])
-        self.finish = ["length", "length"]
-        r = b.call("describe_image", {"path": str(self.photo.relative_to(self.root))})
-        self.assertIn("cut at 8000 tokens twice", r["error"])
+        self.assertEqual([c[1]["max_tokens"] for c in self.calls], [broker.DESCRIBE_TOKENS])
+        with mock.patch.object(modelcall, "ask", side_effect=modelcall.NoAnswerYet("cut")):
+            r = b.call("describe_image", {"path": str(self.photo.relative_to(self.root))})
+        self.assertIn(f"cut at {2 * broker.DESCRIBE_TOKENS} tokens twice; ask a narrower question", r["error"])
+
+    def test_describe_needs_a_model_that_sees_images_and_says_what_is_missing(self):
+        b = self.broker()
+        rel = str(self.photo.relative_to(self.root))
+        with mock.patch.object(broker, "DESCRIBE_MODEL", "gpu/bonsai2"):
+            self.assertIn("cannot see images", b.call("describe_image", {"path": rel})["error"])
+        with mock.patch.object(modelcall, "available", return_value="no OPENROUTER_API_KEY in the supervisor's .env"):
+            self.assertIn("no OPENROUTER_API_KEY", b.call("describe_image", {"path": rel})["error"])
+        with mock.patch.object(cloudllm, "spent_today", return_value=99.0):
+            self.assertIn("cap $", b.call("describe_image", {"path": rel})["error"])
+        self.assertEqual(self.calls, [])
 
     def test_at_most_ten_per_run(self):
         b = self.broker()
@@ -241,12 +256,12 @@ class DescribeTest(Case):
             (state / "a" / "p.png").write_bytes(self.photo.read_bytes())
             return broker.ReplayBroker("wisp", self.root.parent, {}, state / "b.log", state_root=state,
                                        start_commit="0", as_of=datetime.now(), cache=cache, cache_lock=lock,
-                                       billed="wisp@trial:t", tools_log=state / "t.log")
+                                       billed="example@trial:t", tools_log=state / "t.log")
         a, b = replay(), replay()
         self.assertEqual(a.call("describe_image", {"path": "a/p.png"})["result"],
                          b.call("describe_image", {"path": "a/p.png"})["result"])
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.calls[0][0], "wisp@trial:t")
+        self.assertEqual(self.billed[0][0], "example@trial:t")
 
     def test_battery_has_no_image_tools(self):
         self.assertIn("describe_image", battery.EXAM_OFF)

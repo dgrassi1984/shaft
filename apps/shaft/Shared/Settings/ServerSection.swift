@@ -4,6 +4,10 @@ import SwiftUI
 struct ServerSection: View {
     let store: ServicesStore
     @State private var confirming: String?
+    #if os(macOS)
+    @Environment(\.serverUpdater) private var updater
+    @Environment(\.phoneAccess) private var phoneAccess
+    #endif
 
     var body: some View {
         Section {
@@ -19,11 +23,18 @@ struct ServerSection: View {
                     serviceRow(service)
                 }
             }
+            #if os(macOS)
+            if let updater { UpdateServerRows(updater: updater) }
+            if let phoneAccess { PhoneAccessRows(access: phoneAccess) }
+            #endif
         } header: { Text("Services") } footer: {
             Text("These restart a service for all instances.").foregroundStyle(Color.textSecondary)
         }
         .listRowBackground(Color.elevated)
         .task { await store.load() }
+        #if os(macOS)
+        .task { updater?.checkForUpdate() }     // a local `shaft deploy --check`: not while a deploy runs
+        #endif
         .confirmationDialog(confirmation, isPresented: Binding(
             get: { confirming != nil }, set: { if !$0 { confirming = nil } }
         ), titleVisibility: .visible) {

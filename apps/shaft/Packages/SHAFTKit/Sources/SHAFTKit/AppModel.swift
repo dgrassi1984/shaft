@@ -22,20 +22,38 @@ public final class AppModel {
     /// otherwise: a notification about it shows no banner.
     public var visibleChat: ChatTarget?
 
-    public init() {
-        do {
+    private let start: () throws -> SHAFTSession
+
+    public convenience init() {
+        self.init(start: {
             #if os(iOS)
             // The app's defaults disappear on uninstall; the shared Keychain item does not.
             try PairingStore(store: KeychainStore.forMainBundle()).forgetOnFirstLaunch(defaults: .standard)
             #endif
-            session = try SHAFTSession.standard()
+            return try SHAFTSession.standard()
+        })
+    }
+
+    /// `start` opens the session; a failure is `startupError`, and `retryStart()` runs it again.
+    init(start: @escaping () throws -> SHAFTSession) {
+        self.start = start
+        retryStart()
+    }
+
+    /// Run the startup again (the Try again of the "could not start" screen), e.g. after the cause was removed.
+    public func retryStart() {
+        do {
+            session = try start()
+            startupError = nil
             connectBadge()
         } catch {
+            session = nil
             startupError = "SHAFT could not start: \(error.localizedDescription)"
         }
     }
 
     public init(session: SHAFTSession) {
+        self.start = { session }
         self.session = session
         connectBadge()
     }

@@ -115,7 +115,9 @@ final class MacState {
     }
 }
 
-/// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector.
+/// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector. Before a
+/// session, the setup gate (MacSetup): the setup wizard when SHAFT is not installed on this Mac, the pairing with it
+/// (no link) when it is, and the pasted-link pairing from the wizard's Welcome.
 struct MacRoot: View {
     static let windowID = "main"
     /// The window's least: with the sidebar collapsed it holds the chat beside the documents at up to 360 pt
@@ -130,13 +132,36 @@ struct MacRoot: View {
     static let splitChatMinimum: CGFloat = ChatShell.chatMinimum - ChatShell.inspectorWidth
     let model: AppModel
     let state: MacState
+    let setup: MacSetup
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        SessionRoot(model: model) { session, store in
-            MacChats(session: session, store: store, state: state)
-                .task { await VoiceReporter.atLaunch(client: store.client) }
+        Group {
+            if let error = setup.configurationError {
+                MarkMessage("SHAFT could not start", message: Text(error)) {
+                    Button("Try again") {
+                        setup.loadConfiguration()
+                        setup.update(model.session)
+                    }
+                    .buttonStyle(ProminentAction())
+                }
+            } else if let session = model.session, setup.route == .wizard {
+                SetupWizard(setup: setup, session: session)
+            } else if let session = model.session, setup.route == .localPairing {
+                LocalPairingView(setup: setup, session: session)
+            } else {
+                SessionRoot(model: model) { session, store in
+                    MacChats(session: session, store: store, state: state)
+                        .task { await VoiceReporter.atLaunch(client: store.client) }
+                }
+            }
         }
+        .environment(model)
+        .environment(\.serverUpdater, model.session.flatMap { setup.updater(for: $0) })
+        .environment(\.phoneAccess, model.session.flatMap { setup.phoneAccess(for: $0) })
+        // The gate decides again when the session opens or changes, and when a pairing comes or goes.
+        .onChange(of: model.session.map(ObjectIdentifier.init), initial: true) { setup.update(model.session) }
+        .onChange(of: model.session?.store.map(ObjectIdentifier.init)) { setup.update(model.session) }
         .frame(minWidth: Self.minimumWidth, minHeight: 480)
         // The reading surface behind everything, the title bar's area too.
         .containerBackground(Color.canvas, for: .window)

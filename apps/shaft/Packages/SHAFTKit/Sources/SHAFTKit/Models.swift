@@ -816,7 +816,7 @@ public struct ErrorBody: Codable, Sendable, Equatable {
 }
 
 /// The server's error: `code` for the app, `message` for the screen. `sha`/`diff` come with `stale`, `version` with
-/// `stale_version`.
+/// `stale_version`, `done` (the setup steps already done) with a refused `POST /setup/instance` (§18.1).
 public struct ServerError: Codable, Sendable, Equatable {
     public var code: String
     public var message: String
@@ -824,6 +824,7 @@ public struct ServerError: Codable, Sendable, Equatable {
     public var diff: String?
     public var version: String?
     public var settings: InstanceSettings? = nil
+    public var done: [String]? = nil
 
     public init(code: String, message: String, sha: String? = nil, diff: String? = nil, version: String? = nil) {
         self.code = code

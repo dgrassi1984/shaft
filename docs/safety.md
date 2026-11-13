@@ -164,11 +164,13 @@ committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`.
 ### Coding delegation
 
 `delegate_coding`: an
-Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
+Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`; any provider the supervisor calls:
+claude-…, openrouter/…, a priced custom/… or a codex/… plan model) reads the instance's code
 read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
 the gate passes; code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
 `SHAFT_CODER_DAILY_USD` (5) per instance per day. Admission blocks new tasks once
-recorded daily spend reaches the allowance. An admitted task can make up to 16 model calls
+recorded daily spend reaches the allowance. An OpenRouter reply without a cost is booked at the dearest
+qualifying provider's catalogue price; with no price to be had, at the rest of the day's allowance. An admitted task can make up to 16 model calls
 and can exceed that allowance (`supervisor/coder.py`, `MAX_TURNS`, `write`).
 Commits and `self/stats.md` record what was delegated.
 
@@ -441,7 +443,7 @@ in both orders; a sign test (α 0.1) gives better / worse / no clear difference,
 Nothing is applied: the instance adopts the change itself, and if it makes the trialled edit (the same lines
 removed and added, even if the rest of the file moved on) its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
 sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_TRIAL_FALLBACK_MODEL`
-(mimo); at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
+(mimo; `none` keeps it waiting for the local model); at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
 (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
 `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
 trials: `.supervisor/trials/<name>/<id>/`.
@@ -472,8 +474,12 @@ tell which) is graded from its tool log by a cloud model picked at random from a
 default MiMo and GLM 5.3 Flash), never the model the judged instance runs on; each verdict
 records its judge, and a cycle left out has no verdict rather than a failing one. The second judge's model
 (`SHAFT_JUDGE2_MODEL`, DeepSeek V4.1 Flash) stays out of the main rotation, so its cross-check is independent; a
-pool that still lists it uses it only when no other judge may grade, and that cycle gets no second judgment. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
-collection, zero retention). A trial pair keeps
+pool that still lists it uses it only when no other judge may grade, and that cycle gets no second judgment. Every
+judge call goes through `supervisor/modelcall.py`: Claude models straight to the Claude API; OpenRouter ones under the
+instances' data policy (no data collection, zero retention); `custom/` ones to the operator's endpoint at their declared
+prices; `codex/` ones to a ChatGPT plan, through a short-lived Codex app-server of the supervisor's own. A pool of one
+model that is the instance's own (an operator whose one provider offers one model) grades it with that model, and the
+verdict records `"independence": "same-model"`; a pool of several models never does. A trial pair keeps
 one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
 feed `self/stats.md`.
 

@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import judge
-from .core import NETWORK_ERRORS, cloud_model, jsonl_lines, knob, whole
+from .core import NETWORK_ERRORS, NO_FALLBACK, any_model, fallback_model, jsonl_lines, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
@@ -828,9 +828,12 @@ SPECS["describe_image"] = _spec(
      "question": {"type": "string", "description": "what you want to know (optional: a full description)"}},
     ["path"])
 DESCRIBE_MODEL, _ = knob(
-    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", cloud_model, "the model describe_image uses for an instance whose "
-    "own model cannot see images", group="Models and spend", services=("runs", "api"))
+    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", fallback_model, "the model describe_image uses for an instance whose "
+    "own model cannot see images (a custom/ model only when SHAFT_CUSTOM_VISION lists it), or none: image "
+    "description is off and no image is sent anywhere", group="Models and spend",
+    services=("runs", "api"))
 DESCRIBE_CALLS_PER_RUN = 10
+DESCRIBE_TOKENS = 4000          # a description's first ceiling; a cut one is asked once more with twice the room
 DESCRIBE_PROMPT = ("You describe an image for an AI assistant that cannot see it. Answer its question precisely. "
                    "Transcribe any text in the image exactly, and say what you cannot make out rather than guess.\n\n"
                    "Its question: ")
@@ -1258,7 +1261,14 @@ class Broker:
                     if planchannel.serves(original):
                         if not broker.local_fallback:
                             raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {broker.channel_down}")
-                        body = {**body, "model": planchannel.fallback_model(original)}
+                        if (fallback := planchannel.fallback_model(original)) == NO_FALLBACK:
+                            # No other provider: the channel's failure is the run's error (the channel stays down, so
+                            # each later call of the run gets it at once and the instance's retries end the run).
+                            prefix = original.partition("/")[0].upper()
+                            raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: "
+                                                           f"{broker.channel_down}; no fallback model "
+                                                           f"(SHAFT_{prefix}_FALLBACK_MODEL={NO_FALLBACK})")
+                        body = {**body, "model": fallback}
                         try:
                             fallback_vision = not images or vision.sees_images(body["model"])
                         except vision.VisionError:
@@ -1279,6 +1289,9 @@ class Broker:
                             reply = selfhosted.complete(broker.usage_name, body, **how)
                         elif body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
                             return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
+                                                    label or body["model"])
+                        elif body.get("stream") and str(body.get("model", "")).startswith("custom/"):
+                            return self._llm_stream(cloudllm.custom_stream(broker.usage_name, body, broker.secrets),
                                                     label or body["model"])
                         else:
                             reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
@@ -1778,17 +1791,19 @@ class Broker:
         if id:
             chat = web_chat.thread_of(self.name, self._thread_id(id) or id, writing=False)
             history = messages.history()
-            items = web_chat.dialogue(chat, history)
+            items = web_chat.dialogue(chat, history, senders=True)
             # Its own long answers are cut, and the view never starts after the operator's latest message: reading
             # a thread is what lets send_message answer in it (thread_reads), so what the operator said last is
-            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail)
-            lines = [f"operator ({ts}): {text}" if role == "user" else
-                     f"{self.name} ({ts}): " + (text if len(text) <= READ_THREAD_ITEM_CHARS else
+            # always in what it returns (a review found a long answer pushing it out of a plain 12,000-char tail).
+            # Each line names who wrote it: the setup's opening of a new instance is not the operator's.
+            lines = [f"operator ({ts}): {text}" if who["kind"] == web_chat.OPERATOR else
+                     f"setup, on the operator's behalf ({ts}): {text}" if who["kind"] == web_chat.SETUP else
+                     f"{who['name']} ({ts}): " + (text if len(text) <= READ_THREAD_ITEM_CHARS else
                                                 text[:READ_THREAD_ITEM_CHARS]
                                                 + f" … [{len(text) - READ_THREAD_ITEM_CHARS} more characters cut]")
-                     for ts, role, text in items]
+                     for ts, role, text, who in items]
             out = "\n\n".join(lines)
-            said = [k for k, (_, role, _) in enumerate(items) if role == "user"]
+            said = [k for k, (_, _, _, who) in enumerate(items) if who["kind"] == web_chat.OPERATOR]
             keep = len("\n\n".join(lines[said[-1]:])) if said else 0
             self.thread_reads[chat["id"]] = web_chat.thread_mark(chat, history)
             return out[-max(READ_THREAD_CHARS, keep):]
@@ -2138,6 +2153,7 @@ class Broker:
             raise ValueError(f"no directory {cwd!r} in your folder")
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         from .runner import RunRefused, _refused
+        env_dirs = pyenv.path_dirs(root, self.env_root)     # a broken app runtime: this run's error, before any file
         try:
             profile = sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
                                           job_state=self.run_confined_to)
@@ -2151,7 +2167,7 @@ class Broker:
         # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
         # interpreter's folder has no such name), then the system.
         system = [str(bindir)] if (bindir / "python3").exists() else [str(home), str(bindir)]
-        path = ":".join([*pyenv.path_dirs(root, self.env_root), *system, "/usr/bin:/bin:/usr/sbin:/sbin"])
+        path = ":".join([*env_dirs, *system, "/usr/bin:/bin:/usr/sbin:/sbin"])
         env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home),
                "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
                "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb",
@@ -2401,7 +2417,7 @@ class Broker:
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
                 "consult": None if self.usage_name != self.name or not self.model_allowed else
-                    field("consult", lambda: consult.envelope(self.name)),
+                    field("consult", lambda: consult.envelope(self.name, self.secrets)),
                 "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in unavailable else
                     field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name, **until)),
                                             "cap_usd": float(coder.DAILY_USD)}),
@@ -3840,23 +3856,39 @@ class Broker:
                f"image's, not the operator's instructions]\n" + self._describe(media, data, question)
 
     def _describe(self, media: str, data: bytes, question: str) -> str:
-        """The vision model's answer about one prepared image. A reply cut by its token ceiling is no answer: asked
-        again once with more room, then refused."""
-        from . import cloudllm, vision
-        if not vision.sees_images(DESCRIBE_MODEL):
-            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} cannot see images")
-        for ceiling in (2000, 8000):
-            body = {"model": DESCRIBE_MODEL, "max_tokens": ceiling, "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": vision.data_url(media, data)}},
-                {"type": "text", "text": DESCRIBE_PROMPT + question}]}]}
-            try:
-                reply = cloudllm.complete(self.usage_name, body, self.secrets, {})
-            except cloudllm.CloudError as e:
-                raise RuntimeError(str(e)) from None
-            choice = reply["choices"][0]
-            if choice.get("finish_reason") != "length":
-                return (choice["message"].get("content") or "").strip() or "(the model gave no description)"
-        raise RuntimeError(f"{DESCRIBE_MODEL}'s description was cut at {ceiling} tokens twice; ask a narrower question")
+        """The vision model's answer about one prepared image (modelcall, whatever the provider), billed to the
+        instance under its daily cloud cap. A reply cut by its token ceiling is no answer: modelcall asks again once
+        with twice the room, then it is refused."""
+        from . import cloudllm, modelcall, vision
+        if DESCRIBE_MODEL == NO_FALLBACK:
+            raise RuntimeError(f"image description is off (SHAFT_DESCRIBE_MODEL={NO_FALLBACK})")
+        if (reason := modelcall.reads_images(DESCRIBE_MODEL)):
+            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL}: {reason}")
+        if (reason := modelcall.available(DESCRIBE_MODEL)):
+            raise RuntimeError(f"SHAFT_DESCRIBE_MODEL={DESCRIBE_MODEL} is unavailable: {reason}")
+        spent = cloudllm.spent_today(self.usage_name)
+        if spent >= (cap := cloudllm.daily_cap(self.usage_name)):
+            raise RuntimeError(f"{self.usage_name} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
+
+        def billed(call: modelcall.Call) -> None:   # every attempt in the instance's cloud ledger, as complete() did
+            u = call.usage or {}
+            counts = cloudllm.billed(u) if call.model.startswith("claude-") else {
+                "input_tokens": u.get("prompt_tokens"), "output_tokens": u.get("completion_tokens")}
+            cloudllm._record(self.usage_name, call.model, counts["input_tokens"], counts["output_tokens"], call.usd,
+                             time.monotonic() - call.seconds, call.stop, call.error,
+                             cache={k: v for k, v in counts.items() if k.startswith("cache_")})
+        content = [{"type": "image_url", "image_url": {"url": vision.data_url(media, data)}},
+                   {"type": "text", "text": DESCRIBE_PROMPT + question}]
+        try:
+            answer = modelcall.ask(DESCRIBE_MODEL, "", [{"role": "user", "content": content}],
+                                   max_tokens=DESCRIBE_TOKENS, effort=None,
+                                   purpose=f"describe_image {self.usage_name}", log=billed)
+        except modelcall.NoAnswerYet:
+            raise RuntimeError(f"{DESCRIBE_MODEL}'s description was cut at {2 * DESCRIBE_TOKENS} tokens twice; "
+                               f"ask a narrower question") from None
+        except modelcall.ModelCallError as e:
+            raise RuntimeError(str(e)) from None
+        return answer.text.strip() or "(the model gave no description)"
 
 
 def _marked(text: str, limit: int) -> str:

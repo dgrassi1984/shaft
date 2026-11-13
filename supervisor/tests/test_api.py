@@ -12,7 +12,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
-from supervisor import api
+from supervisor import api, core
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
 EVENTS = [{"type": "ready", "name": "shaft"}, {"type": "status", "phase": "waiting for the model"},
@@ -121,6 +121,28 @@ class ApiTest(unittest.TestCase):
                 self.assertEqual([(r["text"], r["channel"]) for r in rows[-2:]],
                                  [("Yes,\ngo ahead.", channel)] * 2)
                 self.assertEqual(len(rows), 2 * (("web", "telegram", "api").index(channel) + 1))
+
+    def test_a_new_conversation_is_refused_while_a_deploy_restarts_the_services(self):
+        """`shaft deploy` holds core.restart_barrier from its look at the open conversations until the old API process is
+        gone: a conversation opening then is refused with 503 "try again", never registered (it would be cut), while one
+        already open goes on (the deploy saw it and waits for it)."""
+        sup = self.roots / ".sup-barrier"
+        with mock.patch.object(core, "SUP_DIR", sup), mock.patch.object(api, "TALKS", sup / "api_talks.json"):
+            api.Handler.conversations = api.Conversations()
+            going_on = [{"role": "user", "content": "already talking"}]
+            self.req("/chat/completions", {"model": "shaft", "messages": going_on}).read()
+            with core.restart_barrier(wait_s=1):
+                with self.assertRaises(urllib.error.HTTPError) as refused:
+                    self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "new"}]})
+                self.assertEqual(refused.exception.code, 503)
+                self.assertIn(core.RESTARTING_SAID, refused.exception.read().decode())
+                refused.exception.close()
+                self.req("/chat/completions", {"model": "shaft", "messages": going_on + [
+                    {"role": "assistant", "content": "reply"}, {"role": "user", "content": "more"}]}).read()
+            talks = json.loads((sup / "api_talks.json").read_text())
+            self.assertEqual(len(talks), 1)                     # the refused one was never registered
+            self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "new"}]}).read()
+            self.assertEqual(len(json.loads((sup / "api_talks.json").read_text())), 2)
 
     def test_empty_chat_and_rejected_interject_are_not_recorded(self):
         self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "  "}]}).read()
@@ -696,9 +718,10 @@ class InboxDoorbellTest(unittest.TestCase):
         self.assertEqual(len(self.inbox()), 2)
 
     def test_inbox_key_command_creates_the_key_once(self):
-        """Also the bug where api._set_secret used SUP_DIR without importing it (NameError on a first `api on`)."""
+        """Also the bug where the old api._set_secret used SUP_DIR without importing it (NameError on a first `api on`)."""
         env = {}
         with mock.patch.object(api, "secrets_env", lambda: env), mock.patch.object(api, "url", return_value="u/v1"), \
+                mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "SUP_DIR", self.sup), \
                 mock.patch("sys.stdout", new_callable=io.StringIO) as out, mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertEqual(api.command("inbox-key"), 0)
         key = out.getvalue().strip()

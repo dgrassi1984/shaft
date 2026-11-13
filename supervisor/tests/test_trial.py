@@ -638,6 +638,22 @@ class LocalTimeTest(Fixture):
         t["queued_at"] = (datetime.now() - timedelta(hours=trial.LOCAL_WAIT_H + 1)).isoformat()
         self.assertEqual(trial._pair_model(t, {"preempted": 0}, self.project), trial.FALLBACK_MODEL)
 
+    def test_fallback_none_never_moves_a_pair_to_a_cloud_model(self):
+        """SHAFT_TRIAL_FALLBACK_MODEL=none (no cloud provider for trials): a local trial's pairs wait for the local
+        model's idle time however long or often preempted; a trial that would run on the cloud is refused when
+        asked for, not left to fail."""
+        self.enterContext(mock.patch.object(trial, "FALLBACK_MODEL", "none"))
+        self.schedule(datetime.now() - timedelta(minutes=110))   # busy soon: no local slot now
+        t = {"model": "auto", "llm": {"local": True}, "created": datetime.now().isoformat(), "instance": NAME,
+             "by": "instance", "queued_at": (datetime.now() - timedelta(hours=trial.LOCAL_WAIT_H + 1)).isoformat()}
+        self.assertIsNone(trial._pair_model(t, {"preempted": 2}, self.project))
+        self.schedule(datetime.now() - timedelta(minutes=10))    # free: the local model, never the cloud
+        self.assertEqual(trial._pair_model(t, {"preempted": 2}, self.project), "local")
+        self.assertIsNone(trial._pair_model({**t, "model": "cloud"}, {"preempted": 0}, self.project))
+        with self.assertRaisesRegex(trial.TrialError, "SHAFT_TRIAL_FALLBACK_MODEL=none"):
+            trial.create(NAME, {"shaft/x.py": b"# x\n"}, "on the cloud", by="operator", project=self.project,
+                         model="cloud")
+
 
 class FlowTest(Fixture):
     """Judging, verdict, delivery and probation, with the replays and the judge stubbed."""

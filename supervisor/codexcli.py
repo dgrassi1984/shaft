@@ -5,7 +5,9 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
+import signal
 import contextlib
 import fcntl
 import sqlite3
@@ -14,8 +16,8 @@ import tempfile
 import time
 from typing import Callable
 
-from . import planchannel, sandbox
-from .core import SUP_DIR, cloud_model, knob, positive_int
+from . import core, planchannel, sandbox
+from .core import SUP_DIR, channel_fallback, knob, positive_int
 
 
 def serves(model: str | None) -> bool:
@@ -44,8 +46,9 @@ MODELS, _ = knob("SHAFT_CODEX_MODELS", "codex/gpt-6-astra,codex/gpt-6.1-sol", _m
     "Codex models offered to instances, comma separated", group="Codex", services=("runs", "api"))
 WEEKLY_PCT, _ = knob("SHAFT_CODEX_WEEKLY_PCT", "85", _percent,
     "stop Codex calls at this percentage of the weekly allowance", group="Codex", services=("runs", "api"))
-FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", cloud_model,
-    "cloud model used for the run after a Codex failure", group="Codex", services=("runs", "api"))
+FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", channel_fallback,
+    "cloud model used for the run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or none: the "
+    "failure ends the run", group="Codex", services=("runs", "api"))
 TIMEOUT_S, _ = knob("SHAFT_CODEX_TIMEOUT_S", "900", positive_int,
     "seconds Codex may take for one model step; held tool calls are exempt", group="Codex", services=("runs", "api"))
 LOG_HOURS, _ = knob("SHAFT_CODEX_LOG_HOURS", "24", positive_int,
@@ -210,7 +213,8 @@ class Channel(planchannel.Channel):
         (home / "config.toml").write_text("")
         auth = home / "auth.json"
         if not auth.is_file():
-            raise CodexFailure("Codex login missing; run shaft codex login")
+            raise CodexFailure(core.say("Codex login missing; run shaft codex login",
+                                        "Codex is not signed in: sign in with ChatGPT on the Model step"))
         _prune_logs(home)
         self._folder = Path(tempfile.mkdtemp(prefix="shaft-codex-")).resolve()
         argv = [BIN]
@@ -384,3 +388,139 @@ class Channel(planchannel.Channel):
 
     def _cancel_turn(self, turn):
         self._request("turn/interrupt", {"threadId": self._session, "turnId": turn})
+
+
+# -- signing in without a terminal (`shaft codex login --json`, the Mac app's Model step) ------------------------------
+# `codex login --device-auth` prints a page to open and a one-time code to enter there, then polls until the operator
+# has entered it; it opens no browser itself and needs no terminal. The app opens the page and shows the code.
+LOGIN_TIMEOUT_S = 600
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_LINK = re.compile(r"https?://[^\s<>\"'`]+")
+_CODE = re.compile(r"[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+")
+
+
+class LoginStopped(Exception):
+    """SIGTERM or SIGHUP reached the sign-in: whoever started it (the app's Cancel) wants it gone."""
+
+
+def _plain(line: str) -> str:
+    return _ANSI.sub("", line).strip()
+
+
+def _stop_login(proc: subprocess.Popen) -> None:
+    """The CLI and anything it started (its own process group) end now: SIGTERM, then SIGKILL after 5 s."""
+    if proc.poll() is not None:
+        return
+    for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, sig)
+        try:
+            proc.wait(wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None = None) -> tuple[bool, str]:
+    """`codex login --device-auth` with CODEX_HOME=home and stdin closed. `emit` gets `{"url": …}` and `{"code": …}` as
+    soon as the CLI prints them (each once). (True, "") once it exits 0 with a login in `home` (what `shaft codex status`
+    reads, auth.json); else (False, its real error). A timeout, SIGTERM/SIGHUP or the parent's exit (the app quit) stops
+    the CLI first: nothing of this sign-in keeps running."""
+    import queue
+    import threading
+    limit = LOGIN_TIMEOUT_S if timeout is None else timeout
+    lines: queue.Queue = queue.Queue()
+    handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        def stop(signum, frame):
+            raise LoginStopped(signal.Signals(signum).name)
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            handlers[sig] = signal.signal(sig, stop)
+    parent = os.getppid()
+    proc = None
+    readers: list = []
+    try:
+        proc = subprocess.Popen([BIN, "login", "--device-auth"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env={**os.environ, "CODEX_HOME": str(home), "NO_COLOR": "1"},
+                                start_new_session=True)
+
+        def read(name, stream):
+            with contextlib.suppress(ValueError, OSError):      # closed under it once the sign-in is over
+                for raw in iter(stream.readline, b""):
+                    lines.put((name, raw.decode("utf-8", "replace")))
+            lines.put((name, None))
+        for name, stream in (("out", proc.stdout), ("err", proc.stderr)):
+            readers.append(threading.Thread(target=read, args=(name, stream), daemon=True))
+            readers[-1].start()
+        deadline, open_streams, exited = time.monotonic() + limit, 2, None
+        url = code = None
+        expect_url = expect_code = None                # the stream whose prompt announced a link, a code
+        # what each stream printed besides the page and the code, and where the code was on the stream that printed it
+        # (only one stream's order is known: the two are read apart)
+        said: dict[str, list[str]] = {"out": [], "err": []}
+        code_at: tuple[str, int] | None = None
+        def over() -> str:
+            """Why the sign-in must end now, whatever Codex is doing: '' while it may go on."""
+            if time.monotonic() > deadline:
+                return (f"Codex sign-in timed out after {round(limit / 60) or 1} min: the code was not entered in time. "
+                        "Sign in again for a new code.")
+            return "the app that started this sign-in quit" if os.getppid() != parent else ""
+
+        while open_streams:
+            if why := over():
+                return False, why
+            if proc.poll() is not None:
+                exited = exited or time.monotonic()
+                if time.monotonic() - exited > 2:      # something it started keeps its output open: it is done
+                    break
+            try:
+                name, line = lines.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if line is None:
+                open_streams -= 1
+                continue
+            text = _plain(line)
+            if not text:
+                continue
+            # the page: a link on its own line, or the first one after "Open this link" (never one inside an error)
+            found = _LINK.search(text)
+            if url is None and found and (expect_url == name or _LINK.fullmatch(text)):
+                url = found.group(0).rstrip(".,;:)")
+                emit({"url": url})
+                continue
+            # the code: the line right after "one-time code", or one shaped like a device code (ABCD-1234)
+            if code is None and (expect_code == name and re.fullmatch(r"[A-Za-z0-9-]{4,32}", text)
+                                 or _CODE.fullmatch(text)):
+                code, code_at = text, (name, len(said[name]))
+                emit({"code": code})
+                continue
+            low = text.lower()
+            if "open this link" in low:
+                expect_url = name
+            expect_code = name if "one-time code" in low else None if expect_code == name else expect_code
+            said[name].append(text)
+        # Its output closed, but Codex may still run (and log in later): it stays under the same limits until it exits.
+        while (status := proc.poll()) is None:
+            if why := over():
+                return False, why
+            time.sleep(0.1)
+        if status == 0 and (home / "auth.json").is_file():
+            return True, ""
+        def told(stream):          # its own words: on the stream with the prompt, only what came after the code
+            rows = said[stream][code_at[1]:] if code_at and code_at[0] == stream else said[stream]
+            return [r for r in rows if not r.startswith("Continue only if you started this login")]
+        words = told("err") or told("out")
+        return False, (" ".join(words) or f"codex login --device-auth exited with status {status}"
+                       + ("" if status else f", leaving no login in {home}"))
+    except OSError as e:
+        return False, f"could not run {BIN}: {e}"
+    finally:
+        if proc is not None:
+            _stop_login(proc)
+            for reader in readers:
+                reader.join(1)
+            for stream in (proc.stdout, proc.stderr):
+                stream.close()
+        for sig, previous in handlers.items():
+            signal.signal(sig, previous)

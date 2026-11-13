@@ -5,7 +5,9 @@ It runs the real `/app/v1` (supervisor/app_api.py, web_chat, docs, comments, fee
 over a temporary SUP_DIR and instances folder it seeds itself, never the real `.supervisor/` or `instances/`. What it
 fakes is what lies outside the web service, as supervisor/tests/test_app_api.py does:
 
-- the tailnet: every request gets the login `tailscale serve` would add, and the host is 127.0.0.1:<port>;
+- the tailnet: every request gets the login `tailscale serve` would add, and the host is 127.0.0.1:<port>; but a
+  request of a device paired as a Mac app (platform `macos`) to /app/v1 comes as the Mac app on the server's own Mac
+  does, on loopback without that header: the setup routes that only loopback may use (docs/app-api.md §18) answer it;
 - the API a reply streams from: a send starts a scripted reply here (activity, an answer streamed in pieces, then the
   real `web_chat._finish`); a message containing "fail" fails as a model 502 does, "slow" streams for a minute,
   "wide" answers with a 12-column table and a 400-character line of code;
@@ -14,17 +16,37 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 - the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json;
 - settings: config and tool settings belong to the fixture's instances, and writes run in process;
 - services: fake records start with this process's live pid; restarts change only those records. No CLI or launchd
-  is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub.
+  is called. Only docs, limits, channel, pause, resume, api on, api restart, web restart and autonomy restart are
+  allowed by the command stub;
+- the setup verbs behind /app/v1/setup/* (docs/app-api.md §18) the Mac app's wizard calls: `new` makes the instance's
+  folders here (paused, with its first-reply marker), `config set` and `drive set` write them, `first-reply` is the real
+  verb on this folder, `secrets set` keeps only the key's name in <dir>/setup.json (never its value), and `provider use`
+  and `provider check` answer as the real verbs would: OpenRouter covers everything once its key was set, and is off
+  with the missing key before; a check fails for a model whose name contains "fail". The drives come from a fixture
+  template (<dir>/template/drive.md). Access (§18.6): `share` is the real check and setting on this folder, `browser
+  install` only records a fake Chromium version in <dir>/setup.json, `tools <n> on|off <tool>` writes the instance's
+  tool settings here, and `telegram token` keeps the instance's name (never the token), refusing a token without ":"
+  or containing "bad"; web search reads as set once SCRAPEBADGER_API_KEY was saved. `telegram on` writes a live
+  service record (never launchd); `telegram pair --json` issues a real code on this folder, and the fixture "sends" it
+  to the bot PAIR_AFTER_S (3 s) later, so the wizard sees the pairing land.
+- Google (§18.6–18.7): never Google. The app runs `shaft google client|login` itself, against the installed server, which
+  a fixture run has not: `act google [address]` stands in for that login, writing an account `google` (a fake token) on
+  this folder. Its labels and calendars are GOOGLE_LABELS and GOOGLE_CALENDARS; `mail|calendar|gdrive|gchat <n> grant`
+  and their revokes run the real grant setters here, refusing a label or calendar the account does not have, and a
+  label whose name contains "Refused" (to drive the wizard's first-failure stop).
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>] [--slow-seen 5]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
     python3 apps/shaft/DevServer/fixture_server.py act   --dir /tmp/shaft-fixture --port 8899 <what> [text]
 
-`act` (run while `serve` runs, on the same folder; pass the same --simctl): `message <instance> [text]` and
+`act` (run while `serve` runs, on the same folder; pass the same --simctl): `google [address]` (the operator's Google
+account `google` signed in, as the app's local `shaft google login` would), `message <instance> [text]` and
 `question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
-`services drain-end` finishes a pending scheduler drain and changes its fake pid.
+`services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
+GET /app/v1/version answer as a server of that API version, `version missing` as one older than the route (404), and
+`version` alone the real answer again (docs/app-api.md §19).
 
 `--slow-seen SECONDS` holds every "mark seen" answer that long, so leaving a chat at once cancels the request in flight.
 
@@ -47,8 +69,13 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 ME = "operator@example.com"
+PAIR_AFTER_S = 3.0          # a pairing code "sent to the bot" this long after the wizard asked for it (tests shorten it)
 TOPIC = os.environ.get("SHAFT_APNS_TOPIC", "")
 INSTANCES = ("tundra", "wisp", "ada")
+GOOGLE_LABELS = ["Assistant", "Receipts", "Refused here", "Travel"]
+GOOGLE_CALENDARS = [{"id": ME, "title": ME, "summary": ME, "primary": True, "access": "owner"},
+                    {"id": "team@group.calendar.google.com", "title": "Team", "summary": "Team", "primary": False,
+                     "access": "reader"}]
 
 
 def setup(base: Path, port: int):
@@ -63,6 +90,10 @@ def setup(base: Path, port: int):
     import supervisor
     from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
                             opconfig, version, web, web_chat, webpush, web_settings)
+    from supervisor import __main__ as shaft_cli       # the real `first-reply` verb, on this folder (SUP_DIR below)
+    from supervisor import setup as setup_access       # GET/POST /access answers (§18.6)
+    from supervisor import calendar as calendar_mod, google as google_mod, mail as mail_mod   # never Google here
+    from supervisor import telegram as telegram_mod    # the real pairing state, on this folder (SUP_DIR above)
 
     # setup can be called again in the same test process after supervisor imports are cached.
     for module_name, module in list(sys.modules.items()):
@@ -73,28 +104,165 @@ def setup(base: Path, port: int):
     mock.patch.object(core, "SETTINGS_FILE", base / "sup" / "settings.env").start()
 
     inst = base / "instances"
-    for name in INSTANCES:
+    template = base / "template"
+    template.mkdir(exist_ok=True)
+    if not (template / "drive.md").exists():
+        (template / "drive.md").write_text(TEMPLATE_DRIVE)
+
+    def make_instance(name: str) -> Path:
+        root = inst / name
         for d in ("shaft", ".git", "notes/docs", "inbox"):
-            (inst / name / d).mkdir(parents=True, exist_ok=True)
-        config = inst / name / "config.env"
+            (root / d).mkdir(parents=True, exist_ok=True)
+        config = root / "config.env"
         if not config.exists():
             config.write_text(f'LLM_MODEL="{cloudllm.CLOUD_MODELS[0]}"\nLLM_BASE_URL="broker"\n'
                               'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES="5"\nOPERATOR_NAME="Operator"\n')
-        choices = inst / name / "shaft" / "config.py"
+        choices = root / "shaft" / "config.py"
         if not choices.exists():
             choices.write_text('CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high")}\n')
-    for name in ("api", "scheduler"):
+        return root
+
+    for name in INSTANCES:
+        make_instance(name)
+
+    def names() -> list[str]:
+        """The seeded instances, then those the setup wizard created here (`new`)."""
+        made = sorted(d.name for d in inst.iterdir() if d.name not in INSTANCES and (d / "shaft").is_dir())
+        return [*INSTANCES, *made]
+    for name in ("api", "scheduler", "web"):        # web: the release GET /app/v1/version names (serve records its own)
         if not (base / "sup" / "services" / f"{name}.json").exists():
             _service_record(base, name, os.getpid())
     apns = _stub_apns(base)
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     real_respond = web.respond
 
-    def respond(req):                                  # what `tailscale serve` adds to every request
-        req.headers = {**req.headers, "tailscale-user-login": ME}
-        return real_respond(req)
+    mock.patch.object(web, "LOCAL", True).start()     # the Mac app's loopback path (SHAFT_WEB_LOCAL=on), on this port
+    mock.patch.object(web, "local_hosts", return_value=hosts).start()
 
-    def run_now(args, timeout=60, who="top"):
+    def mac_app(req) -> bool:
+        """A request of a device paired as the Mac app, to /app/v1: it comes on loopback, as on the server's own Mac."""
+        _, _, cred = (req.headers.get("authorization") or "").partition(" ")
+        dev = cred.strip().partition(".")[0]
+        return req.path.startswith("/app/v1/") and (web.devices().get(dev) or {}).get("platform") == "macos"
+
+    def respond(req):                                  # what `tailscale serve` adds to every request
+        if not mac_app(req):
+            req.headers = {**req.headers, "tailscale-user-login": ME}
+        response = real_respond(req)
+        # `act version`: answer as an older server would (§19), once the real route has checked the device.
+        old = _read_json(base / "version.json")
+        if old and response.status == 200 and req.path.split("?")[0] == "/app/v1/version":
+            from supervisor import app_api
+            if old.get("missing"):
+                return app_api.error(404, "not_found", f"Nothing at {req.path}.")
+            return app_api._json(200, {"server": old.get("server", "v0.0.1"), "api": old["api"]})
+        return response
+
+    setup_state = base / "setup.json"            # the key names set (never their values) and the provider in use
+    from supervisor import app_api
+    # The instances `new` finished (the real check reads the mind store's creation commit, which the fake `new` makes
+    # no git store for): a retry of the wizard finishes those, and refuses one `new` left halfway.
+    mock.patch.object(app_api, "_unfinished", side_effect=lambda name: None if name in _read_json(setup_state).get(
+        "created", []) else "its memory store was never made").start()
+
+    def run_json(args, timeout=60, who="top", input=None):
+        # The setup verbs (docs/app-api.md §18), faked over this folder: never the real subprocess runner, which would
+        # run them against this checkout's own .env and instances. An unknown verb raises.
+        if not args:
+            raise ValueError("fixture command needs a verb")
+        state = _read_json(setup_state)
+        if args[0] == "new" and len(args) >= 2:
+            name = args[1]
+            then = args[args.index("--paused-until-first-reply") + 1] if "--paused-until-first-reply" in args else None
+            if not core.NAME_RE.match(name) or name == "operator":
+                return 2, [{"ok": False, "error": "instance names: lowercase letters, digits and '-', starting with a "
+                                                  "letter (not 'operator')"}]
+            if (inst / name).exists():
+                return 2, [{"ok": False, "error": f"instance {name!r} already exists"}]
+            if then:                                   # as `shaft new`: paused before its folders exist
+                core.set_paused(name, True, reason="waiting for the operator's first reply", note=False)
+                shaft_cli._write_first_reply(name, then)
+            root = make_instance(name)
+            (root / "drive.md").write_text((template / "drive.md").read_text())
+            state["created"] = sorted({*state.get("created", []), name})      # `new` finished: its mind store's commit
+            _write_json(setup_state, state)
+            return 0, [{"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
+                        "paused": bool(then)}]
+        if args[0] == "first-reply" and len(args) >= 3:
+            out: list[str] = []
+            with mock.patch.object(shaft_cli, "print", create=True,
+                                   side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = shaft_cli.cmd_first_reply(args[1], args[2], True)
+            return code, [json.loads(line) for line in out]
+        if args[:2] == ["secrets", "set"] and len(args) >= 3:
+            if not (input or "").strip():
+                return 1, [{"ok": False, "error": f"no value for {args[2]} on stdin"}]
+            state["secrets"] = sorted({*state.get("secrets", []), args[2]})
+            _write_json(setup_state, state)
+            return 0, [{"ok": True, "name": args[2]}]
+        if args == ["telegram", "pair", "--json"]:          # the real code on this folder; "sent" PAIR_AFTER_S later
+            try:
+                code = telegram_mod.new_pairing_code()
+            except telegram_mod.TelegramError as e:
+                return 1, [{"ok": False, "error": str(e)}]
+            timer = threading.Timer(PAIR_AFTER_S, telegram_mod.try_pair, ({"id": 1, "username": "fixture_operator"}, code))
+            timer.daemon = True
+            timer.start()
+            return 0, [{"ok": True, "code": code, "minutes": telegram_mod.PAIR_MINUTES}]
+        if args[:2] == ["provider", "use"] and len(args) >= 3:
+            return provider_use(args[2], _flags(args[3:]), state)
+        if args[:2] == ["provider", "check"] and len(args) >= 3:
+            return provider_check(args[2], state)
+        raise ValueError(f"the fixture server has no fake for {' '.join(args[:2])}")
+
+    def provider_use(provider: str, flags: dict, state: dict):
+        if provider == "custom":
+            for need, why in (("model", "custom needs --model (the model name on the endpoint)"),
+                              ("price_in", "custom needs --price-in and --price-out (dollars per million tokens): an "
+                                           "unpriced model would spend money the daily cap cannot count"),
+                              ("price_out", "custom needs --price-in and --price-out (dollars per million tokens): an "
+                                            "unpriced model would spend money the daily cap cannot count"),
+                              ("base_url", "custom needs --base-url (the OpenAI-compatible endpoint, e.g. https://host/v1)")):
+                if need not in flags:
+                    return 2, [{"ok": False, "error": why}]
+            model = "custom/" + flags["model"].removeprefix("custom/")
+        elif "model" in flags and provider == "openrouter" and not flags["model"].startswith("openrouter/"):
+            return 2, [{"ok": False, "error": f"--model for openrouter is an openrouter/… model, not {flags['model']!r}"}]
+        else:
+            model = flags.get("model") or {"openrouter": "openrouter/xiaomi/mimo-v2.6-pro",
+                                           "codex": "codex/gpt-6-astra"}[provider]
+        functions = ["instances", "judge", "judge2", "coder", "consult", "describe", "recap", "trial"]
+        off: dict[str, str] = {}
+        if provider == "openrouter" and "OPENROUTER_API_KEY" not in state.get("secrets", []):
+            off = {fn: "OPENROUTER_API_KEY is not set (shaft secrets set OPENROUTER_API_KEY)" for fn in functions}
+        if provider == "codex":
+            functions.remove("instances")          # an instance's own model is chosen per instance
+        if provider == "custom":
+            functions.remove("trial")              # `none`: a choice, not a gap
+            if not flags.get("vision"):
+                off["describe"] = f"{model} does not read images: mark it with SHAFT_CUSTOM_VISION"
+        judge = "custom/" + flags["judge_model"].removeprefix("custom/") if flags.get("judge_model") else None
+        state["provider"] = {"name": provider, "models": [m for m in (model, judge) if m]}
+        _write_json(setup_state, state)
+        return 0, [{"ok": True, "provider": provider, "model": model, "changed": ["SHAFT_JUDGE_MODELS"], "written": {},
+                    "covers": [fn for fn in functions if fn not in off], "off": off, "not_live": {}}]
+
+    def provider_check(provider: str, state: dict):
+        used = state.get("provider") or {}
+        if used.get("name") != provider:
+            return 1, [{"ok": False, "model": None,
+                        "error": f"no {provider}/ model is configured: run shaft provider use {provider}"}]
+        rows = []
+        for model in used["models"]:
+            error = None
+            if provider == "openrouter" and "OPENROUTER_API_KEY" not in state.get("secrets", []):
+                error = "OpenRouter HTTP 401: No auth credentials found"
+            elif "fail" in model:
+                error = f"{model}: HTTP 404: the fixture's endpoint has no such model"
+            rows.append({"ok": error is None, "model": model, "error": error})
+        return (0 if all(r["ok"] for r in rows) else 1), rows
+
+    def run_now(args, timeout=60, who="top", input=None):
         # Never fall through to actions' real subprocess runner, including for an unknown verb.
         if not args:
             raise ValueError("fixture command needs a verb")
@@ -105,9 +273,63 @@ def setup(base: Path, port: int):
             with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
                 code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
             return code == 0, out[-1] if out else ""
+        if verb == "config" and len(args) >= 4 and args[2] == "set":
+            name = args[1]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            config = inst / name / "config.env"
+            lines = config.read_text().splitlines()
+            for pair in args[3:]:
+                key, _, value = pair.partition("=")
+                lines = [l for l in lines if not l.startswith(f"{key}=")] + [f'{key}="{value}"']
+            config.write_text("\n".join(lines) + "\n")
+            return True, f"{name}: saved {', '.join(p.partition('=')[0] for p in args[3:])}"
+        if verb == "drive" and len(args) >= 7 and args[2] == "set":          # the real verb, on this folder
+            out = []
+            with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = opconfig.drive_command(args[1], "set", args[args.index("--file") + 1],
+                                              args[args.index("--expect-sha") + 1])
+            return code == 0, out[-1] if out else ""
+        if verb == "share" and len(args) == 3:             # the real check and setting, on this folder
+            name = args[1]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            try:
+                path = core.set_shared_folder(name, None if args[2] == "off" else args[2])
+            except ValueError as e:
+                return False, str(e)
+            return True, f"{name} may read {path} as shared/ (read-only)" if path else f"{name} has no shared folder"
+        if args == ["browser", "install"]:                # never Playwright: a version recorded here
+            state = _read_json(setup_state)
+            state["browser"] = "1.58.0-fixture"
+            _write_json(setup_state, state)
+            return True, "Chromium 1.58.0-fixture installed"
+        if verb == "tools" and len(args) == 4 and args[2] in ("on", "off"):
+            name, tool = args[1], args[3]
+            if name not in names():
+                return False, f"no instance named {name!r}"
+            off = core.disabled_tools(name)
+            core._update_tool_settings(name, off=sorted(off - {tool} if args[2] == "on" else off | {tool}))
+            return True, f"{name}: {tool} {args[2]}"
+        if verb in ("mail", "calendar", "gdrive", "gchat") and len(args) >= 4 and args[2].startswith(("grant", "revoke")):
+            return google_grant(args)
+        if args[:2] == ["telegram", "token"] and len(args) == 3:
+            name, token = args[2], (input or "").strip()
+            if ":" not in token or "bad" in token:
+                return False, "not saved: Telegram refused the token (Unauthorized)"
+            state = _read_json(setup_state)
+            state["telegram"] = sorted({*state.get("telegram", []), name})
+            _write_json(setup_state, state)
+            telegram_mod.remember_bot(name, f"{name}_fixture_bot")
+            return True, f"saved: {name} answers on Telegram as @{name}_fixture_bot"
+        if args == ["telegram", "on"]:                    # never launchd: a live record of this process
+            if not _read_json(setup_state).get("telegram"):
+                return False, "no bot tokens yet: shaft telegram token <instance>"
+            _service_record(base, "telegram", os.getpid())
+            return True, "telegram installed (fixture): starts at login, restarted if it stops"
         if verb in ("limits", "channel", "pause", "resume"):
             name = args[1]
-            if name not in INSTANCES:
+            if name not in names():
                 raise ValueError(f"unknown fixture instance: {name}")
             # HTML web_config actions still use these commands; app settings write in process.
             if verb == "limits":
@@ -126,10 +348,13 @@ def setup(base: Path, port: int):
             else:
                 core.set_paused(name, verb == "pause", reason=who)
             return True, "saved in fixture"
-        if args == ["api", "on"]:
+        if args in (["api", "on"], ["api", "restart"]):
             time.sleep(0.2)
             _restart_service(base, "api")
             return True, "fixture API restarted"
+        if args == ["web", "restart"]:
+            _restart_service(base, "web")
+            return True, "fixture web service restarted"
         if args in (["autonomy", "restart"], ["autonomy", "restart", "--cancel"]):
             request = base / "sup" / "scheduler-restart.json"
             drain = base / "sup" / "scheduler-drain.json"
@@ -148,6 +373,67 @@ def setup(base: Path, port: int):
             return True, "fixture scheduler drain updated"
         raise ValueError(f"unsupported fixture command: {args}")
 
+    def google_grant(args):
+        # The grant verbs over this folder's account and lists: the real setters, never Google.
+        verb, name, op, alias = args[:4]
+        what = args[4] if len(args) > 4 else ""
+        if name not in names():
+            return False, f"no instance named {name!r}"
+        if not google_mod.account(alias):
+            return False, f"no Google account {alias!r} (logged in: {', '.join(google_mod.accounts()) or 'none'})"
+        if op.startswith("revoke"):                     # never contacts Google: the stored grant only
+            return google_revoke(verb, name, op, alias, what)
+        if verb == "mail":
+            if what not in GOOGLE_LABELS or "Refused" in what:
+                return False, f"not granted: Gmail has no label {what!r} for {alias} (fixture)"
+            core.set_mail_grants(name, core.mail_grants(name) + [{"account": alias, "label": what,
+                                                                  **({"draft": True} if op == "grant-draft" else {})}])
+            return True, f"{name}: mail {op} {alias}/{what}"
+        if verb == "calendar":
+            cal = next((c for c in GOOGLE_CALENDARS if what in (c["id"], c["title"]) or (what == "primary" and c["primary"])),
+                       None)
+            if not cal:
+                return False, f"not granted: {alias} has no calendar {what!r} (fixture)"
+            grants = [g for g in core.calendar_grants(name) if (g["account"], g["calendar"]) != (alias, cal["id"])]
+            prior = next((g for g in core.calendar_grants(name) if (g["account"], g["calendar"]) == (alias, cal["id"])), {})
+            write = op == "grant-write" or prior.get("write") is True
+            if op == "grant-write" and cal["access"] not in ("owner", "writer"):
+                return False, f"not granted: {alias} may only read {cal['title']} (fixture)"
+            core.set_calendar_grants(name, grants + [{"account": alias, "calendar": cal["id"], "name": cal["title"],
+                                                      **({"write": True} if write else {})}])
+            return True, f"{name}: calendar {op} {alias}/{cal['id']}"
+        if verb == "gdrive":
+            core.set_gdrive_grants(name, [g for g in core.gdrive_grants(name) if g["account"] != alias]
+                                   + [{"account": alias, "reach": "all" if "--all" in args else "own"}])
+            return True, f"{name}: Drive {alias}"
+        core.set_gchat_grants(name, [g for g in core.gchat_grants(name) if g["account"] != alias] + [{"account": alias}])
+        return True, f"{name}: Chat {alias}"
+
+    def google_revoke(verb, name, op, alias, what):
+        if verb == "mail":
+            grants = core.mail_grants(name)
+            hits = [g for g in grants if (g["account"], g["label"]) == (alias, what)]
+            if not hits:
+                return False, f"{name} has no grant {alias}/{what}"
+            rest = [g for g in grants if g not in hits]
+            if op == "revoke-draft":
+                rest += [{k: v for k, v in g.items() if k != "draft"} for g in hits]
+            core.set_mail_grants(name, rest)
+        elif verb == "calendar":
+            grants = core.calendar_grants(name)
+            hits = [g for g in grants if g["account"] == alias and what in (g["calendar"], g["name"])]
+            if not hits or (op == "revoke-write" and not any(g.get("write") for g in hits)):
+                return False, f"{name} has no calendar {op} grant {alias}/{what}"
+            rest = [g for g in grants if g not in hits]
+            if op == "revoke-write":
+                rest += [{k: v for k, v in g.items() if k != "write"} for g in hits]
+            core.set_calendar_grants(name, rest)
+        elif verb == "gdrive":
+            core.set_gdrive_grants(name, [g for g in core.gdrive_grants(name) if g["account"] != alias])
+        else:
+            core.set_gchat_grants(name, [g for g in core.gchat_grants(name) if g["account"] != alias])
+        return True, f"{name}: {verb} {op} {alias} {what}".strip()
+
     def forbidden_launchctl(*args):
         raise AssertionError(f"fixture must not query launchd: {args}")
 
@@ -159,12 +445,21 @@ def setup(base: Path, port: int):
             (rec := _read_json(base / "sup" / "services" / f"{name}.json")).get("fixture")
             and rec.get("pid") == pid for name in ("api", "scheduler"))
 
-    try:
-        run_now(["unknown-fixture-verb"])
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unknown fixture commands must raise")
+    real_access = setup_access.access
+
+    def access(name):
+        # secrets_env is empty here: the key and the bot this fixture recorded (by name only) say what is set
+        state = _read_json(setup_state)
+        return {**real_access(name), "web_search": "SCRAPEBADGER_API_KEY" in state.get("secrets", []),
+                "telegram": name in state.get("telegram", [])}
+
+    for fake in (run_now, run_json):
+        try:
+            fake(["unknown-fixture-verb"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown fixture commands must raise")
 
     for p in (mock.patch.object(dashboard, "_scheduler_running", return_value=True),
               mock.patch.object(core, "secrets_env", return_value={}),
@@ -173,7 +468,19 @@ def setup(base: Path, port: int):
               mock.patch.object(web, "allowed_logins", return_value={ME}),
               mock.patch.object(web, "allowed_hosts", return_value=hosts),
               mock.patch.object(web, "url", return_value=f"http://127.0.0.1:{port}"),
-              mock.patch.object(web, "_names", return_value=list(INSTANCES)),
+              mock.patch.object(web, "_names", side_effect=names),
+              mock.patch.object(core, "TEMPLATE", template),
+              # never the Mac's own Playwright cache: the version `browser install` recorded here
+              mock.patch("supervisor.browser.version", side_effect=lambda: _read_json(setup_state).get("browser")),
+              mock.patch.object(setup_access, "access", side_effect=access),
+              # the pickers' lists (§18.7) and a writable calendar's id: this fixture's, never Google's
+              mock.patch.object(mail_mod, "labels",
+                                side_effect=lambda acct: {n: f"Label_{i}" for i, n in enumerate(GOOGLE_LABELS)}),
+              mock.patch.object(calendar_mod, "calendars", side_effect=lambda acct: [dict(c) for c in GOOGLE_CALENDARS]),
+              mock.patch.object(google_mod, "urlopen", side_effect=AssertionError("the fixture never calls Google")),
+              # secrets_env is empty here: the bots are those `telegram token` recorded (never the real .env)
+              mock.patch.object(telegram_mod, "tokens",
+                                side_effect=lambda: {n: "fixture" for n in _read_json(setup_state).get("telegram", [])}),
               mock.patch.object(web, "_live", side_effect=lambda n: _state(base).get(n, {})),
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),
@@ -184,9 +491,12 @@ def setup(base: Path, port: int):
               mock.patch.object(commitments, "INSTANCES", inst), mock.patch.object(metrics, "INSTANCES", inst),
               mock.patch.object(docs, "instance_root", lambda n: inst / n),
               mock.patch.object(actions, "run_now", side_effect=run_now),
+              mock.patch.object(actions, "run_json", side_effect=run_json),
               mock.patch.object(actions, "service_guard", side_effect=lambda name, action:
                                 _read_json(base / "services.json").get("busy", "") if name == "api" else ""),
               mock.patch.object(autonomy, "_launchctl", side_effect=forbidden_launchctl),
+              mock.patch.object(autonomy, "service_problem",
+                                side_effect=lambda name: f"the {name} service is not running in this fixture"),
               mock.patch.object(autonomy, "launchd_pid", side_effect=lambda name:
                                 _read_json(base / "sup" / "services" / f"{name}.json").get("pid")),
               mock.patch.object(autonomy, "running", side_effect=lambda name:
@@ -208,6 +518,23 @@ def setup(base: Path, port: int):
             {"identifier": "fixture.voice.it", "name": "Example Italian", "language": "it-IT", "quality": "default"},
         ])
     return web, web_chat, messages, webpush
+
+
+TEMPLATE_DRIVE = "You were created with one innate drive: to improve yourself.\n"   # the fixture template's drive.md
+
+
+def _flags(args: list[str]) -> dict:
+    """`provider use`'s flags as the route passes them (--json dropped): {"model": …, "price_in": …, "vision": True}."""
+    out: dict = {}
+    rest = [a for a in args if a != "--json"]
+    while rest:
+        flag = rest.pop(0).removeprefix("--").replace("-", "_")
+        if flag == "vision":
+            out["vision"] = True
+        elif rest:
+            value = rest.pop(0)
+            out[flag] = float(value) if flag.startswith(("price", "judge_price")) else value
+    return out
 
 
 def _read_json(path: Path) -> dict:
@@ -727,6 +1054,15 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                 request.unlink()
         else:
             raise SystemExit("services needs busy <text> or drain-end")
+    elif what == "version":                            # an older server for the app's version gate (§19)
+        if not args:
+            (base / "version.json").unlink(missing_ok=True)
+        elif name == "missing":
+            _write_json(base / "version.json", {"missing": True})
+        elif name.isdigit():
+            _write_json(base / "version.json", {"api": int(name), "server": text or "v0.0.1"})
+        else:
+            raise SystemExit("version needs <api> [server], missing, or nothing (the real answer again)")
     elif what in ("message", "question"):
         file = f"{datetime.now():%Y%m%d-%H%M%S-%f}-from-{name}.md"
         text = text or ("Should I archive the September notes?" if what == "question" else "The nightly report is ready.")
@@ -758,8 +1094,14 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                   **({"mid": f"long-{k}"} if k % 2 == 0 else {})} for k in range(int(text or 90))]
         web_chat.save({"id": "web-" + os.urandom(8).hex(), "instance": name, "login": ME,
                        "created": turns[0]["ts"], "state": "idle", "reply": None, "turns": turns})
+    elif what == "google":                             # the app's local `shaft google login`, which a fixture run has not
+        from supervisor import google
+        address = args[0] if args else ME
+        google._save_account("google", {"address": address, "client": "google", "refresh_token": "fixture",
+                                        "scope": " ".join(google.SCOPES), "created": now})
+        print(f"Google account google is {address} (fixture: every scope, a fake token)")
     else:
-        raise SystemExit(f"unknown act {what!r}: message, question, state, doc, long")
+        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long")
 
 
 def main() -> int:

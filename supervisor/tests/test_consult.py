@@ -6,12 +6,19 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 from supervisor import autonomy, broker, consult, core, delete
 from supervisor.tests import test_limits
+
+REAL_URLOPEN = urllib.request.urlopen   # before any test patches it: the loopback stub of a custom/ consult
+
+
+def _unexpected(req):
+    raise AssertionError(f"unexpected HTTP: {getattr(req, 'full_url', req)}")
 
 
 class ConsultTest(unittest.TestCase):
@@ -330,6 +337,81 @@ class ConsultTest(unittest.TestCase):
         self.assertIn("caller=plugin", text)
         self.assertNotIn("private", text)
         self.assertNotIn("too-old", text)
+
+    def custom(self, own="custom/my-model"):
+        """An install on an OpenAI-compatible endpoint: custom/ consult models, the instance itself on one of them."""
+        from supervisor import cloudllm
+        from supervisor.tests.test_custom_route import Stub, chat
+        stub = Stub()
+        self.addCleanup(stub.close)
+        stub.reply = chat("from custom", usage={"prompt_tokens": 1000, "completion_tokens": 500})
+        for target, name, value in ((consult, "MODELS", ["custom/my-model", "custom/other", "custom/unpriced"]),
+                                    (cloudllm, "CUSTOM_PRICES", {"my-model": (2.0, 8.0), "other": (1.0, 4.0)}),
+                                    (cloudllm, "CUSTOM_BASE_URL", stub.url)):
+            self.enterContext(mock.patch.object(target, name, value))
+        self.enterContext(mock.patch.object(core, "instance_config", return_value={"LLM_MODEL": own}))
+        (self.sup / "consult_catalogue.json").unlink()      # no OpenRouter catalogue: a fetch would be a bug
+        self.urlopen.side_effect = lambda req, *a, **k: (
+            REAL_URLOPEN(req, *a, **k) if getattr(req, "full_url", req).startswith(stub.url) else _unexpected(req))
+        self.b.secrets = {"SHAFT_CUSTOM_API_KEY": "c"}
+        return stub
+
+    def test_consult_menu_on_custom_lists_priced_custom_models_but_not_the_instances(self):
+        stub = self.custom()
+        menu = {m["model"]: m for m in consult.menu("wisp", secrets=self.b.secrets)}
+        self.assertEqual(list(menu), ["custom/other", "custom/unpriced"])       # its own model is not a consult
+        self.assertEqual({k: menu["custom/other"][k] for k in ("in_per_m", "out_per_m", "reserve_in_per_m",
+                                                               "reserve_out_per_m", "available")},
+                         {"in_per_m": 1.0, "out_per_m": 4.0, "reserve_in_per_m": 1.0, "reserve_out_per_m": 4.0,
+                          "available": True})
+        self.assertFalse(menu["custom/unpriced"]["available"])
+        self.assertIn("SHAFT_CUSTOM_PRICES", menu["custom/unpriced"]["why"])
+        self.assertEqual(consult.envelope("wisp", self.b.secrets)["models"], list(menu.values()))
+        self.assertIn("SHAFT_CUSTOM_API_KEY", consult.menu("wisp", secrets={})[0]["why"])   # no key: off, and why
+        body = {"model": "custom/other", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 100}
+        reply = self.complete(body)
+        self.assertEqual(reply["choices"][0]["message"]["content"], "from custom")
+        req = stub.requests[-1]
+        self.assertEqual((req["path"], req["headers"]["Authorization"], req["body"]["model"]),
+                         ("/v1/chat/completions", "Bearer c", "other"))
+        self.assertNotIn("provider", req["body"])                                  # no OpenRouter knobs
+        row = self.rows()[0]
+        self.assertAlmostEqual(row["usd"], (1000 * 1.0 + 500 * 4.0) / 1e6)       # the declared price
+        self.assertAlmostEqual(reply["shaft"]["usd"], row["usd"])
+        self.assertEqual(consult._reservations(), [])
+        with self.assertRaisesRegex(consult.ConsultError, "own model"):
+            self.complete({**body, "model": "custom/my-model"})
+        with self.assertRaisesRegex(consult.ConsultError, "SHAFT_CUSTOM_PRICES"):
+            self.complete({**body, "model": "custom/unpriced"})
+
+    def test_a_mixed_menu_keeps_custom_consults_when_openrouters_catalogue_fails(self):
+        """custom/ and codex/ consults never depend on OpenRouter: with its catalogue unreachable (no cache, offline),
+        only the openrouter/ entries are off, with the reason, and a custom/ consult still answers."""
+        stub = self.custom()
+        self.enterContext(mock.patch.object(consult, "MODELS", [self.model, "custom/other"]))
+
+        def offline(req, *a, **k):
+            if getattr(req, "full_url", req).startswith(stub.url):
+                return REAL_URLOPEN(req, *a, **k)
+            raise OSError("offline")
+        self.urlopen.side_effect = offline
+        menu = {m["model"]: m for m in consult.menu("wisp", secrets=self.b.secrets)}
+        self.assertTrue(menu["custom/other"]["available"])
+        self.assertFalse(menu[self.model]["available"])
+        self.assertIn("no cached prices", menu[self.model]["why"])
+        reply = self.complete({"model": "custom/other", "messages": [{"role": "user", "content": "hi"}],
+                               "max_tokens": 100})
+        self.assertEqual(reply["choices"][0]["message"]["content"], "from custom")
+        with self.assertRaisesRegex(consult.ConsultError, "no cached prices") as caught:   # OpenRouter's own: 503
+            self.complete(self.body)
+        self.assertEqual(caught.exception.status, 503)
+
+    def test_custom_consult_reserves_the_declared_worst_case(self):
+        self.custom()
+        with mock.patch.object(consult, "daily_cap", return_value=0.0001):
+            with self.assertRaisesRegex(consult.ConsultError, "worst case"):
+                self.complete({"model": "custom/other", "messages": [{"role": "user", "content": "hello"}],
+                               "max_tokens": 100})
 
 
 class ConsultLimitsTest(test_limits.LimitsTest):

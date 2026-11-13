@@ -139,6 +139,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path 
         _ancestors_metadata(root, home),
         *_shared(shared, home),
         *_env_reads(root, env_root, home),
+        *_runtime_reads(home),
         *_image_temp_names(),
         _no_secrets(root),
         _no_operator_file_writes(root),
@@ -170,6 +171,27 @@ def _browser_reads(home: Path) -> list[str]:
     rules = [f"(allow file-read* (subpath {_q(browsers)}))"]
     if (meta := _ancestors_metadata(browsers, Path(home).resolve())):
         rules.append(meta)
+    return rules
+
+
+def _runtime_reads(home: Path) -> list[str]:
+    """The Mac app's runtime (core.RUNTIME): its Python, which the agent, its plugins and its tests run on (core.PYTHON,
+    and a .venv's interpreter links to it), and uv, which `run` uses (pyenv) — read-only, in every profile, and only
+    bin/ and python/: never uv's cache. A Homebrew install has no runtime folder and its profiles are unchanged. Until
+    2026-11-13 the app-installed Python lived in the closed home folder and could not start in any sandbox."""
+    from . import core
+    rules = []
+    for name in core.RUNTIME_READABLE:
+        try:
+            folder = core.runtime_dir(name)       # a real folder inside the real runtime, never a link out of it
+        except core.RuntimeLayoutError as e:
+            core.log(f"sandbox: no read rule for the runtime's {name}/: {e}")
+            continue
+        if folder is None:
+            continue
+        rules.append(f"(allow file-read* (subpath {_q(folder)}))")
+        if (meta := _ancestors_metadata(folder, Path(home).resolve())):
+            rules.append(meta)
     return rules
 
 
@@ -228,6 +250,7 @@ def _command_profile(root: Path, home: Path, writable: str, shared: Path | None,
         _ancestors_metadata(root, home),
         *_shared(shared, home),
         *_env_reads(root, env_root, home),
+        *_runtime_reads(home),
         *_browser_reads(home),
         *_image_temp_names(),
         _no_secrets(root),

@@ -21,7 +21,7 @@ import time
 import uuid
 
 from . import planchannel, sandbox
-from .core import SUP_DIR, cloud_model, knob, positive_int
+from .core import SUP_DIR, channel_fallback, knob, positive_int
 
 
 def serves(model):
@@ -41,8 +41,9 @@ BIN, _ = knob("SHAFT_GROK_BIN", str(Path.home() / '.grok/bin/grok'), str,
     'Grok CLI executable', group='Grok', services=('runs', 'api'))
 MODELS, _ = knob("SHAFT_GROK_MODELS", 'grok/grok-4.7', _models,
     'Grok models offered to instances, comma separated', group='Grok', services=('runs', 'api'))
-FALLBACK_MODEL, _ = knob("SHAFT_GROK_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', cloud_model,
-    'cloud model used for the run after a Grok failure', group='Grok', services=('runs', 'api'))
+FALLBACK_MODEL, _ = knob("SHAFT_GROK_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', channel_fallback,
+    'cloud model used for the run after a Grok failure (claude-…, openrouter/… or a priced custom/…), or none: the '
+    'failure ends the run', group='Grok', services=('runs', 'api'))
 TIMEOUT_S, _ = knob("SHAFT_GROK_TIMEOUT_S", '900', positive_int,
     'seconds Grok may take per step; held calls are exempt', group='Grok', services=('runs', 'api'))
 SESSION_HOURS, _ = knob("SHAFT_GROK_SESSION_HOURS", '24', positive_int,

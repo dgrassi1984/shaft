@@ -15,22 +15,31 @@ struct SessionRoot<Paired: View>: View {
         Group {
             if let session = model.session {
                 if let store = session.store {
-                    paired(session, store)
-                        .id(ObjectIdentifier(store))
-                        .environment(store)
-                        .onAppear { if scenePhase == .active { store.start() } }
-                        .onChange(of: scenePhase) { _, phase in
-                            if phase == .active { store.start() } else { store.stop() }
-                        }
+                    if case .needsNewerServer(let server) = store.compatibility {
+                        // §19: one clear screen instead of every call failing on an older server.
+                        NeedsNewerServer(server: server, store: store)
+                    } else {
+                        paired(session, store)
+                            .id(ObjectIdentifier(store))
+                            .environment(store)
+                            .onAppear { if scenePhase == .active { store.start() } }
+                            .onChange(of: scenePhase) { _, phase in
+                                if phase == .active { store.start() } else { store.stop() }
+                            }
+                    }
                 } else {
                     PairingView(session: session)
                 }
             } else {
-                MarkMessage("SHAFT could not start", message: Text(model.startupError ?? "No reason was given."))
+                MarkMessage("SHAFT could not start", message: Text(model.startupError ?? "No reason was given.")) {
+                    Button("Try again") { model.retryStart() }.buttonStyle(ProminentAction())
+                }
             }
         }
         .environment(model)
         .onChange(of: model.session?.credential, initial: true) { AttachmentLoader.shared.clear() }
+        // Once per paired store: is the server new enough for this app (§19)?
+        .task(id: model.session?.store.map(ObjectIdentifier.init)) { await model.session?.store?.checkCompatibility() }
     }
 }
 

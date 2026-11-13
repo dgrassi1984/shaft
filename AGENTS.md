@@ -36,7 +36,8 @@ tests over 10 seconds, and duplicate tests. The default gate timeout is 300 seco
   through broker `run`. Preserve this path before adding supervisor tools.
 - Judges grade effectiveness first. Useful and correct beats resemblance.
 - The supervisor never imports agent code. Instances never see secrets.
-- The API stays tailnet-only.
+- The API is reachable on the tailnet only, or on loopback for the native app on
+  the same Mac with a paired device's bearer (`/app/v1` only, never the web pages).
 - Conversations hold the instance only while it replies. Keep open conversations
   registered. Never write them up while they are still going on.
 - Trial replays never settle, commit, deliver, or send. Record simulated writes.

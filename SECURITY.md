@@ -16,7 +16,7 @@ is granting it to the instance and to anyone who can put text in front of it.
 
 | Boundary | How | Limits |
 |---|---|---|
-| Filesystem | Each run executes under macOS `sandbox-exec` (`supervisor/sandbox.py`). Writes are limited to the instance's own folder (minus `secrets/`, `config.env`, `drive.md` and `shaft-docs/`), permitted devices and the image tools' temporary files; the broker's `run` tool may write less. A shared folder you grant is read-only. Your home folder, `/private/tmp`, `/Users/Shared`, `/Volumes` and the per-user temp and cache folder are closed; if macOS does not say where that per-user folder is, the run refuses to start. | `sandbox-exec` is a containment layer, not a virtual machine, and Apple marks it deprecated. |
+| Filesystem | Each run executes under macOS `sandbox-exec` (`supervisor/sandbox.py`). Writes are limited to the instance's own folder (minus `secrets/`, `config.env`, `drive.md` and `shaft-docs/`), permitted devices and the image tools' temporary files; the broker's `run` tool may write less. A shared folder you grant is read-only. On a Mac-app install, `~/SHAFT/.runtime/bin` and `~/SHAFT/.runtime/python` are read-only too: the uv and Python 3.12 the app installed, which the instance's agent, plugins and tests run on (`sandbox._runtime_reads`; never uv's cache, never a write; only real folders inside an unlinked `.runtime` — a link there gets no rule and its runtime is not used, `core.runtime_dir`). Your home folder, `/private/tmp`, `/Users/Shared`, `/Volumes` and the per-user temp and cache folder are closed; if macOS does not say where that per-user folder is, the run refuses to start. | `sandbox-exec` is a containment layer, not a virtual machine, and Apple marks it deprecated. |
 | Supervisor code and state | Instances cannot write `supervisor/`, `.supervisor/`, their `config.env` or `drive.md`. Each live run imports its `shaft` package from a read-only copy of its last approved code. | Plugins and the broker's `run` tool execute the writable working tree; what they changed is gated when the run settles. |
 | Self-changes | Changes to the instance's code paths (`shaft/`, `tests/`, `plugins/`, `.python-version`, `requirements.txt`) and the config lines it set through the broker must pass the test gate. A failed check reverts them. | If the gate cannot run at all (its sandbox cannot be built), nothing is reverted: the change stays unsettled and the run is refused until a later gate settles it. Memory, notes and other non-code files are not gated. |
 | Journal and core | The journal must stay append-only: a rewrite is replaced by the previous text. Once a core personality exists, another core change within 72 hours is put back. | If `memory/` is a link or a write fails, the supervisor records a note instead of restoring. A first core, or a change from an empty core, is kept. |
@@ -76,7 +76,8 @@ All Google credentials stay with the supervisor; the broker checks the grant on 
 ## Network access to the supervisor
 
 The web UI, the chat API and the native apps' API bind to localhost and are reached through Tailscale Serve, on your
-tailnet only. Do not expose them through a public proxy or Tailscale Funnel.
+tailnet only, with one exception for the Mac app on the same Mac (below). Do not expose them through a public proxy
+or Tailscale Funnel.
 
 - The chat API (`/v1`) needs a bearer key and an allowed Tailscale login. The inbox endpoint is the exception: it
   accepts the narrower `SHAFT_INBOX_KEY` alone, without the login check, so anyone on your tailnet who holds that key
@@ -86,6 +87,40 @@ tailnet only. Do not expose them through a public proxy or Tailscale Funnel.
 - The native apps' API (`/app/v1`) needs the same login and host and a paired device's bearer token. It reads no
   cookie, and the web pages accept no bearer, so a browser can never send an app credential on its own.
   `shaft web unpair` revokes a device.
+
+### The loopback path for the Mac app
+
+Off by default. `shaft web on --local`, which the Mac app's installer runs, sets `SHAFT_WEB_LOCAL=on`; the Mac app on
+the same Mac then reaches `/app/v1` at `http://127.0.0.1:8785` without Tailscale. Only `/app/v1` takes this path: the
+web UI pages keep every tailnet check, and answer no one until `shaft web on` records a tailnet name.
+
+- **Who can use it.** A request whose `Host` is `127.0.0.1` or `localhost` at the web port. The tailnet login and host
+  checks are skipped, so a paired device's bearer is the only credential, and every route needs it. Such a device is
+  made by `shaft web pair --local`, which prints its secret once and needs the login `operator@local` that `shaft api
+  on --local` adds. A pairing link is refused on loopback (`403 local_pair`).
+- **Who it acts as.** The identity comes from the paired device's record in `.supervisor/web/devices.json`, never from
+  a header: any local process could send `Tailscale-User-Login` to 127.0.0.1. A device unpaired since is refused.
+- **Proxied requests take the tailnet path.** `tailscale serve` forwards whatever `Host` it was given, so a request
+  carrying any header its proxy adds (`X-Forwarded-For`, `Forwarded`, `X-Forwarded-Host`, `Tailscale-User-Login`,
+  `Tailscale-User-Name`) must pass the login, host and bearer checks as before.
+- **What it adds.** No reach from other machines: the service still listens on 127.0.0.1 only, and instance runs
+  cannot reach its port. A process running as you that holds a paired bearer can do what the app can, as it could
+  with a browser's cookie.
+- **The setup routes.** The wizard's `/app/v1/setup/*` routes run the CLI verbs a terminal would, as the paired device,
+  so every verb's own checks apply. `POST /app/v1/setup/secret` writes only an allowlist of provider and tool keys
+  (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`): the server's own keys
+  and logins, Google clients and Telegram tokens cannot be written there. A key or token travels on the verb's stdin,
+  never in its arguments, a log line or an answer. The Google client's JSON goes on the stdin of `shaft google client`,
+  which the app runs as a local process.
+- **One restart barrier.** A restart of the api or web service (`shaft api on`, `shaft api restart`, `shaft web on`, the
+  app's API restart, `shaft deploy`) first looks at the open conversations and restarts nothing while one is open. From
+  that look until the restart it holds `.supervisor/restarting.lock`, and a conversation that tries to open meanwhile is
+  refused with "the server is restarting, try again in a moment". The app's restart routes and the web panel's share one
+  lock per service, so two restarts of the same service never overlap.
+- **The Mac app runs outside the App Sandbox.** Its setup runs `git`, `uv` and the server's CLI and writes `~/SHAFT`,
+  which the App Sandbox forbids. It keeps the hardened runtime, and its notification extension stays sandboxed. It
+  allows plain `http` to local addresses only (`NSAllowsLocalNetworking`), which it uses for 127.0.0.1. The iPhone and
+  iPad apps reach the server over the tailnet only.
 
 ## Supported versions
 

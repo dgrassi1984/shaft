@@ -769,12 +769,12 @@ class TelegramTest(unittest.TestCase):
 
     def test_token_command_checks_with_telegram_before_saving(self):
         saved = {}
-        with mock.patch("supervisor.api._set_secret", lambda k, v: saved.update({k: v})), \
+        with mock.patch("supervisor.telegram.set_secret_env", lambda k, v: saved.update({k: v})), \
                 mock.patch("sys.stdin", io.StringIO("999:bad\n")), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
             self.assertEqual(telegram.command("token", "wisp"), 1)
         self.assertEqual(saved, {})
         self.assertIn("not saved", out.getvalue())
-        with mock.patch("supervisor.api._set_secret", lambda k, v: saved.update({k: v})), \
+        with mock.patch("supervisor.telegram.set_secret_env", lambda k, v: saved.update({k: v})), \
                 mock.patch("sys.stdin", io.StringIO(TOK["wisp"] + "\n")), mock.patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(telegram.command("token", "wisp"), 0)
         self.assertEqual(saved, {"TELEGRAM_TOKEN_WISP": TOK["wisp"]})

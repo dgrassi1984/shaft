@@ -20,10 +20,12 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
+from .core import say as core_say
 from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_paused, set_update_queued, update_queued)
@@ -59,66 +61,169 @@ def _seeded(text: str, source: str, operator: str) -> str:
     return f"{first}\n\n{note}{rest}" if first.startswith("# ") else f"{note}\n{text}"
 
 
-def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
+def _git_identity_problem() -> str | None:
+    """None when git resolves an author and committer in PROJECT (env, repo-local or global config: the same test the
+    commit makes), else the message. Checked first, so `new` never fails at its commit with a worktree half made."""
+    for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        if git("var", var, check=False).returncode != 0:
+            return core_say("git has no identity here, so the instance's first commit would fail: run `shaft install` "
+                            "(it sets one for this project) or `git config user.name` and `git config user.email`, "
+                            "then try again",
+                            "SHAFT has no name to sign the instance's first commit with: go back to Install and run it "
+                            "again (it sets one), then Try again.")
+    return None
+
+
+def _write_first_reply(name: str, then: str, created: str | None = None) -> None:
+    """`.supervisor/first-reply-<name>`: what to do once the operator has answered the welcome (atomic, 0600)."""
+    SUP_DIR.mkdir(exist_ok=True)
+    path = SUP_DIR / f"first-reply-{name}"
+    fd, tmp = tempfile.mkstemp(prefix=f".first-reply-{name}.", dir=SUP_DIR)     # exclusive, 0600
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"then": then,
+                                "created": created or datetime.now().astimezone().isoformat(timespec="seconds")}))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def cmd_first_reply(name: str, then: str, as_json: bool = False) -> int:
+    """`shaft first-reply NAME resume|stay`: change what the operator's first answered reply does to an instance made
+    with `new --paused-until-first-reply` (the Mac app's "How it works alone" step). Under `core.first_reply_lock`,
+    which the web service's first reply holds too while it reads, acts on and removes the marker: the marker is read
+    and replaced in place (temporary file, then os.replace: never a moment without it), keeping when it was made.
+    Refused (exit 1) when there is no marker: the first reply has happened already, or the instance was not created
+    waiting for one — never a marker after the fact, which would resume the instance at some later reply."""
+    from .core import first_reply_lock
+
+    def say(ok: bool, message: str, code: int) -> int:
+        if as_json:
+            print(json.dumps({"ok": True, "name": name, "then": then} if ok else {"ok": False, "error": message}))
+        else:
+            print(message, file=sys.stdout if ok else sys.stderr)
+        return code
+
+    if not NAME_RE.match(name) or name == "operator":
+        return say(False, f"no instance named {name!r}", 2)
+    path = SUP_DIR / f"first-reply-{name}"
+    try:
+        with first_reply_lock(name):
+            try:
+                created = json.loads(path.read_text()).get("created")
+            except FileNotFoundError:
+                return say(False, core_say(
+                    f"{name} is not waiting for its first reply (it was answered already, or {name} was not created "
+                    f"waiting for one): use shaft pause {name} or shaft resume {name} instead",
+                    f"{name} is not waiting for its first reply any more (it was answered already): pause or resume it "
+                    f"from its settings instead."), 1)
+            except (ValueError, AttributeError):
+                created = None                 # unreadable: replaced whole, as the consumer would have left it
+            _write_first_reply(name, then, created if isinstance(created, str) else None)
+    except OSError as e:
+        return say(False, f"could not change {name}'s first-reply marker: {e}", 1)
+    return say(True, f"{name}: after your first reply it will "
+                     + ("work on its own" if then == "resume" else "stay paused, answering only when you talk to it"), 0)
+
+
+def cmd_new(name: str, source: str | None, seed: bool = False, as_json: bool = False,
+            paused_until_first_reply: str | None = None) -> int:
     """Create instance/<name> forked from `template` (or from another instance's branch).
 
     A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
     self-model, personality, goals, journal, episodes and notes start fresh. The lineage
     stays in git history. With `seed`, it also starts knowing what the parent knows about the operator
     (its people file and facts, marked as the parent's), never what the parent is.
+    With `paused_until_first_reply` ("resume" or "stay") it is also paused, with a marker the app reads once the
+    operator has answered its welcome. With `as_json` stdout is one JSON object; refusals exit 2, failures 1.
     """
+    def refuse(message: str, code: int = 2) -> int:
+        if as_json:
+            print(json.dumps({"ok": False, "error": message}))
+        else:
+            print(message, file=sys.stderr)
+        return code
+
     if not NAME_RE.match(name) or name == "operator":
-        print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
-              file=sys.stderr)
-        return 2
+        return refuse("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')")
     root = INSTANCES / name
     if root.exists() or git("rev-parse", "--verify", "-q", f"refs/heads/instance/{name}", check=False).stdout:
-        print(f"instance {name!r} already exists", file=sys.stderr)
-        return 2
+        return refuse(f"instance {name!r} already exists")
     if mind.exists(name):
-        print(f"a mind store for {name!r} already exists at {mind.store(name)} (an earlier instance of that name); "
-              "move it away first", file=sys.stderr)
-        return 2
+        return refuse(f"a mind store for {name!r} already exists at {mind.store(name)} (an earlier instance of that "
+                      "name); move it away first")
     if seed and not source:
-        print("--seed copies from a parent instance: name it with --from", file=sys.stderr)
-        return 2
+        return refuse("--seed copies from a parent instance: name it with --from")
     if source:
-        instance_root(source)
+        try:
+            instance_root(source)
+        except SystemExit as e:        # an unknown parent is a usage refusal, not an exit from inside the verb
+            return refuse(str(e.code))
     if seed:
         try:
             operator, seeds = _seed_files(source)
         except ValueError as e:
-            print(f"cannot seed from {source}: {e}", file=sys.stderr)
-            return 2
+            return refuse(f"cannot seed from {source}: {e}")
+    if (problem := _git_identity_problem()):
+        return refuse(problem)
     base = f"instance/{source}" if source else "template"
-    INSTANCES.mkdir(exist_ok=True)
-    git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
-    git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)   # a parent's, pre-cutover
-    for d in MIND_PATHS:
-        shutil.rmtree(root / d, ignore_errors=True)
-    for d in ("self", "memory", "notes", "skills"):
-        safe_mkdir(root, d)
-    safe_write(root, "self/self.md", 
-        f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
-        "this self-model is for me to write.\n")
-    safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
-    origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
-        else "from the SHAFT template"
-    if seed:
-        for path, text in seeds.items():
-            safe_write(root, path, _seeded(text, source, operator))
-        origin = (f"forked from {source} (code, skills and plugins; of its memories only what it knows about "
-                  f"{operator}: {', '.join(seeds) or 'none, it had neither file'})")
-    safe_write(root, "memory/journal.md", f"# {name} — journal\n")
-    journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here."
-                 + (f" The seeded files are {source}'s beliefs, in {source}'s voice; my own sleeps will make them mine."
-                    if seed and seeds else ""))
-    message = f"{name}: created {origin}"
-    add_all_but_mind(root)
-    git_wt(root, "commit", "-q", "--allow-empty", "-m", message)   # from the template: no code change, the lineage
-    mind.init(name)
-    mind.commit(name, message, root)
-    log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
+    paused = bool(paused_until_first_reply)
+    made = []        # the pause files this call created, removed again if the creation fails before any worktree exists
+    try:
+        if paused:     # before the worktree exists: the scheduler finds an instance by its `shaft` folder
+            made = [f for f in (SUP_DIR / f"paused-{name}", SUP_DIR / f"first-reply-{name}") if not f.exists()]
+            set_paused(name, True, reason="waiting for the operator's first reply", note=False)
+            _write_first_reply(name, paused_until_first_reply)
+        INSTANCES.mkdir(exist_ok=True)
+        git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
+        git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)   # a parent's, pre-cutover
+        for d in MIND_PATHS:
+            shutil.rmtree(root / d, ignore_errors=True)
+        for d in ("self", "memory", "notes", "skills"):
+            safe_mkdir(root, d)
+        safe_write(root, "self/self.md", 
+            f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
+            "this self-model is for me to write.\n")
+        safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
+        origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
+            else "from the SHAFT template"
+        if seed:
+            for path, text in seeds.items():
+                safe_write(root, path, _seeded(text, source, operator))
+            origin = (f"forked from {source} (code, skills and plugins; of its memories only what it knows about "
+                      f"{operator}: {', '.join(seeds) or 'none, it had neither file'})")
+        safe_write(root, "memory/journal.md", f"# {name} — journal\n")
+        journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here."
+                     + (f" The seeded files are {source}'s beliefs, in {source}'s voice; my own sleeps will make them mine."
+                        if seed and seeds else ""))
+        message = f"{name}: created {origin}"
+        add_all_but_mind(root)
+        git_wt(root, "commit", "-q", "--allow-empty", "-m", message)   # from the template: no code change, the lineage
+        mind.init(name)
+        mind.commit(name, message, root)
+        log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
+    except (subprocess.CalledProcessError, OSError, mind.MindError) as e:
+        detail = (getattr(e, "stderr", None) or "").strip() or str(e)
+        if root.exists():     # by the filesystem, not git's return: a hook can fail after the worktree was made
+            return refuse(core_say(f"{name} is half-created{' and paused' if paused else ''} ({detail}); remove it "
+                                   f"with `shaft delete {name}`",
+                                   f"{name} was only partly created ({detail}). Choose another name: {name} stays "
+                                   f"paused and never runs."), 1)
+        for f in made:
+            try:
+                f.unlink(missing_ok=True)
+            except OSError as err:
+                detail += f"; could not remove {f}: {err}"
+        return refuse(f"could not create {name}: {detail}", 1)
+    if paused:     # the instance exists now: the note the pause owes its journal (best effort, like every pause)
+        set_paused(name, True, reason="waiting for the operator's first reply", write_flag=False)
+    if as_json:
+        print(json.dumps({"ok": True, "name": name, "branch": f"instance/{name}", "worktree": str(root),
+                          "paused": paused}))
+        return 0
     print(f"created {name} (branch instance/{name}, worktree {root.relative_to(PROJECT)})")
     if seed:
         missing = [p for p in _seed_paths(operator) if p not in seeds]
@@ -287,7 +392,16 @@ def _said(text: str) -> None:
 
 
 def cmd_setup() -> int:
-    """Recreate missing worktrees from branches — e.g. after a fresh clone — and install the push guard."""
+    """Recreate missing worktrees from branches — e.g. after a fresh clone — and install the push guard.
+    A failing git (not a repository, no identity) says so and returns 1, never a traceback."""
+    try:
+        return _setup()
+    except subprocess.CalledProcessError as e:
+        print(f"setup failed: {(e.stderr or e.stdout or str(e)).strip()}", file=sys.stderr)
+        return 1
+
+
+def _setup() -> int:
     branches = git("for-each-ref", "--format=%(refname:short)", "refs/heads/template",
                    "refs/heads/instance/").stdout.split()
     remote = git("for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/template",
@@ -643,11 +757,21 @@ def cmd_share(name: str, folder: str | None) -> int:
     return 0
 
 
-def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "") -> int:
-    """The operator's Google accounts, shared by mail, calendar, Drive and Chat: log one in (one
-    consent), list them with their clients and granted scopes, or move the account files out of the old mail folder."""
+def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "",
+               as_json: bool = False) -> int:
+    """The operator's Google accounts, shared by mail, calendar, Drive and Chat: keep an OAuth client from the JSON
+    Google Cloud downloads, log one in (one consent), list them with their clients and granted scopes, or move the
+    account files out of the old mail folder."""
     from . import google
     from .core import secrets_env
+    if as_json and action not in ("client", "login"):
+        print("shaft google" + (f" {action}" if action else "") + " has no --json (only client and login)",
+              file=sys.stderr)
+        return 2
+    if action == "client":
+        return _google_client(alias, as_json)
+    if action == "login" and as_json:
+        return _google_login_json(alias, address, client)
     if action == "login":
         if not (alias and address):
             print("usage: shaft google login <alias> <address> [--client <name>]  (e.g. shaft google login work "
@@ -686,7 +810,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
         print("\n".join(lines))
         return 0
     if action:
-        print(f"unknown google action {action!r}: login or migrate (alone: list the accounts)", file=sys.stderr)
+        print(f"unknown google action {action!r}: client, login or migrate (alone: list the accounts)", file=sys.stderr)
         return 2
     accts = google.accounts()
     for a, d in accts.items():
@@ -697,6 +821,83 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
     if (left := google.unmigrated()):
         print(f"NOT READ: {', '.join(left)} still in {google.old_accounts_dir()} (shaft google migrate)", file=sys.stderr)
     return 0
+
+
+def _google_client(name: str | None, as_json: bool) -> int:
+    """`shaft google client NAME [--json]`: the Desktop app OAuth client from the JSON Google Cloud downloads, read on
+    stdin, kept as GMAIL_<NAME>_CLIENT_ID / _CLIENT_SECRET in .env (core.set_secret_env). Neither value is printed or
+    logged. One line: `{"ok": true, "client", "login_again": [aliases]}` or `{"ok": false, "error"}`."""
+    from . import google
+
+    def say(ok: bool, text: str, **extra) -> int:
+        if as_json:
+            print(json.dumps({"ok": ok, **({} if ok else {"error": text}), **extra}))
+        else:
+            print(text, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+    if not name:
+        usage = "usage: shaft google client <name> [--json] < client.json  (the Desktop app client's JSON on stdin)"
+        if as_json:
+            print(json.dumps({"ok": False, "error": usage}))
+        else:
+            print(usage, file=sys.stderr)
+        return 2
+    try:
+        text = sys.stdin.read(google.CLIENT_JSON_MAX + 1)
+        again = google.save_client(name, text)
+    except google.AccountError as e:
+        return say(False, f"not saved: {e}")
+    except (ValueError, OSError) as e:
+        return say(False, f"not saved: {e}")
+    id_key, secret_key = google.client_keys(name)
+    log(f"Google OAuth client {name} saved from its JSON ({id_key}, {secret_key}) by the operator"
+        + (f"; {', '.join(again)} must log in again" if again else ""))
+    text = f"saved: Google client {name} ({id_key} and {secret_key} in .env)" + (
+        f". {', '.join(again)} logged in with its earlier ID: run shaft google login for "
+        f"{'it' if len(again) == 1 else 'each'} again" if again else "")
+    return say(True, text, client=name, login_again=again)
+
+
+def _google_login_json(alias: str | None, address: str | None, client: str) -> int:
+    """`shaft google login ALIAS ADDRESS [--client NAME] --json`, for the Mac app: `{"url"}` (Google's consent page;
+    the app opens it, nothing here opens a browser) as soon as the loopback listener waits, then
+    `{"ok": true, "alias", "address", "client", "granted": [scope names], "missing": [scope names]}` or
+    `{"ok": false, "error"}` with the real reason (300 s without an answer from the browser among them). SIGTERM (the
+    app's Cancel) ends it with nothing saved."""
+    from . import google
+    from .core import secrets_env
+
+    def emit(row: dict) -> None:
+        print(json.dumps(row), flush=True)
+    if not (alias and address):
+        emit({"ok": False, "error": "usage: shaft google login <alias> <address> [--client <name>] --json"})
+        return 2
+    try:
+        saved = google.login(alias, address, secrets_env(), client=client,
+                             open_url=lambda url: emit({"url": url}), announce=False)
+    except BrokenPipeError:
+        return 1                                     # nobody reads the answer any more
+    except google.AccountError as e:
+        error = str(e)
+    except (OSError, ValueError) as e:              # the token exchange could not reach Google
+        error = f"the Google login failed: {e}"
+    else:
+        granted = google.scopes(saved)
+        names = [google.SCOPE_NAMES[s] for s in google.SCOPES if s in granted]
+        missing = [google.SCOPE_NAMES[s] for s in google.SCOPES if s not in granted]
+        log(f"Google account {alias} logged in as {saved['address']} (client {saved['client']}, granted "
+            f"{google.scope_text(saved)}) by the operator, from the app")
+        try:
+            emit({"ok": True, "alias": alias, "address": saved["address"], "client": saved["client"],
+                  "granted": names, "missing": missing})
+        except BrokenPipeError:
+            pass
+        return 0
+    try:
+        emit({"ok": False, "error": error})
+    except BrokenPipeError:
+        pass
+    return 1
 
 
 def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
@@ -1254,10 +1455,15 @@ def cmd_feedback(name: str | None, days: int | None) -> int:
     return 0
 
 
-def cmd_codex(action: str) -> int:
+def cmd_codex(action: str, as_json: bool = False) -> int:
     from . import codexcli, planchannel
     home = Path(codexcli.HOME).expanduser().resolve()
+    if as_json and action != "login":
+        print(f"shaft codex {action} has no --json", file=sys.stderr)
+        return 2
     if action == "login":
+        if as_json:
+            return _codex_login_json(home)
         try:
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
             home.chmod(0o700)
@@ -1272,6 +1478,33 @@ def cmd_codex(action: str) -> int:
     if (fault := planchannel.outage("codex")):
         print(("Codex security event: " if fault.get("security") else "Codex unavailable: ") + fault["reason"])
     return 0
+
+
+def _codex_login_json(home: Path) -> int:
+    """`shaft codex login --json`, for the Mac app (no terminal): `codex login --device-auth` in SHAFT's private Codex
+    home, stdin closed. One JSON line each: `{"url"}` (the page to open) and `{"code"}` (the code to enter there) as soon
+    as Codex prints them, then `{"ok": true}` once the login is in that home, or `{"ok": false, "error"}` with Codex's
+    own words. It opens no browser: the app does. SIGTERM (the app's Cancel), the app quitting, or 10 minutes without
+    the code entered stop Codex too."""
+    from . import codexcli
+
+    def emit(row: dict) -> None:
+        print(json.dumps(row), flush=True)
+    try:
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        home.chmod(0o700)
+        ok, error = codexcli.device_login(home, emit)
+    except OSError as e:
+        ok, error = False, f"Codex login failed: {e}"
+    except codexcli.LoginStopped as e:
+        ok, error = False, f"Codex sign-in stopped ({e})"
+    except BrokenPipeError:
+        return 1                                     # nobody reads the answer any more
+    try:
+        emit({"ok": True} if ok else {"ok": False, "error": error})
+    except BrokenPipeError:
+        pass
+    return 0 if ok else 1
 
 
 def cmd_grok(action: str) -> int:
@@ -1354,8 +1587,32 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("wake", help="one scheduled wake of an instance (run by the scheduler; skipped if awake)")
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
-    p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
-    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p.add_argument("action", choices=["on", "off", "restart", "status", "key", "inbox-key", "serve"])
+    p.add_argument("--force", action="store_true",
+                   help="on/off/restart even if it would kill or cut off runs in progress")
+    p.add_argument("--local", action="store_true", help="on: without Tailscale — allow the Mac app's local login, "
+                                                        "expose nothing")
+    p.add_argument("--json", action="store_true",
+                   help="on, restart: one JSON object on stdout ({ok} or {ok: false, error})")
+    p = sub.add_parser("secrets", help="the supervisor's .env secrets: set NAME (value on stdin), unset NAME, list "
+                                       "(names only)")
+    p.add_argument("action", choices=["set", "unset", "list"])
+    p.add_argument("name", nargs="?")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    p = sub.add_parser("provider", help="use PROVIDER: one consistent preset of every model the supervisor calls "
+                                        "(openrouter, codex or custom); check PROVIDER: one live call per configured "
+                                        "model of it. Never touches .env (shaft secrets sets the keys)")
+    p.add_argument("action", choices=["use", "check"])
+    p.add_argument("provider", choices=["openrouter", "codex", "custom"])
+    p.add_argument("--model", help="codex: the instance model (default codex/gpt-6-astra) · custom: the model name")
+    p.add_argument("--judge-model", help="custom: the judge's model (default: the same model)")
+    p.add_argument("--base-url", help="custom: the OpenAI-compatible endpoint, e.g. https://host/v1")
+    p.add_argument("--price-in", type=float, help="custom: dollars per million input tokens of --model")
+    p.add_argument("--price-out", type=float, help="custom: dollars per million output tokens of --model")
+    p.add_argument("--judge-price-in", type=float, help="custom: dollars per million input tokens of --judge-model")
+    p.add_argument("--judge-price-out", type=float, help="custom: dollars per million output tokens of --judge-model")
+    p.add_argument("--vision", action="store_true", help="custom: --model reads images (declares it in SHAFT_CUSTOM_VISION)")
+    p.add_argument("--json", action="store_true", help="one JSON object per line on stdout")
     p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
                                       " (one write, one commit; --expect refuses if a value changed since you looked)")
     p.add_argument("name")
@@ -1402,19 +1659,30 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("alerts", help="the control panel's open alerts with their ids; 'dismiss ID…' hides them")
     p.add_argument("action", nargs="?", choices=["dismiss"])
     p.add_argument("ids", nargs="*")
-    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on, off, "
-                                   "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
-    p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
+    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet: on [--local], off, "
+                                   "status, pair [--name NAME] (a one-time link for a browser; --local: the Mac app on "
+                                   "this Mac, directly), unpair DEVICE|--all")
+    p.add_argument("action", choices=["on", "off", "restart", "status", "pair", "unpair", "serve"])
     p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
     p.add_argument("--name", help="pair: what to call this browser (e.g. laptop, phone)")
     p.add_argument("--all", action="store_true", help="unpair: every browser")
+    p.add_argument("--local", action="store_true", help="on: without Tailscale (SHAFT_WEB_LOCAL=on, /app/v1 at "
+                                                        "127.0.0.1); pair: the Mac app on this Mac, no link")
+    p.add_argument("--json", action="store_true", help="pair, on (tailnet), restart: one JSON object on stdout")
+    p.add_argument("--force", action="store_true",
+                   help="on, restart: even while an instance is replying (the reply is cut off)")
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
-    p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
+    p.add_argument("action", choices=["on", "off", "restart", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
+    p.add_argument("--json", action="store_true", help="pair: one JSON line with the code")
+    p.add_argument("--force", action="store_true",
+                   help="on, restart: even while an instance is replying (the reply is cut off)")
     p = sub.add_parser("grok", help="Grok plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
     p.add_argument("action", choices=["login", "status"])
+    p.add_argument("--json", action="store_true",
+                   help="login without a terminal: the page to open and the code to enter there, as JSON lines")
     p = sub.add_parser("claude", help="Claude plan (claude -p on your own subscription) login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("antigravity", help="Antigravity plan (Gemini through agy on your own subscription) login and status")
@@ -1580,6 +1848,21 @@ def main(argv: list[str]) -> int:
                    help="backfill, check: a copy of the project repository (git clone --mirror) instead of the real one")
     sub.add_parser("list", help="list instances")
     sub.add_parser("setup", help="create missing worktrees for template and instance branches")
+    p = sub.add_parser("install", help="the fresh-Mac install steps after the clone (git identity, setup, api and web "
+                                       "on this Mac only, scheduler); one JSON line per step with --json")
+    p.add_argument("--operator", required=True, help="your name (the git author when none is set)")
+    p.add_argument("--email", help="the git author's email (default: user@host.local)")
+    p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
+    p = sub.add_parser("deploy", help="move this checkout onto release TAG as docs/deploy.md says (fast-forward main and "
+                                      "the template, update the instances, drain-restart the scheduler, restart api, "
+                                      "web and telegram when no conversation is open); one JSON line per step")
+    p.add_argument("tag", nargs="?", help="the release tag, vX.Y.Z (its template commit is template-vX.Y.Z)")
+    p.add_argument("--check", action="store_true", help="only say the newest release on origin this could move to")
+    p.add_argument("--local", action="store_true",
+                   help="with --check: ask nothing of origin, only say a deploy left unfinished here")
+    p.add_argument("--services-only", action="store_true",
+                   help="only the services and verify steps: the retry after a deploy that waited for conversations")
+    p.add_argument("--json", action="store_true", required=True, help="one JSON object per step on stdout")
     p = sub.add_parser("update", help="merge the template into instances (only when idle; gate-tested)")
     p.add_argument("names", nargs="*")
     p.add_argument("--all", action="store_true")
@@ -1589,6 +1872,14 @@ def main(argv: list[str]) -> int:
     p.add_argument("--seed", action="store_true",
                    help="with --from: also start knowing what the parent knows about you (its people file and "
                         "facts, marked as its own), never what it is")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout: ok, name, branch, worktree, paused")
+    p.add_argument("--paused-until-first-reply", choices=["resume", "stay"], metavar="{resume,stay}",
+                   help="create it paused, with a marker saying what to do once you have answered its welcome")
+    p = sub.add_parser("first-reply", help="for an instance created with --paused-until-first-reply: what your first "
+                                           "answered reply does (resume: it works on its own; stay: it stays paused)")
+    p.add_argument("name")
+    p.add_argument("then", choices=["resume", "stay"])
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout: ok, name, then (or error)")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -1654,14 +1945,18 @@ def main(argv: list[str]) -> int:
                                        "[--playwright X.Y.Z]' (re)installs it; alone shows it and each profile")
     p.add_argument("action", nargs="?", choices=["install"])
     p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
-    p = sub.add_parser("google", help="your Google accounts, for mail, calendar and Drive: 'login <alias> <address> "
+    p = sub.add_parser("google", help="your Google accounts, for mail, calendar and Drive: 'client <name>' (a Desktop "
+                                      "app OAuth client from its downloaded JSON, on stdin), 'login <alias> <address> "
                                       "[--client <name>]' (reads, calendar writes and mail drafts), 'migrate' (from .supervisor/mail/); "
                                       "alone lists them with their clients and granted scopes")
-    p.add_argument("action", nargs="?", choices=["login", "migrate"])
-    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work)")
+    p.add_argument("action", nargs="?", choices=["client", "login", "migrate"])
+    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work); with client: the client's "
+                                            "name (GMAIL_<NAME>_CLIENT_ID/_SECRET), its downloaded JSON on stdin")
     p.add_argument("address", nargs="?", help="with login: its address")
     p.add_argument("--client", default="", help="with login: the OAuth client (GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env); "
                                                 "default: the alias. One per Google organisation: personal Google needs its own")
+    p.add_argument("--json", action="store_true", help="client, login: one JSON object per line on stdout (login: "
+                                                       "the consent URL first, opened by the caller)")
     p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: "
                                     "'<name> grant|revoke|grant-draft|revoke-draft <alias> <label>', "
                                     "'<name> off', '<name>' shows; alone lists all "
@@ -1756,10 +2051,18 @@ def main(argv: list[str]) -> int:
                                     "gate's baseline was red (the scheduler does it after a green warm-up)")
     p.add_argument("action", choices=["warm", "budget", "regate"])
     args = parser.parse_args(argv)
+    from .core import app_wording
+    # A --json verb answers the Mac app, and so does a verb an app's route runs (actions._run): the app shows its
+    # errors as they are, so they name what to do in the app, never a terminal command (core.say).
+    with app_wording(bool(getattr(args, "json", False)) or os.environ.get(actions.APP_WORDING) == "1"):
+        return _dispatch(args, parser)
+
+
+def _dispatch(args, parser) -> int:
     if args.cmd == "grok":
         return cmd_grok(args.action)
     if args.cmd == "codex":
-        return cmd_codex(args.action)
+        return cmd_codex(args.action, args.json)
     if args.cmd == "claude":
         return cmd_claude(args.action)
     if args.cmd == "antigravity":
@@ -1798,11 +2101,21 @@ def main(argv: list[str]) -> int:
     if args.cmd == "tick":
         return autonomy.tick()
     if args.cmd in actions.GUARDED_CLI and (refused := actions.cli_guard(args.cmd, args.action, args.force)):
-        print(refused, file=sys.stderr)
+        if getattr(args, "json", False):    # the Mac app reads one JSON line, whatever refused
+            # the app's own words: no --force or terminal verb in what it shows
+            print(json.dumps({"ok": False, "error": refused.split(" Try again when")[0] + " Try again when they end."}))
+        else:
+            print(refused, file=sys.stderr)
         return 1
     if args.cmd == "api":
         from . import api
-        return api.command(args.action)
+        return api.command(args.action, local=args.local, as_json=args.json, force=args.force)
+    if args.cmd == "secrets":
+        from . import opsecrets
+        return opsecrets.command(args.action, args.name, args.json)
+    if args.cmd == "provider":
+        from . import provider
+        return provider.command(args)
     if args.cmd == "config":
         from . import opconfig
         return opconfig.config_command(args.name, args.action, args.items, args.expect, args.expect_unset)
@@ -1833,10 +2146,11 @@ def main(argv: list[str]) -> int:
         return cmd_alerts(args.action, args.ids)
     if args.cmd == "web":
         from . import web
-        return web.command(args.action, args.name if args.action == "pair" else args.device, args.all)
+        return web.command(args.action, args.name if args.action == "pair" else args.device, args.all,
+                           local=args.local, as_json=args.json, force=args.force)
     if args.cmd == "telegram":
         from . import telegram
-        return telegram.command(args.action, args.name)
+        return telegram.command(args.action, args.name, args.json, force=args.force)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
     if args.cmd == "embed":
@@ -1878,7 +2192,7 @@ def main(argv: list[str]) -> int:
             print(f"  {name}: {browser.describe(INSTANCES / name)}")
         return 0
     if args.cmd == "google":
-        return cmd_google(args.action, args.alias, args.address, args.client)
+        return cmd_google(args.action, args.alias, args.address, args.client, args.json)
     if args.cmd == "mail":
         if args.target == "login":   # one login for every Google service
             print("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", file=sys.stderr)
@@ -2146,10 +2460,20 @@ def main(argv: list[str]) -> int:
         return 0
     if args.cmd == "setup":
         return cmd_setup()
+    if args.cmd == "install":
+        from . import install
+        return install.run(args.operator, args.email)
+    if args.cmd == "deploy":
+        from . import deploy
+        if args.check == bool(args.tag) or (args.check and args.services_only) or (args.local and not args.check):
+            parser.error("deploy takes TAG [--services-only], or --check [--local]")
+        return deploy.check(args.local) if args.check else deploy.run(args.tag, args.services_only)
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
-        return cmd_new(args.name, args.source, args.seed)
+        return cmd_new(args.name, args.source, args.seed, args.json, args.paused_until_first_reply)
+    if args.cmd == "first-reply":
+        return cmd_first_reply(args.name, args.then, args.json)
     if args.cmd == "kill":
         from . import kill
         if not (INSTANCES / args.name / "shaft").is_dir():

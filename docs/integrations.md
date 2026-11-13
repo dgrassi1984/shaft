@@ -113,11 +113,32 @@ it defaults to the alias. One client per Google organisation, because an **Inter
 organisation's users:
 Create a Desktop app OAuth client in a Google Cloud project with the APIs and scopes
 required by the grant. Use an Internal consent audience for an eligible Workspace
-organisation, or configure an External audience for personal accounts. Follow the
-current Google consent-screen requirements; token lifetime and verification rules
-are provider policy, not guarantees made by SHAFT.
+organisation, or configure an External audience for personal accounts.
+
+**A login that lasts.** Google's OAuth documentation says a project with an External user type and the publishing
+status **Testing** gets refresh tokens that expire after 7 days (unless it asks only for basic profile, email and
+OpenID scopes, which SHAFT never does), and that test users' authorizations lapse after a week
+([refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration),
+[manage app audience](https://support.google.com/cloud/answer/15549945)). An External app in Testing therefore
+stops working a week after each login. To keep it working, open Google Auth Platform → **Audience** and click
+**Publish app**, so the status reads **In production**, then log in. If you logged in while it was in Testing, log in
+again after publishing, as a precaution: Google's documentation does not say whether a token issued in Testing outlives
+the 7 days once the app is published. Google does not require verification for an app for personal use (fewer than 100 users,
+[exceptions to verification](https://support.google.com/cloud/answer/13464323)); until verified, the consent page
+shows an "unverified app" warning, which you continue past, and the app may sign in at most 100 new users in its
+lifetime. An **Internal** app (Workspace only) has no Testing status, so the 7-day rule does not apply to it. A
+refresh token can still stop working for Google's other reasons (revoked access, six months unused, a password
+change with Gmail scopes, an admin's policy): the tool that needs it then refuses, naming the login to run again.
+
+The Mac app's setup wizard walks through the same steps (Access → Set up Google…) and keeps the client from the JSON
+Google Cloud downloads for a Desktop app client: `shaft google client <name>` reads that JSON on stdin and writes
+`GMAIL_<NAME>_CLIENT_ID` / `_CLIENT_SECRET` to `.env` (a Web application client's JSON is refused: it needs a
+Desktop app client). With `--json`, `client` prints one line, and `login` prints `{"url": …}` (the consent page, for
+the caller to open) before it waits, then `{"ok": true, "alias", "address", "client", "granted", "missing"}` or
+`{"ok": false, "error"}`.
 
 ```bash
+shaft google client personal < ~/Downloads/client_secret_….json
 shaft google login work operator@work.example
 shaft google login home operator@example.com --client personal
 ```
@@ -527,7 +548,8 @@ Instances can see images. There are two ways:
 - **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
   message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
 - **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
-  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`) answers in text, marked as described rather than seen. This
+  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`; any model the supervisor can call: Claude, OpenRouter, a priced
+  `custom/` model or a `codex/` plan model) answers in text, marked as described rather than seen. This
   is how an instance whose model cannot see images (an instance on Bonsai) learns what is in one, and the cost counts
   toward its daily cloud cap. At most 10 calls per run.
 

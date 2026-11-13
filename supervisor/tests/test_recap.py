@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, panel, recap
+from supervisor import cloudllm, modelcall, panel, recap
 
 try:
     from rich.console import Console
@@ -50,7 +50,7 @@ class RecapCase(unittest.TestCase):
         for p in (mock.patch.object(recap, "SUP_DIR", self.sup),
                   mock.patch.object(recap, "STORE", self.sup / "recaps.json"),
                   mock.patch.object(recap, "USAGE", self.sup / "recap_usage.jsonl"),
-                  mock.patch.object(recap, "secrets_env", return_value={"ANTHROPIC_API_KEY": "k"}),
+                  mock.patch.object(modelcall, "secrets_env", return_value={"ANTHROPIC_API_KEY": "k"}),
                   mock.patch.object(panel, "transcripts", lambda name: self.transcripts),
                   mock.patch("supervisor.messages.history", lambda: self.history)):
             p.start()
@@ -146,13 +146,18 @@ class Ask(RecapCase):
         self.assertNotIn("records", second["messages"][0]["content"])   # the shortener sees only the draft
 
     def test_no_answer_yet_is_an_error_not_a_recap(self):
-        with mock.patch("urllib.request.urlopen", return_value=_reply("half", "a sent", stop="max_tokens")):
+        """Cut off at max_tokens: asked once more with twice the room (modelcall), then an error — never a recap."""
+        cut = [_reply("half", "a sent", stop="max_tokens") for _ in range(2)]
+        with mock.patch("urllib.request.urlopen", side_effect=cut) as u:
             with self.assertRaisesRegex(recap.RecapError, "max_tokens"):
                 recap.ask("records")
-        self.assertEqual(json.loads((self.sup / "recap_usage.jsonl").read_text())["error"], "max_tokens")
+        self.assertEqual([json.loads(c[0][0].data)["max_tokens"] for c in u.call_args_list],
+                         [recap.MAX_TOKENS, 2 * recap.MAX_TOKENS])
+        rows = [json.loads(l) for l in (self.sup / "recap_usage.jsonl").read_text().splitlines()]
+        self.assertEqual([r["error"] for r in rows], ["max_tokens", "max_tokens"])
 
     def test_a_missing_key_names_the_key(self):
-        with mock.patch.object(recap, "secrets_env", return_value={}):
+        with mock.patch.object(modelcall, "secrets_env", return_value={}):
             with self.assertRaisesRegex(recap.RecapError, "ANTHROPIC_API_KEY"):
                 recap.ask("records")
 
@@ -162,7 +167,8 @@ class Store(RecapCase):
         with mock.patch("urllib.request.urlopen", return_value=_reply("Idle", "Nothing recorded")):
             first = recap.write(_inst("kiln", state="idle"), NOW)
         self.assertEqual(first["text"], "Idle · last hour: Nothing recorded")
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("no route")):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("no route")), \
+                mock.patch.object(modelcall.time, "sleep"):         # its retries (15 s, 60 s), taken at once
             second = recap.write(_inst("kiln", state="idle"), NOW + 60)
         self.assertEqual(second["text"], first["text"])
         self.assertIn("no route", second["error"])

@@ -173,7 +173,8 @@ Changing tools or instructions rebuilds the session with a transcript; changing
 model or reasoning effort restarts the process.
 
 The weekly pool cannot be read programmatically. A failed live call switches the
-rest of the run to `SHAFT_GROK_FALLBACK_MODEL`; trials and bake-offs fail instead.
+rest of the run to `SHAFT_GROK_FALLBACK_MODEL` (`none`: the failure ends the run); trials and bake-offs
+fail instead.
 Plan rows spend no API dollars (`usd=null`). Costs views show Grok's reported
 `costUsdTicks / 10^10` as **API equivalent**, not money spent; fallback calls are
 charged normally. Grok's own session files have best-effort 24-hour retention,

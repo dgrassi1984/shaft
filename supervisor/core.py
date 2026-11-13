@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import fcntl
 import hashlib
 import http.client
 import json
@@ -11,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 from datetime import datetime
 from pathlib import Path
@@ -27,9 +29,61 @@ NETWORK_ERRORS = (urllib.error.URLError, OSError, http.client.HTTPException)
 # launchd jobs must not depend on one.
 PYTHON = str(getattr(sys, "_base_executable", None) or sys.executable)
 INSTANCES = PROJECT / "instances"
+# The Mac app's install keeps its own tools here: uv in bin/, the Python 3.12 that runs SHAFT in python/ (uv's
+# UV_PYTHON_INSTALL_DIR), uv's cache in cache/. A Homebrew install has no such folder. Instances read bin/ and python/
+# (sandbox._runtime_reads): their agent, plugins and tests run on that Python, and `run` uses that uv.
+RUNTIME = PROJECT / ".runtime"
+RUNTIME_READABLE = ("bin", "python")
+
+
+class RuntimeLayoutError(RuntimeError):
+    """core.RUNTIME is not laid out as the Mac app makes it: a link where a folder belongs. Nothing of it is used."""
+
+
+def runtime_dir(name: str) -> Path | None:
+    """core.RUNTIME/<name> (bin or python), resolved, when the app's install made it; None when there is none. Every
+    profile reads it (sandbox._runtime_reads), so it must be what it says: a real folder directly inside a real runtime
+    folder, never a link — `.runtime/python -> ~` would open the whole home, `.runtime/bin -> .runtime/cache` uv's
+    cache. A symlinked `.runtime` itself is refused too (the app never makes one). Raises RuntimeLayoutError, naming
+    the link, otherwise."""
+    if name not in RUNTIME_READABLE:
+        raise ValueError(f"{name!r} is not a runtime folder instances read ({', '.join(RUNTIME_READABLE)})")
+    if RUNTIME.is_symlink():
+        raise RuntimeLayoutError(f"{RUNTIME} is a link (to {os.path.realpath(RUNTIME)}), not the folder the Mac app "
+                                 "makes: its runtime is not used")
+    entry = RUNTIME / name
+    if not entry.exists() and not entry.is_symlink():
+        return None
+    if entry.is_symlink() or not entry.is_dir():
+        raise RuntimeLayoutError(f"{entry} is " + (f"a link (to {os.path.realpath(entry)})" if entry.is_symlink()
+                                                   else "not a folder") + ", not the folder the Mac app makes: it is "
+                                 "not used")
+    real = entry.resolve()
+    if real != RUNTIME.resolve() / name:
+        raise RuntimeLayoutError(f"{entry} resolves to {real}, outside {RUNTIME.resolve()}: it is not used")
+    return real
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
+# The Mac app reads a --json verb's errors as they are and shows them: there is no terminal to point at, so they name
+# what to do in the app. A verb answering --json runs under app_wording(); say() picks the wording for its reader.
+APP_MODE = False
+
+
+def say(human: str, app: str) -> str:
+    """The wording for whoever reads it: the terminal's, or (a --json verb, the Mac app) the app's."""
+    return app if APP_MODE else human
+
+
+@contextlib.contextmanager
+def app_wording(on: bool = True):
+    """Messages said inside it use the app's wording (say) when `on`: a --json verb's whole run."""
+    global APP_MODE
+    before, APP_MODE = APP_MODE, APP_MODE or bool(on)
+    try:
+        yield
+    finally:
+        APP_MODE = before
 # The mind: what an instance remembers and writes for itself. Never in the project's git (which can be pushed):
 # versioned in its private mind store (supervisor/mind.py).
 MIND_PATHS = ("self", "memory", "notes", "inbox")
@@ -135,6 +189,12 @@ def positive_int(s: str) -> int:
     return n
 
 
+def on_off(s: str) -> bool:
+    if s not in ("on", "off"):
+        raise ValueError(f"must be on or off, not {s!r}")
+    return s == "on"
+
+
 def whole(s: str) -> int:
     n = int(s)
     if n < 0:
@@ -193,11 +253,24 @@ def model_names(s: str) -> list[str]:
     return [model_name(m) for m in s.split(",") if m.strip()]
 
 
+def custom_model(s: str) -> str:
+    """A custom/<model> name, accepted only when SHAFT_CUSTOM_PRICES declares its price: an unpriced model would
+    spend money the daily cap could not count."""
+    from . import cloudllm
+    if cloudllm.custom_price(s) is None:
+        raise ValueError(f"{s!r} has no price: declare it in SHAFT_CUSTOM_PRICES as "
+                         f"{{\"{s.removeprefix('custom/')}\": [input_usd_per_million, output_usd_per_million]}} "
+                         f"(0 is allowed), so the daily cap can count it")
+    return s
+
+
 def cloud_model(s: str) -> str:
-    """A model the supervisor calls itself: Claude (claude-…) on Anthropic's API, else openrouter/…."""
+    """A model the supervisor calls itself: Claude (claude-…) on Anthropic's API, openrouter/…, or a priced custom/…."""
     s = model_name(s)
+    if s.startswith("custom/"):
+        return custom_model(s)
     if not (s.startswith("claude-") or s.startswith("openrouter/")):
-        raise ValueError(f"must be a claude-… or openrouter/… model, not {s!r}")
+        raise ValueError(f"must be a claude-… or openrouter/… or custom/… model, not {s!r}")
     return s
 
 
@@ -205,10 +278,56 @@ def instance_model(s: str) -> str:
     """A cloud or registered plan model an instance or bake-off may run on."""
     from . import planchannel
     s = model_name(s)
+    if s.startswith("custom/"):
+        return custom_model(s)
     if not (s.startswith("claude-") or s.startswith("openrouter/") or planchannel.serves(s)):
         plans = " or ".join(f"{p}/…" for p in planchannel.PROVIDERS)
-        raise ValueError(f"must be a claude-… or openrouter/… or {plans} model, not {s!r}")
+        raise ValueError(f"must be a claude-… or openrouter/… or custom/… or {plans} model, not {s!r}")
     return s
+
+
+def any_model(s: str) -> str:
+    """A model the supervisor can call for itself (modelcall: judges, recaps, describe_image): claude-…, openrouter/…,
+    a priced custom/… or a codex/… model of SHAFT_CODEX_MODELS (a ChatGPT plan)."""
+    s = model_name(s)
+    if s.startswith("codex/"):
+        from . import codexcli
+        if s not in codexcli.MODELS:
+            raise ValueError(f"{s!r} is not one of SHAFT_CODEX_MODELS ({', '.join(codexcli.MODELS)})")
+        return s
+    if s.startswith("custom/"):
+        return custom_model(s)
+    if not (s.startswith("claude-") or s.startswith("openrouter/")):
+        raise ValueError(f"must be a claude-…, openrouter/…, priced custom/… or codex/… model, not {s!r}")
+    return s
+
+
+NO_FALLBACK = "none"
+
+
+def fallback_model(s: str) -> str:
+    """A fallback model (any_model), or `none`: no fallback — what would have fallen back ends with its own error, and
+    nothing is moved onto a model the operator has no provider for."""
+    s = model_name(s)
+    return s if s == NO_FALLBACK else any_model(s)
+
+
+def channel_fallback(s: str) -> str:
+    """What a live run uses after its plan channel (codex/, grok/) fails: a model the broker calls directly —
+    claude-…, openrouter/… or a priced custom/… — or `none` (the channel's failure ends the run)."""
+    s = model_name(s)
+    if s.partition("/")[0] in ("codex", "grok"):
+        raise ValueError(f"{s!r} is a plan model: a failed plan channel falls back to a claude-…, openrouter/… or "
+                         f"priced custom/… model, or none")
+    return s if s == NO_FALLBACK else cloud_model(s)
+
+
+def any_models(s: str) -> list[str]:
+    """A non-empty comma-separated list of any_model names."""
+    out = [any_model(m) for m in s.split(",") if m.strip()]
+    if not out:
+        raise ValueError("must name at least one model")
+    return out
 
 
 def claude_model(s: str) -> str:
@@ -232,6 +351,27 @@ def cloud_models(s: str) -> list[str]:
     if not out:
         raise ValueError("must name at least one model")
     return out
+
+
+def http_url(s: str) -> str:
+    """An http(s) URL with a host (or empty: not set)."""
+    from urllib.parse import urlsplit
+    s = s.strip()
+    if s and not ((u := urlsplit(s)).scheme in ("http", "https") and u.netloc):
+        raise ValueError(f"must be an http:// or https:// URL, not {s!r}")
+    return s
+
+
+def custom_prices(s: str) -> dict:
+    """{"<model>": [input_usd_per_million, output_usd_per_million]}: non-negative numbers, 0 allowed."""
+    v = json_object(s)
+    for model, p in v.items():
+        ok = (isinstance(p, list) and len(p) == 2
+              and all(isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x < float("inf") for x in p))
+        if not ok:
+            raise ValueError(f"the price of {model!r} must be [input_usd_per_million, output_usd_per_million], "
+                             f"two non-negative numbers, not {p!r}")
+    return {m: (float(p[0]), float(p[1])) for m, p in v.items()}
 
 
 def json_object(s: str) -> dict:
@@ -269,6 +409,52 @@ IDLE_MINUTES, IDLE_SRC = knob(
     "before it is closed and written up into the journal", group="Runs and conversations",
     services=("runs", "api", "telegram"))
 API_TALKS = SUP_DIR / "api_talks.json"
+RESTARTING_SAID = "the server is restarting, try again in a moment"
+
+
+class Restarting(Exception):
+    """A new conversation refused while `shaft deploy` restarts the services conversations run through."""
+
+
+def _restart_barrier_file():
+    SUP_DIR.mkdir(parents=True, exist_ok=True)
+    return open(SUP_DIR / "restarting.lock", "a")
+
+
+@contextlib.contextmanager
+def admitting():
+    """Held (shared) while a new conversation registers itself (api.Conversations.talk_id, runner.Presence): never at
+    the same time as restart_barrier. While a deploy holds that, it raises Restarting instead of waiting, so a
+    conversation never opens between deploy's look at the open conversations and its restart of the services."""
+    with _restart_barrier_file() as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Restarting(RESTARTING_SAID) from None
+        yield
+
+
+@contextlib.contextmanager
+def restart_barrier(wait_s: float = 10):
+    """Held (exclusive) by `shaft deploy` from its look at the open conversations until the services it restarts are
+    replaced: no conversation registers in between (admitting). A registration holds its share for a moment only, so
+    the barrier is taken within `wait_s` or the deploy says so."""
+    import time
+    with _restart_barrier_file() as f:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"conversations kept registering for {wait_s:.0f} s: the services were not "
+                                       f"restarted") from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 # What the unsandboxed supervisor reads out of an instance's folder, which the instance fills as it likes: one file, and
 # one walk of a folder tree (the gate's code snapshot, read into memory; a battery exam's copy, written to disk). Past
 # a bound the read fails, explicitly — never an empty or partial answer (the gate then fails closed) — rather than
@@ -316,6 +502,50 @@ def secrets_env() -> dict[str, str]:
             k, v = line.split("=", 1)
             out[k.strip()] = v.strip().strip('"\'')
     return out
+
+
+SECRET_NAMES_RE = re.compile(r"^(ANTHROPIC_API_KEY|OPENROUTER_API_KEY|SCRAPEBADGER_API_KEY|SHAFT_CUSTOM_API_KEY|"
+                             r"SHAFT_API_KEY|SHAFT_INBOX_KEY|SHAFT_API_LOGINS|TELEGRAM_TOKEN_[A-Z0-9_]+|"
+                             r"GMAIL_[A-Z0-9_]+_CLIENT_(ID|SECRET))$")
+
+
+def set_secret_env(name: str, value: str | None) -> None:
+    """The one writer of PROJECT/.env: set NAME=value (None removes it). Atomic (temp file + os.replace), serialised by
+    SUP_DIR/env.lock, mode 0600. A key keeps its line; a new one goes last; every other line is kept byte for byte."""
+    if not SECRET_NAMES_RE.fullmatch(name):
+        raise ValueError(f"{name!r} is not a secret name the supervisor stores")
+    if value is not None and ("\n" in value or "\r" in value or "\0" in value):
+        raise ValueError(f"the value for {name} must be a single line")
+    path = PROJECT / ".env"
+    SUP_DIR.mkdir(exist_ok=True)
+    with (SUP_DIR / "env.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = path.read_bytes().decode("utf-8").splitlines(keepends=True) if path.exists() else []
+        out: list[str] = []
+        done = False
+        for line in old:
+            text = line.strip()                                          # the reader's parse (secrets_env)
+            if text and not text.startswith("#") and "=" in text and text.split("=", 1)[0].strip() == name:
+                if value is not None and not done:
+                    out.append(f"{name}={value}\n")
+                done = True
+                continue
+            out.append(line)
+        if value is not None and not done:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append(f"{name}={value}\n")
+        fd, tmp = tempfile.mkstemp(prefix=".env.", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write("".join(out).encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -403,19 +633,30 @@ def long_pauses(now: datetime | None = None) -> list[dict]:
     return out
 
 
-def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator") -> None:
+def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator", write_flag: bool = True,
+               note: bool = True) -> None:
     """Set or lift a pause flag (`.supervisor/paused-<name>`, or `paused` for all), then tell each instance it touches
     in a journal note: the scheduler leaves a paused instance out without a word, and tundra took an operator pause
     (2026-10-25 12:42 to 26 14:36) for the scheduler silently skipping its wakes. Re-pausing writes nothing; notes
-    are best effort and never stop the pause, resume, kill or delete that called this."""
+    are best effort and never stop the pause, resume, kill or delete that called this. `write_flag=False` (pausing
+    only) writes just the note for a flag already in place, `note=False` just the flag: `shaft new` pauses before the
+    worktree exists, so no scheduler tick can wake it, and notes once it does."""
     flag = SUP_DIR / (f"paused-{name}" if name else "paused")
     now = datetime.now()
     SUP_DIR.mkdir(exist_ok=True)
     if enabled:
-        try:
-            with flag.open("x") as f:
-                f.write(now.isoformat())
-        except FileExistsError:
+        if write_flag:
+            try:
+                with flag.open("x") as f:
+                    f.write(now.isoformat())
+            except FileExistsError:
+                return
+        else:
+            try:
+                now = datetime.fromisoformat(flag.read_text().strip())
+            except (OSError, UnicodeError, ValueError):
+                pass
+        if not note:
             return
         title = f"Supervisor: paused by {reason}"
         body = f"{'Global pause' if name is None else 'Pause'} started at {now:%Y-%m-%d %H:%M} by {reason}. "
@@ -702,6 +943,13 @@ def _grant_lock(name: str, lock_name: str):
             yield
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def first_reply_lock(name: str):
+    """One holder at a time of `.supervisor/first-reply-<name>`, across processes: `shaft first-reply` reading and
+    rewriting it, and the web service's first answered reply reading it, acting on it (`shaft resume`) and removing
+    it. Without it a rewrite could land after the consumer read the old choice and be removed with it."""
+    return _grant_lock(name, "first-reply")
 
 
 def gdrive_lock(name: str):

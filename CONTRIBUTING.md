@@ -54,7 +54,8 @@ Useful and correct results take priority over whether an answer sounds like the 
 
 ### The supervisor and instances stay separate
 
-The supervisor never imports agent code. Instances never see secrets. The API stays tailnet-only.
+The supervisor never imports agent code. Instances never see secrets. The API is reachable on the tailnet only, or on
+loopback for the native app on the same Mac with a paired device's bearer (`/app/v1` only, never the web pages).
 
 ### Conversations hold an instance only while it replies
 

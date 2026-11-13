@@ -1431,17 +1431,23 @@ class FixturesTest(AppTest):
                  "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
                  "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"}
         self.assertEqual(set(self.out), names)
-        if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
-            FIXTURES.mkdir(exist_ok=True)
-            for name, value in self.out.items():
-                (FIXTURES / f"{name}.json").write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
-            return
-        for name, value in self.out.items():
-            path = FIXTURES / f"{name}.json"
-            self.assertTrue(path.is_file(), f"{path} is missing: SHAFT_UPDATE_FIXTURES=1 writes it")
-            self.assertEqual(json.loads(path.read_text()), value,
-                             f"{path.name} is not what the server answers now: if the change is meant, rewrite the "
-                             "fixtures (SHAFT_UPDATE_FIXTURES=1) and make the Swift side decode them")
+        write_or_check_fixtures(self, self.out)
+
+
+def write_or_check_fixtures(case: unittest.TestCase, out: dict[str, object]) -> None:
+    """The server's answers `out` ({fixture name: JSON}) against the checked-in fixtures; SHAFT_UPDATE_FIXTURES=1 rewrites
+    them instead (then the Swift tests must decode them). test_app_api_setup writes the setup ones the same way."""
+    if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
+        FIXTURES.mkdir(exist_ok=True)
+        for name, value in out.items():
+            (FIXTURES / f"{name}.json").write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        return
+    for name, value in out.items():
+        path = FIXTURES / f"{name}.json"
+        case.assertTrue(path.is_file(), f"{path} is missing: SHAFT_UPDATE_FIXTURES=1 writes it")
+        case.assertEqual(json.loads(path.read_text()), value,
+                         f"{path.name} is not what the server answers now: if the change is meant, rewrite the "
+                         "fixtures (SHAFT_UPDATE_FIXTURES=1) and make the Swift side decode them")
 
 
 if __name__ == "__main__":

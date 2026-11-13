@@ -91,6 +91,14 @@ def resolve(acct: google.Account, which: str) -> dict:
     raise google.AccountError(f"account {acct.alias!r} has no calendar {which!r}; it has: {listed}")
 
 
+def grant_id(alias: str, which: str) -> str:
+    """The ID of the calendar `which` names in the operator's account `alias` (resolve), read once for one writable
+    grant: its read grant and its write upgrade then both name that ID, never a calendar found by the order of the
+    stored grants, which a concurrent grant on the same account may change in between."""
+    from .core import secrets_env
+    return resolve(google.Account(alias, secrets_env()).require(google.CALENDAR), which)["id"]
+
+
 # -- time: the window asked for, and an event's span in the operator's time zone -------------------------------------
 def _local(dt: datetime) -> datetime:
     """In the operator's time zone (the supervisor runs on their machine), DST of that very day included. A naive

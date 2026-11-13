@@ -1,16 +1,22 @@
 """Hand a coding task to an Opus-class model — the instance decides what, the coder writes it.
 
-`delegate_coding` (a broker tool) runs this: a Claude tool loop that may *read* the instance's
-files (read-only, its own folder, never .git) and ends by submitting complete new versions of
-code files. The supervisor applies them to a scratch copy of the instance, runs the full test
-gate there, and only if it passes writes them into the instance. Allowed targets: code only
-(shaft/, plugins/, skills/, tests/) — never the instance's mind or its model settings.
+`delegate_coding` (a broker tool) runs this: a tool loop that may *read* the instance's files (read-only, its own
+folder, never .git) and ends by submitting complete new versions of code files. The supervisor applies them to a
+scratch copy of the instance, runs the full test gate there, and only if it passes writes them into the instance.
+Allowed targets: code only (shaft/, plugins/, skills/, tests/) — never the instance's mind or its model settings.
 
-Raw HTTP like the judge (the supervisor stays dependency-free). Budgets: per run and per day.
+The loop is in OpenAI tool format and runs on the provider SHAFT_CODER_MODEL names (an operator with one provider
+still gets hand-offs): claude-… on Anthropic's API through cloudllm.to_anthropic (the instance path's translator:
+prompt caching, effort high, each assistant turn resent verbatim, thinking included); openrouter/… under the
+instances' data policy, priced by OpenRouter's usage.cost; custom/… on the operator's endpoint at its declared
+prices; codex/… on a ChatGPT plan, through a Codex app-server of the supervisor's own (modelcall.codex_channel: the
+tools are the thread's dynamic tools; plan usage costs no dollars). Raw HTTP (the supervisor stays dependency-free).
+Budgets: per run and per day.
 """
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import tempfile
 import time
@@ -19,22 +25,23 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
-from . import cloudllm, ledger
-from .core import (HOME, NETWORK_ERRORS, SUP_DIR, TreeTooBig, UnsafePath, claude_model, contained, copy_beneath,
+from . import cloudllm, ledger, modelcall, planchannel
+from .core import (HOME, NETWORK_ERRORS, SUP_DIR, TreeTooBig, UnsafePath, any_model, contained, copy_beneath,
                    dollars, knob, reserved, safe_read, safe_write, secrets_env, walk_beneath)
 
 
-
-def _priced_claude(s: str) -> str:
-    """A Claude model with a price (cloudllm.PRICES): an unpriced one would be uncapped, and a hand-off refuses it."""
-    s = claude_model(s)
-    if s not in cloudllm.PRICES:
+def _priced_model(s: str) -> str:
+    """A model the coder can run on (core.any_model) whose spend the daily cap counts: a Claude model needs a price in
+    cloudllm.PRICES (a custom/ one is priced by any_model; OpenRouter reports its cost; a plan costs no dollars)."""
+    s = any_model(s)
+    if s.startswith("claude-") and s not in cloudllm.PRICES:
         raise ValueError(f"{s!r} has no price in cloudllm.PRICES ({', '.join(sorted(cloudllm.PRICES))})")
     return s
 
 
 CODER_MODEL, _ = knob(
-    "SHAFT_CODER_MODEL", "claude-opus-5-5", _priced_claude, "the model an instance hands a coding task to (delegate)",
+    "SHAFT_CODER_MODEL", "claude-opus-5-5", _priced_model, "the model an instance hands a coding task to (delegate): "
+    "claude-…, openrouter/…, a priced custom/… or a codex/… plan model",
     group="Models and spend", services=("runs", "api"))
 DAILY_USD, _ = knob(
     "SHAFT_CODER_DAILY_USD", "5", dollars, "dollars per day per instance its coding hand-offs may spend",
@@ -65,18 +72,20 @@ behaviour. Your changes are tested by the supervisor's test gate before they are
 the agent gets the test output.
 - Read the relevant files before writing. Submit complete files, not diffs."""
 
-TOOLS = [
-    {"name": "list_files", "description": "List files under a directory of the agent's folder.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}},
-    {"name": "read_file", "description": "Read a text file in the agent's folder.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
-    {"name": "submit", "description": "Finish: the complete new content of each changed or new file, and a summary.",
-     "input_schema": {"type": "object", "properties": {
-         "files": {"type": "array", "items": {"type": "object", "properties": {
-             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
-         "summary": {"type": "string", "description": "what you changed and why, for the agent's journal"}},
-         "required": ["files", "summary"]}},
-]
+_SUBMIT = {"type": "object", "properties": {
+    "files": {"type": "array", "items": {"type": "object", "properties": {
+        "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
+    "summary": {"type": "string", "description": "what you changed and why, for the agent's journal"}},
+    "required": ["files", "summary"]}
+TOOLS = [{"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
+         for name, description, parameters in (
+    ("list_files", "List files under a directory of the agent's folder.",
+     {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}),
+    ("read_file", "Read a text file in the agent's folder.",
+     {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+    ("submit", "Finish: the complete new content of each changed or new file, and a summary.", _SUBMIT))]
+MAX_OUTPUT = 32000
+NUDGE = "Call submit with your changes (or with no files and a summary explaining why not)."
 
 
 class CoderError(Exception):
@@ -125,10 +134,15 @@ def _read_only_tool(root: Path, name: str, args: dict) -> str:
         return f"ERROR: {e}"
 
 
-def _call(key: str, messages: list) -> dict:
-    body = {"model": CODER_MODEL, "max_tokens": 32000, "system": SYSTEM, "messages": messages, "tools": TOOLS,
-            "output_config": {"effort": "high"}, "fallbacks": "default",
-            "cache_control": cloudllm.CACHE}   # each turn re-reads the files read so far from the cache
+class _Turn(dict):
+    """One reply of the loop: `message` (OpenAI-format assistant message), `finish`, `counts` (token counts for the
+    ledger), `usd` (None: unpriced) and, for a call that failed after it may have been billed, `error`."""
+
+
+def _anthropic(key: str, messages: list, remembered: dict) -> _Turn:
+    body = cloudllm.to_anthropic({"model": CODER_MODEL, "max_tokens": MAX_OUTPUT, "messages": messages,
+                                  "tools": TOOLS}, remembered)   # cache_control: each turn re-reads the files so far
+    body.update(output_config={"effort": "high"}, fallbacks="default")
     req = urllib.request.Request(API, data=json.dumps(body).encode(), headers={
         "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
         "anthropic-beta": "server-side-fallback-2026-07-01"})
@@ -137,56 +151,187 @@ def _call(key: str, messages: list) -> dict:
         time.sleep(wait)
         try:
             with urllib.request.urlopen(req, timeout=900) as resp:
-                return json.load(resp)
+                data = json.load(resp)
+            break
         except urllib.error.HTTPError as e:
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
-                break
+                raise CoderError(f"coder call failed: {error}") from None
         except NETWORK_ERRORS as e:
             error = f"network: {e}"
-    raise CoderError(f"coder call failed: {error}")
+    else:
+        raise CoderError(f"coder call failed: {error}")
+    counts = cloudllm.billed(data.get("usage") or {})
+    # a fallback model may have answered: priced as the model that did (an unpriced one as the coder's)
+    usd = cloudllm.usd(data.get("model") or CODER_MODEL, counts) or cloudllm.usd(CODER_MODEL, counts)
+    if data.get("stop_reason") == "refusal":
+        return _Turn(message={}, finish="refusal", counts=counts, usd=usd)
+    out = cloudllm.from_anthropic(data)
+    message = out["choices"][0]["message"]
+    remembered[cloudllm._turn_key(message["content"], [c["id"] for c in message.get("tool_calls", [])])] = \
+        data["content"]                                  # resent verbatim, thinking included
+    return _Turn(message=message, finish=out["choices"][0]["finish_reason"], counts=counts, usd=usd)
+
+
+def _openai(key: str, messages: list) -> _Turn:
+    """openrouter/ (the instances' data policy, effort high, priced by its usage.cost) or custom/ (the declared
+    prices: the endpoint's counts, else the worst case)."""
+    body = {"model": CODER_MODEL, "max_tokens": MAX_OUTPUT, "messages": messages, "tools": TOOLS}
+    custom = CODER_MODEL.startswith("custom/")
+    if custom:
+        req = cloudllm._custom_request(body, key, stream=False)
+    else:
+        req = cloudllm._openrouter_request({**body, "reasoning": {"effort": "high"}}, key, stream=False)
+    data, error = cloudllm._send(req)
+    if data is not None and not data.get("choices"):    # an error object answered with 200
+        error = f"no reply: {json.dumps(data.get('error') or data)[:400]}"
+    if error:
+        cost = 0.0                                      # nothing came back: nothing was generated
+        if data is not None:                            # an answer without a reply may still have been billed
+            cost = (cloudllm._custom_counts(cloudllm.custom_price(CODER_MODEL), body, data.get("usage") or {}, 0)[2]
+                    if custom else float((data.get("usage") or {}).get("cost") or 0.0))
+        return _Turn(message={}, finish=None, counts={}, usd=cost,
+                     error=f"coder call failed: {error}{'' if custom else cloudllm._policy_hint(error)}")
+    choice = data["choices"][0]
+    message = dict(choice.get("message") or {})
+    usage = data.get("usage") or {}
+    if custom:
+        tin, tout, usd, _ = cloudllm._custom_counts(cloudllm.custom_price(CODER_MODEL), body, usage,
+                                                     cloudllm._message_chars(message))
+    else:
+        tin, tout = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        known = lambda n: isinstance(n, int) and not isinstance(n, bool) and n >= 0
+        usd = float(usage["cost"]) if usage.get("cost") is not None else None
+        if usd is None:                                  # the counts an estimate is priced at: the worst when absent
+            tin = tin if known(tin) else math.ceil(len(json.dumps(messages) + json.dumps(TOOLS)) / 3)
+            tout = tout if known(tout) else MAX_OUTPUT
+        tin, tout = (tin if known(tin) else 0), (tout if known(tout) else 0)
+    for c in message.get("tool_calls") or []:
+        fn = c.get("function") or {}
+        if not isinstance(fn.get("arguments"), str):
+            fn["arguments"] = json.dumps(fn.get("arguments") or {}, ensure_ascii=False)
+    kept = {k: message[k] for k in ("content", "tool_calls", "reasoning_details") if message.get(k) is not None
+            and (k != "reasoning_details" or not custom)}   # OpenRouter's reasoning goes back with its tool calls
+    return _Turn(message={"role": "assistant", "content": "", **kept}, finish=choice.get("finish_reason"),
+                 counts={"input_tokens": tin or 0, "output_tokens": tout or 0}, usd=usd)
+
+
+def _codex(channel, messages: list) -> _Turn:
+    try:
+        reply = channel.complete({"model": CODER_MODEL, "messages": messages, "tools": TOOLS,
+                                  "reasoning_effort": "high"})
+    except planchannel.ChannelFailure as e:
+        raise CoderError(f"coder call failed: {e.reason}") from None
+    choice = reply["choices"][0]
+    return _Turn(message=choice["message"], finish=choice["finish_reason"], counts={}, usd=0.0)
+
+
+def _estimate(instance: str, counts: dict, usage: dict) -> float:
+    """What an OpenRouter reply without a cost is booked at, conservatively: its token counts (else the prompt's
+    characters / 3 and the whole output room) at the dearest qualifying provider's catalogue price; with no price
+    to be had, the rest of today's allowance, so no further hand-off is admitted today (the cap still holds)."""
+    from . import consult
+    price = consult.worst_price(CODER_MODEL, cloudllm.OPENROUTER_PROVIDER)
+    if price is not None:
+        usage["estimated"] = usage.get("estimated") or "catalogue price"
+        return (counts["input_tokens"] * price[0] + counts["output_tokens"] * price[1]) / 1e6
+    usage["estimated"] = "rest of the allowance"
+    # one ledger unit (the row keeps 4 places) over the rest: rounding can never leave the day just under the cap
+    return max(DAILY_USD - spent_today(instance) - usage["usd"], 0.0) + 0.0001
+
+
+def _arguments(call: dict) -> dict | None:
+    try:
+        args = json.loads((call.get("function") or {}).get("arguments") or "{}")
+    except ValueError:
+        return None
+    return args if isinstance(args, dict) else None
+
+
+def _submission(args: dict | None) -> str:
+    """'' when submit's arguments are what delegate() applies — a list of {path, content} strings and a summary —
+    else what is wrong (told to the model, which tries again: not every provider's model keeps to a schema)."""
+    if args is None:
+        return "the arguments are not a JSON object"
+    files = args.get("files")
+    if not isinstance(files, list) or not all(isinstance(f, dict) and isinstance(f.get("path"), str)
+                                              and isinstance(f.get("content"), str) for f in files):
+        return "files must be a list of {path, content} objects, both strings"
+    return "" if isinstance(args.get("summary", ""), str) else "summary must be a string"
 
 
 def write(root: Path, instance: str, task: str) -> tuple[list[dict], str, dict]:
     """Run the coder loop. Returns (files, summary, usage). Writes nothing."""
-    key = secrets_env().get("ANTHROPIC_API_KEY")
-    if not key:
-        raise CoderError("no ANTHROPIC_API_KEY in the supervisor's .env")
+    keys = secrets_env()
+    if (why := modelcall.available(CODER_MODEL, keys)):
+        raise CoderError(f"the coder ({CODER_MODEL}) is off: {why}")
+    if CODER_MODEL.startswith("claude-") and CODER_MODEL not in cloudllm.PRICES:   # unpriced = uncapped: refuse
+        raise CoderError(f"SHAFT_CODER_MODEL={CODER_MODEL!r} has no price in cloudllm.PRICES ({sorted(cloudllm.PRICES)})")
     if spent_today(instance) >= DAILY_USD:
         raise CoderError(f"{instance} already spent ${spent_today(instance):.2f} on coding today (cap ${DAILY_USD:.2f})")
-    if CODER_MODEL not in cloudllm.PRICES:   # unpriced = uncapped: refuse, never bill $0
-        raise CoderError(f"SHAFT_CODER_MODEL={CODER_MODEL!r} has no price in cloudllm.PRICES ({sorted(cloudllm.PRICES)})")
-    messages = [{"role": "user", "content": f"The agent's task for you:\n\n{task}"}]
+    messages = [{"role": "system", "content": SYSTEM},
+                {"role": "user", "content": f"The agent's task for you:\n\n{task}"}]
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_5m_tokens": 0,
              "cache_write_1h_tokens": 0, "turns": 0, "usd": 0.0}
+    plan = CODER_MODEL.startswith("codex/")
+    if plan:
+        usage["plan"] = "codex"
+
+    def plan_step(step):                       # each finished Codex step, once, with its final usage
+        usage["input_tokens"] += step.usage.get("prompt_tokens") or 0
+        usage["output_tokens"] += step.usage.get("completion_tokens") or 0
+        usage["cache_read_tokens"] += step.cached
+
+    channel = modelcall.codex_channel(plan_step) if plan else None
+    remembered: dict[str, list] = {}
     started = time.monotonic()
     try:
         for _ in range(MAX_TURNS):
-            data = _call(key, messages)
+            if plan:
+                turn = _codex(channel, messages)
+            elif CODER_MODEL.startswith("claude-"):
+                turn = _anthropic(keys["ANTHROPIC_API_KEY"], messages, remembered)
+            else:
+                key = keys["SHAFT_CUSTOM_API_KEY" if CODER_MODEL.startswith("custom/") else "OPENROUTER_API_KEY"]
+                turn = _openai(key, messages)
             usage["turns"] += 1
-            counts = cloudllm.billed(data.get("usage") or {})
-            for k, v in counts.items():
+            for k, v in turn["counts"].items():
                 usage[k] += v
-            # a fallback model may have answered: priced as the model that did (an unpriced one as the coder's)
-            usage["usd"] += cloudllm.usd(data.get("model") or CODER_MODEL, counts) or cloudllm.usd(CODER_MODEL, counts)
-            if data.get("stop_reason") == "refusal":
+            if turn["usd"] is None:                # OpenRouter gave no cost: never booked as $0
+                turn["usd"] = _estimate(instance, turn["counts"], usage)
+            usage["usd"] += turn["usd"]
+            if usage.get("estimated") == "rest of the allowance":
+                raise CoderError(f"{CODER_MODEL} gave no cost for the coder's call and its price is unknown: booked "
+                                 f"the rest of today's coding allowance (${turn['usd']:.4f}) so the cap still holds; "
+                                 f"stopped")
+            if turn.get("error"):
+                raise CoderError(turn["error"])
+            if turn["finish"] == "refusal":
                 raise CoderError("the coder declined this task")
-            if data.get("stop_reason") == "max_tokens":
+            if turn["finish"] == "length":
                 raise CoderError("the coder ran out of output room; ask for a smaller change")
-            messages.append({"role": "assistant", "content": data["content"]})   # verbatim, thinking included
-            calls = [b for b in data["content"] if b.get("type") == "tool_use"]
-            submit = next((b for b in calls if b["name"] == "submit"), None)
-            if submit:
-                return submit["input"].get("files", []), submit["input"].get("summary", ""), usage
+            if turn["finish"] == "error":
+                raise CoderError("the coder's provider ended the reply with an error")
+            message = turn["message"]
+            messages.append(message)
+            calls = message.get("tool_calls") or []
+            submit = next((c for c in calls if (c.get("function") or {}).get("name") == "submit"), None)
+            if submit and not _submission(args := _arguments(submit)):
+                return args["files"], args.get("summary", ""), usage
             if not calls:
-                messages.append({"role": "user", "content": "Call submit with your changes (or with no files and "
-                                                            "a summary explaining why not)."})
+                messages.append({"role": "user", "content": NUDGE})
                 continue
-            messages.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": b["id"], "content": _read_only_tool(root, b["name"], b["input"])}
-                for b in calls]})
+            for c in calls:
+                args, name = _arguments(c), (c.get("function") or {}).get("name")
+                result = (f"ERROR: {_submission(args)}; call submit again" if name == "submit" else
+                          "ERROR: the arguments are not a JSON object" if args is None else
+                          _read_only_tool(root, name, args) if name in ("list_files", "read_file") else
+                          f"ERROR: no tool {name!r}")
+                messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         raise CoderError(f"the coder did not submit within {MAX_TURNS} turns")
     finally:
+        if channel is not None:
+            channel.close()                       # its last step's usage reaches plan_step here
         usage["usd"] = round(usage["usd"], 4)
         ledger.record_charge(usage["usd"])
         usage["seconds"] = round(time.monotonic() - started, 1)

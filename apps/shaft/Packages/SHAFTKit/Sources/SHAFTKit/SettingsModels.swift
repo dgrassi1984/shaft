@@ -111,6 +111,20 @@ public struct SettingSave: Codable, Sendable, Equatable {
     public var applies: String
 }
 
+/// `GET /app/v1/version` (§19): the release the web service runs (git describe) and its `/app/v1` version; on loopback
+/// also the checkout it runs from (`project`), never over the tailnet.
+public struct ServerVersion: Codable, Sendable, Equatable {
+    public var server: String
+    public var api: Int
+    public var project: String?
+
+    public init(server: String, api: Int, project: String? = nil) {
+        self.server = server
+        self.api = api
+        self.project = project
+    }
+}
+
 public struct ServicesResponse: Codable, Sendable, Equatable {
     public var services: [ServiceStatus]
     public var version: String?

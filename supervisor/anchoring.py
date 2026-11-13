@@ -118,6 +118,7 @@ def run(name: str, n: int = 40, bare: bool = False, dry_run: bool = False) -> di
             result["stopped"] = f"{arm} of {ep['ts']}: {e}"   # said by the verb too: "0 done" alone hid why
             break
         row = {"episode_ts": ep["ts"], "arm": arm, "judge": stored["judge"],
+               **judge.independence(stored["judge"], metrics.own_models(name, ep)),
                "judged_at": datetime.now().isoformat(timespec="seconds"),
                "claimed": ep["finish"]["criterion_met"], "stored": stored["criterion_met"],
                **{k: verdict[k] for k in ANCHOR_SCHEMA["properties"]}}

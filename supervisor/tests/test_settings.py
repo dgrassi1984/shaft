@@ -82,12 +82,12 @@ class SetTest(FileCase):
         self.assertEqual(self.file.read_text(), "# mine\nSHAFT_JUDGE_MODELS=claude-sonnet-5-5\n")
 
     def test_a_bad_value_is_refused_with_the_reason_and_nothing_is_written(self):
-        for key, value, why in (("SHAFT_JUDGE_MODELS", "gpt-5", "claude-… or openrouter/…"),
+        for key, value, why in (("SHAFT_JUDGE_MODELS", "gpt-5", "claude-…, openrouter/…, priced custom/… or codex/…"),
                                 ("SHAFT_JUDGE_MODELS", "", "at least one model"),
                                 ("SHAFT_IDLE_MINUTES", "0", "above 0"),
                                 ("SHAFT_CLOUD_DAILY_USD", "lots", "lots"),
                                 ("SHAFT_OPENROUTER_PROVIDER", "[1]", "JSON object"),
-                                ("SHAFT_JUDGE2_MODEL", "claude-sonnet-5-5", "openrouter/"),
+                                ("SHAFT_JUDGE2_MODEL", "codex/gpt-0", "SHAFT_CODEX_MODELS"),
                                 ("SHAFT_CODER_MODEL", "claude-unknown-9", "no price"),
                                 ("SHAFT_NO_SUCH", "1", "not a setting"),
                                 ("SHAFT_IDLE_MINUTES", "1\nSHAFT_X=2", "one line")):
@@ -130,6 +130,15 @@ class SetTest(FileCase):
                          ("claude-sonnet-5-5", "file"))
         self.assertEqual(listed["SHAFT_JUDGE_MODELS"]["kind"], "models")
         self.assertIn("openrouter/xiaomi/mimo-v2.6-pro", listed["SHAFT_JUDGE_MODELS"]["choices"])
+        # the coder and the fallbacks run on the operator's provider: model pickers, `none` where it means no fallback
+        coder_, codex_fb, trial_fb = (listed[n] for n in ("SHAFT_CODER_MODEL", "SHAFT_CODEX_FALLBACK_MODEL",
+                                                          "SHAFT_TRIAL_FALLBACK_MODEL"))
+        self.assertEqual((coder_["kind"], codex_fb["kind"], trial_fb["kind"]), ("model", "model", "model"))
+        self.assertIn("codex/gpt-6-astra", coder_["choices"])
+        self.assertNotIn("none", coder_["choices"])
+        self.assertIn("none", codex_fb["choices"])
+        self.assertNotIn("codex/gpt-6-astra", codex_fb["choices"])
+        self.assertTrue({"none", "codex/gpt-6-astra"} <= set(trial_fb["choices"]))
         self.assertFalse(listed["SHAFT_WEB_PORT"]["web"])
         code, out = run("unset", ["SHAFT_JUDGE_MODELS"], ["SHAFT_JUDGE_MODELS=claude-sonnet-5-5"], [])
         self.assertEqual(code, 0, out)

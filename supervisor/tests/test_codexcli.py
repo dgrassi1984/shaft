@@ -51,7 +51,7 @@ def actions():
             note('item/completed', tagged(item=dict(type='agentMessage', id='m'+str(stage), text=text)))
         elif 'call' in action:
             n = action['call']
-            params = tagged(callId='call-'+str(n), tool='echo', arguments=action.get('arguments', {'n': n}))
+            params = tagged(callId='call-'+str(n), tool=action.get('tool', 'echo'), arguments=action.get('arguments', {'n': n}))
             note('item/started', tagged(item=dict(type='dynamicToolCall', id='item-'+str(n))))
             calls[1000+n] = True
             send(dict(id=1000+n, method='item/tool/call', params=params))

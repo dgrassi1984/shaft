@@ -500,13 +500,14 @@ def make_recall(name: str, force: bool = False) -> Path | None:
               "outcome), not an opinion — phrased as someone asking the agent about its past, without quoting "
               "the entry. Give the answer as the entry states it.\n\n"
               + "\n\n".join(f"## Entry {stamp}\n{text[:3000]}" for stamp, text in picked))
-    by = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
+    own = [instance_config(name).get("LLM_MODEL")]
+    by = judge.pick(exclude=own)
     out = judge.ask("You write precise recall questions.", prompt, RECALL_SCHEMA, purpose=f"battery recall-gen {name}",
                     model=by)
     qs = out["questions"]
     if len(qs) != RECALL_ITEMS:
         raise judge.JudgeError(f"expected {RECALL_ITEMS} recall questions, got {len(qs)}")
-    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": by,
+    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": by, **judge.independence(by, own),
             "questions": [{"id": f"{name}-{i + 1}", "prompt": q["question"], "answer": q["answer"],
                            "entry": q["entry"], "max_steps": 8} for i, q in enumerate(qs)]}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -604,7 +605,8 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
             arms = ([] if control_only else ["instance"]) + \
                 (["control"] if (control or control_only) and item["category"] in CONTROLLED else [])
             # One grader for both arms of an item, so instance and control are compared under the same judge.
-            grader = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
+            own = [instance_config(name).get("LLM_MODEL")]
+            grader = judge.pick(exclude=own)
             for arm in arms:
                 why = interrupt()
                 from .autonomy import parent_draining
@@ -612,7 +614,7 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
                     why = "the scheduler is draining for a restart"
                 if why:
                     raise Interrupted(why)
-                row = _one(name, item, arm, root, e, until, interrupt, grader)
+                row = _one(name, item, arm, root, e, until, interrupt, grader, own)
                 summary["items"].append({k: row.get(k) for k in ("item", "arm", "status", "score")})
                 scored += row["status"] == "scored"
     except Interrupted as stop:
@@ -635,14 +637,14 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
 
 
 def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | None, interrupt,
-         grader: str | None = None) -> dict:
+         grader: str | None = None, own=()) -> dict:
     """One item for one arm, in a folder made for it and deleted after it: a copy of the instance (`real`, never
     written), or a fresh control."""
     for previous in reversed(results(name)):
         if previous.get("item") == item["id"] and previous.get("arm") == arm and _same_era(previous, e):
             if previous.get("status") == "unjudged" and previous.get("grading_case") and \
                     previous.get("grading_attempts", 1) < GRADE_ATTEMPTS:
-                return _grade_saved(name, previous)
+                return _grade_saved(name, previous, own)
             break
     label = name if arm == "instance" else f"{name}-control"
     deadline = min(time.time() + ITEM_TIMEOUT_S, until or float("inf"))
@@ -663,7 +665,7 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
             _append(name, row)
             log(f"{name}: battery item {item['id']} ({arm}) not run: {row['error']}")
             return row
-        return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader)
+        return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader, own)
     finally:
         if root is not None:
             from . import kill
@@ -693,14 +695,15 @@ def _clean_left(name: str, control_only: bool) -> None:
 
 
 def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
-            interrupt, grader: str | None) -> dict:
+            interrupt, grader: str | None, own=()) -> dict:
+    """`own`: the instance's models, so a grader that is one of them (a one-model pool) is marked on the row."""
     from .runner import RunRefused, _refused
     if item["category"] == "perturbation":
         from . import perturbation
         row = {**_row(item, arm, e), "probe_protocol": "temperature-v1", "base_temperature": localmodel.TEMP}
         try:
             row["probes"] = perturbation.run(name, root, until, interrupt, grader)
-            row.update(status="scored", grader=grader)
+            row.update(status="scored", grader=grader, **judge.independence(grader, own))
         except Interrupted as stop:
             row.update(status="interrupted", why=str(stop))
             _append(name, row)
@@ -744,16 +747,22 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
     row["truth"] = truth(name, item["truth"]) if item["category"] == "self" else None
     row["tests"] = tests
     row["grader"] = grader
+    row.update(judge.independence(grader, own) if grader else {})
     row["grading_case"] = {"item": item, "result": res}
     row["status"] = "unjudged"
-    return _grade_saved(name, row)
+    return _grade_saved(name, row, own)
 
 
-def _grade_saved(name: str, saved: dict) -> dict:
+def _grade_saved(name: str, saved: dict, own=()) -> dict:
     """Grade a finished exam from its saved case: the whole exam result and the grader picked for it. A grading that
     fails keeps the case, and a later run grades it again without rerunning the exam (review C11), up to
-    GRADE_ATTEMPTS gradings; then the item's exam runs afresh."""
+    GRADE_ATTEMPTS gradings; then the item's exam runs afresh. With the instance's models (`own`), the row's
+    independence mark is set for its grader again: a row saved unmarked (before rows carried it) is marked when a
+    one-model pool's grader is the instance's own model."""
     row = {**saved, "grading_attempts": saved.get("grading_attempts", 0) + 1}
+    if own and row.get("grader"):
+        row.pop("independence", None)
+        row.update(judge.independence(row["grader"], own))
     case = row["grading_case"]
     try:
         row["grade"] = grade(case["item"], case["result"], row["truth"], row["tests"], model=row["grader"])

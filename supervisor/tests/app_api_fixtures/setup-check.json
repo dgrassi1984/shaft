@@ -1,0 +1,16 @@
+{
+  "provider": "openrouter",
+  "ok": false,
+  "models": [
+    {
+      "ok": true,
+      "model": "openrouter/a",
+      "error": null
+    },
+    {
+      "ok": false,
+      "model": "openrouter/b",
+      "error": "OpenRouter HTTP 401: no key"
+    }
+  ]
+}

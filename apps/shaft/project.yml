@@ -134,6 +134,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The APNs environment the entitlement below names. Everyday builds, Release included, are signed with an
+        # Apple Development identity, which only fits a development profile; Scripts/release-mac.sh overrides it with
+        # SHAFT_APS_ENVIRONMENT=production for the Developer ID archive and checks the signed result.
+        SHAFT_APS_ENVIRONMENT: development
     info:
       path: Generated/macOS-Info.plist
       properties:
@@ -152,14 +156,13 @@ targets:
           - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
             CFBundleURLSchemes: [shaft]
     postBuildScripts:
-      # As for iOS: plain http to this machine (the fixture server) in Debug builds only.
-      - name: Allow local http in Debug
+      # Plain http to this machine in every configuration: the Mac app's setup wizard talks to the server it starts on
+      # 127.0.0.1 (and the fixture server in Debug). iOS stays Debug-only above.
+      - name: Allow local http
         script: |
-          if [ "$CONFIGURATION" = "Debug" ]; then
-            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
-          fi
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
           touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
         inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
         outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
@@ -172,16 +175,15 @@ targets:
     entitlements:
       path: Generated/macOS.entitlements
       properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.network.client: true
-        com.apple.security.files.user-selected.read-write: true
-        # The microphone for voice mode, under the sandbox and the hardened runtime alike.
+        # No App Sandbox: the setup wizard runs git, uv and the server's CLI and writes ~/SHAFT. The hardened runtime
+        # stays on (ENABLE_HARDENED_RUNTIME); NotificationService-macOS keeps its sandbox (extensions must).
+        # The microphone for voice mode, under the hardened runtime.
         com.apple.security.device.audio-input: true
-        com.apple.developer.aps-environment: development
+        com.apple.developer.aps-environment: $(SHAFT_APS_ENVIRONMENT)
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
-  # The Mac app's own logic that needs no window: its Markdown text and its text views' menu items. A plain test
-  # bundle with no host app, run by the SHAFT-macOS scheme's test action.
+  # The Mac app's own logic that needs no window: its Markdown text, its text views' menu items, the setup gate and the
+  # setup wizard's rules and work. A plain test bundle with no host app, run by the SHAFT-macOS scheme's test action.
   SHAFTMacTests:
     type: bundle.unit-test
     platform: macOS
@@ -198,6 +200,11 @@ targets:
       - path: macOS/SelectionReplyButton.swift
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift
+      - path: macOS/Setup/SetupGate.swift
+      - path: macOS/Setup/MacSetup.swift
+      - path: macOS/Setup/SetupForms.swift
+      - path: macOS/Setup/SetupSteps.swift
+      - path: macOS/Setup/GoogleSetup.swift
       - path: Shared/Attachments/AttachmentViews.swift
     dependencies:
       - package: SHAFTKit

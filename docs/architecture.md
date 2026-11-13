@@ -91,7 +91,9 @@ Native provider tools are denied. SHAFT tools are relayed through
 
 Consultations have their own model menu and daily allowance in `supervisor/consult.py`.
 The broker route `/llm/consult/v1/chat/completions` accepts non-streaming, text-only
-requests and reserves their worst-case cost before dispatch. Consultations are unavailable
+requests and reserves their worst-case cost before dispatch. Each menu model is called by its
+prefix: openrouter/… on OpenRouter, custom/… on the operator's endpoint at its declared prices,
+codex/… on the ChatGPT plan through `supervisor/modelcall.py` (no dollars). Consultations are unavailable
 to scheduled jobs, trial replays, and battery exams.
 
 `web_search` uses a 35-second socket timeout per attempt. It makes up to three attempts
@@ -489,8 +491,11 @@ An internal ledger or book the operator does not read or act on is `own_record`,
 
 The main judge rotation leaves out `SHAFT_JUDGE2_MODEL`, keeping the cross-check independent; a pool that still
 lists it uses it only when no other judge may grade a run (that run gets no second judgment). A run whose own models
-cover the whole pool is skipped for now, and the runs after it are still judged. The judge owns length retries: one
-escalation to twice the initial token ceiling; trial pair judging adds no retry. Cloud usage rows retain OpenRouter
+cover a pool of several models is skipped for now, and the runs after it are still judged; a pool of one model that is
+the instance's own grades it with that model and the verdict records `"independence": "same-model"`. Judges, recaps
+and describe_image call their model through `modelcall.ask` (claude-…, openrouter/…, custom/…, codex/…; a codex/
+call starts its own app-server for that call and closes it), which owns length retries: one escalation to twice the
+initial token ceiling; trial pair judging adds no retry. Cloud usage rows retain OpenRouter
 cache reads and writes. Native Claude judge rows record dollars from the shared pricing table. Self-hosted calls have
 `usd=null` and `unpriced=true` and add nothing to recorded dollar charges; spend reports count
 unpriced calls separately from their dollar totals.

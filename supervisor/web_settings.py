@@ -68,7 +68,7 @@ def _restart_buttons(services: list[str], scheduled: list[str], busy: list[str])
     out = []
     for svc in services:
         if svc in NOT_FROM_HERE:
-            out.append(h('<span class="dim">{svc}: restart it from a terminal (<code>shaft web on</code>): the web UI '
+            out.append(h('<span class="dim">{svc}: restart it from a terminal (<code>shaft web restart</code>): the web UI '
                          'cannot restart itself</span>', svc=svc))
             continue
         why = actions.guard_reason(svc, "restart", scheduled, busy)

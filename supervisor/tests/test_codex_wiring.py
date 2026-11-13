@@ -265,6 +265,66 @@ class BrokerTest(Case):
         h.send_response.assert_called_once_with(502)
         self.assertIn("weekly cap", json.loads(h.wfile.getvalue())["error"]["message"])
 
+    def test_fallback_none_ends_the_run_with_the_channel_error(self):
+        """SHAFT_CODEX_FALLBACK_MODEL=none (an operator with a ChatGPT plan only): a live run's channel failure is its
+        error — never a call to some other model, never a silent continue — and every later call of the run gets
+        the same error at once (the channel stays down), so the instance's retries end the run."""
+        self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", "none"))
+        for streaming in (False, True):
+            with self.subTest(stream=streaming):
+                self.b.channel_down, self.b._log = None, mock.Mock()
+                self.channel.complete.reset_mock()
+                self.channel.stream.reset_mock()
+                self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+                self.channel.stream.side_effect = codexcli.CodexFailure("offline")
+                with mock.patch.object(cloudllm, "complete") as cloud, \
+                        mock.patch.object(cloudllm, "openrouter_stream") as cloud_stream:
+                    first, _ = self.call(stream=streaming)
+                    again, _ = self.call(stream=streaming)
+                cloud.assert_not_called()
+                cloud_stream.assert_not_called()
+                for h in (first, again):
+                    h.send_response.assert_called_once_with(502)
+                    message = json.loads(h.wfile.getvalue())["error"]["message"]
+                    self.assertIn("Codex failed: offline", message)
+                    self.assertIn("SHAFT_CODEX_FALLBACK_MODEL=none", message)
+                self.assertEqual((self.channel.stream if streaming else self.channel.complete).call_count, 1)
+                self.assertEqual(self.b.channel_down, "offline")
+                logged = [c.args[0] for c in self.b._log.call_args_list]
+                self.assertTrue(any("ERROR" in line and "Codex failed: offline" in line for line in logged), logged)
+
+    def test_fallback_none_reaches_the_instance_as_its_model_calls_error(self):
+        """The same, one level up: the instance's own model client (template shaft/llm.py) talking to the real broker
+        handler over loopback. Its retries of the 502 end with the channel failure as the error it raises — what ends
+        the run — and its usage log records it on every attempt. (No harness drives a whole live run on a plan
+        channel; this is the highest level the wiring tests reach.)"""
+        import sys
+        from http.server import ThreadingHTTPServer
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
+        self.addCleanup(sys.path.remove, sys.path[0])
+        from shaft import llm as instance_llm
+        self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", "none"))
+        self.enterContext(mock.patch.object(instance_llm.time, "sleep"))
+        self.b.token, self.b._project_charges = "tok", []
+        self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        usage = self.root / "llm_usage.jsonl"
+        client = instance_llm.Client(f"http://127.0.0.1:{server.server_address[1]}/llm/v1", MODEL, "", 30, usage,
+                                     broker_token="tok")
+        with mock.patch.object(cloudllm, "complete") as cloud:
+            with self.assertRaises(instance_llm.LLMError) as caught:
+                client.complete([{"role": "user", "content": "hi"}], 100, "step")
+        cloud.assert_not_called()
+        self.assertIn("Codex failed: offline", str(caught.exception))
+        self.assertIn("SHAFT_CODEX_FALLBACK_MODEL=none", str(caught.exception))
+        rows = [json.loads(line) for line in usage.read_text().splitlines()]
+        self.assertEqual(len(rows), 3)                                   # the first try and both retries
+        self.assertTrue(all("Codex failed: offline" in r["error"] for r in rows))
+        self.channel.complete.assert_called_once()                       # the channel stays down after the first
+
     def test_codex_closed_is_shutdown_without_false_outage_or_paid_fallback(self):
         for streaming in (False, True):
             with self.subTest(stream=streaming):
@@ -396,12 +456,19 @@ class ModelsTest(Case):
         for parse in (core.cloud_model, core.claude_model, core.openrouter_model):
             with self.assertRaisesRegex(ValueError, "model"):
                 parse(MODEL)
-        from supervisor import coder, recap
-        with self.assertRaisesRegex(ValueError, "Claude model"):
-            coder._priced_claude(MODEL)
-        with self.assertRaisesRegex(ValueError, "Claude model"):
-            core.KNOBS["SHAFT_RECAP_MODEL"].parse(MODEL)
-        self.assertIs(core.KNOBS["SHAFT_RECAP_MODEL"].parse, core.claude_model)
+
+    def test_supervisor_side_calls_accept_codex_models(self):
+        """modelcall runs judges, recaps and describe_image on a Codex plan too (a standalone app-server), and the
+        coder runs a hand-off there."""
+        for name in ("SHAFT_JUDGE2_MODEL", "SHAFT_RECAP_MODEL"):
+            self.assertIs(core.KNOBS[name].parse, core.any_model, name)
+            self.assertEqual(core.KNOBS[name].parse(MODEL), MODEL)
+        self.assertIs(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse, core.fallback_model)    # any_model, or none: off
+        self.assertEqual(core.KNOBS["SHAFT_DESCRIBE_MODEL"].parse(MODEL), MODEL)
+        self.assertEqual(core.KNOBS["SHAFT_CODER_MODEL"].parse(MODEL), MODEL)
+        self.assertEqual(core.KNOBS["SHAFT_JUDGE_MODELS"].parse(MODEL), [MODEL])
+        with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS"):
+            core.any_model("codex/not-offered")
 
     def test_operator_choices_and_setting_choices(self):
         with mock.patch.object(opconfig, "_template_text", return_value=""), \
@@ -413,8 +480,12 @@ class ModelsTest(Case):
         with mock.patch.object(settings, "model_choices", return_value=[MODEL, "claude-haiku-5-5"]), \
                 mock.patch.object(settings, "not_live", return_value={}):
             fields = {f["name"]: f for f in settings.listing()}
-        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
-            self.assertNotIn(MODEL, fields[name]["choices"])
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL"):   # called directly by the broker
+            self.assertNotIn(MODEL, fields[name]["choices"], name)
+            self.assertIn("none", fields[name]["choices"], name)
+        for name in ("SHAFT_JUDGE_MODELS", "SHAFT_JUDGE2_MODEL", "SHAFT_DESCRIBE_MODEL", "SHAFT_RECAP_MODEL",
+                     "SHAFT_CODER_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
+            self.assertIn(MODEL, fields[name]["choices"], name)       # modelcall calls Codex plan models too
         self.assertIn("codexcli", settings.MODULES)
 
     def test_bakeoff_arms_accept_codex_and_reject_same_judge_across_providers(self):
@@ -527,16 +598,57 @@ class ModelsTest(Case):
                 mock.patch.object(version, "supervisor_commit", return_value="abc"):
             self.assertIn(f"model {MODEL} via the broker (Codex plan)", version.describe("bird"))
 
-    def test_unsupported_consult_and_probes_refuse_codex_clearly(self):
+    def test_unsupported_consult_and_probes_refuse_plans_clearly(self):
+        """Probes still need an OpenRouter model; a consult runs on a Codex plan (below) but not on Grok's."""
         with self.assertRaisesRegex(experiments.ExperimentError, "openrouter/"):
             experiments._probe_model(MODEL)
-        with self.assertRaisesRegex(consult.ConsultError, "codex/ is not supported"):
-            consult.complete("bird", {"model": MODEL}, {}, None, None, None)
-        with mock.patch.object(consult, "MODELS", [MODEL]), \
+        with self.assertRaisesRegex(consult.ConsultError, "grok/ is not supported"):
+            consult.complete("bird", {"model": "grok/grok-4.7"}, {}, None, None, None)
+        with mock.patch.object(consult, "MODELS", ["grok/grok-4.7"]), \
                 mock.patch.object(consult, "_catalogue", return_value={"models": [], "endpoints": []}):
             item = consult.menu("bird")[0]
         self.assertFalse(item["available"])
-        self.assertIn("codex/ is not supported", item["why"])
+        self.assertIn("grok/ is not supported", item["why"])
+
+    def test_consult_on_codex_is_plan_priced(self):
+        """A ChatGPT-plan install consults the plan's other models: no dollars (usd 0, plan: true), its own model
+        left off the menu, the answer through a short-lived Codex app-server of the supervisor's own."""
+        from supervisor.tests.test_modelcall import FakeCodex
+        fake = FakeCodex(self, self.root)
+        fake.say("from codex")
+        other = "codex/gpt-6.1-sol"
+        self.enterContext(mock.patch.object(consult, "USAGE", self.root / "consult_usage.jsonl"))
+        self.enterContext(mock.patch.object(consult, "SUP_DIR", self.root))
+        self.enterContext(mock.patch.object(consult, "MODELS", [MODEL, other]))
+        self.enterContext(mock.patch.object(core, "instance_config", return_value={"LLM_MODEL": MODEL}))
+        self.enterContext(mock.patch.object(consult, "_catalogue", side_effect=AssertionError("no catalogue")))
+        self.assertEqual(consult.menu("bird"), [{"model": other, "plan": True, "in_per_m": 0.0, "out_per_m": 0.0,
+                                                 "reserve_in_per_m": 0.0, "reserve_out_per_m": 0.0,
+                                                 "available": True, "why": ""}])
+        body = {"model": other, "messages": [{"role": "system", "content": "be brief"},
+                                             {"role": "user", "content": "hello"}], "max_tokens": 100}
+        reply = consult.complete("bird", body, {}, "plugin", "live", "2026-11-12T10:00:00")
+        self.assertEqual(reply["choices"][0]["message"]["content"], "from codex")
+        self.assertEqual(reply["shaft"]["usd"], 0.0)
+        self.assertEqual(fake.requests("thread/start")[-1]["params"]["model"], "gpt-6.1-sol")
+        self.assertEqual(fake.requests("thread/start")[-1]["params"]["baseInstructions"], "be brief")
+        row = json.loads(consult.USAGE.read_text())
+        self.assertEqual((row["model"], row["usd"], row["reserved_usd"], row["plan"]), (other, 0.0, 0.0, "codex"))
+        self.assertEqual(consult._reservations(), [])
+        with self.assertRaisesRegex(consult.ConsultError, "own model"):
+            consult.complete("bird", {**body, "model": MODEL}, {}, "plugin", "live", None)
+
+    def test_fallback_knobs_take_any_supervisor_model_or_none(self):
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL", "SHAFT_TRIAL_FALLBACK_MODEL"):
+            parse = core.KNOBS[name].parse
+            for value in ("none", "claude-haiku-5-5", "openrouter/x/y"):
+                self.assertEqual(parse(value), value, name)
+            with self.assertRaises(ValueError):
+                parse("codex/not-offered")
+        self.assertEqual(core.KNOBS["SHAFT_TRIAL_FALLBACK_MODEL"].parse(MODEL), MODEL)
+        for name in ("SHAFT_CODEX_FALLBACK_MODEL", "SHAFT_GROK_FALLBACK_MODEL"):   # a failed channel's fallback is
+            with self.assertRaisesRegex(ValueError, "none"):                     # called directly, not on a plan
+                core.KNOBS[name].parse(MODEL)
 
 
 class AccountingTest(Case):
@@ -624,6 +736,171 @@ class CLITest(Case):
         self.assertEqual(run.call_args.args, ([codexcli.BIN, "login"],))
         self.assertEqual(set(run.call_args.kwargs), {"env"})
         self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(home.resolve()))
+
+    # A fake `codex` (never the real login): it records how it was run, prints the device-code prompt as Codex 0.167
+    # does (with colour codes), then waits for the code to be "entered" (the file `entered` in its CODEX_HOME), writes
+    # auth.json and exits 0. FAIL=1 makes it refuse after the prompt, EARLY=1 before it; HANG=1 makes it wait forever;
+    # CLOSE=1 closes its output after the code and keeps running.
+    FAKE_CODEX = r"""#!/bin/sh
+echo "$$" > "$CODEX_HOME/pid"
+printf '%s\n' "$@" > "$CODEX_HOME/args"
+if read -r line; then echo "stdin was open: $line" >&2; exit 3; fi
+if [ "${CLOSE:-}" = 1 ]; then
+  printf '1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n'
+  printf '2. Enter this one-time code (expires in 15 minutes)\n   WXYZ-12345\n'
+  exec >/dev/null 2>&1
+  while [ ! -f "$CODEX_HOME/entered" ]; do sleep 0.05; done
+  echo '{"tokens": {}}' > "$CODEX_HOME/auth.json"; exit 0
+fi
+if [ "${EARLY:-}" = 1 ]; then
+  echo "Error: failed to request device code: device code login is not enabled for this Codex server." >&2; exit 1
+fi
+B=$(printf '\033[94m'); R=$(printf '\033[0m')
+printf '\nWelcome to Codex [v0.167.0]\nOpenAI\047s command-line coding agent\n\n'
+printf 'Follow these steps to sign in with ChatGPT using device code authorization:\n\n'
+printf '1. Open this link in your browser and sign in to your account\n   %shttps://auth.openai.com/codex/device%s\n\n' "$B" "$R"
+printf '2. Enter this one-time code (expires in 15 minutes)\n   %sWXYZ-12345%s\n\n' "$B" "$R"
+printf 'Continue only if you started this login in Codex. If a website or another person gave you this code, cancel.\n'
+if [ "${FAIL:-}" = 1 ]; then echo "Error logging in with device code: device auth was declined" >&2; exit 1; fi
+n=0
+while [ ! -f "$CODEX_HOME/entered" ]; do
+  sleep 0.05; n=$((n+1))
+  if [ "${HANG:-}" != 1 ] && [ $n -gt 400 ]; then echo "never entered" >&2; exit 4; fi
+done
+echo '{"tokens": {}}' > "$CODEX_HOME/auth.json"
+echo "Successfully logged in"
+"""
+
+    def fake_codex(self, **env):
+        binary = self.root / "fake-codex"
+        binary.write_text(self.FAKE_CODEX)
+        binary.chmod(0o755)
+        home = self.root / "codex-home"
+        self.enterContext(mock.patch.object(codexcli, "BIN", str(binary)))
+        self.enterContext(mock.patch.object(codexcli, "HOME", home))
+        self.enterContext(mock.patch.dict(os.environ, env))
+        return home.resolve()
+
+    def login_json(self, on_row=lambda row: None):
+        """`shaft codex login --json` in process: its JSON lines, each handed to `on_row` the moment it is printed."""
+        rows: list[dict] = []
+
+        class Lines(io.StringIO):
+            def write(self, text):
+                for line in text.splitlines():
+                    if line.strip():
+                        rows.append(json.loads(line))
+                        on_row(rows[-1])
+                return len(text)
+        with redirect_stdout(Lines()), mock.patch.object(cli.subprocess, "run",
+                                                         side_effect=AssertionError("no terminal login")):
+            code = cli.main(["codex", "login", "--json"])
+        return code, rows
+
+    def test_codex_login_json_relays_the_url_and_waits(self):
+        home = self.fake_codex()
+        seen_before_login = []
+
+        def on_row(row):
+            # The page and the code arrive while Codex still waits: nothing is logged in yet.
+            seen_before_login.append((row, (home / "auth.json").exists()))
+            if "code" in row:
+                (home / "entered").touch()          # the operator enters the code on the page
+        code, rows = self.login_json(on_row)
+        self.assertEqual(code, 0)
+        self.assertEqual(rows, [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}, {"ok": True}])
+        self.assertEqual(seen_before_login[:2], [({"url": "https://auth.openai.com/codex/device"}, False),
+                                                 ({"code": "WXYZ-12345"}, False)])
+        self.assertEqual((home / "args").read_text().split(), ["login", "--device-auth"])
+        self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+        self.assertTrue((home / "auth.json").is_file())
+
+    def test_codex_login_json_failure_carries_codexs_own_words(self):
+        home = self.fake_codex(FAIL="1")
+        code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
+        self.assertEqual(rows[-1], {"ok": False, "error": "Error logging in with device code: device auth was declined"})
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_refused_before_any_code_says_why(self):
+        self.fake_codex(EARLY="1")
+        code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(rows, [{"ok": False, "error": "Error: failed to request device code: device code login is not "
+                                                       "enabled for this Codex server."}])
+
+    def test_codex_login_json_times_out_and_stops_codex(self):
+        home = self.fake_codex(HANG="1")
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
+            code, rows = self.login_json()
+        self.assertEqual(code, 1)
+        self.assertFalse(rows[-1]["ok"])
+        self.assertIn("timed out", rows[-1]["error"])
+        pid = int((home / "pid").read_text())
+        with self.assertRaises(ProcessLookupError):          # the fake Codex is gone, not left polling
+            os.kill(pid, 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_times_out_when_codex_closes_its_output_and_keeps_running(self):
+        """Fix round 1: once both streams ended, the wait for Codex had no limit, so one that closed its output and
+        kept polling escaped the 10 minutes and the app's quit, and could still log in later."""
+        home = self.fake_codex(CLOSE="1")
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
+            started = time.monotonic()
+            code, rows = self.login_json()
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
+        self.assertIn("timed out", rows[-1]["error"])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((home / "pid").read_text()), 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_login_json_parent_quitting_stops_codex_after_its_output_closed(self):
+        home = self.fake_codex(CLOSE="1")
+        real, quit = os.getppid(), []                           # the app quits once the code is shown
+
+        def on_row(row):
+            if "code" in row:
+                time.sleep(0.3)                                 # Codex has closed its output by now
+                quit.append(True)
+        with mock.patch.object(codexcli.os, "getppid", side_effect=lambda: 1 if quit else real):
+            code, rows = self.login_json(on_row)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[1], {"code": "WXYZ-12345"})
+        self.assertEqual(rows[-1], {"ok": False, "error": "the app that started this sign-in quit"})
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((home / "pid").read_text()), 0)
+
+    def test_codex_login_json_sigterm_stops_codex(self):
+        """The app's Cancel terminates `shaft codex login --json`: Codex goes with it and no login is written later."""
+        import signal
+        home = self.fake_codex(HANG="1")
+
+        def on_row(row):
+            if "code" in row:
+                os.kill(os.getpid(), signal.SIGTERM)    # what Process.terminate() sends
+        before = signal.getsignal(signal.SIGTERM)
+        code, rows = self.login_json(on_row)
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[-1], {"ok": False, "error": "Codex sign-in stopped (SIGTERM)"})
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+        pid = int((home / "pid").read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        (home / "entered").touch()
+        time.sleep(0.3)
+        self.assertFalse((home / "auth.json").exists())
+
+    def test_codex_status_json_is_a_usage_error(self):
+        with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(cli.main(["codex", "status", "--json"]), 2)
+        self.assertIn("no --json", err.getvalue())
 
     def test_trial_run_cli_accepts_codex(self):
         with mock.patch.object(cli, "instance_root", return_value=self.root), \

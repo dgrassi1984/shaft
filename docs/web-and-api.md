@@ -34,7 +34,10 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
 Each instance is a "model" of an OpenAI-compatible API (`GET /v1/models`, `POST /v1/chat/completions`,
 streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` on port 8443 of this Mac's
 tailnet name; tailnet only, never Funnel. Chat and model-list requests need the key (`shaft api key`) and a
-Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
+Tailscale login listed in `SHAFT_API_LOGINS`. `shaft api on --local` (a Mac without Tailscale; the Mac app's installer
+runs it) creates the keys and adds the login `operator@local` instead, the login the Mac app's chats reach the API as
+through the web service, and exposes nothing; a later `shaft api on` adds your tailnet login beside it. The instance
+answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
 same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), keeps the channel its client names
 with `X-Shaft-Channel: web|telegram` (the web UI and the Telegram service send it; `api` without it), and is written
@@ -579,6 +582,13 @@ and chat design. The native chat apps talk to the same service through a JSON AP
 2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
    and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
 
+Without Tailscale, only the Mac app on the same Mac: `shaft api on --local`, then `shaft web on --local` (sets
+`SHAFT_WEB_LOCAL=on`, installs the service, exposes nothing), then `shaft web pair --local --name <mac>`, which prints
+the app's base URL (`http://127.0.0.1:8785`), device id and secret once. The Mac app's installer does all three
+(`shaft install`, then the pairing). Only `/app/v1` answers there; the pages wait for a tailnet name. Adding Tailscale
+later (the Mac app's **Use SHAFT from iPhone/iPad**, or `shaft api on` and `shaft web on` in a terminal) keeps the
+local path. See [the app API](app-api.md#12-auth).
+
 **On your iPhone**: open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
 paste it into the app's "not paired" page. Expired links show the same paste box for a new link. Pairing and notice
@@ -631,7 +641,8 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 
 Every web-service request needs an allowed tailnet login and a host accepted by
-`web.allowed_hosts()`. That is the recorded tailnet host, or `SHAFT_WEB_HOSTS` when
+`web.allowed_hosts()`, except a loopback request to `/app/v1` while `SHAFT_WEB_LOCAL` is on (below).
+That is the recorded tailnet host, or `SHAFT_WEB_HOSTS` when
 set. Protected web pages also require a paired-browser cookie; their POSTs require
 same-origin validation and the page's CSRF token. Pairing uses a one-time token and
 its POST requires same origin, without an existing pairing or CSRF token. Static
@@ -699,7 +710,8 @@ target wins. Feedback changes no grades. Fine-tuning changes belong to milestone
 ## The native chat apps' API (`/app/v1`)
 
 The iPhone, iPad and Mac apps use a JSON API on the web service
-itself, same port, tailnet only. Its contract, every route, field, status code and example, is
+itself, same port, tailnet only, or on loopback for the Mac app on the same Mac. Its contract, every route, field,
+status code and example, is
 [app-api.md](app-api.md); the JSON the server gives for representative chats is checked in under
 `supervisor/tests/app_api_fixtures/`, the only fixture source. It includes pairing, chats, send and feedback
 responses and retried turns as well as the chat scenarios. The apps' own tests decode those files, or the folder
@@ -710,11 +722,22 @@ set by `SHAFT_APP_API_FIXTURES`.
   paired browser's cookie holds, checked the same way (`devices.json`, the secret's hash). `/app/v1` reads no cookie
   and the web pages accept no bearer, so a web page can never reach the API with a credential the browser adds on
   its own; there is no CSRF token and no CORS.
+- **On loopback** (`SHAFT_WEB_LOCAL=on`, off by default): a request to `http://127.0.0.1:8785/app/v1/…` (or
+  `localhost`) that carries none of the headers `tailscale serve`'s proxy adds skips the login and host checks. The
+  paired device's bearer is then the only credential, and the request acts as that device's recorded login, never a
+  header. A request with a proxy header takes the tailnet path whatever its `Host`. See
+  [the contract](app-api.md#12-auth) and [SECURITY.md](../SECURITY.md#the-loopback-path-for-the-mac-app).
 - **Pairing.** `shaft web pair --name iphone-app` prints the link, as for a browser. Paste it into the app, which posts
   it to `POST /app/v1/pair` and keeps the device's secret in its Keychain. The link still works once, for 10 minutes.
   A paired app is a paired device: `shaft web status` lists it under **native apps**, with its platform and whether
   native push reaches it (and the server's `native push: ready` or what is missing). `shaft web unpair` revokes it,
   as does **Unpair** in the app (`POST /app/v1/unpair`). Unpairing drops its push token and retains the operator's shared read marks.
+  The Mac app pairs with the SHAFT on the same Mac without a link: its setup runs `shaft web pair --local --json`
+  and keeps the printed secret; `POST /app/v1/pair` on loopback is refused (`403 local_pair`).
+- **Version.** `GET /app/v1/version` says the server's release and `api` level (and, on loopback only, the checkout it
+  runs from); an app that needs a newer server says so instead of failing call by call. The Mac app's **Update
+  server** runs `shaft deploy` from that checkout ([deploy](deploy.md)). See
+  [the contract](app-api.md#19-version-and-compatibility).
 - **One chat model.** The JSON feed and the web page's feed are drawn from one function (`web_chat.build`), so the app
   shows what the PWA shows: the same items with the same keys, the 80-message window, the reply running now, what is
   queued, feedback waiting for your next message.
@@ -744,6 +767,13 @@ set by `SHAFT_APP_API_FIXTURES`.
   `/pause` and `/resume` share the web action. `GET /app/v1/services` shows API and scheduler status and the server's version.
   `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
   and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
+- **Setup.** The Mac app's setup wizard creates an instance (`POST /app/v1/setup/instance`: `shaft new`, `config`,
+  `drive`, created paused until your first answered reply; `/setup/autonomy/<name>` then sets whether that reply lets it
+  work on its own, `shaft first-reply`), offers four starting drives, stores the provider and
+  web-search keys (`/setup/secret`, on the verb's stdin), switches and checks the provider, grants a folder, the
+  browser, Gmail labels, calendars, Drive and Chat (`/app/v1/access/<name>`), sets a Telegram bot, and last asks the
+  instance for its welcome (`/setup/hello/<name>`). Each runs the CLI verb as the device. See
+  [the contract](app-api.md#18-setup).
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
   logic. Push to the apps (APNs) is set up separately.
 - **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat

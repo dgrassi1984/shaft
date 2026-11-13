@@ -1,0 +1,23 @@
+{
+  "refused": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "refused",
+        "message": "refused: LLM_MODEL: no such model",
+        "done": [
+          "new"
+        ]
+      }
+    }
+  },
+  "bad_request": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "name must be one of OPENROUTER_API_KEY, ANTHROPIC_API_KEY, SCRAPEBADGER_API_KEY, SHAFT_CUSTOM_API_KEY, with its value."
+      }
+    }
+  }
+}

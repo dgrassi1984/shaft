@@ -226,6 +226,60 @@ def client_keys(client: str) -> tuple[str, str]:
     return f"{stem}_CLIENT_ID", f"{stem}_CLIENT_SECRET"
 
 
+CLIENT_JSON_MAX = 64 * 1024     # Google's client JSON is under 1 KB; anything this large is not one
+
+
+def client_from_json(text: str) -> tuple[str, str]:
+    """The ID and secret of a Desktop app OAuth client, from the JSON Google Cloud downloads for it
+    (`{"installed": {"client_id", "client_secret", …}}`). A Web application client (`{"web": …}`) is refused with
+    the fix: its redirect URIs are fixed in advance, so the loopback login on a free port cannot use it."""
+    if len(text) > CLIENT_JSON_MAX:
+        raise AccountError(f"that file is {len(text)} bytes: not the client JSON Google Cloud downloads (under 1 KB)")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise AccountError("that file is not JSON: download the client's JSON from Google Cloud → Google Auth "
+                           "Platform → Clients (the download button beside the Desktop app client)") from None
+    if not isinstance(data, dict):
+        raise AccountError("that JSON is not an OAuth client: download the Desktop app client's JSON from Google Cloud")
+    if "installed" not in data:
+        if "web" in data:
+            raise AccountError("This is a Web application client: create a Desktop app client instead (Google Cloud "
+                               "→ Google Auth Platform → Clients → Create client → Application type: Desktop app)")
+        raise AccountError(f"that JSON is not a Desktop app OAuth client (it has {', '.join(map(str, data)) or 'nothing'}, "
+                           "not \"installed\"): create a Desktop app client and download its JSON")
+    inner = data["installed"]
+    out = []
+    for key in ("client_id", "client_secret"):
+        value = inner.get(key) if isinstance(inner, dict) else None
+        if not isinstance(value, str) or not value.strip() or any(c.isspace() for c in value.strip()):
+            raise AccountError(f"the Desktop app client JSON has no usable installed.{key}: download it again from "
+                               "Google Cloud → Google Auth Platform → Clients")
+        out.append(value.strip())
+    return out[0], out[1]
+
+
+def save_client(client: str, text: str) -> list[str]:
+    """Keep a Desktop app client from Google's JSON as GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET in the project .env
+    (core.set_secret_env, the one writer). Returns the aliases of saved accounts that logged in with this client under
+    another ID: a refresh token works only with the client that issued it, so each needs its login again."""
+    if not CLIENT_RE.fullmatch(client or ""):
+        raise AccountError(f"{client!r} is not an OAuth client name (lowercase letters, digits, -, starting with a letter)")
+    if client.endswith("-web"):
+        # GMAIL_<X>_WEB_CLIENT_ID is <x>'s Web application client (client_keys): never overwritten from here
+        raise AccountError(f"{client!r} ends in -web, the names of {client.removesuffix('-web')!r}'s Web application "
+                           "client: choose another name")
+    cid, secret = client_from_json(text)
+    id_key, secret_key = client_keys(client)
+    before = core.secrets_env().get(id_key)
+    core.set_secret_env(id_key, cid)
+    core.set_secret_env(secret_key, secret)
+    if not before or before == cid:
+        return []
+    return sorted(alias for alias, data in accounts().items()
+                  if (data.get("client") or alias).removesuffix(":web") == client)
+
+
 def _client(client: str, secrets_env: dict[str, str]) -> tuple[str, str]:
     """An account's OAuth client, by name. One per Google organisation at least: an Internal app (work.example) only
     signs in its own organisation's users, so a personal Google account needs its own client (an External app in
@@ -413,30 +467,37 @@ class Account:
 # -- login: the operator's consent, once per account, for every scope ---------------------------------------------
 def _signed_in_as(access_token: str, granted: set[str]) -> str:
     """The account the token belongs to, read with a scope it was granted: Gmail's profile, else the primary
-    calendar (whose ID is the account's address), else Drive's `about`."""
-    if granted & {GMAIL, GMAIL_MODIFY}:
-        url, read = GMAIL_PROFILE, lambda d: d.get("emailAddress")
-    elif CALENDAR in granted:
-        url, read = CALENDAR_PRIMARY, lambda d: d.get("id")
-    elif granted & {DRIVE, DRIVE_READONLY}:
-        url, read = DRIVE_ABOUT, lambda d: (d.get("user") or {}).get("emailAddress")
-    else:
+    calendar (whose ID is the account's address), else Drive's `about`. A source whose API the client's project has not
+    enabled (Google answers 403) gives way to the next one granted: a project set up for Calendar and Drive alone may
+    still be granted a Gmail scope. When none answers, the last refusal is raised."""
+    sources = [(GMAIL_PROFILE, lambda d: d.get("emailAddress")) if granted & {GMAIL, GMAIL_MODIFY} else None,
+               (CALENDAR_PRIMARY, lambda d: d.get("id")) if CALENDAR in granted else None,
+               (DRIVE_ABOUT, lambda d: (d.get("user") or {}).get("emailAddress")) if granted & {DRIVE, DRIVE_READONLY}
+               else None]
+    sources = [s for s in sources if s]
+    if not sources:
         raise AccountError("Google granted no Gmail, Calendar or Drive scope: nothing saved")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-    with urlopen(req, timeout=30) as resp:
-        return str(read(json.load(resp)) or "")
+    for i, (url, read) in enumerate(sources):
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return str(read(json.load(resp)) or "")
+        except urllib.error.HTTPError as e:
+            if e.code != 403 or i == len(sources) - 1:
+                raise
 
 
 def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "", open_url=None,
-          timeout_s: int = 300) -> dict:
+          timeout_s: int = 300, announce: bool = True) -> dict:
     """Run Google's consent flow for every scope in SCOPES with OAuth client `client` (default: the one named like
     the alias) on a loopback redirect, check the account is `address`, and keep its refresh token, the client that
     issued it and the scopes Google granted (the consent page lets the operator untick one). Nothing is saved unless
-    every step succeeds."""
+    every step succeeds. `announce`: print the sign-in line (the terminal's); `--json` hands the URL to `open_url`
+    alone."""
     client = client or alias
     if not ALIAS_RE.match(alias or ""):
         raise AccountError(f"{alias!r} is not an alias: lowercase letters, digits, -, starting with a letter (e.g. work)")
-    data = consent(address, client, SCOPES, secrets_env, open_url=open_url, timeout_s=timeout_s)
+    data = consent(address, client, SCOPES, secrets_env, open_url=open_url, timeout_s=timeout_s, announce=announce)
     _save_account(alias, data)
     return data
 
@@ -465,7 +526,7 @@ def instance_key_login(address: str, client: str, scope: str, secrets_env: dict[
 
 
 def consent(address: str, client: str, wanted: tuple[str, ...], secrets_env: dict[str, str], open_url=None,
-            timeout_s: int = 300, incremental: bool = True) -> dict:
+            timeout_s: int = 300, incremental: bool = True, announce: bool = True) -> dict:
     """Google's consent flow with OAuth client `client` for `wanted` scopes, on a loopback redirect with PKCE and a
     state check, signed in as `address`: {address, client, refresh_token, scope, created}. `incremental` keeps
     scopes this client was granted before (an operator login); an instance key asks only for what it needs."""
@@ -501,7 +562,8 @@ def consent(address: str, client: str, wanted: tuple[str, ...], secrets_env: dic
         "state": state, "code_challenge_method": "S256",
         "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()})
     try:
-        print(f"Sign in as {address} in the browser (it opens now; otherwise open this):\n{url}", flush=True)
+        if announce:
+            print(f"Sign in as {address} in the browser (it opens now; otherwise open this):\n{url}", flush=True)
         (open_url or webbrowser.open)(url)
         if not done.wait(timeout_s):
             raise AccountError(f"no answer from the browser in {timeout_s} s: nothing saved")
@@ -524,7 +586,14 @@ def consent(address: str, client: str, wanted: tuple[str, ...], secrets_env: dic
     if not tok.get("scope"):
         raise AccountError("Google did not say which scopes it granted: nothing saved")
     granted = set(str(tok["scope"]).split())
-    me = _signed_in_as(tok["access_token"], granted)
+    try:
+        me = _signed_in_as(tok["access_token"], granted)
+    except urllib.error.HTTPError as e:
+        # typically the API is not enabled in the client's project ("Gmail API has not been used in project …")
+        raise AccountError(f"Google would not say who signed in (HTTP {e.code}: {_error_text(e)}): nothing "
+                           "saved") from None
+    except OSError as e:
+        raise AccountError(f"could not reach Google to check who signed in ({e}): nothing saved") from None
     if me.casefold() != address.casefold():
         raise AccountError(f"signed in as {me or 'an unknown account'}, not {address}: nothing saved")
     return {"address": me, "client": client, "refresh_token": tok["refresh_token"],

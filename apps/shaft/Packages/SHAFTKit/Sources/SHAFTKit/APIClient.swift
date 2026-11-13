@@ -452,6 +452,12 @@ public final class APIClient: Sendable {
         try await get("/app/v1/services")
     }
 
+    /// The server's release and the `/app/v1` version it speaks (§19): what `ServerCompatibility` decides on. A server
+    /// older than the route answers `404 not_found`.
+    public func version() async throws -> ServerVersion {
+        try await get("/app/v1/version")
+    }
+
     /// The API restart watcher must not let an individual poll outlast its confirmation deadline.
     func services(timeout: TimeInterval) async throws -> ServicesResponse {
         let path = "/app/v1/services"
@@ -477,6 +483,89 @@ public final class APIClient: Sendable {
 
     private struct SettingsResponse: Decodable {
         var settings: InstanceSettings
+    }
+
+    // MARK: Setup (§18)
+
+    /// The four starting drives.
+    public func setupDrives() async throws -> DrivePresets {
+        try await get("/app/v1/setup/drives")
+    }
+
+    /// One provider or tool key, into the server's `.env` on the verb's stdin. The answer never carries it.
+    public func setupSecret(name: String, value: String) async throws -> SaidResponse {
+        try await post("/app/v1/setup/secret", json: ["name": name, "value": value])
+    }
+
+    /// `provider use`: held up to the verb's own limit (`actions.SLOW_S`, 90 s) and a margin.
+    public func setupProvider(_ request: ProviderRequest) async throws -> ProviderUseResponse {
+        try await post("/app/v1/setup/provider", json: request, timeout: 120)
+    }
+
+    /// `provider check`: one live call per configured model, up to `2 × actions.SLOW_S`.
+    public func checkProvider(_ provider: String) async throws -> ProviderCheckResponse {
+        try await post("/app/v1/setup/provider/check", json: ["provider": provider], timeout: 200)
+    }
+
+    /// `new`, `config set` and `drive set` in a row: `new` alone may take `actions.SLOW_S`.
+    public func setupInstance(name: String, operator: String, model: String, drive: String,
+                              autonomy: String) async throws -> SetupInstanceResponse {
+        try await post("/app/v1/setup/instance",
+                       json: ["name": name, "operator": `operator`, "model": model, "drive": drive, "autonomy": autonomy],
+                       timeout: 240)
+    }
+
+    /// `telegram token <name>`, the bot's token on the verb's stdin (Telegram is asked who the bot is first).
+    public func setupTelegram(name: String, token: String) async throws -> SaidResponse {
+        try await post("/app/v1/setup/telegram", json: ["name": name, "token": token])
+    }
+
+    /// Where the instance's Telegram stands: its bot, the paired account, the service.
+    public func telegramStatus(_ instance: String) async throws -> TelegramStatus {
+        try await get("/app/v1/setup/telegram/status/\(instance)")
+    }
+
+    /// `telegram pair --json`: the code the operator sends to the bot; none when an account is paired already.
+    public func telegramPair(_ instance: String) async throws -> TelegramStatus {
+        try await post("/app/v1/setup/telegram/pair/\(instance)", json: EmptyBody())
+    }
+
+    /// `telegram on`: the Telegram service installed, or restarted to pick up a new bot (the verb's `actions.SLOW_S`).
+    public func telegramService() async throws -> SaidResponse {
+        try await post("/app/v1/setup/telegram/service", json: EmptyBody(), timeout: 120)
+    }
+
+    /// What the operator has granted the instance (§18.6).
+    public func access(_ instance: String) async throws -> AccessResponse {
+        try await get("/app/v1/access/\(instance)")
+    }
+
+    /// One grant or revocation through its verb, answered with the fresh access. The browser's may first install the
+    /// shared Chromium, held up to the server's 15 minutes (`app_api.BROWSER_INSTALL_S`): this waits that and a margin.
+    public func grantAccess(_ instance: String, _ grant: AccessGrant) async throws -> AccessResponse {
+        try await post("/app/v1/access/\(instance)", json: grant,
+                       timeout: grant.grant == "browser" ? AccessGrant.browserTimeout : 120)
+    }
+
+    /// The Gmail labels of the operator's Google account `alias`, read live from Google (§18.7): what a mail grant
+    /// may name.
+    public func googleLabels(_ alias: String) async throws -> GoogleLabels {
+        try await get("/app/v1/google/\(alias)/labels")
+    }
+
+    /// The calendars of the operator's Google account `alias`, primary first (§18.7): what a calendar grant may name.
+    public func googleCalendars(_ alias: String) async throws -> GoogleCalendars {
+        try await get("/app/v1/google/\(alias)/calendars")
+    }
+
+    /// `first-reply`: `resume` (it works on its own after the first answered reply) or `stay`.
+    public func setupAutonomy(_ instance: String, then: String) async throws -> SetupAutonomyResponse {
+        try await post("/app/v1/setup/autonomy/\(instance)", json: ["then": then])
+    }
+
+    /// The hidden opening: the instance writes its welcome in Main, whose id the answer carries.
+    public func setupHello(_ instance: String) async throws -> NewThreadResponse {
+        try await post("/app/v1/setup/hello/\(instance)", json: EmptyBody())
     }
 
     // MARK: Plumbing

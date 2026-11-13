@@ -41,7 +41,7 @@ from pathlib import Path
 from . import gate, localmodel, mind
 from .core import (jsonl_lines, CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MEMORY_CACHES, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
                    TreeTooBig, UnsafePath,
-                   cloud_model, instance_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
+                   NO_FALLBACK, fallback_model, instance_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
                    read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
@@ -60,8 +60,9 @@ LOCAL_WAIT_H, LOCAL_WAIT_SRC = knob(
     "SHAFT_TRIAL_LOCAL_WAIT_H", "6", hours, "hours a trial waits for the local model's idle time before it runs on the "
     "fallback model", group="Trials", services=("runs", "scheduler"))
 FALLBACK_MODEL, FALLBACK_SRC = knob(
-    "SHAFT_TRIAL_FALLBACK_MODEL", "openrouter/xiaomi/mimo-v2.6-pro", cloud_model, "the cloud model a local-model "
-    "trial runs on when the local model stays busy", group="Trials", services=("runs", "scheduler"))
+    "SHAFT_TRIAL_FALLBACK_MODEL", "openrouter/xiaomi/mimo-v2.6-pro", fallback_model, "the cloud model a local-model "
+    "trial runs on when the local model stays busy, or none: its pairs wait for the local model, and a trial or probe "
+    "that needs a cloud model is refused", group="Trials", services=("runs", "scheduler"))
 PARALLEL, PARALLEL_SRC = knob(
     "SHAFT_TRIAL_PARALLEL", "3", positive_int, "replayed cycles a cloud-model trial runs at once", group="Trials",
     services=("runs",))
@@ -953,6 +954,8 @@ def create(name: str, change: dict[str, bytes | None], hypothesis: str, *, by: s
             model = instance_model(model)
         except ValueError as e:
             raise TrialError(str(e)) from None
+    if model == "cloud" and cloud_fallback() is None:
+        raise TrialError(f"a trial on the cloud model needs one: SHAFT_TRIAL_FALLBACK_MODEL={NO_FALLBACK}")
     units = replay_units(cycles, sleep_between)
     root = project / "instances" / name
     a = committed_code(project, name)
@@ -1034,8 +1037,9 @@ def request(name: str, files: list, hypothesis: str, episodes: list, n: int, ext
     t = create(name, change, hypothesis, episodes=[str(e) for e in episodes], n=n, project=project)
     k = len(t["states"])
     where = ("a cloud model, beside your schedule — usually within the hour" if not t["llm"]["local"] else
-             f"the local model while it is idle (never during your own cycles); pairs still waiting after "
-             f"{LOCAL_WAIT_H:g} h run on {FALLBACK_MODEL}")
+             "the local model while it is idle (never during your own cycles)" + (
+                 f"; pairs still waiting after {LOCAL_WAIT_H:g} h run on {FALLBACK_MODEL}" if cloud_fallback() else
+                 "; they wait for it however long that takes (no cloud fallback is configured)"))
     return (f"trial {t['id']} queued: {k} of your past cycles × 2 versions ({sum(1 for s in t['states'] if s['chosen_by'] == 'you')} "
             f"you chose, the rest at random). First the supervisor runs the tests on the proposed code; then the "
             f"replays run on {where}. The verdict arrives in your inbox; record(kind='trials') shows progress. "
@@ -1171,23 +1175,29 @@ def local_never_free(project: Path = PROJECT) -> str:
     return ""
 
 
+def cloud_fallback() -> str | None:
+    """SHAFT_TRIAL_FALLBACK_MODEL, or None when it is `none` (no cloud model for trials and probes)."""
+    return None if FALLBACK_MODEL == NO_FALLBACK else FALLBACK_MODEL
+
+
 def _pair_model(t: dict, s: dict, project: Path) -> str | None:
     """'local' (the code's own local model), 'own' (the code's own cloud model), a fallback cloud model id, or
     None (wait: the local model is busy now)."""
     if t.get("model") not in (None, "auto", "cloud", "local"):
         return t["model"]
+    fallback = cloud_fallback()          # None (SHAFT_TRIAL_FALLBACK_MODEL=none): a pair is never moved to the cloud
     if t.get("model") == "cloud":
-        return FALLBACK_MODEL
+        return fallback
     if not t["llm"]["local"]:
         return "own"
     if t.get("model") != "local" and local_never_free(project):
-        return FALLBACK_MODEL
+        return fallback
     waited = datetime.now() - datetime.fromisoformat(t.get("queued_at") or t["created"])
     if t.get("model") != "local":
-        if s["preempted"] >= 2 or waited > timedelta(hours=LOCAL_WAIT_H):
-            return FALLBACK_MODEL
+        if fallback and (s["preempted"] >= 2 or waited > timedelta(hours=LOCAL_WAIT_H)):
+            return fallback
         if usage_today(t["instance"])["local_units"] >= LOCAL_UNITS_PER_DAY and t["by"] == "instance":
-            return FALLBACK_MODEL
+            return fallback
     free, _ = local_free_for(LOCAL_UNIT_S, project)
     return "local" if free else None
 
@@ -1335,12 +1345,15 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
     # One judge for both orders of the pair (the order swap checks position bias, not judge variance), never the
     # model the instance or its replay ran on.
     from . import judge
+    own = [_config(project, name).get("LLM_MODEL"), label]
     try:
-        by = judge.pick(exclude=[_config(project, name).get("LLM_MODEL"), label])
+        by = judge.pick(exclude=own)
     except judge.JudgeError as e:
         by = None
         log(f"{name}: trial {t['id']} past cycle {i + 1}: {e}")
     s["judge"] = by
+    if by:
+        s.update(judge.independence(by, own))
     for first, second in (("A", "B"), ("B", "A")):
         purpose = f"trial {name} {t['id']} s{i} {first}{second}"
         try:

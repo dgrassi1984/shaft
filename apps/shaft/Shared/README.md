@@ -8,7 +8,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 |---|---|
 | `Design/` | tokens and `Appearance.swift`: per-device theme and reading text size, the Appearance settings section |
 | `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows (an instance, its open threads, From *instance*, New thread), `ChatSelection` |
-| `Settings/` | `InstanceSettingsView` (server settings for one instance) and `ServerSection` (API restart and scheduler drain, shared with app settings through `session.store.services`) |
+| `Settings/` | `InstanceSettingsView` (server settings for one instance), `ServerSection` (API restart and scheduler drain, shared with app settings through `session.store.services`; on the Mac also Update server and Use SHAFT from iPhone/iPad: `PhoneAccessRows.swift`, which adds Tailscale to a local-only install), and `UpdateServer.swift` (the Mac's Update server rows, and `NeedsNewerServer`, shown in place of the session when the server is older than the app needs: docs/app-api.md §19) |
 | `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll while visible and active; watching only while uncovered; seen marks while shown, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (Documents and Cycles beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
 | `Composer/` | quote cards with their answers, attachment chips, the field, Send or Stop, and a "More ways to send" chevron beside Send once there is text or other draft content (Queue after reply / Next cycle); these choices also stay in + and, on iOS, a long press on Send |
@@ -45,6 +45,17 @@ sheet on every platform; while it is open the chat is covered for read tracking.
 The form reads values and choices from `InstanceSettingsStore`. Text edits save on submit, focus loss and disappearance.
 Successful saves show the server's value; refused saves preserve the draft. Pausing asks first; empty cloud cap
 removes the instance override, so the default cap still applies. Loading, load errors and older servers each have an explicit state.
+
+`SessionRoot` asks `GET /app/v1/version` once per paired store (`InstancesStore.checkCompatibility`); a server below
+`ServerCompatibility.minimumServerAPI` (0: one without the route is api 0 and keeps working; only the Mac setup wizard
+needs `setupServerAPI`, 1) gets `NeedsNewerServer` instead of the chat (Check
+again, and again whenever the app comes to the front). On the Mac, Settings → Services also has Update server when the
+app is paired with this Mac's own install (`MacSetup.updater`: a loopback pairing and `~/SHAFT`), and only once
+`/version`'s loopback `project` is that checkout (else it says where the server runs from): on appear it runs
+`shaft deploy --check --json`, which also names a deploy left unfinished ("Finish updating to vX.Y.Z"); "Update server to vX.Y.Z" runs
+`shaft deploy vX.Y.Z --json` as a local process, a row per step, "Reconnecting…" while the web service restarts, and a
+Retry (`--services-only`) when the services step waited for an open conversation. The updater (SHAFTKit
+`ServerUpdater`) owns its run, so closing Settings never cuts a deploy halfway.
 
 Both settings screens show the Services section (`ServerSection`) using the paired session's shared `ServicesStore`, including in the Mac
 Settings scene, which does not inherit the main window's store environment. API restarts ask first and retain the

@@ -82,6 +82,61 @@ def launchd_pid(name: str) -> int | None:
     return int(pid) if pid.isdigit() else None
 
 
+def installed(name: str) -> bool:
+    """Whether the service's launchd plist is installed (`service(name, "on")` wrote it and `off` has not removed it)."""
+    return (AGENTS / f"{SERVICES[name]['label']}.plist").exists()
+
+
+def service_problem(name: str) -> str:
+    """Why a service is not up, in launchd's words: not installed, not loaded, or its state and last exit code."""
+    label = SERVICES[name]["label"]
+    if not installed(name):
+        return f"the {name} service is not installed"
+    r = _launchctl("print", f"gui/{os.getuid()}/{label}")
+    if r.returncode != 0:
+        return f"the {name} service is installed but launchd has not loaded it"
+    fields: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        key, sep, value = line.strip().partition(" = ")
+        if sep:
+            fields.setdefault(key, value)
+    code = fields.get("last exit code")
+    return (f"the {name} service is {fields.get('state', 'in an unknown state')} in launchd"
+            + (f" (last exit code {code})" if code else "") + ", and it has not recorded that it runs")
+
+
+def _plist(name: str) -> dict:
+    """What `service(name, "on")` writes: one builder for it and for service_current."""
+    svc = SERVICES[name]
+    label = svc["label"]
+    # The Mac app's install keeps its own tools (uv) in core.RUNTIME/bin: the services and the runs they start find them.
+    from . import core
+    try:
+        runtime_bin = core.runtime_dir("bin")
+    except core.RuntimeLayoutError as e:     # a link where the app's folder belongs: not put on any PATH
+        log(f"service {name}: the runtime's bin/ is left off PATH: {e}")
+        runtime_bin = None
+    service_path = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" if runtime_bin is None
+                    else f"{runtime_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    return {
+        "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
+        "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
+        "EnvironmentVariables": {"PATH": service_path},
+        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}
+
+
+def service_current(name: str) -> bool:
+    """Whether `service(name, "on")` would change nothing: the plist on disk is exactly what it would write and launchd
+    has the job loaded. A rerun of an install uses it to leave a right service (and the runs it holds) alone."""
+    path = AGENTS / f"{SERVICES[name]['label']}.plist"
+    try:
+        if plistlib.loads(path.read_bytes()) != _plist(name):
+            return False
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return False
+    return _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}").returncode == 0
+
+
 def service(name: str, action: str) -> int:
     svc = SERVICES[name]
     label, domain = svc["label"], f"gui/{os.getuid()}"
@@ -101,11 +156,7 @@ def service(name: str, action: str) -> int:
         return 0
     SUP_DIR.mkdir(exist_ok=True)
     AGENTS.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(plistlib.dumps({
-        "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
-        "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
-        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}))
+    path.write_bytes(plistlib.dumps(_plist(name)))
     # bootout returns before launchd has let go of the old job: a bootstrap right after it failed with
     # "5: Input/output error" and left the service unloaded (`shaft model on`, 2026-10-19; it worked a moment later).
     for _ in range(BOOTSTRAP_TRIES):
