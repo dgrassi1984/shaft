@@ -17,7 +17,8 @@ ENDED = "web-77ab02c4e9d15f30"
 class FixtureThreadRepliesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.directory = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
+        cls.directory = tempfile.TemporaryDirectory(prefix="shaft-fixture-test-")
+        cls.addClassCleanup(cls.directory.cleanup)   # also when setUpClass fails (tearDownClass is then skipped)
         cls.previous = os.environ.get("SHAFT_SUPERVISOR_DIR")
         base = Path(cls.directory.name)
         cls.web, cls.chat, messages, _ = fixture.setup(base, 8899)
@@ -32,7 +33,6 @@ class FixtureThreadRepliesTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         mock.patch.stopall()
-        cls.directory.cleanup()
         if cls.previous is None:
             os.environ.pop("SHAFT_SUPERVISOR_DIR", None)
         else:

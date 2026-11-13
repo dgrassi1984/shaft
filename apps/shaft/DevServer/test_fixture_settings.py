@@ -16,8 +16,8 @@ class FixtureSettingsTest(unittest.TestCase):
                 fixture.setup(base, 8899)
 
     def test_fixture_html_avoids_launchctl_and_real_secrets_and_settings_stay_isolated(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
-            base = Path(directory)
+        with tempfile.TemporaryDirectory(prefix="shaft-fixture-test-") as directory:
+            base = Path(directory).resolve()   # setup resolves it too: /var is /private/var on macOS
             previous = os.environ.get("SHAFT_SUPERVISOR_DIR")
             try:
                 web, chat, messages, push = fixture.setup(base, 8899)
