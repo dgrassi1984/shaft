@@ -1195,7 +1195,7 @@ plugin grants or global settings.
 | Method | Route under `/app/v1` | Success |
 |---|---|---|
 | GET | `/settings/<n>` | 200, the settings object below |
-| POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
+| POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now", "notes": []}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
 | GET | `/version` | 200, `{"server": str, "api": int}`, plus `project` on loopback (§19) |
@@ -1222,18 +1222,26 @@ plugin grants or global settings.
 | `voice_effort` | `{"value": str, "choices": [str] or null}`: `VOICE_REASONING_EFFORT`, the reasoning effort on spoken turns. `""` (also when not set) means its `effort`. Choices are `""` and the effort choices; null when those are |
 
 Model choices come from `opconfig.model_choices()`. A current model absent from that list is appended with its
-model name as its label. Effort choices come from the instance's own `shaft/config.py`, parsed as text without
-importing or executing it. Unavailable choices are null. Wake `effective` comes from `autonomy.wake_interval`,
+model name as its label. Effort choices are the intersection of the instance's own `shaft/config.py` CHOICES
+(parsed as text without importing or executing it) and the selected model's levels, ordered low, medium, high,
+xhigh, max, ultra. The supervisor reads Codex levels from app-server `model/list` and OpenRouter levels from
+`GET /api/v1/models`. These live listings are cached in `effort_catalog.json` under the supervisor state directory
+for `SHAFT_EFFORT_CATALOG_HOURS` (default 24 hours). A failed refresh retains cached data; without cached data the
+levels are unknown. Bonsai, Claude, Antigravity and Grok use provider tables probed on 2026-11-13. The supervisor
+never offers none or minimal. Unknown choices are null; a model that accepts no levels has an empty list.
+Wake `effective` comes from `autonomy.wake_interval`,
 including its floor and invalid-value fallback; zero means no scheduled wakes. `value` is the configured interval,
 or the scheduler default when missing or invalid.
 
 `POST /settings/<n>` takes exactly `{"field": str, "value": <new value>, "expect": <displayed value>}`.
 One field per request. Both values have the setting's type; booleans are not numbers. A missing field, extra field,
 unknown field, wrong type or non-finite number gives `400 bad_request`. Domain writers validate allowed values.
+The response includes `notes`, an empty list when there are none. A model switch resets incompatible efforts in
+the same write and reports each reset in `notes`. The fresh settings include the new model's effort choices.
 
 | `field` | Writer | `applies` |
 |---|---|---|
-| `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL` | `next run` |
+| `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL`, `LLM_REASONING_EFFORT`, `VOICE_REASONING_EFFORT` | `next run` |
 | `effort` | `opconfig.set_values`; null unsets the key | `next run` |
 | `wake_interval` | `opconfig.set_values`; the scheduler uses it on its next read | `now` |
 | `cloud_cap` | `core.limit_value` and `core._update_tool_settings` with `expect`; null removes the override | `now` |

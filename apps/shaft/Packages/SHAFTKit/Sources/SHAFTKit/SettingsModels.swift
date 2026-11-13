@@ -109,6 +109,7 @@ public enum SettingValue: Codable, Sendable, Equatable {
 public struct SettingSave: Codable, Sendable, Equatable {
     public var settings: InstanceSettings
     public var applies: String
+    public var notes: [String]?
 }
 
 /// `GET /app/v1/version` (§19): the release the web service runs (git describe) and its `/app/v1` version; on loopback

@@ -58,7 +58,9 @@ class FixtureSettingsTest(unittest.TestCase):
                 for field, value in (("operator_name", "Fixture operator"), ("wake_interval", 0),
                                      ("effort", "high"), ("model", settings["model"]["choices"][0]["model"]),
                                      ("cloud_cap", 2.5), ("channel", "telegram"), ("cloud_cap", None)):
-                    settings = api(path, "POST", {"field": field, "value": value, "expect": settings[field]["value"]})["settings"]
+                    saved = api(path, "POST", {"field": field, "value": value, "expect": settings[field]["value"]})
+                    self.assertEqual(saved["notes"], ["nothing to change"] if field == "model" else [])
+                    settings = saved["settings"]
                     self.assertEqual(settings[field]["value"], value)
                 self.assertEqual(core.instance_root("tundra"), base / "instances" / "tundra")
                 self.assertEqual(opconfig.instance_root("tundra"), base / "instances" / "tundra")

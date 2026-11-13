@@ -48,7 +48,8 @@ public final class InstanceSettingsStore {
             self.settings = answer.settings
             unsupported = false
             loadError = nil
-            notice = answer.applies == "next run" ? "Applies from the next run" : "Applies now"
+            let applies = answer.applies == "next run" ? "Applies from the next run" : "Applies now"
+            notice = ((answer.notes ?? []) + [applies]).joined(separator: " · ")
             return true
         } catch {
             guard let error = APIError.from(error) else { return false }

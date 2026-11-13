@@ -316,3 +316,34 @@ class CommandTest(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeAppsCanAlertTest(unittest.TestCase):
+    """Bug 2026-11-12: an operator with only the native apps (APNs tokens, no Web Push subscription) was told
+    "no device has the web UI's notifications on", so every alert fell back to Telegram even with the channel set
+    to web. The real can_alert, not the Sandbox's stub."""
+
+    def setUp(self):
+        for p in (mock.patch("supervisor.version.service", lambda n, stale=True: {"pid": 1}),
+                  mock.patch.object(webpush, "subscriptions", lambda: {})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_native_devices_with_apns_configured_can_alert_on_the_web(self):
+        from supervisor import apns
+        with mock.patch.object(apns, "devices", lambda: {"iphone": {"token": "t"}}), \
+                mock.patch.object(apns, "configured", lambda: None):
+            self.assertEqual(channel.can_alert("wisp", "web"), "")
+            self.assertTrue(webpush.can_wake())
+
+    def test_native_devices_without_apns_configured_cannot(self):
+        from supervisor import apns
+        with mock.patch.object(apns, "devices", lambda: {"iphone": {"token": "t"}}), \
+                mock.patch.object(apns, "configured", lambda: "native push off: missing SHAFT_APNS_KEY_ID"):
+            self.assertIn("notifications on", channel.can_alert("wisp", "web"))
+            self.assertFalse(webpush.can_wake())
+
+    def test_no_device_at_all_cannot(self):
+        from supervisor import apns
+        with mock.patch.object(apns, "devices", lambda: {}), mock.patch.object(apns, "configured", lambda: None):
+            self.assertIn("notifications on", channel.can_alert("wisp", "web"))

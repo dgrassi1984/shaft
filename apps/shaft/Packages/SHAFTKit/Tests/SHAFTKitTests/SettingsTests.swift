@@ -105,6 +105,28 @@ struct SettingsTests {
         }
     }
 
+    @Test func modelSaveShowsResetNotes() async throws {
+        let folder = try temporaryFolder("settings-model-notes")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let note = "LLM_REASONING_EFFORT reset to medium: ternary-bonsai-2-27b-mlx does not take ultra"
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(200, #"{"settings":\#(settingsExample),"applies":"next run","notes":["\#(note)"]}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wisp")
+        await store.load()
+        #expect(await store.save(.model, value: .string("ternary-bonsai-2-27b-mlx")))
+        #expect(store.notice == note + " · Applies from the next run")
+    }
+
+    @Test func olderSaveResponseWithoutNotesDecodes() throws {
+        let response = try SHAFTJSON.decoder().decode(SettingSave.self,
+            from: Data(#"{"settings":\#(settingsExample),"applies":"now"}"#.utf8))
+        #expect(response.notes == nil)
+        #expect(response.applies == "now")
+    }
+
     @Test func saveReplacesTheShownSettingsWithTheServersAnswer() async throws {
         let folder = try temporaryFolder("settings-save")
         defer { try? FileManager.default.removeItem(at: folder) }

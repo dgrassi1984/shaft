@@ -432,3 +432,11 @@ class Channel(claudecli.Channel):
                     pass
         super().close()
         self._prune()
+
+
+# Provider reasoning levels, probed 2026-11-13.
+EFFORTS = (('low', 'medium', 'high'), 'medium')
+
+
+def efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
+    return EFFORTS if serves(model) else None

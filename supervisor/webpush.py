@@ -130,6 +130,14 @@ def subscriptions() -> dict:
         return {}
 
 
+def can_wake() -> bool:
+    """Whether a push reaches any device: a Web Push subscription, or a native app's APNs token while APNs is
+    configured. The one test of "the web can alert the operator" (channel.can_alert, web_alerts' digest): an operator
+    with only the native apps has no Web Push subscription, and counting only those sent every alert to Telegram."""
+    from . import apns
+    return bool(subscriptions()) or (apns.configured() is None and bool(apns.devices()))
+
+
 def _save(subs: dict) -> None:
     path = _subs_path()
     path.parent.mkdir(parents=True, exist_ok=True)

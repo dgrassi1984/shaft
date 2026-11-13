@@ -79,6 +79,12 @@ struct InstanceSettingsView: View {
                             ForEach(choices, id: \.self) { Text($0).tag(Optional($0)) }
                         }
                     }
+                } else {
+                    // Unknown levels (the model's listing could not be read): show the value, never hide the row
+                    VStack(alignment: .leading, spacing: Design.Space.s4) {
+                        LabeledContent("Effort", value: settings.effort.value ?? "Not set")
+                        Text("Effort choices are unavailable.").font(.footnote).foregroundStyle(Color.textSecondary)
+                    }
                 }
             }
             .listRowBackground(Color.elevated)

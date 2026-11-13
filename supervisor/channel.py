@@ -65,8 +65,8 @@ def can_alert(name: str, channel: str) -> str:
     from . import webpush
     if not service("web", stale=False):
         return "the web UI is not running"
-    if not webpush.subscriptions():
-        return "no device has the web UI's notifications on"
+    if not webpush.can_wake():
+        return "no device has the web UI's or the apps' notifications on"
     return ""
 
 

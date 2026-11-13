@@ -119,7 +119,7 @@ def setup(base: Path, port: int):
                               'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES="5"\nOPERATOR_NAME="Operator"\n')
         choices = root / "shaft" / "config.py"
         if not choices.exists():
-            choices.write_text('CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high")}\n')
+            choices.write_text('CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra")}\n')
         return root
 
     for name in INSTANCES:

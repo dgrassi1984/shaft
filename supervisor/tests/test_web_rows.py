@@ -62,10 +62,12 @@ class SavedRowsTest(ActionsTest):
 
     def test_issue_17_a_model_switch_returns_its_base_url_row_too(self):
         """A model save also writes LLM_BASE_URL (opconfig.set_values). Returning only the saved row left the base
-        URL row's saw stale, so its next save was refused as changed since the page was drawn."""
+        URL row's saw stale, so its next save was refused as changed since the page was drawn. The same holds for
+        both effort rows, which a model switch may reset (effort per model, 2026-11-13)."""
         root = self.sup / "config-model"
         root.mkdir()
-        (root / "config.env").write_text("LLM_MODEL=old-model\nLLM_BASE_URL=https://old.example/v1\n")
+        (root / "config.env").write_text("LLM_MODEL=old-model\nLLM_BASE_URL=https://old.example/v1\n"
+                                         "LLM_REASONING_EFFORT=medium\n")
 
         def cli(args, *unused, **kwargs):
             out = io.StringIO()
@@ -84,7 +86,7 @@ class SavedRowsTest(ActionsTest):
                               saw_set="1")
         self.assertEqual(r.status, 200, r.body)
         rows = re.findall(rb'<tr data-row id="config-([A-Z_]+)"', r.body)
-        self.assertEqual(rows, [b"LLM_MODEL", b"LLM_BASE_URL"])
+        self.assertEqual(rows, [b"LLM_MODEL", b"LLM_BASE_URL", b"LLM_REASONING_EFFORT", b"VOICE_REASONING_EFFORT"])
         self.assertIn(b'name="saw" value="https://new.example/v1"', r.body)
 
     def test_issue_17_add_returns_an_editable_row(self):

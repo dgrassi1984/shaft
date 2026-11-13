@@ -156,6 +156,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_COPY_MAX_GB` | `8` | gigabytes the supervisor copies of an instance's folder for a battery exam or a gate's scratch copy (more, and the exam or the check fails) | [core.py](../supervisor/core.py) |
 | `SHAFT_TREE_MAX_FILES` | `200000` | files and folders the supervisor reads or copies in one walk of an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
 | `SHAFT_TREE_MAX_DEPTH` | `64` | folders deep the supervisor walks in an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
+| `SHAFT_EFFORT_CATALOG_HOURS` | `24` | hours before refreshing live model reasoning levels | [effortcatalog.py](../supervisor/effortcatalog.py) |
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |

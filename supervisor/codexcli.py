@@ -206,6 +206,11 @@ class Channel(planchannel.Channel):
             raise CodexFailure("weekly cap")
 
     def _start(self, model, effort):
+        self._start_server()
+        if not _limits(self._request("account/rateLimits/read", {})):
+            raise CodexFailure("Codex weekly rate limit unavailable")
+
+    def _start_server(self):
         from .runner import RunRefused
         home = Path(HOME).expanduser().resolve()
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -239,8 +244,6 @@ class Channel(planchannel.Channel):
         self._request("initialize", {"clientInfo": {"name": "shaft", "version": "1"},
                                      "capabilities": {"experimentalApi": True}})
         self._send({"method": "initialized"})
-        if not _limits(self._request("account/rateLimits/read", {})):
-            raise CodexFailure("Codex weekly rate limit unavailable")
 
     def _result(self, method, reply):
         if "error" in reply:
@@ -524,3 +527,40 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
                 stream.close()
         for sig, previous in handlers.items():
             signal.signal(sig, previous)
+
+
+class _CatalogChannel(Channel):
+    @property
+    def timeout_s(self):
+        return max(0, self.deadline - time.monotonic())
+
+
+def _effort_listing() -> dict:
+    from . import effortcatalog
+    channel = _CatalogChannel("effort-catalog", "effort-catalog", lambda message: None)
+    channel.deadline = time.monotonic() + 15  # leave time for process cleanup within 20 seconds
+    try:
+        channel._start_server()
+        models, cursor, seen = {}, None, set()
+        while True:
+            params = {"includeHidden": True}
+            if cursor is not None:
+                params["cursor"] = cursor
+            result = channel._request("model/list", params)
+            for item in result["data"]:
+                models[item["model"]] = effortcatalog.entry(
+                    [e["reasoningEffort"] for e in item["supportedReasoningEfforts"]],
+                    item.get("defaultReasoningEffort"))
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return models
+            if cursor in seen:
+                raise ValueError("repeated Codex model/list cursor")
+            seen.add(cursor)
+    finally:
+        channel.close()
+
+
+def efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
+    from . import effortcatalog
+    return effortcatalog.lookup("codex", model[6:], _effort_listing) if serves(model) else None

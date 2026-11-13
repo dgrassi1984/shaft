@@ -475,7 +475,7 @@ class ModelsTest(Case):
                 mock.patch.object(opconfig, "model_choices", wraps=opconfig.model_choices):
             self.assertIn({"model": MODEL, "base_url": "broker", "label": f"{MODEL} (Codex plan)"}, opconfig.model_choices())
             self.assertEqual(opconfig.base_url_for(MODEL), "broker")
-            opconfig._check("bird", self.root, "LLM_MODEL", MODEL)
+            opconfig._check("bird", self.root, "LLM_MODEL", MODEL, MODEL)
         settings.load_all()
         with mock.patch.object(settings, "model_choices", return_value=[MODEL, "claude-haiku-5-5"]), \
                 mock.patch.object(settings, "not_live", return_value={}):
@@ -492,7 +492,7 @@ class ModelsTest(Case):
         self.assertEqual(bakeoff.parse_arm(MODEL + "@high", ("high",))["model"], MODEL)
         with mock.patch.object(bakeoff, "parse_arm", side_effect=[{"model": MODEL, "label": "a"},
                 {"model": "claude-haiku-5-5", "label": "b"}]), \
-                mock.patch.object(opconfig, "effort_choices", return_value=None):
+                mock.patch.object(opconfig, "effort_choices", autospec=True, return_value=None):
             with self.assertRaisesRegex(bakeoff.BakeoffError, "also a candidate"):
                 bakeoff.create("bird", ["a", "b"], [], judge="openrouter/openai/gpt-6-astra", bid="test")
         redact = bakeoff._redactor({"arms": []})
