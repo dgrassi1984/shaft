@@ -577,7 +577,7 @@ def answer_question(n: str, login: str, data: dict) -> dict:
         try:
             # From and ended threads use the next-cycle Reply path specified by the card contract.
             if cid == "from" or chat.get("state") == "ended" or web_chat.is_from(chat):
-                _, said = web_chat.background(n, login, text, [], mid=mid, cid=cid)
+                _, said = web_chat.background(n, login, text, [], mid=mid, cid=cid, in_reply_to=file)
             else:
                 _, said = web_chat.send(n, login, text, [], mid=mid, cid=cid)
         except web_chat.Refused as e:

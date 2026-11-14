@@ -263,6 +263,19 @@ class ChoiceAnswerTest(AppTest):
         self.assertEqual(questions.answers()["choice.md"]["answer"]["picked"], [0])
         self.assertEqual(reply_links.records()[0]["in_reply_to"], "choice.md")
 
+    def test_an_answer_is_a_reply_never_a_cancellable_note_20261114(self):
+        """Seen in the simulator: a card answered "Tomorrow morning" left a next-cycle note with Cancel under it, so the
+        answer could be taken back while the card said answered. The quote did not match the question's inbox file,
+        and the note went as a plain message: the answer names its question by file instead."""
+        self.choice_question(talk=None)
+        (self.sup / "operator-inbox" / "choice.md").write_text("no header, so the quote matches nothing\n")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice().status, 200)
+        note = next(i for i in self.get("/app/v1/from/wisp")["items"] if i["type"] == "later")
+        self.assertFalse(note["cancellable"], "an answer is final: the card says answered")
+        row = next(m for m in messages.history() if m.get("mid") == "answer-1")
+        self.assertEqual((row["kind"], row.get("in_reply_to")), ("reply", "choice.md"))
+
     def test_choice_feed_fields_in_chat_and_from(self):
         self.chat([])
         row = self.choice_question(thread=CID)

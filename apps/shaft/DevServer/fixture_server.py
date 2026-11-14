@@ -41,7 +41,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 
 `act` (run while `serve` runs, on the same folder; pass the same --simctl): `google [address]` (the operator's Google
 account `google` signed in, as the app's local `shaft google login` would), `message <instance> [text]` and
-`question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
+`question <instance> [text]` (the instance sends you one, with a push; `choice` and `choices` the same with
+single- and multiple-choice options), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
 `services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
@@ -1065,11 +1066,21 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
             _write_json(base / "version.json", {"api": int(name), "server": text or "v0.0.1"})
         else:
             raise SystemExit("version needs <api> [server], missing, or nothing (the real answer again)")
-    elif what in ("message", "question"):
+    elif what in ("message", "question", "choice", "choices"):
         file = f"{datetime.now():%Y%m%d-%H%M%S-%f}-from-{name}.md"
-        text = text or ("Should I archive the September notes?" if what == "question" else "The nightly report is ready.")
+        text = text or {"question": "Should I archive the September notes?",
+                        "choice": "When should I run the October reconciliation?",
+                        "choices": "Which accounts go in the weekly summary?"}.get(what, "The nightly report is ready.")
         # a message from a cycle, as the broker records one: `talk` null (no conversation), so it shows in From
-        row = {"ts": now, "from": name, "to": "operator", "kind": what, "file": file, "text": text, "talk": None}
+        row = {"ts": now, "from": name, "to": "operator", "kind": "message" if what == "message" else "question",
+               "file": file, "text": text, "talk": None}
+        if what in ("choice", "choices"):              # as send_message's choices records them (supervisor/questions.py)
+            from supervisor import questions
+            row["choices"] = questions.validate_choices(
+                {"options": [{"label": "Tonight", "detail": "After the 22:00 import"}, {"label": "Tomorrow morning"},
+                             {"label": "Skip October"}]} if what == "choice" else
+                {"options": [{"label": "Operating"}, {"label": "Reserve", "detail": "Only if it moved"},
+                             {"label": "Payroll"}, {"label": "Tax"}], "multiple": True})
         with (base / "sup" / "messages.jsonl").open("a") as f:
             f.write(json.dumps(row) + "\n")
         box = base / "sup" / "operator-inbox"

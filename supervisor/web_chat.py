@@ -1450,13 +1450,15 @@ def _in_chat(chat: dict | None, mid: str) -> bool:
 
 
 def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
-               comment_block: str = "", comments: list[dict] | None = None, cid: str = "") -> tuple[str, str]:
+               comment_block: str = "", comments: list[dict] | None = None, cid: str = "",
+               in_reply_to: str | None = None) -> tuple[str, str]:
     """Next cycle: the message goes to the instance's inbox now and is read in
     its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
     in the chat. Files and a quoted question as send()'s. (inbox file, what to say). `cid`: the thread it was written
     in — while that thread is open the note shows there (not in From) and names it, so the cycle answers there too;
     "current": the thread the plain chat page follows (current); "from": the From conversation; none or an ended one:
-    From, outside any conversation."""
+    From, outside any conversation. `in_reply_to`: the question it answers, named by its file (a choice card's answer);
+    else the open question its quote matches, if any."""
     from . import autonomy, messages
     text = text.replace("\r\n", "\n").strip()        # a browser form's line ends: the inbox file is the instance's
     if not text and not files and not comment_block:
@@ -1483,7 +1485,8 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
                   else None)
         try:
             path = messages.deliver_background(name, body, shown=text, attachments=atts, mid=mid, comments=comments,
-                                               in_reply_to=asked[0]["path"].name if asked else None, thread=thread)
+                                               in_reply_to=in_reply_to or (asked[0]["path"].name if asked else None),
+                                               thread=thread)
         except (OSError, UnsafePath) as e:            # its inbox/ is its own folder: say what stopped it, not a 500
             raise Refused(f"could not put it in {name}'s inbox: {e}") from None
     said = autonomy.next_cycle(name)
