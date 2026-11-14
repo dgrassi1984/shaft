@@ -234,6 +234,14 @@
         node = document.importNode(n, true);
         node._src = src;
         if (cur) {
+          // Keep the live answer form, including picks, Other, and the id used for a retry.
+          const answer = cur.querySelector("form[data-answer]");
+          const nextAnswer = node.querySelector("form[data-answer]");
+          if (answer && nextAnswer) {
+            const focused = answer.contains(document.activeElement) ? document.activeElement : null;
+            nextAnswer.replaceWith(answer);
+            node._answerFocus = focused;
+          }
           const details = new Map([...cur.querySelectorAll("details[data-key]")].map(d => [d.dataset.key, d.open]));
           node.querySelectorAll("details[data-key]").forEach(d => {
             if (details.has(d.dataset.key)) d.open = details.get(d.dataset.key);
@@ -260,6 +268,10 @@
       if (node !== cursor) el.insertBefore(node, cursor);
       cursor = node.nextElementSibling;
       kept.add(node);
+      if (node._answerFocus) {
+        node._answerFocus.focus({preventScroll: true});
+        delete node._answerFocus;
+      }
       if (node._scrolls) {
         node.querySelectorAll("[data-scroll-key]").forEach(d => {
           const was = node._scrolls.get(d.dataset.scrollKey);
@@ -530,7 +542,7 @@
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
     const typed = box ? box.value : null;            // what this send carries
-    const mid = chatSend(form) ? form.querySelector("input[name=mid]") : null;
+    const mid = chatSend(form) || form.dataset.answer ? form.querySelector("input[name=mid]") : null;
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
     const destination = form._pendingCid !== undefined ? form._pendingCid : pageCid() || "from";
