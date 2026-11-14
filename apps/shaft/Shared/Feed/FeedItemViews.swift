@@ -267,7 +267,8 @@ struct AssistantItemView: View {
                     }
                 }
             }
-            AnswerFooter(ts: answer.ts, source: answer.content, rating: answer.rating, k: answer.k, file: nil,
+            AnswerFooter(id: screen.readAloudID(answer.key), ts: answer.ts, source: answer.content,
+                         rating: answer.rating, k: answer.k, file: nil,
                          keepActions: answer.last, hovering: hovering, steps: answer.activity.count, stepsOpen: $steps,
                          rateable: !answer.content.isEmpty && answer.failure == nil)
             if steps && !answer.activity.isEmpty {
@@ -285,10 +286,12 @@ struct AssistantItemView: View {
 }
 
 /// A message's footer, one 28 pt row: its time, "⚙ 4 steps", then the thumbs on every message with something to rate.
-/// On iOS Copy and Reply stand before the thumbs on the last answer, kept in view. On the Mac they follow the thumbs on
+/// Read aloud is available on every nonempty instance message. On iOS Copy and Reply stand before the thumbs on the
+/// last answer, kept in view. On the Mac they follow the thumbs on
 /// every message, the last one too, while the pointer is over it, as the web does on a computer. It wraps rather than
 /// overlap at the largest text sizes.
 struct AnswerFooter: View {
+    let id: String
     let ts: Date
     let source: String
     let rating: Rating?
@@ -321,6 +324,7 @@ struct AnswerFooter: View {
                     CopyButton(text: source)
                     if !screen.archived && !asksReply { ReplyIcon(source: source, file: file) }
                 }
+                if !source.isEmpty { ReadAloudButton(id: id, source: source) }
                 #endif
                 if rateable {
                     // Always here, on every message and answer: never only on hover or in a menu (2026-11-04).
@@ -330,7 +334,8 @@ struct AnswerFooter: View {
                 }
                 #if os(macOS)
                 // After the thumbs: hidden, they keep their room, which must not open a gap before the thumbs.
-                if !source.isEmpty { HoverActions(source: source, file: file, shown: hovering, reply: !asksReply) }
+                if !source.isEmpty { HoverActions(source: source, file: file, shown: hovering, reply: !asksReply,
+                                                         readAloud: true, id: id) }
                 #endif
             }
             Spacer(minLength: 0)
@@ -373,15 +378,24 @@ struct HoverActions: View {
     let shown: Bool
     /// False where the footer's own Reply stands at the row's end (a question).
     var reply = true
+    var readAloud = false
+    var id = ""
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
         HStack(spacing: 0) {
-            CopyButton(text: source).help("Copy")
-            if reply && !screen.archived { ReplyIcon(source: source, file: file) }
+            Group {
+                CopyButton(text: source).help("Copy")
+                if reply && !screen.archived { ReplyIcon(source: source, file: file) }
+            }
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            if readAloud {
+                ReadAloudButton(id: id, source: source)
+                    .opacity(shown || ReadAloudPlayer.shared.playing == id ? 1 : 0)
+                    .allowsHitTesting(shown || ReadAloudPlayer.shared.playing == id)
+            }
         }
-        .opacity(shown ? 1 : 0)
-        .allowsHitTesting(shown)
     }
 }
 #endif
@@ -690,7 +704,8 @@ struct SentItemView: View {
                     .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
             }
             AttachmentsView(attachments: message.attachments)
-            AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
+            AnswerFooter(id: screen.readAloudID(message.key), ts: message.ts, source: message.text,
+                         rating: message.rating, k: nil, file: message.file,
                          keepActions: asking, hovering: hovering, asksReply: !screen.archived)
                 .padding(.bottom, -Design.Footer.slack)     // keep the footer target within the card padding
         }
