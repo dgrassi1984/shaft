@@ -112,6 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         let instance = NotificationContent.instance(from: userInfo)
         let cid = NotificationContent.cid(from: userInfo)
+        if response.actionIdentifier != UNNotificationDefaultActionIdentifier {
+            guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
+            let request = NotificationQuestion.answer(actionIdentifier: response.actionIdentifier, userInfo: userInfo,
+                typedText: (response as? UNTextInputNotificationResponse)?.userText,
+                requestIdentifier: response.notification.request.identifier)
+            await model.answerNotification(request, instance: instance)
+            return
+        }
         await MainActor.run {
             model.notificationTapped(instance: instance, cid: cid)
             state.bringForward()

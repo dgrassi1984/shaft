@@ -97,6 +97,33 @@ public final class AppModel {
         if let instance { openChat = ChatTarget(instance: instance, cid: cid) }
     }
 
+    /// Notification actions run without opening a chat. Every refusal, including an answer made elsewhere, is shown.
+    public func answerNotification(_ request: ChoiceAnswerRequest?, instance: String?) async {
+        let reason: String
+        do {
+            guard let request, let instance else {
+                throw APIError.badLink("The notification has no valid question or answer. Open the chat to answer it.")
+            }
+            guard let client = session?.store?.client else { throw APIError.notPaired }
+            _ = try await client.answer(instance, request)
+            return
+        } catch {
+            reason = APIError.from(error)?.message ?? "Sending was interrupted. Open the chat to check the answer."
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Answer not sent"
+        content.body = "Your answer was not sent. \(reason)"
+        content.sound = .default
+        // No instance metadata: this failure must show a banner even when its chat is already visible.
+        let notification = UNNotificationRequest(identifier: "answer-failed-" + (request?.mid ?? UUID().uuidString),
+                                                  content: content, trigger: nil)
+        do {
+            try await UNUserNotificationCenter.current().add(notification)
+        } catch {
+            pushError = "\(content.body) The failure notification could not be posted: \(error.localizedDescription)"
+        }
+    }
+
     /// Show the server's badge (§12) on the app icon.
     public func setBadge(_ count: Int) {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }

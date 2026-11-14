@@ -703,6 +703,9 @@ struct SentItemView: View {
                     .liftsOnCanvas(tint: Color.brand.opacity(0.06))
                     .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
             }
+            if let choices = message.choices {
+                QuestionCard(message: message, choices: choices)
+            }
             AttachmentsView(attachments: message.attachments)
             AnswerFooter(id: screen.readAloudID(message.key), ts: message.ts, source: message.text,
                          rating: message.rating, k: nil, file: message.file,
