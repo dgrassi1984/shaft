@@ -112,6 +112,8 @@ def to_json(model: dict) -> dict:
         out["chat"].update(created=stamp(out["chat"]["created"]), ended=stamp(out["chat"]["ended"]))
     for it in out["items"]:
         it["ts"] = stamp(it["ts"])
+        if it.get("answer"):
+            it["answer"]["ts"] = stamp(it["answer"]["ts"])
         if it.get("cancelled"):             # a next-cycle note taken back: a time like any other (§1.6)
             it["cancelled"] = stamp(it["cancelled"])
         for a in it.get("attachments", []):
@@ -533,6 +535,70 @@ def _send(req: Request, n: str) -> Response:
         raise Refusal(409, "refused", str(e)) from None
     reply_links.record(n, fields.get("in_reply_to"), f"send:{n}:{mid}")
     return _said(said, chat=web_chat.public_id(n, (chat or {}).get("id")), file=None)
+
+
+def _answer(req: Request, n: str) -> Response:
+    return _json(200, answer_question(n, _login(req), _body(req)))
+
+
+def answer_question(n: str, login: str, data: dict) -> dict:
+    """Answer a choice card through the ordinary Reply delivery path, once per question."""
+    from . import questions, messages, web_chat, reply_links
+    from .core import SUP_DIR
+    import fcntl
+    mid, cid, file = (data.get(k) for k in ("mid", "cid", "file"))
+    if not isinstance(mid, str) or not MID.fullmatch(mid):
+        raise Refusal(400, "bad_answer", "mid is required: 1–64 letters, digits, - or _.")
+    if not isinstance(cid, str) or not cid:
+        raise Refusal(400, "bad_answer", "cid is required: a thread id or from.")
+    question = next((m for m in messages.history() if m["file"] == file and m["from"] == n
+                     and m["to"] == "operator" and m["kind"] == "question"), None)
+    if question is None:
+        raise Refusal(404, "not_found", "No such question from this instance.")
+    SUP_DIR.mkdir(parents=True, exist_ok=True)
+    with (SUP_DIR / "question-answers.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        stored = dict(questions.answers())
+        if old := stored.get(file):
+            if old["mid"] == mid:
+                return {"said": old["said"], "answer": {**old["answer"], "ts": stamp(old["answer"]["ts"])}}
+            raise Refusal(409, "answered", "This question was already answered.",
+                          answer={**old["answer"], "ts": stamp(old["answer"]["ts"])})
+        # Answered or closed another way (a quoted Reply, Telegram, the CLI): a late card or notification adds nothing
+        if file not in messages._unread("operator"):
+            raise Refusal(409, "closed", "This question was already answered or closed.")
+        try:
+            answer = questions.validate_answer(question.get("choices"), data)
+        except ValueError as e:
+            raise Refusal(400, "bad_answer", str(e)) from None
+        chat = None
+        if cid != "from":
+            chat = web_chat.load(cid)
+            if not chat or chat.get("instance") != n:
+                raise Refusal(404, "not_found", "No such thread from this instance.")
+        text = questions.reply_text(question, answer)
+        # Recorded before it is delivered: a store that cannot be written stops the delivery, so a second device can
+        # never deliver a different answer because the first one's was not kept. A refused delivery takes it back.
+        stored[file] = {"mid": mid, "said": "", "answer": answer}
+        questions.save_answers(stored)
+        try:
+            # From and ended threads use the next-cycle Reply path specified by the card contract. quoted=False: the
+            # answer closes its own question only, never another whose text its quote happens to match
+            if cid == "from" or chat.get("state") == "ended" or web_chat.is_from(chat):
+                _, said = web_chat.background(n, login, text, [], mid=mid, cid=cid, in_reply_to=file, quoted=False)
+            else:
+                _, said = web_chat.send(n, login, text, [], mid=mid, cid=cid, quoted=False)
+        except BaseException as e:
+            stored.pop(file)
+            questions.save_answers(stored)
+            if isinstance(e, web_chat.Refused):
+                raise Refusal(409, "refused", str(e)) from None
+            raise
+        messages._archive(messages.OPERATOR_INBOX / file, "reply")
+        reply_links.record(n, file, f"send:{n}:{mid}")
+        stored[file] = {"mid": mid, "said": said, "answer": answer}
+        questions.save_answers(stored)
+        return {"said": said, "answer": {**answer, "ts": stamp(answer["ts"])}}
 
 
 def _action(req: Request, n: str, act: str) -> Response:
@@ -1504,6 +1570,7 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/services/(?P<service>api|scheduler)/(?P<act>restart)", {"POST": _service_action}),
     (r"/services/(?P<service>scheduler)/(?P<act>cancel)", {"POST": _service_action}),
     (rf"/chat/{N}", {"GET": _feed}),
+    (rf"/chat/{N}/answer", {"POST": _answer}),
     (rf"/chat/{N}/send", {"POST": _send}),
     (rf"/chat/{N}/stream", {"GET": _stream}),
     (rf"/chat/{N}/(?P<act>new|rename|unqueue|uncycle|stop|end|clear|seen|away)", {"POST": _action}),

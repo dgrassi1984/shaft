@@ -106,6 +106,12 @@ struct FeedView: View {
             }
         }
         .onChange(of: pill, initial: true) { _, pill in screen.latestPill = pill }
+        .onChange(of: screen.jumpToQuestion) { _, key in
+            guard let key else { return }
+            pinned = false
+            withAnimation(reduceMotion ? nil : .default) { position.scrollTo(id: key, anchor: .top) }
+            screen.jumpToQuestion = nil
+        }
         .onChange(of: screen.jumpToLatest) {
             pinned = true
             newBelow = false

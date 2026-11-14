@@ -505,6 +505,20 @@ public final class ChatStore {
         return owner?.outbox.entries(for: instance, cid: ref.draftKey) ?? []
     }
 
+    /// Structured answers stay on their cards while sending, and retain their body for Retry.
+    public let questionAnswers = QuestionAnswers()
+
+    public func answerQuestion(file: String, picked: [Int], other: String?) async {
+        guard let client, let chatID else { return }
+        await questionAnswers.send(file: file, cid: chatID, picked: picked, other: other,
+                                   instance: instance, client: client)
+    }
+
+    public func retryQuestion(file: String) async {
+        guard let client else { return }
+        await questionAnswers.retry(file: file, instance: instance, client: client)
+    }
+
     public var content: FeedContent? { feed?.content }
 
     /// Whether the chat is on screen now (`watch`, §4): false while a sheet covers it. Read at each request; use

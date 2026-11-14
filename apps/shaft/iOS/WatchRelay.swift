@@ -133,12 +133,16 @@ private struct ReplyHandler: @unchecked Sendable {
 
 /// Time to finish a watch turn after iOS woke the app in the background for it.
 @MainActor
-private final class BackgroundTask {
+final class BackgroundTask {
     private var id: UIBackgroundTaskIdentifier = .invalid
+    var onExpiration: (@MainActor @Sendable () -> Void)?
 
     init(name: String) {
-        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-            MainActor.assumeIsolated { self?.end() }
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { @Sendable [weak self] in
+            Task { @MainActor in
+                self?.onExpiration?()
+                self?.end()
+            }
         }
     }
 

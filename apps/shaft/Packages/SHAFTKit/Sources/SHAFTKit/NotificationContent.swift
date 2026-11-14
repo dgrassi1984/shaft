@@ -42,8 +42,10 @@ public enum NotificationContent {
         let mine = instance.map { name in latest.events.filter { $0.instance == name } } ?? latest.events
         let event = cid.flatMap { cid in mine.last { $0.cid == cid } } ?? mine.last
         guard let event else { return nil }
-        return Filled(title: event.title, body: event.body, badge: latest.badge, instance: event.instance,
-                      cid: event.cid)
+        var filled = Filled(title: event.title, body: event.body, badge: latest.badge, instance: event.instance,
+                            cid: event.cid)
+        filled.question = event.question
+        return filled
     }
 
     /// What `fetch` found, to lay onto the notification.
@@ -54,6 +56,7 @@ public enum NotificationContent {
         public var instance: String?
         /// The thread the event is about (`PushEvent.cid`): kept in `userInfo["cid"]`, so the tap opens it.
         public var cid: String?
+        public var question: NotificationQuestion? = nil
 
         public init(title: String, body: String, badge: Int, instance: String?, cid: String? = nil) {
             self.title = title
@@ -72,6 +75,17 @@ public enum NotificationContent {
                 content.userInfo["instance"] = instance
             }
             if let cid { content.userInfo["cid"] = cid }
+            content.categoryIdentifier = ""
+            content.userInfo.removeValue(forKey: "question_file")
+            content.userInfo.removeValue(forKey: "question_option_count")
+            if let question {
+                content.userInfo["question_file"] = question.file
+                content.userInfo["cid"] = question.cid
+                if let category = question.category {
+                    content.categoryIdentifier = category.identifier
+                    content.userInfo["question_option_count"] = question.choices.options.count
+                }
+            }
         }
     }
 }
@@ -96,8 +110,21 @@ public final class NotificationDelivery: @unchecked Sendable {
         }
         Task {
             let filled = await NotificationContent.fetch(instance: instance, cid: cid, store: store, timeout: timeout)
-            self.deliver(filled)
+            await self.deliverAfterRegistration(filled) { category in
+                await QuestionCategoryRegistry.shared.register(category)
+            }
         }
+    }
+
+    /// Expiry may deliver the original content while registration waits. A late completion cannot deliver again.
+    func deliverAfterRegistration(_ filled: NotificationContent.Filled?,
+                                  register: @Sendable (NotificationQuestion.Category) async -> Bool) async {
+        guard lock.withLock({ handler != nil }) else { return }
+        if let category = filled?.question?.category, !(await register(category)) {
+            deliver(nil)
+            return
+        }
+        deliver(filled)
     }
 
     /// Deliver with the body when there is one, else as it came. A second call does nothing.

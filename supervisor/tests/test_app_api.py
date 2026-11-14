@@ -224,6 +224,182 @@ class AppTest(WebTest):
         web._write("devices.json", ds)
 
 
+class ChoiceAnswerTest(AppTest):
+    def choice_question(self, file="choice.md", text="When should I start?", multiple=False, **extra):
+        choices = {"options": [{"label": "Now", "detail": None}, {"label": "Later", "detail": "Tomorrow"}],
+                   "multiple": multiple}
+        row = self.message("2026-11-03T14:02:00", file, text, kind="question", read=False,
+                           choices=choices, **extra)
+        (self.sup / "operator-inbox" / file).write_text(
+            f"From: wisp\nTo: operator\nKind: question\n\n{text}\n")
+        return row
+
+    def answer_choice(self, **changes):
+        return self.api("/app/v1/chat/wisp/answer", "POST",
+                        {"cid": "from", "file": "choice.md", "picked": [0], "mid": "answer-1", **changes})
+
+    def test_choice_answer_is_durable_archived_and_idempotent(self):
+        self.choice_question(text="A long question " + "x" * 24000)
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT) as wake:
+            response = self.answer_choice()
+            self.assertEqual(response.status, 200, response.body)
+            first = json.loads(response.body)
+            self.assertEqual(first["answer"]["picked"], [0])
+            self.assertIsNone(first["answer"]["other"])
+            self.assertEqual(first["answer"]["ts"], app_api.stamp(first["answer"]["ts"]))
+            self.assertEqual(json.loads(self.answer_choice().body), first)
+            wake.assert_called_once_with("wisp")
+        conflict = self.error(self.answer_choice(mid="answer-2"), 409, "answered")
+        self.assertEqual(conflict["answer"], first["answer"])
+        self.assertFalse((self.sup / "operator-inbox" / "choice.md").exists())
+        self.assertTrue((self.sup / "operator-inbox/read/choice.md").exists())
+        inbox = list((self.inst / "wisp/inbox").glob("*.md"))
+        self.assertEqual(len(inbox), 1)
+        self.assertIn("In-Reply-To: choice.md", inbox[0].read_text())
+        self.assertIn("Answer: Now", inbox[0].read_text())
+        saved = json.loads((self.sup / "question-answers.json").read_text())
+        self.assertEqual(saved["choice.md"]["mid"], "answer-1")
+        from supervisor import questions
+        self.assertEqual(questions.answers()["choice.md"]["answer"]["picked"], [0])
+        self.assertEqual(reply_links.records()[0]["in_reply_to"], "choice.md")
+
+    def test_an_answer_is_a_reply_never_a_cancellable_note_20261114(self):
+        """Seen in the simulator: a card answered "Tomorrow morning" left a next-cycle note with Cancel under it, so the
+        answer could be taken back while the card said answered. The quote did not match the question's inbox file,
+        and the note went as a plain message: the answer names its question by file instead."""
+        self.choice_question(talk=None)
+        (self.sup / "operator-inbox" / "choice.md").write_text("no header, so the quote matches nothing\n")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice().status, 200)
+        note = next(i for i in self.get("/app/v1/from/wisp")["items"] if i["type"] == "later")
+        self.assertFalse(note["cancellable"], "an answer is final: the card says answered")
+        row = next(m for m in messages.history() if m.get("mid") == "answer-1")
+        self.assertEqual((row["kind"], row.get("in_reply_to")), ("reply", "choice.md"))
+
+    def test_an_answer_not_kept_is_not_delivered_and_a_refused_one_is_taken_back_20261114(self):
+        """Review 2026-11-14: the answer was stored after its delivery, so a store write that failed left a delivered
+        answer unrecorded, and a second device delivered a different one."""
+        from supervisor import questions
+        self.choice_question(talk=None)
+        with mock.patch.object(questions, "save_answers", side_effect=OSError("disk full")):
+            self.assertEqual(self.answer_choice().status, 500)
+        self.assertEqual(list((self.inst / "wisp/inbox").glob("*.md")), [], "not kept, so not delivered")
+        with mock.patch.object(web_chat, "background", side_effect=web_chat.Refused("its inbox is full")):
+            self.error(self.answer_choice(mid="answer-2"), 409, "refused")
+        self.assertNotIn("choice.md", questions.answers(), "a refused delivery is not an answer")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice(mid="answer-3").status, 200)
+        self.assertEqual(len(list((self.inst / "wisp/inbox").glob("*.md"))), 1)
+
+    def test_an_answer_closes_its_own_question_only_20261114(self):
+        """Review 2026-11-14: the answer quotes its question, and the quote closed every open question with that text."""
+        self.choice_question(file="q1.md", talk=None, text="Which date should I use?")
+        self.choice_question(file="q2.md", talk=None, text="Which date should I use?")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice(file="q1.md").status, 200)
+        self.assertTrue((self.sup / "operator-inbox" / "q2.md").exists(), "the other question stays open")
+        item = next(i for i in self.get("/app/v1/from/wisp")["items"] if i.get("file") == "q2.md")
+        self.assertTrue(item["open"])
+
+    def test_a_question_closed_another_way_takes_no_late_answer_20261114(self):
+        """Review 2026-11-14: a question answered by a quoted Reply still took a notification's choice afterwards."""
+        self.choice_question(talk=None)
+        messages._archive(self.sup / "operator-inbox" / "choice.md", "reply")
+        self.error(self.answer_choice(), 409, "closed")
+        self.assertEqual(list((self.inst / "wisp/inbox").glob("*.md")), [])
+
+    def test_choice_feed_fields_in_chat_and_from(self):
+        self.chat([])
+        row = self.choice_question(thread=CID)
+        feed = self.get(f"/app/v1/chat/wisp/{CID}")
+        item = next(i for i in feed["items"] if i["type"] == "sent")
+        self.assertEqual((item["choices"], item["answer"], item["open"]), (row["choices"], None, True))
+        self.assertEqual(self.answer_choice(cid=CID).status, 200)
+        item = next(i for i in self.get(f"/app/v1/chat/wisp/{CID}")["items"] if i["type"] == "sent")
+        self.assertFalse(item["open"])
+        self.assertEqual(item["answer"]["picked"], [0])
+        self.choice_question(file="from-choice.md", talk=None)   # a cycle's row: From
+        feed = self.get("/app/v1/from/wisp")
+        item = next(i for i in feed["items"] if i.get("file") == "from-choice.md")
+        self.assertEqual((item["choices"], item["answer"], item["open"]), (row["choices"], None, True))
+        answer = json.loads(self.answer_choice(file="from-choice.md", mid="from-answer", other="Please hurry").body)
+        item = next(i for i in self.get("/app/v1/from/wisp")["items"] if i.get("file") == "from-choice.md")
+        self.assertEqual(item["answer"], answer["answer"])
+        self.assertFalse(item["open"])
+        plain = self.message("2026-11-03T14:03:00", "note.md", "An update", read=False)
+        self.assertEqual({k: web_chat.message_item("wisp", plain, {})[k] for k in ("choices", "answer", "open")},
+                         {"choices": None, "answer": None, "open": False})
+        self.choice_question(file="archived.md")
+        messages._archive(self.sup / "operator-inbox/archived.md")
+        row = next(m for m in messages.history() if m["file"] == "archived.md")
+        self.assertFalse(web_chat.message_item("wisp", row, {})["open"])
+
+    def test_multiple_and_other_only_answers(self):
+        self.choice_question(multiple=True)
+        response = self.answer_choice(picked=[1, 0], other="At noon")
+        self.assertEqual(response.status, 200, response.body)
+        answer = json.loads(response.body)["answer"]
+        self.assertEqual((answer["picked"], answer["other"]), ([0, 1], "At noon"))
+        self.choice_question(file="other.md")
+        response = self.answer_choice(file="other.md", mid="other-answer", picked=[], other="At noon")
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual(json.loads(response.body)["answer"]["picked"], [])
+
+    def test_choice_answer_rejects_bad_answers_and_unknown_questions(self):
+        self.choice_question()
+        for changes in ({"picked": [0, 1]}, {"picked": [-1]}, {"picked": [2]}, {"picked": []},
+                        {"picked": [], "other": "   "}, {"picked": [True]}, {"picked": "0"},
+                        {"other": "x" * 2001}, {"other": 7}, {"picked": [0, 0]}, {"mid": "bad id"}):
+            with self.subTest(changes=changes):
+                self.error(self.answer_choice(**changes), 400, "bad_answer")
+        self.error(self.answer_choice(file="missing.md"), 404, "not_found")
+        self.message("2026-11-03T14:03:00", "plain.md", "A plain question?", kind="question", read=False)
+        self.error(self.answer_choice(file="plain.md"), 400, "bad_answer")
+        self.message("2026-11-03T14:03:00", "foreign.md", "Someone else's question?", frm="tundra",
+                     kind="question", read=False)
+        self.error(self.answer_choice(file="foreign.md"), 404, "not_found")
+        self.assertEqual(list((self.inst / "wisp/inbox").glob("*.md")), [])
+
+    def test_choice_answer_reaches_open_live_and_ended_threads(self):
+        for state in ("idle", "replying", "ended"):
+            with self.subTest(state=state):
+                cid = {"idle": "web-111", "replying": "web-222", "ended": "web-333"}[state]
+                self.chat([], state=state, cid=cid, reply={"started": "2026-11-03T14:00:00", "interjections": 0}
+                          if state == "replying" else None)
+                file = f"{state}.md"
+                self.choice_question(file=file, thread=cid)
+                with mock.patch.object(web_chat, "_post", return_value=(202, {})):
+                    response = self.answer_choice(cid=cid, file=file, mid=state)
+                self.assertEqual(response.status, 200, response.body)
+                chat = web_chat.load(cid)
+                if state == "ended":
+                    self.assertEqual(chat["turns"], [])
+                    rows = [r for r in messages.history() if r.get("mid") == state]
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0]["in_reply_to"], file)
+                else:
+                    self.assertEqual(chat["turns"][-1]["role"], "user")
+                    self.assertIn("> When should I start?\n\nAnswer: Now", chat["turns"][-1]["content"])
+
+    def test_choice_push_survives_latest_and_web_form_uses_the_answer_logic(self):
+        from supervisor import web_alerts
+        row = self.choice_question()
+        event = web_alerts.event(row)
+        self.assertEqual(event["question"], {"file": "choice.md", "cid": "from", "choices": row["choices"]})
+        self.assertNotIn("question", web_alerts.event({**row, "kind": "note"}))
+        with mock.patch.object(webpush, "_queue", return_value={self.device: {"pending": [{**event, "at": 1}]}}), \
+                mock.patch.object(webpush, "_save_queue"), mock.patch.object(webpush.time, "time", return_value=2):
+            self.assertEqual(self.get("/app/v1/push/latest")["events"][0]["question"], event["question"])
+        body = urllib.parse.urlencode({"cid": "from", "file": "choice.md", "mid": "web-answer",
+                                       "picked[]": "1", "other": "After lunch"}).encode()
+        cookie = self.paired()
+        response = self.req("/chat/wisp/answer", "POST", cookie=cookie, body=body,
+                            headers={"content-type": "application/x-www-form-urlencoded",
+                                     "sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(cookie)})
+        self.assertEqual(response.status, 200, response.body)
+        self.assertEqual(json.loads((self.sup / "question-answers.json").read_text())["choice.md"]["answer"]["picked"], [1])
+
+
 class CyclesTest(AppTest):
     def setUp(self):
         super().setUp()

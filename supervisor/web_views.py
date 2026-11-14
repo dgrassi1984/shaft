@@ -1574,6 +1574,35 @@ def _seen_attrs(name: str, key: str | None, attr: str, ts: str) -> Html:
              k=h(' data-seen-key="{k}"', k=key) if key else Html(""))
 
 
+def _question_card(name: str, cid: str, it: dict) -> Html:
+    choices = it.get("choices")
+    if not choices:
+        return Html("")
+    if (answer := it.get("answer")) is not None:
+        labels = "; ".join(choices["options"][i]["label"] for i in answer["picked"])
+        other = ("; " if labels else "") + f"Other: {answer['other']}" if answer.get("other") else ""
+        return h('<p class="question-answer">You answered: {labels}{other}</p>', labels=labels, other=other)
+    if not it.get("open"):
+        return h('<p class="dim question-answer">No longer waiting for an answer.</p>')
+    options = join(h('<label class="question-option"><input type="{type}" name="{field}" value="{i}">'
+                     '<span>{label}{detail}</span></label>',
+                     type="checkbox" if choices["multiple"] else "radio",
+                     field="picked[]" if choices["multiple"] else "picked", i=i, label=option["label"],
+                     detail=h('<span class="dim question-detail">{t}</span>', t=option["detail"])
+                     if option.get("detail") else Html(""))
+                   for i, option in enumerate(choices["options"]))
+    return h('<form class="question-card" method="post" action="/chat/{n}/answer" '
+             'data-post="/chat/{n}/answer" data-answer="1">'
+             '<input type="hidden" name="cid" value="{cid}"><input type="hidden" name="file" value="{file}">'
+             # the page's JS gives it an id at the first Send and keeps it for a retry: no random value here, which
+             # would change the feed's HTML at every poll
+             '<input type="hidden" name="mid" value="">'
+             '<fieldset><legend class="sr">Choose an answer</legend>{options}</fieldset>'
+             '<label class="question-other">Other…<input type="text" name="other" maxlength="2000"></label>'
+             '<button type="submit">Send</button></form>',
+             n=q(name), cid=cid, file=it["file"], options=options)
+
+
 def _message_item(name: str, it: dict, archived: bool, key: str | None = None) -> Html:
     """A logged message in the chat (web_chat.message_item): one the instance sent you, or one you left for its next
     cycle."""
@@ -1601,11 +1630,11 @@ def _message_item(name: str, it: dict, archived: bool, key: str | None = None) -
               h(' <a class="laterchip reply-chip" href="/i/{n}/chat?id={c}" title="It answers this ended thread">re: «{t}»</a>',
                 n=q(name), c=it["re"]["cid"], t=it["re"]["title"]) if it.get("re") else Html(""))
     return h('<div class="turn sent" data-k="{key}" data-raw="{raw}"{at}><div class="who">{n} sent you '
-             '{what}{origin} <span class="dim">{ts}</span></div>{t}<div class="atts">{a}</div><div class="sentactions"><button type="button" '
+             '{what}{origin} <span class="dim">{ts}</span></div>{t}{question}<div class="atts">{a}</div><div class="sentactions"><button type="button" '
              'class="reply small icon" data-reply-message="{identity}" title="Reply to the message" '
              'aria-label="Reply to the message">{reply}</button>{feedback}</div></div>', key=it["key"], n=name, raw=it["text"], what=what,
              ts=_turn_time(it["ts"]), identity=it["file"], reply=ICONS["reply"], t=markdown(it["text"]), a=atts,
-             origin=origin,
+             origin=origin, question=_question_card(name, key or "from", it),
              feedback=_thumbs(name, {"kind": "message", "file": it["file"]}, it["rating"]),
              at=_seen_attrs(name, key, "sent-at", it["ts"]) if not archived else "")
 

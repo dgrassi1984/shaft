@@ -448,11 +448,15 @@ public struct SentItem: Codable, Sendable, Equatable {
     public var attachments: [Attachment]
     public var rating: Rating?
 
+    public var choices: Choices?
+    public var answer: ChoiceAnswer?
+    public var open: Bool
+
     private enum CodingKeys: String, CodingKey {
-        case key, file, ts, kind, fromCycle, re, read, text, attachments, rating
+        case key, file, ts, kind, fromCycle, re, read, text, attachments, rating, choices, answer, open
     }
 
-    /// A server before thread replies sends neither `from_cycle` nor `re`: not from a cycle, answering no thread.
+    /// Older servers omit thread links and structured questions. Missing `open` means false.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         key = try container.decode(String.self, forKey: .key)
@@ -465,6 +469,9 @@ public struct SentItem: Codable, Sendable, Equatable {
         text = try container.decode(String.self, forKey: .text)
         attachments = try container.decode([Attachment].self, forKey: .attachments)
         rating = try container.decodeIfPresent(Rating.self, forKey: .rating)
+        choices = try container.decodeIfPresent(Choices.self, forKey: .choices)
+        answer = try container.decodeIfPresent(ChoiceAnswer.self, forKey: .answer)
+        open = try container.decodeIfPresent(Bool.self, forKey: .open) ?? false
     }
 }
 
@@ -807,6 +814,7 @@ public struct PushEvent: Codable, Sendable, Equatable {
     /// The thread it is about (a chat id), `"from"` for the From feed, nil for the instance's current chat or from a
     /// server before threads.
     public var cid: String?
+    public var question: NotificationQuestion? = nil
 }
 
 // MARK: - Errors (§1.5)
@@ -825,6 +833,7 @@ public struct ServerError: Codable, Sendable, Equatable {
     public var version: String?
     public var settings: InstanceSettings? = nil
     public var done: [String]? = nil
+    public var answer: ChoiceAnswer? = nil
 
     public init(code: String, message: String, sha: String? = nil, diff: String? = nil, version: String? = nil) {
         self.code = code

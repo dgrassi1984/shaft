@@ -103,6 +103,8 @@ struct ChatScreen: View {
                                 .transition(.opacity)
                         }
                     }
+                    // Above the fade, not under it: the feed's own inset sat beneath the header's fade, washed out.
+                    .safeAreaInset(edge: .top, spacing: 0) { questionsWaiting }
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
                             connectionNotice
@@ -255,6 +257,28 @@ struct ChatScreen: View {
             .frame(maxHeight: .infinity)
         } else {
             ProgressView("Loading the chat…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// "N questions waiting": the open questions of this feed; a tap goes to the oldest.
+    @ViewBuilder
+    private var questionsWaiting: some View {
+        let questions = chat.feed.map(FeedRows.waitingQuestions) ?? []
+        if let oldest = questions.first {
+            Button {
+                screen.jumpToQuestion = oldest.key
+            } label: {
+                Text("\(questions.count) \(questions.count == 1 ? "question" : "questions") waiting")
+                    .font(Design.Text.pill)
+                    .foregroundStyle(Color.brand)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Design.Space.gutter)
+                    .padding(.vertical, Design.Space.s8)
+                    .quietHitArea()
+            }
+            .buttonStyle(.plain)
+            .background(Color.canvas)
+            .accessibilityHint("Scrolls to the oldest unanswered question")
         }
     }
 

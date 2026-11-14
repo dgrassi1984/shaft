@@ -83,6 +83,8 @@ final class ChatScreenModel {
     var latestPill: LatestPill?
     /// The pill was tapped: the feed goes to its end.
     var jumpToLatest = 0
+    /// The "N questions waiting" strip was tapped: the feed goes to this question (its item key).
+    var jumpToQuestion: String?
     var dismissRequest = 0
 
     /// Return to the chat for notification and link navigation.
