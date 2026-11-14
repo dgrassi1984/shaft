@@ -52,6 +52,7 @@ class Node {
   getClientRects() { return [1]; }
   getBoundingClientRect() { return {top: this.top || 0, bottom: 300}; }
   querySelectorAll(s) {
+    if (s === 'form[data-answer]') return this.nodes.filter(n => n.kind === 'answer');
     if (s === '.turn[data-k]') return this.nodes.filter(n => n.dataset.k && n.classList.contains('turn'));
     if (s === '.sending') return this.nodes.filter(n => n.classList.contains('sending'));
     if (s.startsWith('details[data-key]')) return this.parts.filter(n => n.kind === 'details' && n.dataset.key &&
@@ -96,6 +97,25 @@ class LiveRefreshTest(unittest.TestCase):
         result = subprocess.run([NODE, "-e", HARNESS.replace("//CASE//", script), str(JS)],
                                 capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_question_form_survives_polls_until_answered_or_closed(self):
+        self.run_js(r'''
+const feed = panel(), old = turn('sq', 'mid-one');
+const form = part('answer', {}), other = part('input', {}), pick = part('input', {});
+other.value = 'At noon'; pick.checked = true; form.mid = 'mid-one';
+form.parts = [other, pick]; old.appendChild(form); feed.appendChild(old);
+document.activeElement = other;
+const next = turn('sq', 'mid-two'), replacement = part('answer', {}); next.appendChild(replacement);
+parsed = [next]; assert.equal(morph(feed, 'poll'), true);
+assert.equal(feed.children[0].querySelector('form[data-answer]'), form);
+assert.equal(form.mid, 'mid-one'); assert.equal(other.value, 'At noon'); assert.equal(pick.checked, true);
+assert.equal(document.activeElement, other);
+parsed = [turn('sq', 'You answered: Now')]; morph(feed, 'answered');
+assert.equal(feed.children[0].querySelector('form[data-answer]'), null);
+assert.equal(feed.children[0].version, 'You answered: Now');
+const closed = turn('sq', 'No longer waiting for an answer.'); parsed = [closed]; morph(feed, 'closed');
+assert.equal(feed.children[0], closed);
+''')
 
     def test_issue_26_each_failed_panel_must_recover(self):
         """Reverting #26 lets a successful rail poll clear a failed feed's stale state and warning."""

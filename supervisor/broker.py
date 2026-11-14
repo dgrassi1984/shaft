@@ -296,6 +296,15 @@ SPECS = {
                                       "description": "time-critical things only; bypasses quiet hours and push budget"},
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
+                           "choices": {"type": "object", "description":
+                                       "Only for questions to the operator: 2–6 options with short unique labels "
+                                       "(1–60 characters), optional detail (up to 120 characters), and multiple "
+                                       "(boolean, defaults to false). Other free text is always offered by the UI; "
+                                       "do not add an Other option.",
+                                       "properties": {"options": {"type": "array", "items": {"type": "object",
+                                           "properties": {"label": S, "detail": S}, "required": ["label"]}},
+                                                      "multiple": {"type": "boolean", "default": False}},
+                                       "required": ["options"]},
                            "attachments": {"type": "array", "items": {"type": "string"},
                                            "description": "paths of files in your folder (e.g. notes/report.md), "
                                                           "up to 10, 20 MB each, 50 MB in all; the operator opens them "
@@ -1608,8 +1617,14 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
-                      expect_reply: dict | None = None, urgent: bool = False, conversation: str = "") -> str:
+                      expect_reply: dict | None = None, urgent: bool = False, conversation: str = "",
+                      choices: dict | None = None) -> str:
         from . import messages
+        if choices is not None:
+            from .questions import validate_choices
+            if to != "operator" or kind != "question":
+                raise ValueError("choices are only for questions to the operator")
+            choices = validate_choices(choices)
         if type(urgent) is not bool:
             raise ValueError("urgent must be a boolean")
         if not isinstance(conversation, str):
@@ -1660,7 +1675,7 @@ class Broker:
             body = text.strip() + messages.attachment_lines(atts, "path")
             held = self._deliver("operator", f"{stem}.md",
                                  f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                                 kind, stamp, body, atts, urgent=urgent, thread=thread, re_=re_)
+                                 kind, stamp, body, atts, urgent=urgent, thread=thread, re_=re_, choices=choices)
             if check:
                 try:
                     self._log_check(check)
@@ -2090,7 +2105,7 @@ class Broker:
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None, urgent: bool = False, thread: str | None = None,
-                 re_: str | None = None) -> tuple[str, str] | None:
+                 re_: str | None = None, choices: dict | None = None) -> tuple[str, str] | None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
         instance's inbox/ — and in the message log. Returns (when, why) when its notification waits for the digest.
         `thread`/`re_`: the open thread it is part of, or the ended one it answers (_conversation_target)."""
@@ -2108,7 +2123,7 @@ class Broker:
                 alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
                 log(f"{self.name}: message to the operator: {alert[1]}")
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
-                            alert, urgent=urgent, talk=self.talk_id, thread=thread, re_=re_)
+                            alert, urgent=urgent, talk=self.talk_id, thread=thread, re_=re_, choices=choices)
             from . import pushes
             row = next((r for r in pushes.records(self.project / ".supervisor") if r["file"] == path.name), {})
             held = (row["push_due"], row.get("push_held") or "held") if row.get("push_due") else None
@@ -4312,7 +4327,7 @@ class ReplayBroker(Broker):
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None, urgent: bool = False, thread: str | None = None,
-                 re_: str | None = None) -> tuple[str, str] | None:
+                 re_: str | None = None, choices: dict | None = None) -> tuple[str, str] | None:
         self._tag("simulated: not delivered")
         if to != "operator":
             return None

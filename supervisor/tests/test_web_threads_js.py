@@ -16,7 +16,7 @@ WEB_JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
 HARNESS = r"""
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
-const handlers = {}, sent = [];
+const handlers = {}, sent = [], notices = [];
 let reloads = 0;
 const location = { href: "https://shaft.test/i/wisp/chat", reload() { reloads++; } };
 const cidField = { value: process.argv[2] === "thread" ? "web-a" : "" };
@@ -28,7 +28,7 @@ const document = {
   dispatchEvent(ev) { (handlers[ev.type] || []).forEach(fn => fn(ev)); },
   querySelector: q => q === "form.composer input[name=cid]" && cidField.value ? cidField : null,
   querySelectorAll: () => [],
-  getElementById: () => ({ set textContent(v) {}, setAttribute() {}, classList: { add() {}, remove() {} } }),
+  getElementById: () => ({ set textContent(v) { notices.push(v); }, setAttribute() {}, classList: { add() {}, remove() {} } }),
   createElement: () => ({ className: "", style: {}, setAttribute() {}, appendChild() {}, classList: { add() {} } }),
 };
 class DOMParser {
@@ -51,11 +51,11 @@ const sandbox = {
   Event: class { constructor(type) { this.type = type; } }, CustomEvent: class { constructor(type) { this.type = type; } },
   setTimeout: (f, ms) => { if (ms === 300) f(); return 1; }, clearTimeout() {}, setInterval() {}, clearInterval() {}, crypto: { randomUUID: () => "mid-1" },
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-  fetch: async (url, opts) => { sent.push([url, opts.body.fd || opts.body]); return { ok: true, status: 200,
+  fetch: async (url, opts) => { sent.push([url, opts.body.fd || opts.body]); return { ok: answerStatus === 200, status: answerStatus,
     headers: { get: () => null }, text: async () => answer }; },
 };
 sandbox.globalThis = sandbox;
-let answer = "<p>done</p>";
+let answer = "<p>done</p>", answerStatus = 200;
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), sandbox);
 function formOf(post, after, inputs = {}, details = null) {
   return { dataset: { post, ...(after ? { after } : {}) },
@@ -96,6 +96,30 @@ async function submit(form, submitter = null) {
   assert.equal(reloads, thread ? 1 : 0, "End reloads a thread's page (it shows as an earlier chat)");
   await submit(formOf("/chat/wisp/clear", "thread-cleared", { "input[name=cid]": { value: "web-a" } }));
   assert.equal(location.href, thread ? "/i/wisp/chat" : "here", "Clear goes to the current thread");
+  // Answer cards use the same fetch path, retain their rendered mid on failure, and refresh the feed.
+  const answerMid = {value: "card-mid"};
+  const card = formOf("/chat/wisp/answer", "", {
+    "input[name=cid]": {value: "from"}, "input[name=file]": {value: "choice.md"},
+    "input[name=mid]": answerMid, "input[name=picked]": {value: "1"},
+    "input[name=other]": {value: "At noon"},
+  });
+  card.dataset.answer = "1";
+  let refreshes = 0; document.addEventListener("shaft:refresh", () => refreshes++);
+  const before = location.href;
+  answerStatus = 409; answer = "<p>This question was already answered.</p>";
+  await submit(card);
+  assert.equal(location.href, before);
+  assert.equal(sent.at(-1)[0], "/chat/wisp/answer");
+  assert.equal(sent.at(-1)[1].get("mid"), "card-mid");
+  assert.equal(sent.at(-1)[1].get("picked"), "1");
+  assert.equal(sent.at(-1)[1].get("other"), "At noon");
+  assert.ok(notices.includes("This question was already answered."));
+  assert.equal(answerMid.value, "card-mid");
+  answerStatus = 200; answer = "<p>Sent.</p>";
+  await submit(card);
+  assert.equal(location.href, before);
+  assert.equal(refreshes, 2);
+  assert.ok(notices.includes("Sent."));
   console.log("ok");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """

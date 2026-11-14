@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, core, messages
+from supervisor import autonomy, broker, core, messages, questions, trial
 from supervisor.broker import Broker
 
 try:
@@ -32,7 +33,8 @@ class MessageLogTest(unittest.TestCase):
         for name in ("wisp", "shaft"):
             (self.project / "instances" / name / "shaft").mkdir(parents=True)
             (self.project / "instances" / name / ".git").write_text("gitdir: x")
-        for p in (mock.patch.object(messages, "SUP_DIR", self.sup),
+        for p in (mock.patch.object(core, "SUP_DIR", self.sup),
+                  mock.patch.object(messages, "SUP_DIR", self.sup),
                   mock.patch.object(messages, "INSTANCES", self.project / "instances"),
                   mock.patch.object(messages, "OPERATOR_INBOX", self.sup / "operator-inbox"),
                   mock.patch.object(core, "INSTANCES", self.project / "instances"),
@@ -41,6 +43,67 @@ class MessageLogTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         messages._cache.update(key=None, rows=[])
+
+    def test_choices_are_validated_in_words_before_delivery(self):
+        options = [{"label": "Now"}, {"label": "Later"}]
+        cases = [(17, "object"), ({"options": []}, "two to six"),
+                 ({"options": options * 4}, "two to six"),
+                 ({"options": [{"label": " "}, {"label": "Later"}]}, "one to sixty"),
+                 ({"options": [{"label": "x" * 61}, {"label": "Later"}]}, "one to sixty"),
+                 ({"options": [{"label": "Now"}, {"label": " now "}]}, "unique"),
+                 ({"options": ["Now", "Later"]}, "text label"),
+                 ({"options": [{"label": "Now", "detail": "x" * 121}, {"label": "Later"}]}, "detail"),
+                 ({"options": options, "multiple": 1}, "boolean")]
+        for choices, words in cases:
+            with self.subTest(choices=choices):
+                b = Broker("wisp", self.project, {}, self.project / "broker.log")
+                result = b.call("send_message", {"to": "operator", "kind": "question", "text": "When?",
+                                                 "choices": choices})
+                self.assertFalse(result["ok"])
+                self.assertIn(words, result["error"])
+        for to, kind in (("operator", "note"), ("shaft", "question")):
+            b = Broker("wisp", self.project, {}, self.project / "broker.log")
+            result = b.call("send_message", {"to": to, "kind": kind, "text": "When?",
+                                             "choices": {"options": options}})
+            self.assertFalse(result["ok"])
+            self.assertIn("only for questions to the operator", result["error"])
+        self.assertEqual(messages.history(), [])
+
+    def test_choices_are_logged_normalized_and_multiple_answers_are_sorted(self):
+        b = Broker("wisp", self.project, {}, self.project / "broker.log")
+        result = b.call("send_message", {"to": "operator", "kind": "question", "text": "When?",
+                                         "choices": {"options": [{"label": " Now "}, {"label": "Later"}]}})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(messages.history()[0]["choices"],
+                         {"options": [{"label": "Now", "detail": None}, {"label": "Later", "detail": None}],
+                          "multiple": False})
+        question = {"text": "When?", "choices": {"options": [{"label": "Now"}, {"label": "Later"}], "multiple": True}}
+        answer = questions.validate_answer(question["choices"], {"picked": [1, 0], "other": "  At noon  "})
+        self.assertEqual(answer["picked"], [0, 1])
+        self.assertEqual(answer["other"], "At noon")
+        self.assertEqual(questions.reply_text(question, answer),
+                         "> When?\n\nAnswer:\n- Now\n- Later\nOther: At noon")
+        other = questions.validate_answer(question["choices"], {"other": "At noon"})
+        self.assertEqual(questions.reply_text(question, other), "> When?\n\nOther: At noon")
+
+    def test_choice_replay_records_the_write_without_delivering(self):
+        replay = broker.ReplayBroker("wisp", self.project, {}, self.project / "replay.log",
+                                     state_root=self.project / "instances/wisp", start_commit="0" * 40,
+                                     as_of=datetime(2026, 11, 3, 14), cache={}, cache_lock=threading.Lock(),
+                                     billed="wisp@trial:example", tools_log=self.project / "tools.log")
+        args = {"to": "operator", "kind": "question", "text": "When?",
+                "choices": {"options": [{"label": "Now"}, {"label": "Later"}]}}
+        with mock.patch.object(broker, "notify") as notify:
+            result = replay.call("send_message", args)
+        self.assertTrue(result["ok"], result)
+        notify.assert_not_called()
+        self.assertEqual(json.loads(replay.trace[-1]["args"]), args)
+        self.assertIn("simulated: not delivered", replay.trace[-1]["tags"])
+        self.assertEqual(messages.history(), [])
+        self.assertFalse((self.sup / "operator-inbox").exists())
+        rendered = trial._run_text({"trace": replay.trace})
+        self.assertIn('"choices":', rendered)
+        self.assertIn("simulated: not delivered", rendered)
 
     def test_broker_logs_the_full_text_of_every_delivery(self):
         long = "Two things.\n" + "x" * 3000

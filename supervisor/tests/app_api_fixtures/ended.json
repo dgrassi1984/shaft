@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "4be271549e35e81e",
+  "version": "e078226f9a118ea9",
   "live": "",
   "reply": null,
   "chat": {
@@ -80,6 +80,9 @@
       "read": false,
       "text": "Should the nightly report keep the per-account lines?",
       "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": true,
       "from_cycle": false,
       "re": null,
       "rating": {
@@ -174,6 +177,9 @@
           "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/2"
         }
       ],
+      "choices": null,
+      "answer": null,
+      "open": false,
       "from_cycle": false,
       "re": null,
       "rating": null
@@ -187,6 +193,9 @@
       "read": true,
       "text": "Answered question?",
       "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": false,
       "from_cycle": false,
       "re": null,
       "rating": null
@@ -200,6 +209,9 @@
       "read": true,
       "text": "March reconciles: 3 lines moved.",
       "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": false,
       "from_cycle": true,
       "re": null,
       "rating": null

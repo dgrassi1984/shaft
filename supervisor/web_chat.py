@@ -548,10 +548,14 @@ def message_item(name: str, m: dict, ratings: dict, pending: set[str] = frozense
                 # still in its inbox (history's `read`: no run has moved it out); uncycle checks again, under the run lock
                 "cancellable": not m.get("cancelled") and not m.get("read") and takes_back(m),
                 "comments": [{"id": c["id"], "doc": c["doc"]} for c in m.get("comments") or []]}
+    from . import questions
+    answer = questions.answers().get(m["file"], {}).get("answer")
     re_chat = load(m["re"]) if m.get("re") else None
     return {"key": f"s{f}", "type": "sent", "file": m["file"], "ts": m["ts"],
             "kind": "question" if m.get("kind") == "question" else "message", "read": bool(m.get("read")),
             "text": m["text"], "attachments": atts,
+            "choices": m.get("choices"), "answer": answer,
+            "open": m.get("kind") == "question" and not m.get("read") and answer is None,
             # an answer from a cycle to work queued in this thread; in From, the ended thread it was for
             "from_cycle": bool(m.get("thread")) and not m.get("talk"),
             "re": {"cid": re_chat["id"], "title": title(re_chat)} if re_chat and re_chat.get("instance") == name else None,

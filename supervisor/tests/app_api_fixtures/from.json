@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "b0b9a858736e3292",
+  "version": "606bd4ceb0337bb2",
   "live": "",
   "reply": null,
   "chat": null,
@@ -17,6 +17,9 @@
       "read": true,
       "text": "The fees match the contract.",
       "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": false,
       "from_cycle": false,
       "re": {
         "cid": "web-00000000000000e1",

@@ -1155,3 +1155,15 @@ details.pendingnotes > summary { display: inline-flex; padding: 0; border: 0; ba
 
 .statepulse { display: inline-block; width: 6px; height: 6px; flex: none; border-radius: 50%;
   background: var(--warn); margin-right: .25rem; vertical-align: middle; }
+
+/* Structured answers stay with the sent question. */
+.question-card { display: grid; gap: .65rem; margin-top: .75rem; }
+.question-card fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.question-option { display: flex; align-items: flex-start; gap: .5rem; padding: .45rem 0; cursor: pointer; }
+.question-option input { flex: none; margin-top: .25rem; accent-color: var(--cycle); }
+.question-option span { min-width: 0; overflow-wrap: anywhere; }
+.question-detail { display: block; font-size: .85rem; }
+.question-other { display: grid; gap: .25rem; }
+.question-other input { width: 100%; min-width: 0; }
+.question-card > button { justify-self: start; }
+.question-answer { overflow-wrap: anywhere; }
