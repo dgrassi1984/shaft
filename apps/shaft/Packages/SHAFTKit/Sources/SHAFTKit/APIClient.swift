@@ -235,20 +235,18 @@ public final class APIClient: Sendable {
         if let retryOf = message.retryOf { form.addField("retry_of", String(retryOf)) }
         if message.voice { form.addField("voice", "1") }
         if let cid = message.sentCid { form.addField("cid", cid) }
-        for file in message.files {
-            let data: Data
-            do {
-                data = try Data(contentsOf: file.fileURL)
-            } catch {
-                throw APIError.transport(code: (error as NSError).code,
-                                         message: "Could not read \(file.name) to send it: \(error.localizedDescription)")
-            }
-            form.addFile("file", filename: file.name, mimeType: file.mimeType, data: data)
+        let bodyURL = FileManager.default.temporaryDirectory.appending(path: "shaft-upload-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: bodyURL) }
+        do {
+            try form.writeBody(files: message.files, to: bodyURL)
+        } catch {
+            guard let error = APIError.from(error) else { throw CancellationError() }
+            throw error
         }
         var request = makeRequest("POST", path)
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 300
-        let (data, _) = try await send(request, path: path, upload: form.body())
+        let (data, _) = try await send(request, path: path, upload: bodyURL)
         return try Self.decode(data, path: path)
     }
 
@@ -633,19 +631,19 @@ public final class APIClient: Sendable {
         return try Self.decode(data, path: path)
     }
 
-    private func send(_ request: URLRequest, path: String, upload: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+    private func send(_ request: URLRequest, path: String, upload: URL? = nil) async throws -> (Data, HTTPURLResponse) {
         try await Self.perform(request, session: session, path: path, upload: upload)
     }
 
     /// Run a request; an error status becomes `APIError` with the server's message (§1.5). `304` passes through.
     static func perform(_ request: URLRequest, session: URLSession, path: String,
-                        upload: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+                        upload: URL? = nil) async throws -> (Data, HTTPURLResponse) {
         let data: Data
         let response: URLResponse
         let delegate = OriginRedirectDelegate(origin: request.url!)
         do {
             if let upload {
-                (data, response) = try await session.upload(for: request, from: upload, delegate: delegate)
+                (data, response) = try await session.upload(for: request, fromFile: upload, delegate: delegate)
             } else {
                 (data, response) = try await session.data(for: request, delegate: delegate)
             }

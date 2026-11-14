@@ -54,6 +54,7 @@ targets:
       - package: SHAFTKit
       - package: MarkdownUI
       - target: NotificationService-iOS
+      - target: ShareExtension-iOS
     settings:
       base:
         PRODUCT_NAME: SHAFT
@@ -215,6 +216,57 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MacTests
         GENERATE_INFOPLIST_FILE: YES
+
+  ShareExtension-iOS:
+    type: app-extension
+    platform: iOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: ShareExtension
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: SHAFTKit
+    settings:
+      base:
+        PRODUCT_NAME: ShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.ShareExtension
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: Generated/ShareExtension-iOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT
+        SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 5
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+              NSExtensionActivationSupportsMovieWithMaxCount: 3
+              NSExtensionActivationSupportsFileWithMaxCount: 10
+    postBuildScripts:
+      - name: Allow local http in Debug
+        script: |
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+            /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
+          fi
+          touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
+        basedOnDependencyAnalysis: false
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
+    entitlements:
+      path: Generated/ShareExtension-iOS.entitlements
+      properties:
+        keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
   NotificationService-iOS:
     type: app-extension
