@@ -220,6 +220,11 @@ public final class APIClient: Sendable {
 
     // MARK: Sending and actions (§6, §7)
 
+    /// Answer a structured question. Refusals retain their status, code, message and existing answer.
+    public func answer(_ instance: String, _ body: ChoiceAnswerRequest) async throws -> ChoiceAnswerResponse {
+        try await post("/app/v1/chat/\(instance)/answer", json: body)
+    }
+
     /// Send a message (multipart, §6). The same `mid` again answers as the first send did, never sending twice.
     public func send(_ instance: String, _ message: OutgoingMessage) async throws -> SendResponse {
         let path = "/app/v1/chat/\(instance)/send"

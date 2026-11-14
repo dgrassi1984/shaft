@@ -991,7 +991,9 @@ def seed(base: Path, web, web_chat, messages) -> None:
     web_chat.save({"id": cid, "instance": "tundra", "login": ME, "created": ts(60 * 24), "state": "idle",
                    "reply": None, "turns": turns})
     msg(ts(15), "seed-from-tundra-q.md", "Should the nightly report keep the **per-account** lines?", "tundra",
-        "operator", False, kind="question")
+        "operator", False, kind="question",
+        choices={"options": [{"label": "Keep them", "detail": "Show each account in the report"},
+                             {"label": "Totals only", "detail": None}], "multiple": False})
     # Spaces distinguish the raw sent.file identity from the URL-encoded feed key.
     msg(ts(14), "seed from tundra m.md", "The totals, as a file:", "tundra", "operator", True,
         attachments=[{"name": "totals.csv", "path": "instances/tundra/attachments/totals.csv", "bytes": 51},

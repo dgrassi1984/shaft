@@ -59,6 +59,26 @@ struct FeedView: View {
             .padding(.bottom, metrics.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let questions = FeedRows.waitingQuestions(feed)
+            if let oldest = questions.first {
+                Button {
+                    pinned = false
+                    withAnimation(reduceMotion ? nil : .default) { position.scrollTo(id: oldest.key, anchor: .top) }
+                } label: {
+                    Text("\(questions.count) \(questions.count == 1 ? "question" : "questions") waiting")
+                        .font(Design.Text.pill)
+                        .foregroundStyle(Color.brand)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Design.Space.gutter)
+                        .padding(.vertical, Design.Space.s8)
+                        .quietHitArea()
+                }
+                .buttonStyle(.plain)
+                .background(Color.canvas)
+                .accessibilityHint("Scrolls to the oldest unanswered question")
+            }
+        }
         .readingTextSize()
         .foregroundStyle(Color.textPrimary)
         .background(Color.canvas)
