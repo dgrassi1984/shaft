@@ -17,11 +17,12 @@ public enum ReadAloudLanguage {
     }
 }
 
-/// One batch in order, with one completion after every utterance finishes or is cancelled.
+/// One batch in order, with one completion after every utterance finishes or is cancelled. `onProgress` comes when
+/// speech starts and again as each word is spoken: the player's sign that the reading is really going on.
 @MainActor
 public protocol ReadAloudSynth: AnyObject {
     func speak(_ utterances: [String], voice: AVSpeechSynthesisVoice?,
-               onStart: @escaping @MainActor () -> Void,
+               onProgress: @escaping @MainActor () -> Void,
                onFinish: @escaping @MainActor () -> Void)
     func stop()
 }
@@ -30,10 +31,16 @@ public protocol ReadAloudSynth: AnyObject {
 public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     private var pending: [AVSpeechUtterance] = []
-    private var onStart: (@MainActor () -> Void)?
+    private var onProgress: (@MainActor () -> Void)?
     private var onFinish: (@MainActor () -> Void)?
     #if os(iOS)
     private var sessionActive = false
+    /// The audio session is switched on and off here, never on the main thread: `setActive` can block for a while
+    /// (the system logs it as a hang risk). One serial queue keeps the order: a reading's switch-off always lands
+    /// before the next reading's switch-on, so a late switch-off can't cut the next reading short.
+    private static let sessionQueue = DispatchQueue(label: "shaft.read-aloud.audio-session")
+    /// The reading whose session is being switched on: a stop meanwhile changes it, and that reading never starts.
+    private var starting: UUID?
     #endif
 
     public override init() {
@@ -63,31 +70,58 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
     #endif
 
     public func speak(_ utterances: [String], voice: AVSpeechSynthesisVoice?,
-                      onStart: @escaping @MainActor () -> Void,
+                      onProgress: @escaping @MainActor () -> Void,
                       onFinish: @escaping @MainActor () -> Void) {
         stop()
-        self.onStart = onStart
+        self.onProgress = onProgress
         self.onFinish = onFinish
         guard !utterances.isEmpty else { finish(); return }
-        #if os(iOS)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-            try session.setActive(true)
-            sessionActive = true
-        } catch {
-            finish()
-            return
-        }
-        #endif
         let batch = utterances.map { text in
             let utterance = AVSpeechUtterance(string: text)
             utterance.voice = voice
             return utterance
         }
         pending = batch
+        #if os(iOS)
+        let reading = UUID()
+        starting = reading
+        Self.sessionQueue.async {
+            let ready: Bool
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+                try session.setActive(true)
+                ready = true
+            } catch {
+                ready = false
+            }
+            Task { @MainActor [weak self] in self?.sessionReady(ready, for: reading) }
+        }
+        #else
         for utterance in batch { synthesizer.speak(utterance) }
+        #endif
     }
+
+    #if os(iOS)
+    private func sessionReady(_ ready: Bool, for reading: UUID) {
+        guard starting == reading else {
+            // Stopped while the session was switching on: switch it off again, in order — unless a newer reading is
+            // starting or speaking, which uses this same session (its switch-on was queued after this one).
+            if ready, starting == nil, !sessionActive { Self.deactivateSession() }
+            return
+        }
+        starting = nil
+        guard ready else { finish(); return }
+        sessionActive = true
+        for utterance in pending { synthesizer.speak(utterance) }
+    }
+
+    private static func deactivateSession() {
+        sessionQueue.async {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+    #endif
 
     public func stop() {
         synthesizer.stopSpeaking(at: .immediate)
@@ -97,14 +131,19 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
     public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                              didStart utterance: AVSpeechUtterance) {
         let id = ObjectIdentifier(utterance)
-        Task { @MainActor [weak self] in self?.started(id) }
+        Task { @MainActor [weak self] in self?.progressed(id) }
     }
 
-    private func started(_ id: ObjectIdentifier) {
+    public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                                             willSpeakRangeOfSpeechString characterRange: NSRange,
+                                             utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor [weak self] in self?.progressed(id) }
+    }
+
+    private func progressed(_ id: ObjectIdentifier) {
         guard pending.contains(where: { ObjectIdentifier($0) == id }) else { return }
-        let start = onStart
-        onStart = nil
-        start?()
+        onProgress?()
     }
 
     public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
@@ -128,10 +167,11 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
 
     private func finish() {
         pending.removeAll()
-        onStart = nil
+        onProgress = nil
         #if os(iOS)
+        starting = nil
         if sessionActive {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            Self.deactivateSession()
             sessionActive = false
         }
         #endif
@@ -147,13 +187,16 @@ public final class ReadAloudPlayer {
     public static let shared = ReadAloudPlayer()
     public private(set) var playing: String?
     private let synth: any ReadAloudSynth
-    private let startTimeout: TimeInterval
-    @ObservationIgnored private var startWatchdog: Task<Void, Never>?
+    /// A reading with no sign of speech (no start, no spoken word) for this long is over: the ■ goes back to ▶. Speech
+    /// that can't play (no audio device, a refused audio queue) may start and then never finish; the button must not
+    /// say a message is being read when nothing is heard.
+    private let stallTimeout: TimeInterval
+    @ObservationIgnored private var watchdog: Task<Void, Never>?
     private var generation = 0
 
-    public init(synth: any ReadAloudSynth = SystemReadAloudSynth(), startTimeout: TimeInterval = 5) {
+    public init(synth: any ReadAloudSynth = SystemReadAloudSynth(), stallTimeout: TimeInterval = 5) {
         self.synth = synth
-        self.startTimeout = startTimeout
+        self.stallTimeout = stallTimeout
     }
 
     public func toggle(id: String, markdown: String, voiceIdentifier: String?, fallback: VoiceLanguage) {
@@ -168,27 +211,32 @@ public final class ReadAloudPlayer {
             ?? AVSpeechSynthesisVoice(language: language.bcp47)
         let mine = generation
         playing = id
-        startWatchdog = Task { [weak self, startTimeout] in
-            do { try await Task.sleep(for: .seconds(startTimeout)) } catch { return }
-            guard !Task.isCancelled, let self, self.generation == mine else { return }
-            self.stop()
-        }
-        synth.speak(utterances, voice: voice, onStart: { [weak self] in
+        armWatchdog(for: mine)
+        synth.speak(utterances, voice: voice, onProgress: { [weak self] in
             guard let self, self.generation == mine else { return }
-            self.startWatchdog?.cancel()
-            self.startWatchdog = nil
+            self.armWatchdog(for: mine)
         }, onFinish: { [weak self] in
             guard let self, self.generation == mine else { return }
-            self.startWatchdog?.cancel()
-            self.startWatchdog = nil
+            self.watchdog?.cancel()
+            self.watchdog = nil
             self.playing = nil
         })
     }
 
+    /// (Re)start the stall countdown for reading `mine`: it stops the reading unless speech shows progress first.
+    private func armWatchdog(for mine: Int) {
+        watchdog?.cancel()
+        watchdog = Task { [weak self, stallTimeout] in
+            do { try await Task.sleep(for: .seconds(stallTimeout)) } catch { return }
+            guard !Task.isCancelled, let self, self.generation == mine else { return }
+            self.stop()
+        }
+    }
+
     public func stop() {
         generation += 1
-        startWatchdog?.cancel()
-        startWatchdog = nil
+        watchdog?.cancel()
+        watchdog = nil
         playing = nil
         synth.stop()
     }

@@ -6,20 +6,23 @@ import Testing
 private final class FakeReadAloudSynth: ReadAloudSynth {
     var batches: [[String]] = []
     var voices: [AVSpeechSynthesisVoice?] = []
-    var starts: [@MainActor () -> Void] = []
+    var progress: [@MainActor () -> Void] = []
     var completions: [@MainActor () -> Void] = []
     var startsImmediately = false
     var stops = 0
 
     func speak(_ utterances: [String], voice: AVSpeechSynthesisVoice?,
-               onStart: @escaping @MainActor () -> Void,
+               onProgress: @escaping @MainActor () -> Void,
                onFinish: @escaping @MainActor () -> Void) {
         batches.append(utterances)
         voices.append(voice)
-        starts.append(onStart)
+        progress.append(onProgress)
         completions.append(onFinish)
-        if startsImmediately { onStart() }
+        if startsImmediately { onProgress() }
     }
+
+    /// The latest batch speaks a word.
+    func speakAWord() { progress.last?() }
 
     func stop() { stops += 1 }
 }
@@ -37,9 +40,9 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
 }
 
 @Suite @MainActor struct ReadAloudPlayerTests {
-    @Test func speechThatNeverStartsClearsPlayingAfterTheStartTimeout_20261114() async throws {
+    @Test func speechThatNeverStartsClearsPlayingAfterTheStallTimeout_20261114() async throws {
         let synth = FakeReadAloudSynth()
-        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.05)
         player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
         #expect(player.playing == "a")
         let before = synth.stops
@@ -48,27 +51,61 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         #expect(synth.stops == before + 1)
     }
 
-    @Test func startedSpeechIsNotStoppedByTheWatchdog() async throws {
+    /// The iPhone simulator, 2026-11-14: the synthesizer said it started, its audio queue failed, and it never said it
+    /// finished. The ■ stayed for good although nothing was heard.
+    @Test func speechThatStartsThenGoesSilentClearsPlaying_20261114() async throws {
         let synth = FakeReadAloudSynth()
         synth.startsImmediately = true
-        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.05)
         player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        #expect(player.playing == "a")
         let before = synth.stops
         try await Task.sleep(for: .seconds(0.2))
+        #expect(player.playing == nil, "no word for longer than the stall timeout: the reading is over")
+        #expect(synth.stops == before + 1)
+    }
+
+    @Test func speechThatKeepsSpeakingIsNotStoppedByTheWatchdog() async throws {
+        let synth = FakeReadAloudSynth()
+        synth.startsImmediately = true
+        let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        let before = synth.stops
+        for _ in 0..<10 {                     // 0.3 s of speech, three times the stall timeout
+            try await Task.sleep(for: .seconds(0.03))
+            synth.speakAWord()
+        }
         #expect(player.playing == "a")
         #expect(synth.stops == before)
     }
 
     @Test func staleWatchdogDoesNotStopANewerMessage() async throws {
         let synth = FakeReadAloudSynth()
-        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
         player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
         synth.startsImmediately = true
         player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
         let before = synth.stops
-        try await Task.sleep(for: .seconds(0.2))
+        for _ in 0..<10 {
+            try await Task.sleep(for: .seconds(0.03))
+            synth.speakAWord()
+        }
         #expect(player.playing == "b")
         #expect(synth.stops == before)
+    }
+
+    @Test func aWordFromAnEarlierReadingDoesNotKeepANewerOneAlive() async throws {
+        let synth = FakeReadAloudSynth()
+        synth.startsImmediately = true
+        let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        let first = try #require(synth.progress.last)
+        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
+        for _ in 0..<10 {
+            try await Task.sleep(for: .seconds(0.03))
+            first()                            // late words of the reading that was replaced
+        }
+        #expect(player.playing == nil, "b spoke nothing: it stalled, whatever a said")
     }
 
     @Test func speaksChunkerSentencesWithoutMarkupOrCodeContents() {
