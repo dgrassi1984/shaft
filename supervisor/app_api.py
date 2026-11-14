@@ -564,6 +564,9 @@ def answer_question(n: str, login: str, data: dict) -> dict:
                 return {"said": old["said"], "answer": {**old["answer"], "ts": stamp(old["answer"]["ts"])}}
             raise Refusal(409, "answered", "This question was already answered.",
                           answer={**old["answer"], "ts": stamp(old["answer"]["ts"])})
+        # Answered or closed another way (a quoted Reply, Telegram, the CLI): a late card or notification adds nothing
+        if file not in messages._unread("operator"):
+            raise Refusal(409, "closed", "This question was already answered or closed.")
         try:
             answer = questions.validate_answer(question.get("choices"), data)
         except ValueError as e:
@@ -574,17 +577,24 @@ def answer_question(n: str, login: str, data: dict) -> dict:
             if not chat or chat.get("instance") != n:
                 raise Refusal(404, "not_found", "No such thread from this instance.")
         text = questions.reply_text(question, answer)
+        # Recorded before it is delivered: a store that cannot be written stops the delivery, so a second device can
+        # never deliver a different answer because the first one's was not kept. A refused delivery takes it back.
+        stored[file] = {"mid": mid, "said": "", "answer": answer}
+        questions.save_answers(stored)
         try:
-            # From and ended threads use the next-cycle Reply path specified by the card contract.
+            # From and ended threads use the next-cycle Reply path specified by the card contract. quoted=False: the
+            # answer closes its own question only, never another whose text its quote happens to match
             if cid == "from" or chat.get("state") == "ended" or web_chat.is_from(chat):
-                _, said = web_chat.background(n, login, text, [], mid=mid, cid=cid, in_reply_to=file)
+                _, said = web_chat.background(n, login, text, [], mid=mid, cid=cid, in_reply_to=file, quoted=False)
             else:
-                _, said = web_chat.send(n, login, text, [], mid=mid, cid=cid)
-        except web_chat.Refused as e:
-            raise Refusal(409, "refused", str(e)) from None
-        # Match by identity too: a long or attachment-bearing question must leave the inbox.
-        if file in messages._unread("operator"):
-            messages._archive(messages.OPERATOR_INBOX / file, "reply")
+                _, said = web_chat.send(n, login, text, [], mid=mid, cid=cid, quoted=False)
+        except BaseException as e:
+            stored.pop(file)
+            questions.save_answers(stored)
+            if isinstance(e, web_chat.Refused):
+                raise Refusal(409, "refused", str(e)) from None
+            raise
+        messages._archive(messages.OPERATOR_INBOX / file, "reply")
         reply_links.record(n, file, f"send:{n}:{mid}")
         stored[file] = {"mid": mid, "said": said, "answer": answer}
         questions.save_answers(stored)

@@ -276,6 +276,38 @@ class ChoiceAnswerTest(AppTest):
         row = next(m for m in messages.history() if m.get("mid") == "answer-1")
         self.assertEqual((row["kind"], row.get("in_reply_to")), ("reply", "choice.md"))
 
+    def test_an_answer_not_kept_is_not_delivered_and_a_refused_one_is_taken_back_20261114(self):
+        """Review 2026-11-14: the answer was stored after its delivery, so a store write that failed left a delivered
+        answer unrecorded, and a second device delivered a different one."""
+        from supervisor import questions
+        self.choice_question(talk=None)
+        with mock.patch.object(questions, "save_answers", side_effect=OSError("disk full")):
+            self.assertEqual(self.answer_choice().status, 500)
+        self.assertEqual(list((self.inst / "wisp/inbox").glob("*.md")), [], "not kept, so not delivered")
+        with mock.patch.object(web_chat, "background", side_effect=web_chat.Refused("its inbox is full")):
+            self.error(self.answer_choice(mid="answer-2"), 409, "refused")
+        self.assertNotIn("choice.md", questions.answers(), "a refused delivery is not an answer")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice(mid="answer-3").status, 200)
+        self.assertEqual(len(list((self.inst / "wisp/inbox").glob("*.md"))), 1)
+
+    def test_an_answer_closes_its_own_question_only_20261114(self):
+        """Review 2026-11-14: the answer quotes its question, and the quote closed every open question with that text."""
+        self.choice_question(file="q1.md", talk=None, text="Which date should I use?")
+        self.choice_question(file="q2.md", talk=None, text="Which date should I use?")
+        with mock.patch.object(autonomy, "next_cycle", return_value=NEXT):
+            self.assertEqual(self.answer_choice(file="q1.md").status, 200)
+        self.assertTrue((self.sup / "operator-inbox" / "q2.md").exists(), "the other question stays open")
+        item = next(i for i in self.get("/app/v1/from/wisp")["items"] if i.get("file") == "q2.md")
+        self.assertTrue(item["open"])
+
+    def test_a_question_closed_another_way_takes_no_late_answer_20261114(self):
+        """Review 2026-11-14: a question answered by a quoted Reply still took a notification's choice afterwards."""
+        self.choice_question(talk=None)
+        messages._archive(self.sup / "operator-inbox" / "choice.md", "reply")
+        self.error(self.answer_choice(), 409, "closed")
+        self.assertEqual(list((self.inst / "wisp/inbox").glob("*.md")), [])
+
     def test_choice_feed_fields_in_chat_and_from(self):
         self.chat([])
         row = self.choice_question(thread=CID)

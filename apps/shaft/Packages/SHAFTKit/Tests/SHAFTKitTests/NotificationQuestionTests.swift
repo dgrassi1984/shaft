@@ -63,11 +63,13 @@ struct NotificationQuestionTests {
         #expect(sameFile.category?.identifier != category.identifier)
     }
 
-    @Test func fourOptionsWorkButMoreOrMultipleOpenTheChat() {
+    /// Review 2026-11-14: four options made five actions, more than a notification shows, so Other could not show.
+    @Test func threeOptionsWorkButMoreOrMultipleOpenTheChat_20261114() {
         var value = question
-        value.choices.options = (0..<4).map { ChoiceOption(label: "Option \($0)", detail: nil) }
-        #expect(value.category?.actions.map(\.identifier) == ["choice.0", "choice.1", "choice.2", "choice.3", "other"])
-        value.choices.options.append(ChoiceOption(label: "Fifth", detail: nil))
+        value.choices.options = (0..<3).map { ChoiceOption(label: "Option \($0)", detail: nil) }
+        #expect(value.category?.actions.map(\.identifier) == ["choice.0", "choice.1", "choice.2", "other"])
+        #expect((value.category?.actions.count ?? 0) <= 4, "a notification shows at most four actions")
+        value.choices.options.append(ChoiceOption(label: "Fourth", detail: nil))
         #expect(value.category == nil)
         value.choices = question.choices
         value.choices.multiple = true

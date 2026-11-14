@@ -672,11 +672,14 @@ option indices, default `[]`; `other` is optional text, at most 2000 characters.
 non-blank Other text. Single-choice questions accept at most one pick. Repeated or out-of-range indices are refused.
 
 Returns `200 {said, answer: {picked, other, ts}}`. The same question and `mid` return the original result.
-A different `mid` after an answer returns `409 {error: {code: "answered", message, answer}}`.
+A different `mid` after an answer returns `409 {error: {code: "answered", message, answer}}`. A question answered or
+closed another way (a quoted Reply, Telegram) returns `409 closed`: a late card or notification adds nothing.
 Invalid answers, including a question without choices, return `400 bad_answer`. An unknown question or a question
 from another instance returns `404 not_found`.
 
-The reply quotes the question and states the selected labels under `Answer:`, with `Other:` on its own line.
+The reply quotes the question and states the selected labels under `Answer:`, with `Other:` on its own line. It
+answers its question by file (`In-Reply-To`), so it is final (no Cancel), and its quote closes no other question.
+The answer is recorded before it is delivered, and a refused delivery takes it back.
 Open threads receive a normal operator turn. From and ended threads receive an inbox reply for the next cycle,
 which wakes the instance. The question leaves the operator inbox and its `open` becomes false. Structured answers
 persist in `.supervisor/question-answers.json`, keyed by question file, under a lock with atomic replacement.

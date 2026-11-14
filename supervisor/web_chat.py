@@ -1451,14 +1451,15 @@ def _in_chat(chat: dict | None, mid: str) -> bool:
 
 def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
                comment_block: str = "", comments: list[dict] | None = None, cid: str = "",
-               in_reply_to: str | None = None) -> tuple[str, str]:
+               in_reply_to: str | None = None, quoted: bool = True) -> tuple[str, str]:
     """Next cycle: the message goes to the instance's inbox now and is read in
     its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
     in the chat. Files and a quoted question as send()'s. (inbox file, what to say). `cid`: the thread it was written
     in — while that thread is open the note shows there (not in From) and names it, so the cycle answers there too;
     "current": the thread the plain chat page follows (current); "from": the From conversation; none or an ended one:
     From, outside any conversation. `in_reply_to`: the question it answers, named by its file (a choice card's answer);
-    else the open question its quote matches, if any."""
+    else the open question its quote matches, if any. `quoted=False`: its quote closes no question (a choice card's
+    answer closes its own, by file)."""
     from . import autonomy, messages
     text = text.replace("\r\n", "\n").strip()        # a browser form's line ends: the inbox file is the instance's
     if not text and not files and not comment_block:
@@ -1490,7 +1491,7 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
         except (OSError, UnsafePath) as e:            # its inbox/ is its own folder: say what stopped it, not a 500
             raise Refused(f"could not put it in {name}'s inbox: {e}") from None
     said = autonomy.next_cycle(name)
-    if (answered := messages.answer_quoted(name, text)):
+    if quoted and (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered by a message for its next cycle")
         said += " · answers its question"
     log(f"web: {login or 'operator'} -> {name}: for its next cycle ({path.name})")
@@ -1524,11 +1525,12 @@ def send_comment_background(name: str, login: str, pid: str) -> str:
 
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
          comment_block: str = "", comments: list[dict] | None = None, retry_of: str = "",
-         voice: bool = False, cid: str = "") -> tuple[dict, str]:
+         voice: bool = False, cid: str = "", quoted: bool = True) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice.
     `retry_of`: the index of the failed reply this sends again (Retry): it and its question fold (mark_retried).
-    `voice`: spoken and transcribed on the device: the turn is `via: voice`, and the API is told."""
+    `voice`: spoken and transcribed on the device: the turn is `via: voice`, and the API is told. `quoted=False`: its
+    quote closes no question (a choice card's answer closes its own, by file)."""
     from . import messages
     with _inst_lock(name):
         # A message sent again (its answer was lost) is found in whichever thread it landed in, before the thread
@@ -1553,7 +1555,7 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
         chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid,
                            voice=voice, cid=cid)
     # a question it quotes is answered, as a Telegram reply answers it
-    if (answered := messages.answer_quoted(name, text)):
+    if quoted and (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
         said += " · answers its question"
     return chat, said

@@ -31,9 +31,11 @@ public struct NotificationQuestion: Codable, Sendable, Equatable {
         }
     }
 
-    /// A deterministic description, independent of the notification center and Swift's randomized Hasher.
+    /// A deterministic description, independent of the notification center and Swift's randomized Hasher. At most
+    /// three options: with Other they fill the four actions a notification shows (review 2026-11-14: a fourth option
+    /// made a fifth action, and Other could not show).
     public var category: Category? {
-        guard !choices.multiple, (2...4).contains(choices.options.count) else { return nil }
+        guard !choices.multiple, (2...3).contains(choices.options.count) else { return nil }
         let hash = SHA256.hash(data: Data(file.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         var actions = choices.options.enumerated().map { index, option in
             Category.Action(identifier: "choice.\(index)", title: option.label,
@@ -49,7 +51,7 @@ public struct NotificationQuestion: Codable, Sendable, Equatable {
                               requestIdentifier: String) -> ChoiceAnswerRequest? {
         guard let file = userInfo["question_file"] as? String, !file.isEmpty,
               let cid = NotificationContent.cid(from: userInfo),
-              let count = userInfo["question_option_count"] as? Int, (2...4).contains(count) else { return nil }
+              let count = userInfo["question_option_count"] as? Int, (2...3).contains(count) else { return nil }
         let picked: [Int]
         let other: String?
         if actionIdentifier == "other" {
