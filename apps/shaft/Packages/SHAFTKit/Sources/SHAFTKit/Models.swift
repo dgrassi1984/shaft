@@ -814,6 +814,7 @@ public struct PushEvent: Codable, Sendable, Equatable {
     /// The thread it is about (a chat id), `"from"` for the From feed, nil for the instance's current chat or from a
     /// server before threads.
     public var cid: String?
+    public var question: NotificationQuestion? = nil
 }
 
 // MARK: - Errors (§1.5)
