@@ -39,6 +39,39 @@ public struct MultipartForm: Sendable {
         return body
     }
 
+    /// Write the send's body to disk. Attachment bytes are copied in bounded chunks for extension memory limits.
+    func writeBody(files: [OutgoingFile], to url: URL) throws {
+        do {
+            try Data().write(to: url)
+            let output = try FileHandle(forWritingTo: url)
+            defer { try? output.close() }
+            for part in parts { try output.write(contentsOf: part) }
+            for file in files {
+                let header = "--\(boundary)\r\n"
+                    + "Content-Disposition: form-data; name=\"file\"; filename=\"\(Self.escape(file.name))\"\r\n"
+                    + "Content-Type: \(file.mimeType)\r\n\r\n"
+                try output.write(contentsOf: Data(header.utf8))
+                do {
+                    let input = try FileHandle(forReadingFrom: file.fileURL)
+                    defer { try? input.close() }
+                    while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                        try Task.checkCancellation()
+                        try output.write(contentsOf: chunk)
+                    }
+                } catch {
+                    if APIError.isCancellation(error) { throw error }
+                    throw APIError.transport(code: (error as NSError).code,
+                                             message: "Could not read \(file.name) to send it: \(error.localizedDescription)")
+                }
+                try output.write(contentsOf: Data("\r\n".utf8))
+            }
+            try output.write(contentsOf: Data("--\(boundary)--\r\n".utf8))
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+    }
+
     static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\"", with: "%22")
             .replacingOccurrences(of: "\r", with: "%0D")
