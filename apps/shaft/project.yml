@@ -10,6 +10,7 @@ options:
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
+    watchOS: "26.0"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -54,6 +55,8 @@ targets:
       - package: SHAFTKit
       - package: MarkdownUI
       - target: NotificationService-iOS
+      # The Apple Watch app, embedded so it installs with the iPhone app.
+      - target: SHAFT-watchOS
     settings:
       base:
         PRODUCT_NAME: SHAFT
@@ -248,6 +251,36 @@ targets:
       path: Generated/NotificationService-iOS.entitlements
       properties:
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  # The Apple Watch app: talk to an instance from the wrist. watchOS runs no VPN, so the watch can't reach the server
+  # on the tailnet: it holds no credential and asks the iPhone app (iOS/WatchRelay.swift) over WatchConnectivity.
+  # The message types are SHAFTKit's WatchProtocol.swift, compiled in as a file (SHAFTKit itself is not built for
+  # watchOS). Its version is stamped as the iPhone app's: iOS refuses a companion watch app whose version differs.
+  SHAFT-watchOS:
+    type: application
+    platform: watchOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: watchOS
+        excludes: ["**/*.md"]
+      - path: Packages/SHAFTKit/Sources/SHAFTKit/Watch/WatchProtocol.swift
+    settings:
+      base:
+        PRODUCT_NAME: SHAFT
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp
+        TARGETED_DEVICE_FAMILY: "4"
+    info:
+      path: Generated/watchOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: $(SHAFT_BUNDLE_PREFIX).shaft
+    postBuildScripts:
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
 
   NotificationService-macOS:
     type: app-extension

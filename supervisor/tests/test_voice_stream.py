@@ -362,6 +362,23 @@ class StreamTest(VoiceTest):
         self.wait_idle(cid)
         self.assertIn(self.device, webpush.notify.call_args.kwargs["skip"])
 
+    def test_a_stream_with_watch_0_never_marks_watching_so_the_push_still_comes(self):
+        """The bug (review, 2026-11-14): the iPhone following a reply for the Apple Watch counted as listening, so the
+        reply's push skipped it, and the notification the watch mirrors never came when the relay could not finish."""
+        hold = threading.Event()
+        self.fake.script = voice_turn(hold)
+        cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
+        web_chat._watched.clear()
+        stream = self.stream("?watch=0")
+        read_events(stream, until="draft")
+        with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0):
+            next(stream)                                              # a keepalive: the refresh would come here
+        self.assertNotIn(self.device, web_chat.watchers("wisp"))
+        hold.set()
+        read_events(stream)
+        self.wait_idle(cid)
+        self.assertNotIn(self.device, webpush.notify.call_args.kwargs["skip"])
+
     def test_the_stream_keeps_marking_watching_while_held(self):
         """The bug: a long reply outlived the first watching mark (WATCH_S, 6 s), and its end was pushed to the
         phone that was listening to it."""

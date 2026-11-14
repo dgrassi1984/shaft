@@ -612,7 +612,11 @@ def _stream(req: Request, n: str) -> Response:
     if relay is None or (relay.ended is not None and len(relay.events) <= after):
         raise Refusal(409, "not_replying", f"{n} is not replying: nothing to stream.")
     dev = req.device
-    web_chat.watching(n, dev, at, cid=chat["id"])                  # listening to it: no push for this chat reaches this device
+    # Listening to it: no push for this chat reaches this device. `watch=0`: the device follows the reply for someone
+    # else (the iPhone relaying it to the Apple Watch) and still wants its push, as a feed read with `watch=0` does.
+    watch = qs.get("watch", "1") != "0"
+    if watch:
+        web_chat.watching(n, dev, at, cid=chat["id"])
 
     def pour():
         sent, marked = after, time.monotonic()
@@ -622,7 +626,7 @@ def _stream(req: Request, n: str) -> Response:
             yield f": reply {relay.id}\n\n".encode()
             while True:
                 events = relay.events_after(sent, KEEPALIVE_S)
-                if time.monotonic() - marked >= WATCH_EVERY_S:
+                if watch and time.monotonic() - marked >= WATCH_EVERY_S:
                     web_chat.watching(n, dev, at, cid=chat["id"])
                     marked = time.monotonic()
                 if not events:

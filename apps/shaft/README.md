@@ -15,6 +15,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `macOS/` | the Mac app: its entry point, window, menu commands and Settings, and the AppKit text views of Shared's seams (a message's text selects in place with ↩ Reply; the composer's field) ([macOS/README.md](macOS/README.md)) |
 | `macOSTests/` | `SHAFTMacTests`: the Mac's Markdown text (`MarkdownAttributed`) and its text views' menu items, with no window |
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
+| `watchOS/` | the Apple Watch app: talk to an instance from the wrist, through the iPhone app (below) |
 | `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
 
 | Target | Platform | Bundle id |
@@ -23,6 +24,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `SHAFT-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft` |
 | `NotificationService-iOS` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
 | `NotificationService-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
+| `SHAFT-watchOS` | watchOS 26+, embedded in `SHAFT-iOS` | `$(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp` |
 | `SHAFTMacTests` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
 
 All of them use Swift 6 with complete strict concurrency, automatic signing with your local team and bundle prefix. The apps depend on
@@ -272,6 +274,31 @@ The audio graph follows the system's changes by itself (`VoiceAudioGraph`): an e
 added or removed, another input picked) starts the engine again, and so does an iOS route change that adds or removes a
 device. An iOS interruption (a call, Siri) pauses it until the system says the app may resume. A session goes on with
 the iPhone locked (`UIBackgroundModes` `audio`). The hooks cannot show any of this: it needs a device.
+
+### The Apple Watch app
+
+watchOS runs no VPN, so the watch can't reach the server on the tailnet: it holds no credential and makes no network
+call. It asks the iPhone app over WatchConnectivity (`iOS/WatchRelay.swift`; the messages are SHAFTKit's
+`Watch/WatchProtocol.swift`, which the watch target compiles as a file). The iPhone lists the instances, sends what was
+dictated as a voice message (`voice=1`, the watch's own `mid`), follows the reply to its end (`WatchTurn`) and pushes it
+back with its language, the instance's voice for it and the sentences to speak. iOS wakes the iPhone app for a watch
+message and gives it a short while; a reply that outlasts it still comes as the usual notification, and opening the
+instance on the watch again fetches it (`latest`).
+
+The iPhone Air simulator is paired with an Apple Watch simulator (`xcrun simctl list pairs`). The iOS build embeds the
+watch app; install it on both and launch the iPhone app first. The watch's dictation sheet can't be scripted, so a Debug
+build takes the first turn from `SHAFT_WATCH_SAY` (through simctl, `SIMCTL_CHILD_SHAFT_WATCH_SAY`): it opens the first
+instance and sends that text as if dictated.
+
+```bash
+# Working directory: apps/shaft/, after the iOS simulator build above; the iPhone app paired with the fixture server
+APP=build/ios-sim/Build/Products/Debug-iphonesimulator/SHAFT.app
+xcrun simctl install <iphone-udid> "$APP" && xcrun simctl install <watch-udid> "$APP/Watch/SHAFT.app"
+xcrun simctl launch <iphone-udid> "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")"
+SIMCTL_CHILD_SHAFT_WATCH_SAY="How did October close?" \
+  xcrun simctl launch <watch-udid> "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Watch/SHAFT.app/Info.plist")"
+xcrun simctl io <watch-udid> screenshot /tmp/watch.png
+```
 
 ## Tests
 

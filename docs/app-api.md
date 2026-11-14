@@ -729,6 +729,7 @@ The feed (§4) still carries the reply for clients not on the stream.
   | `after` | int | the `seq` of the last event the app has; default 0. A `Last-Event-ID` header stands for it when `after` is absent. Not a whole number ≥ 0: `400` |
   | `reply` | str | the `reply` of the events the app has. When it is not the buffered reply's (a newer one began), `after` is ignored and the whole reply comes |
   | `at` | int | as the feed's (§4): orders the watching mark against `away` |
+  | `watch` | `0` | optional: holding the stream does not mark the device as watching (below), so the reply's push still reaches it. The iPhone app sends it when it follows a reply for the Apple Watch |
 
 - **Response 200:** `Content-Type: text/event-stream; charset=utf-8`, no `Content-Length`; the connection closes when
   the stream ends. Each event is `id: <seq>` and one `data:` line of JSON, then a blank line. Lines starting with `:`
@@ -738,7 +739,7 @@ The feed (§4) still carries the reply for clients not on the stream.
   (`STREAM_KEEP_S`), or the one buffered ended and the app has all of it (`after` ≥ its last `seq`). The app listens
   again; it does not retry.
 - **Watching:** holding the stream marks this device as watching the chat, refreshed every 2 s while held, as a held
-  feed with `at` is (§4). A reply that ends while the device listens is not pushed to it. With `at`, an `away` sent
+  feed with `at` is (§4); with `watch=0` it never does. A reply that ends while the device listens is not pushed to it. With `at`, an `away` sent
   later (§7.6) wins over the stream. Without `at`, a voice session on a locked iPhone still counts as listening.
 - **Leaving:** the server notices within 2 s that the client closed the connection, and the hold ends with it.
 - **One reply per stream.** After `end`, the next reply (the operator's next sentence, or the instance's own answer to

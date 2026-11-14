@@ -26,6 +26,8 @@ struct SHAFTApp: App {
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = AppModel()
+    /// The Apple Watch app's way to the server (it has none of its own).
+    private lazy var watch = WatchRelay(model: model)
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -33,6 +35,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         FrameMeter.startIfAsked()
         #endif
         UNUserNotificationCenter.current().delegate = self
+        // At launch, before anything waits: a watch message may be what woke the app.
+        watch.start()
         Task {
             // APNs may change the token: register at every launch (§11.1).
             if await model.requestNotifications() { application.registerForRemoteNotifications() }
