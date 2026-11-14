@@ -31,7 +31,7 @@ struct WatchTurnTests {
         let reply = WatchReplyPayload(instance: "tundra", mid: "m-1", text: "**Done.** 214 accounts.",
                                       spoken: ["Done.", "214 accounts."], language: "en-US",
                                       voice: "com.example.voice.ava", failure: "cut short")
-        let answer = WatchAnswer(instances: ["tundra", "wren"], said: "sent", reply: reply, error: "offline")
+        let answer = WatchAnswer(instances: ["tundra", "wisp"], said: "sent", reply: reply, error: "offline")
         let data = try PropertyListSerialization.data(fromPropertyList: answer.dictionary, format: .binary, options: 0)
         let back = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
         #expect(WatchAnswer(back) == answer)
