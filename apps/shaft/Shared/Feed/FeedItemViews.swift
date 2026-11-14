@@ -392,8 +392,8 @@ struct HoverActions: View {
             .allowsHitTesting(shown)
             if readAloud {
                 ReadAloudButton(id: id, source: source)
-                    .opacity(shown || ReadAloudPlayer.shared.playing == id ? 1 : 0)
-                    .allowsHitTesting(shown || ReadAloudPlayer.shared.playing == id)
+                    .opacity(shown || ReadAloudRequests.shared.isActive(id) ? 1 : 0)
+                    .allowsHitTesting(shown || ReadAloudRequests.shared.isActive(id))
             }
         }
     }

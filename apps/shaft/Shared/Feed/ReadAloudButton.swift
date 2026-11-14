@@ -1,16 +1,22 @@
+import Observation
 import SHAFTKit
 import SwiftUI
 
 /// Serializes voice lookups as well as playback across chat screens.
 @MainActor
+@Observable
 final class ReadAloudRequests {
     static let shared = ReadAloudRequests()
-    private var lookup: Task<Void, Never>?
-    private var timeout: Task<Void, Never>?
-    private var generation = 0
-    private var owner: ObjectIdentifier?
-    private var requested: String?
-    private var voiceOwners: Set<ObjectIdentifier> = []
+    @ObservationIgnored private var lookup: Task<Void, Never>?
+    @ObservationIgnored private var timeout: Task<Void, Never>?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var owner: ObjectIdentifier?
+    private(set) var requested: String?
+    @ObservationIgnored private var voiceOwners: Set<ObjectIdentifier> = []
+
+    func isActive(_ id: String) -> Bool {
+        ReadAloudPlayer.shared.playing == id || requested == id
+    }
 
     func beginVoice(_ owner: VoiceScreenModel) {
         voiceOwners.insert(ObjectIdentifier(owner))
@@ -22,7 +28,7 @@ final class ReadAloudRequests {
     }
 
     func toggle(id: String, source: String, screen: ChatScreenModel, client: APIClient) {
-        let stopping = requested == id || ReadAloudPlayer.shared.playing == id
+        let stopping = isActive(id)
         stop()
         guard !stopping, !screen.showVoice, voiceOwners.isEmpty else { return }
         owner = ObjectIdentifier(screen)
@@ -72,7 +78,7 @@ struct ReadAloudButton: View {
     let source: String
     @Environment(ChatScreenModel.self) private var screen
     @Environment(InstancesStore.self) private var store
-    private var playing: Bool { ReadAloudPlayer.shared.playing == id }
+    private var playing: Bool { ReadAloudRequests.shared.isActive(id) }
     private var label: LocalizedStringKey { playing ? "Stop reading" : "Read aloud" }
 
     var body: some View {

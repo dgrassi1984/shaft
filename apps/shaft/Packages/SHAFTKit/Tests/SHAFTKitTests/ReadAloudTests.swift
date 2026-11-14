@@ -6,14 +6,19 @@ import Testing
 private final class FakeReadAloudSynth: ReadAloudSynth {
     var batches: [[String]] = []
     var voices: [AVSpeechSynthesisVoice?] = []
+    var starts: [@MainActor () -> Void] = []
     var completions: [@MainActor () -> Void] = []
+    var startsImmediately = false
     var stops = 0
 
     func speak(_ utterances: [String], voice: AVSpeechSynthesisVoice?,
+               onStart: @escaping @MainActor () -> Void,
                onFinish: @escaping @MainActor () -> Void) {
         batches.append(utterances)
         voices.append(voice)
+        starts.append(onStart)
         completions.append(onFinish)
+        if startsImmediately { onStart() }
     }
 
     func stop() { stops += 1 }
@@ -32,6 +37,40 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
 }
 
 @Suite @MainActor struct ReadAloudPlayerTests {
+    @Test func speechThatNeverStartsClearsPlayingAfterTheStartTimeout_20261114() async throws {
+        let synth = FakeReadAloudSynth()
+        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        #expect(player.playing == "a")
+        let before = synth.stops
+        try await Task.sleep(for: .seconds(0.2))
+        #expect(player.playing == nil)
+        #expect(synth.stops == before + 1)
+    }
+
+    @Test func startedSpeechIsNotStoppedByTheWatchdog() async throws {
+        let synth = FakeReadAloudSynth()
+        synth.startsImmediately = true
+        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        let before = synth.stops
+        try await Task.sleep(for: .seconds(0.2))
+        #expect(player.playing == "a")
+        #expect(synth.stops == before)
+    }
+
+    @Test func staleWatchdogDoesNotStopANewerMessage() async throws {
+        let synth = FakeReadAloudSynth()
+        let player = ReadAloudPlayer(synth: synth, startTimeout: 0.05)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        synth.startsImmediately = true
+        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
+        let before = synth.stops
+        try await Task.sleep(for: .seconds(0.2))
+        #expect(player.playing == "b")
+        #expect(synth.stops == before)
+    }
+
     @Test func speaksChunkerSentencesWithoutMarkupOrCodeContents() {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
