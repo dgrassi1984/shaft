@@ -52,25 +52,18 @@ private final class ShareModel {
 
     var content: SharedItems { SharedItems(items, note: note) }
     var canSend: Bool { !loading && !sending && !sent && client != nil && !selected.isEmpty && content.isSendable }
+    /// Loading the pairing or the instances failed (no connection, Tailscale off): Retry loads them again, keeping the
+    /// shared items already read, instead of a Send that can't be enabled.
+    var needsReload: Bool { !loading && !sent && error != nil && (client == nil || instances.isEmpty) }
     var locked: Bool { pending != nil || sending || sent }
 
     func start(_ input: [NSExtensionItem]) {
         task = Task {
             defer { loading = false }
             do {
+                // The shared items first and once: they come from the host app, not the network, and a Retry of the
+                // instances below must not read them twice.
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                guard let credential = try KeychainStore.forMainBundle().load() else {
-                    error = "Open SHAFT and pair it first"
-                    return
-                }
-                let client = APIClient(credential: credential)
-                self.client = client
-                if case .value(let response, _) = try await client.instances() {
-                    instances = response.instances
-                }
-                let previous = UserDefaults.standard.string(forKey: "lastSharedInstance")
-                selected = instances.first(where: { $0.name == previous })?.name ?? instances.first?.name ?? ""
-                if instances.isEmpty { error = "No instances available. Open SHAFT to create one." }
                 var index = 0
                 for inputItem in input {
                     if let text = inputItem.attributedContentText?.string, !text.isEmpty { items.append(.text(text)) }
@@ -82,9 +75,41 @@ private final class ShareModel {
                 }
                 try Task.checkCancellation()
             } catch {
-                self.error = APIError.from(error).map { $0.isUnpaired ? "Open SHAFT and pair it first" : $0.message }
+                self.error = APIError.from(error)?.message
                 if Task.isCancelled { cleanUp() }
+                return
             }
+            await loadInstances()
+        }
+    }
+
+    /// Retry after the pairing or the instances could not be loaded.
+    func reload() {
+        guard needsReload else { return }
+        loading = true
+        error = nil
+        task = Task {
+            defer { loading = false }
+            await loadInstances()
+        }
+    }
+
+    private func loadInstances() async {
+        do {
+            guard let credential = try KeychainStore.forMainBundle().load() else {
+                error = "Open SHAFT and pair it first"
+                return
+            }
+            let client = APIClient(credential: credential)
+            self.client = client
+            if case .value(let response, _) = try await client.instances() {
+                instances = response.instances
+            }
+            let previous = UserDefaults.standard.string(forKey: "lastSharedInstance")
+            selected = instances.first(where: { $0.name == previous })?.name ?? instances.first?.name ?? ""
+            if instances.isEmpty { error = "No instances available. Open SHAFT to create one." }
+        } catch {
+            self.error = APIError.from(error).map { $0.isUnpaired ? "Open SHAFT and pair it first" : $0.message }
         }
     }
 
@@ -157,8 +182,12 @@ private struct ShareCard: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(model.error == nil ? "Send" : "Retry") { model.send(complete: complete) }
-                        .disabled(!model.canSend)
+                    if model.needsReload {
+                        Button("Retry") { model.reload() }
+                    } else {
+                        Button(model.error == nil ? "Send" : "Retry") { model.send(complete: complete) }
+                            .disabled(!model.canSend)
+                    }
                 }
             }
         }
