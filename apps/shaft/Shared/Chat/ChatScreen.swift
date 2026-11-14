@@ -216,8 +216,12 @@ struct ChatScreen: View {
             follow()
         }
         .onDisappear {
+            screen.stopReadAloud()
             visible = false
             follow()
+        }
+        .onChange(of: screen.showVoice) { _, shown in
+            if shown { screen.stopReadAloudForVoice() }
         }
         .onChange(of: scenePhase) { follow() }
         .onChange(of: watched) { follow() }

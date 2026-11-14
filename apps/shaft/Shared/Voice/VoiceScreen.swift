@@ -56,6 +56,7 @@ final class VoiceScreenModel {
     func begin() {
         guard !began else { return }
         began = true
+        ReadAloudRequests.shared.beginVoice(self)
         Task { await open() }
     }
 
@@ -129,6 +130,7 @@ final class VoiceScreenModel {
         closed = true
         generation += 1
         await stopSession()
+        ReadAloudRequests.shared.endVoice(self)
     }
 
     private func start(_ mine: Int) async {

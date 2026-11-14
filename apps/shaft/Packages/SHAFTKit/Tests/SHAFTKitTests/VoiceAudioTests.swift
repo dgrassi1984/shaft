@@ -51,19 +51,35 @@ private func waitUntil(_ timeout: TimeInterval, _ condition: () -> Bool) async -
 }
 
 /// English test speech in a temporary AIFF, made with `say` (written to the file, never played).
+/// Each attempt is bounded because a hung `say` once blocked the whole suite.
 private func spokenFile(_ text: String) throws -> URL {
     #if os(macOS)
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("shaft-voice-\(UUID().uuidString).aiff")
+    var timedOut = false
     for voice in [["-v", "Samantha"], []] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         process.arguments = voice + ["-o", url.path, text]
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         try process.run()
+        if exited.wait(timeout: .now() + 30) == .timedOut {
+            timedOut = true
+            process.terminate()
+            if exited.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+            try? FileManager.default.removeItem(at: url)
+            continue
+        }
         process.waitUntilExit()
         if process.terminationStatus == 0, FileManager.default.fileExists(atPath: url.path) { return url }
     }
-    throw XCTSkip("/usr/bin/say could not write test speech")
+    throw XCTSkip(timedOut
+        ? "/usr/bin/say timed out after 30 s writing test speech"
+        : "/usr/bin/say could not write test speech")
     #else
     throw XCTSkip("test speech is made with /usr/bin/say, which only the Mac has")
     #endif
