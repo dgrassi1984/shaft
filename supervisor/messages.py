@@ -24,7 +24,8 @@ LOG_NAME = "messages.jsonl"
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
            mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False,
-           talk: str | None = None, thread: str | None = None, re_: str | None = None, settled: bool = False) -> None:
+           talk: str | None = None, thread: str | None = None, re_: str | None = None, settled: bool = False,
+           choices: dict | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
@@ -42,6 +43,8 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         head = safe_read(path.parent, path.name, "").split("\n\n", 1)[0]
         if ref := re.search(r"(?m)^In-Reply-To: (.+)$", head):
             row["in_reply_to"] = ref[1]
+    if choices is not None:
+        row["choices"] = choices
     if thread:
         row["thread"] = thread
     if re_:

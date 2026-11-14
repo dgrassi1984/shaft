@@ -450,9 +450,12 @@ else `confirm` is set (ask first) and the failed try is kept.
 | `file` | str | its file name in the message log: rating target, `/messages/<file>` in the web UI |
 | `ts` | timestamp | |
 | `kind` | str | `"message"` or `"question"` |
+| `choices` | object or null | `{options: [{label, detail}], multiple}`; 2–6 options, `detail` is text or null, `multiple` defaults to false. Other free text is always offered by the UI. |
+| `answer` | object or null | `{picked: [int], other: str or null, ts: timestamp}`; sorted zero-based option indices and the operator's answer time. |
+| `open` | bool | question still waiting in the operator inbox, neither answered nor archived; always false for a message. |
 | `from_cycle` | bool | written later, in a cycle, for work queued in this thread: part of the thread (shown "⏾ from its cycle") |
 | `re` | object or null | in From: `{"cid", "title"}` of the ended thread it answers (shown as a link to that earlier chat) |
-| `read` | bool | it has left the operator's inbox. A question that is read is answered ("a question (answered)") |
+| `read` | bool | it has left the operator's inbox, by reply or archive; `open` distinguishes questions still waiting. |
 | `text` | str | Markdown |
 | `attachments` | list | `{name, bytes, image, text, url}` |
 | `rating` | object or null | §4.5 |
@@ -661,9 +664,28 @@ The instance's ended chats, newest first (the web's "Earlier chats", all of them
 
 ## 6. Sending
 
+### `POST /app/v1/chat/<n>/answer`
+
+Answer a question with choices. JSON body: `{cid, file, picked, other, mid}`. `cid` is the thread showing the
+card, or `"from"`; `file` is the raw `sent.file`. `mid` follows `/send`'s rules. `picked` is a list of zero-based
+option indices, default `[]`; `other` is optional text, at most 2000 characters. Pick at least one option or supply
+non-blank Other text. Single-choice questions accept at most one pick. Repeated or out-of-range indices are refused.
+
+Returns `200 {said, answer: {picked, other, ts}}`. The same question and `mid` return the original result.
+A different `mid` after an answer returns `409 {error: {code: "answered", message, answer}}`.
+Invalid answers, including a question without choices, return `400 bad_answer`. An unknown question or a question
+from another instance returns `404 not_found`.
+
+The reply quotes the question and states the selected labels under `Answer:`, with `Other:` on its own line.
+Open threads receive a normal operator turn. From and ended threads receive an inbox reply for the next cycle,
+which wakes the instance. The question leaves the operator inbox and its `open` becomes false. Structured answers
+persist in `.supervisor/question-answers.json`, keyed by question file, under a lock with atomic replacement.
+The web form posts to `/chat/<n>/answer` and calls the same answer logic. It uses `picked` for a radio button or
+repeated `picked[]` fields for checkboxes, plus `cid`, `file`, `other`, and `mid`.
+
 ### `POST /app/v1/chat/<n>/send`
 
-The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multipart.
+The web's `/chat/<n>/send` path (`web_chat.send`, `queue`, `background`), multipart. Choice cards use `/answer` above.
 
 - **Request (multipart/form-data):**
 
@@ -1078,6 +1100,9 @@ Stop native push to this device. `{"removed": bool}`.
 
 `{"on": bool, "env": str or null, "reason": str, "problem": str or null}`: `apns.status(device)`, and `problem` from
 `apns.configured()` (null when the server is ready).
+
+A pushed question with choices also carries `question: {file, cid, choices}`. Digest events carry no question.
+The latest-push endpoint preserves this object. Web Push ignores fields it does not use.
 
 ### 11.4 `GET /app/v1/push/latest`
 

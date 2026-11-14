@@ -667,6 +667,22 @@ def _post(req: Request, dev: str) -> Response:
         except (ValueError, bakeoff.BakeoffError) as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e) or "Not a pair of this bake-off."))
         return _html(200, web_pages.h("<p>Saved.</p>"))
+    if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/answer", req.path):
+        from . import app_api
+        if m[1] not in _names():
+            return _not_found(req.path)
+        form = req.form()
+        try:
+            picked = form.get("picked[]", [form["picked"]] if form.get("picked") else [])
+            data = {**form, "picked": [int(i) for i in picked]}
+        except ValueError:
+            return _html(400, web_pages.h("<p>{t}</p>", t="picked must contain whole-number option indices"))
+        try:
+            result = app_api.answer_question(m[1], (req.headers.get("tailscale-user-login") or "").lower(), data)
+        except app_api.Refusal as e:
+            error = json.loads(e.response.body)["error"]
+            return _html(e.response.status, web_pages.h("<p>{t}</p>", t=error["message"]))
+        return _html(200, web_pages.h("<p>{t}</p>", t=result["said"]))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
         from . import web_chat, reply_links
         if m[1] not in _names():

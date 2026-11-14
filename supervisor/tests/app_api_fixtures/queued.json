@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "347acdcd8475683f",
+  "version": "c1ffeacc1470f9ea",
   "live": "fb7597261efc6cb5",
   "reply": {
     "started": "2026-11-03T14:07:02+01:00",
@@ -88,6 +88,9 @@
       "read": false,
       "text": "Should the nightly report keep the per-account lines?",
       "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": true,
       "from_cycle": false,
       "re": null,
       "rating": null

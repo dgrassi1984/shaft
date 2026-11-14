@@ -236,7 +236,7 @@ def _save_queue(queue: dict) -> None:
 
 
 def _fields(event: dict) -> dict:
-    return {**{k: event[k] for k in ("title", "body", "url", "tag")}, "cid": event.get("cid")}
+    return {**{k: v for k, v in event.items() if k != "at"}, "cid": event.get("cid")}
 
 
 def take(device: str, instance: str | None = None, now: float | None = None) -> list[dict]:
