@@ -381,10 +381,11 @@ struct InstanceRowView: View {
                     .font(.headline)
                     .fontWeight(unread ? .bold : .semibold)
                     .lineLimit(1)
+                    .layoutPriority(1)
                 Spacer(minLength: 4)
                 #if os(iOS)
                 if let last = main?.last ?? row.last {
-                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                    Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                 }
                 #endif
                 if unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
@@ -394,7 +395,7 @@ struct InstanceRowView: View {
                 }
                 #if os(macOS)
                 if let last = main?.last ?? row.last {
-                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                    Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                         .fixedSize()
                 }
                 #endif
@@ -781,12 +782,13 @@ struct ThreadRowView: View {
                 .scaleEffect(0.85)
                 .frame(width: SidebarMetrics.state)
             Text(thread.title).font(.subheadline).fontWeight(thread.unread ? .bold : .medium).lineLimit(1)
+                .layoutPriority(1)
             Spacer(minLength: 4)
             #if os(macOS)
             if thread.unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
             #endif
             if let last = thread.last {
-                Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                     #if os(macOS)
                     .fixedSize()
                     #endif
