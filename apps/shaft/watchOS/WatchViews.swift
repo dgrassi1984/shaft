@@ -85,7 +85,7 @@ struct TalkView: View {
                 }
             }
             .labelStyle(.iconOnly)
-            Text(reply.text.isEmpty ? "(no words in the reply)" : reply.text)
+            Text(reply.text.isEmpty ? AttributedString("(no words in the reply)") : reply.screenText)
                 .font(.footnote)
             if let failure = reply.failure {
                 Text(failure).font(.caption2).foregroundStyle(.orange)

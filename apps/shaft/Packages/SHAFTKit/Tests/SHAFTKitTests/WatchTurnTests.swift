@@ -6,6 +6,26 @@ import Testing
 /// (WatchTurn.swift): send as a voice message, follow the reply, hand back what the watch speaks. Every reply text is
 /// invented.
 struct WatchTurnTests {
+    /// Bug (2026-11-15, the App Store screenshots): the watch drew a reply's Markdown as written, `**bold**` and all.
+    @Test func theWatchDrawsAReplysMarkdownNotItsMarkup() {
+        let reply = WatchReplyPayload(instance: "tundra", mid: nil, text: """
+            ## Result
+            Done: **build-cache.md** is in `Documents`.
+            - one
+            ```yaml
+            key: x
+            ```
+            | a | b |
+            | --- | --- |
+            > Measure first.
+            """, spoken: [], language: "en-US", voice: nil)
+        let shown = String(reply.screenText.characters)
+        #expect(shown == "Result\nDone: build-cache.md is in Documents.\n• one\nkey: x\n| a | b |\nMeasure first.")
+        #expect(!shown.contains("**") && !shown.contains("#") && !shown.contains("`"))
+        let bold = reply.screenText.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true }
+        #expect(bold)
+    }
+
     // MARK: The messages
 
     @Test func everyRequestSurvivesTheTripAsAPropertyList() throws {
