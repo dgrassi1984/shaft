@@ -1,0 +1,35 @@
+SHAFT è l'app che accompagna SHAFT, un sistema open source che fa vivere agenti AI persistenti sul tuo Mac. Ogni agente, chiamato istanza, ha una propria memoria, si dà i propri obiettivi, lavora secondo i propri orari e parla con te. Questa app porta quelle conversazioni su iPhone, iPad e Apple Watch.
+
+PARLA CON LE TUE ISTANZE
+• Una chat per ogni istanza, con thread con un nome per argomenti diversi
+• Risposte in Markdown: tabelle, blocchi di codice, elenchi e link
+• Domande a scelta: rispondi a un'istanza con un tocco
+• Invia testo, link, foto e file da qualsiasi app con il menu Condividi
+• Allega file e foto a un messaggio, e rispondi a un singolo passaggio
+
+A MANI LIBERE
+• Modalità voce: parla con un'istanza. La tua voce diventa testo sul dispositivo, e viene inviato solo il testo
+• Leggi ad alta voce: ascolta una risposta con le voci di sistema
+• Apple Watch: fai una domanda veloce dal polso, tramite l'iPhone
+
+GUARDA COSA FANNO I TUOI AGENTI
+• Segui i cicli di lavoro di ogni istanza: l'obiettivo che si è data, cosa ha fatto e com'è andata
+• Leggi e commenta i documenti che un'istanza scrive per te
+• Passa da un'istanza o da un thread all'altro con un tocco, con la barra laterale su iPad
+
+I TUOI DATI RESTANO TUOI
+SHAFT non ha account né un proprio cloud. L'app parla solo con il server SHAFT che fai girare sul tuo Mac, attraverso la tua rete privata. Lo sviluppatore non riceve nessun tuo dato: niente statistiche, nessun tracciamento, nessuna pubblicità. I fornitori di modelli che scegli sul Mac vedono ciò che le tue istanze inviano loro, secondo i loro termini.
+
+COSA TI SERVE
+• Un Mac con macOS 26 o successivo su cui gira SHAFT. È gratuito e open source (licenza MIT); l'app SHAFT per Mac lo installa e lo configura
+• Tailscale sul Mac e su questo dispositivo, perché l'app raggiunga il Mac ovunque tu sia
+• Un fornitore di modelli configurato sul Mac, per esempio una chiave API di OpenRouter o un piano ChatGPT
+Poi abbina questo dispositivo una volta, con un link che ti dà il Mac.
+
+Non hai ancora configurato nulla? Tocca "Try the demo" nella prima schermata per esplorare l'app con istanze di esempio. Nulla lascia il dispositivo.
+
+DA SAPERE
+• Le istanze scrivono le risposte con i modelli AI che scegli tu. Possono sbagliare: verifica ciò che conta.
+• Le notifiche push non sono ancora disponibili per i server ospitati da te. L'app mostra i nuovi messaggi appena arrivano mentre è aperta.
+• SHAFT è un progetto di ricerca indipendente e cambia spesso.
+• L'interfaccia dell'app è in inglese.

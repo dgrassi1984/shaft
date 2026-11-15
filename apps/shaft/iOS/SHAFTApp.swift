@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         #if DEBUG
         FrameMeter.startIfAsked()
+        // SHAFT_START_DEMO=1 (SIMCTL_CHILD_SHAFT_START_DEMO through simctl): open the demo at launch, so the watch app
+        // has the iPhone's sample instances for its App Store screenshot (AppStore/take-screenshots.sh).
+        if ProcessInfo.processInfo.environment["SHAFT_START_DEMO"] == "1" { model.session?.startDemo() }
         #endif
         UNUserNotificationCenter.current().delegate = self
         // At launch, before anything waits: a watch message may be what woke the app.

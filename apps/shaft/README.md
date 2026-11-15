@@ -17,6 +17,8 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
 | `watchOS/` | the Apple Watch app: talk to an instance from the wrist, through the iPhone app (below) |
 | `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
+| `ScreenshotTests/` | `SHAFTScreenshots`: a UI test that drives the iOS demo and writes the App Store screenshots ([AppStore/README.md](AppStore/README.md)) |
+| `AppStore/` | the App Store listing: text, screenshots, the support and privacy pages, and the scripts that make them |
 
 | Target | Platform | Bundle id |
 |---|---|---|
@@ -26,6 +28,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `NotificationService-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
 | `SHAFT-watchOS` | watchOS 26+, embedded in `SHAFT-iOS` | `$(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp` |
 | `SHAFTMacTests` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
+| `SHAFTScreenshots` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.Screenshots` (UI test, the `SHAFT-Screenshots` scheme's test action) |
 
 All of them use Swift 6 with complete strict concurrency, automatic signing with your local team and bundle prefix. The apps depend on
 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui), pinned to exactly 2.4.1.
@@ -78,6 +81,16 @@ The nearest reachable `v[0-9]*` tag supplies the plain release version. The buil
 plus 100, preserving the offset needed after a history rewrite. No version override is needed.
 Settings shows the git description with `+changes` when tracked files differ from HEAD.
 Building requires git and a reachable release tag; missing tags fail the build.
+
+## The demo
+
+The iPhone and iPad pairing screen offers **Try the demo**: the real app over sample data built into SHAFTKit
+(`Packages/SHAFTKit/Sources/SHAFTKit/Demo/`). `DemoServer`, a `URLProtocol`, answers the `/app/v1` routes the app and
+its watch relay use for three sample instances, and refuses every other host, so nothing leaves the device. Nothing is
+saved to the Keychain; the demo's drafts and outbox live in a temporary folder that Leave the demo (Settings) removes,
+and a relaunch starts unpaired. It is how App Review sees the app working, since no reviewer can reach a server on a
+tailnet. A Debug build opens it at launch with `SHAFT_START_DEMO=1` (`SIMCTL_CHILD_SHAFT_START_DEMO=1` through
+simctl), so the watch app has the iPhone's sample instances.
 
 ## Try it against a fixture server
 
@@ -288,7 +301,7 @@ instance on the watch again fetches it (`latest`).
 The iPhone Air simulator is paired with an Apple Watch simulator (`xcrun simctl list pairs`). The iOS build embeds the
 watch app; install it on both and launch the iPhone app first. The watch's dictation sheet can't be scripted, so a Debug
 build takes the first turn from `SHAFT_WATCH_SAY` (through simctl, `SIMCTL_CHILD_SHAFT_WATCH_SAY`): it opens the first
-instance and sends that text as if dictated.
+instance and sends that text as if dictated; `SHAFT_WATCH_OPEN=1` opens the first instance without sending anything.
 
 ```bash
 # Working directory: apps/shaft/, after the iOS simulator build above; the iPhone app paired with the fixture server

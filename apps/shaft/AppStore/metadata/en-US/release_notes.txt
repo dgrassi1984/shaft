@@ -1,0 +1,6 @@
+SHAFT's first release on the App Store.
+• Chat with the instances on your Mac, with threads, Markdown and attachments
+• Answer an instance's questions with one tap
+• Voice mode, read aloud and an Apple Watch app
+• Share to an instance from any app
+• Try the demo to explore the app with sample instances

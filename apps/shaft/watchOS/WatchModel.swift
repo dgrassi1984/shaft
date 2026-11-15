@@ -64,11 +64,17 @@ final class WatchModel: NSObject {
     /// `SHAFT_WATCH_SAY=<text>` (Debug builds, `SIMCTL_CHILD_SHAFT_WATCH_SAY` through simctl): open the first instance
     /// and send that text as if dictated, once. A simulator's dictation sheet can't be driven from a script; the rest
     /// of the turn (the iPhone's send, the reply pushed back, the speech) is the real path.
+    /// `SHAFT_WATCH_OPEN=1` opens the first instance without sending anything: its latest reply shows, as for the App
+    /// Store screenshot (AppStore/take-screenshots.sh).
     private func runDevTurnIfAsked() {
-        guard devOpen == nil, let say = ProcessInfo.processInfo.environment["SHAFT_WATCH_SAY"], !say.isEmpty,
-              let first = instances.first else { return }
-        devOpen = first
-        send(say, to: first)
+        let environment = ProcessInfo.processInfo.environment
+        guard devOpen == nil, let first = instances.first else { return }
+        if let say = environment["SHAFT_WATCH_SAY"], !say.isEmpty {
+            devOpen = first
+            send(say, to: first)
+        } else if environment["SHAFT_WATCH_OPEN"] == "1" {
+            devOpen = first
+        }
     }
     #endif
 

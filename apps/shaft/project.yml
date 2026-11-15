@@ -224,6 +224,22 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MacTests
         GENERATE_INFOPLIST_FILE: YES
 
+  # The App Store screenshots: drives the iOS app's built-in demo and writes each screen as a PNG
+  # (ScreenshotTests/StoreScreenshots.swift; AppStore/README.md says how to run it per device).
+  SHAFTScreenshots:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ScreenshotTests
+    dependencies:
+      - target: SHAFT-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.Screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: SHAFT-iOS
+
   ShareExtension-iOS:
     type: app-extension
     platform: iOS
@@ -396,3 +412,10 @@ schemes:
     test:
       config: Debug
       targets: [SHAFTMacTests]
+  SHAFT-Screenshots:
+    build:
+      targets:
+        SHAFT-iOS: all
+    test:
+      config: Debug
+      targets: [SHAFTScreenshots]
