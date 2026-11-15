@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHAFT Privacy Policy</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<p class="lang"><a href="privacy-it.html" hreflang="it">Italiano</a></p>
+<h1>SHAFT Privacy Policy</h1>
+<p class="meta">For the SHAFT apps for iPhone, iPad and Apple Watch. Last updated 15 November 2026.</p>
+
+<p>SHAFT is an open-source system that runs AI agents ("instances") on your own Mac. The SHAFT app is a client for the
+SHAFT server <em>you</em> run. The developer runs no service that your data passes through, and receives none of it.</p>
+
+<h2>What the developer collects</h2>
+<p>Nothing. The app has no accounts, no analytics, no advertising, no tracking and no third-party SDKs that collect
+data. The developer cannot see your messages, your instances, your files or your use of the app.</p>
+<p>If you choose, in your device's settings, to share analytics with app developers, Apple may pass the developer
+anonymous crash reports and usage figures under <a href="https://www.apple.com/legal/privacy/">Apple's privacy
+policy</a>. You can turn this off at any time in Settings → Privacy &amp; Security → Analytics &amp; Improvements.</p>
+
+<h2>Where your data goes</h2>
+<p>The app sends what you write, say or share only to the SHAFT server you paired it with, on your own Mac, over your
+own private network (for example Tailscale). That includes:</p>
+<ul>
+<li>your messages, their attachments, and what you send from the Share sheet;</li>
+<li>your answers to an instance's questions, your comments on its documents, and your feedback on its replies;</li>
+<li>in voice mode, the text of what you say (never the audio), and the list of voices installed on this device, so an
+instance can suggest one;</li>
+<li>this device's platform (iPhone or iPad) when you pair it, and its push notification token, so your server can
+address notifications to it.</li>
+</ul>
+<p>What your server then does with that content is up to you and how you set it up. Your instances use the AI model
+providers you choose on your Mac (for example OpenRouter or OpenAI), and those providers receive the content your
+instances send them, under their own terms and privacy policies. The developer is not a party to those exchanges.</p>
+
+<h2>What stays on this device</h2>
+<ul>
+<li><strong>The pairing credential</strong> (your server's address and this device's access key) is kept in the
+Keychain, shared only with the app's own extensions. Unpairing deletes it here and revokes it on your server.</li>
+<li><strong>Drafts and unsent messages</strong> are kept in the app's own storage until they are sent or discarded.</li>
+<li><strong>Voice mode</strong> turns speech into text on the device with Apple's on-device speech recognition. The
+audio is never sent anywhere and is not kept. The microphone is used only while voice mode is open.</li>
+<li><strong>Read aloud</strong> uses the voices built into the device.</li>
+<li><strong>Your preferences</strong> (appearance, text size, voice settings) are kept on the device.</li>
+</ul>
+
+<h2>Apple Watch</h2>
+<p>The watch app holds no credential and talks to nothing on the network. It passes your question to the SHAFT app on
+your paired iPhone, which sends it to your server and returns the answer.</p>
+
+<h2>Notifications</h2>
+<p>When notifications are available, a push travels through Apple's Push Notification service and carries only a
+title: the instance's name and what happened. The message itself is fetched by the app from your own server when the
+notification arrives. Push notifications are not yet available for self-hosted servers.</p>
+
+<h2>The demo</h2>
+<p>"Try the demo" runs on sample data built into the app. Nothing you type in the demo leaves the device, and the
+demo is wiped when you leave it or close the app.</p>
+
+<h2>Children</h2>
+<p>The app is not directed at children and collects no data from anyone.</p>
+
+<h2>Your choices</h2>
+<p>Because all your data lives on your own Mac, you control it there: you can read or delete it with SHAFT on your Mac. Deleting the app removes its local data from this device; unpairing (Settings → Unpair) also revokes the
+device on your server.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the new version will be posted on this page with a new date. The history of this page is
+kept with the app's source.</p>
+
+<h2>Contact</h2>
+<p>Questions about this policy: <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>. The app is published by Daniele
+Grassi.</p>
+
+<footer><a href="support.html">Support</a></footer>
+</main>
+</body>
+</html>

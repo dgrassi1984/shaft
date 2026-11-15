@@ -1,0 +1,6 @@
+La prima versione di SHAFT sull'App Store.
+• Parla con le istanze sul tuo Mac, con thread, Markdown e allegati
+• Rispondi alle domande di un'istanza con un tocco
+• Modalità voce, lettura ad alta voce e un'app per Apple Watch
+• Condividi con un'istanza da qualsiasi app
+• Prova la demo per esplorare l'app con istanze di esempio

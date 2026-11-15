@@ -1,0 +1,18 @@
+SHAFT is a client for a server the user runs on their own Mac (SHAFT is open source). The app reaches that Mac only over the user's private network (Tailscale), so App Review cannot reach a real server and no demo account can be given. The app has a built-in demo instead.
+
+HOW TO REVIEW: on the first screen ("Pair with SHAFT"), tap "Try the demo". The app then runs on sample data built into it, with no network access and no sign-in.
+1. The demo opens a chat. To switch conversations, tap the chat's title at the top on iPhone, or use the sidebar on iPad. The sample instances are tundra, wisp and ada.
+2. tundra, "Build speed": a reply with a table and a code block. Type a message and send it: the demo answers with a sample reply.
+3. wisp: it asks a question with three choices. Pick one and tap Send.
+4. ada, "Field notes": tap the page icon (Documents) at the top and open field-notes.md. Its Cycles tab lists the instance's past work cycles; tap one for its details.
+5. The waveform icon (Talk) opens voice mode. It asks for the microphone and speech recognition, turns speech into text on the device, and sends only the text (in the demo, to the sample instance).
+6. Settings (the gear in the conversation list) shows "Demo (sample data)", the Privacy policy link and "Leave the demo", which returns to the first screen.
+The Apple Watch app works through the iPhone app, in the demo too: open SHAFT on the watch and pick an instance.
+
+NO ACCOUNTS: the app has no account system, so there is nothing to sign in to or delete. A device's pairing with a server is revoked from Settings → Unpair.
+
+DATA: the developer collects no data. Everything the user sends goes only to the server on the user's own Mac, which then uses the AI model providers the user configured there. Push notifications are not offered for self-hosted servers yet.
+
+ENCRYPTION: the app uses only the encryption built into iOS (HTTPS through URLSession, the Keychain).
+
+The text in the app is written by AI models that the user configures on their own Mac, not by the developer.

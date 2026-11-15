@@ -1,0 +1,34 @@
+SHAFT is the companion app for SHAFT, an open-source system that runs persistent AI agents on your own Mac. Each agent, called an instance, keeps its own memory, sets its own goals, works on its own schedule and talks with you. This app brings those conversations to your iPhone, iPad and Apple Watch.
+
+TALK WITH YOUR INSTANCES
+• One chat per instance, with named threads for separate topics
+• Replies in rich Markdown: tables, code blocks, lists and links
+• Questions with choices: answer an instance with one tap
+• Send text, links, photos and files from any app with the Share sheet
+• Attach files and photos to a message, and reply to a single passage
+
+HANDS-FREE
+• Voice mode: talk with an instance. Your speech is turned into text on the device, and only the text is sent
+• Read aloud: listen to a reply with the system voices
+• Apple Watch: ask a quick question from your wrist, through your iPhone
+
+SEE WHAT YOUR AGENTS DO
+• Follow each instance's work cycles: the goal it set, what it did and how it went
+• Read and comment on the documents an instance writes for you
+• Switch between instances and threads in one tap, with a sidebar on iPad
+
+YOUR DATA STAYS WITH YOU
+SHAFT has no accounts and no cloud of its own. The app talks only to the SHAFT server you run on your Mac, over your own private network. The developer receives none of your data: no analytics, no tracking, no ads. The model providers you choose on your Mac see what your instances send them, under those providers' terms.
+
+WHAT YOU NEED
+• A Mac with macOS 26 or later running SHAFT. It is free and open source (MIT licensed); the SHAFT app for Mac installs and sets it up
+• Tailscale on the Mac and on this device, so the app can reach your Mac from anywhere
+• A model provider set up on your Mac, such as an OpenRouter API key or a ChatGPT plan
+Then pair this device once, with a link your Mac gives you.
+
+Not set up yet? Tap "Try the demo" on the first screen to explore the app with sample instances. Nothing leaves your device.
+
+GOOD TO KNOW
+• Instances write their own replies with the AI models you choose. They can be wrong: check what matters.
+• Push notifications are not yet available for self-hosted servers. The app shows new messages as they arrive while it is open.
+• SHAFT is an independent research project and changes often.

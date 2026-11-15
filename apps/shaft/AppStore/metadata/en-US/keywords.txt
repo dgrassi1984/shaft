@@ -1,0 +1,1 @@
+AI,agent,assistant,self-hosted,autonomous,LLM,companion,Mac,research,voice,open source,notes,memory

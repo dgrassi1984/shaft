@@ -103,6 +103,23 @@ public struct WatchReplyPayload: Equatable, Sendable {
         self.failure = failure
     }
 
+    /// `text` as the watch draws it: its Markdown's emphasis, links and code rendered, its block markup reduced to plain
+    /// lines (a heading's `#`, a list's `-` as •, code fences and table rules dropped). A watch has no room for blocks.
+    public var screenText: AttributedString {
+        let lines = text.components(separatedBy: "\n").compactMap { line -> String? in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { return nil }
+            if trimmed.hasPrefix("|"), trimmed.allSatisfy({ "|-: ".contains($0) }) { return nil }
+            if let heading = trimmed.firstRange(of: /^#{1,6}\s+/) { return String(trimmed[heading.upperBound...]) }
+            if let bullet = trimmed.firstRange(of: /^[-*+]\s+/) { return "• " + trimmed[bullet.upperBound...] }
+            if trimmed.hasPrefix(">") { return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            return line
+        }
+        let plain = lines.joined(separator: "\n")
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: plain, options: options)) ?? AttributedString(plain)
+    }
+
     /// Marks a pushed payload (`WCSession.sendMessage` / `transferUserInfo`) apart from other user info.
     public static let kind = "shaft.watch.reply"
 

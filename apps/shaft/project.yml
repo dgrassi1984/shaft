@@ -63,12 +63,16 @@ targets:
         PRODUCT_NAME: SHAFT
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Everyday builds use development push; release-ios.sh overrides this for the App Store archive.
+        SHAFT_APS_ENVIRONMENT: development
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     info:
       path: Generated/iOS-Info.plist
       properties:
+        # HTTPS and Keychain use only the operating system's exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleDisplayName: SHAFT
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # audio: a voice session goes on with the iPhone locked or the app in the background.
@@ -115,7 +119,7 @@ targets:
     entitlements:
       path: Generated/iOS.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(SHAFT_APS_ENVIRONMENT)
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
   SHAFT-macOS:
@@ -219,6 +223,22 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MacTests
         GENERATE_INFOPLIST_FILE: YES
+
+  # The App Store screenshots: drives the iOS app's built-in demo and writes each screen as a PNG
+  # (ScreenshotTests/StoreScreenshots.swift; AppStore/README.md says how to run it per device).
+  SHAFTScreenshots:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ScreenshotTests
+    dependencies:
+      - target: SHAFT-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.Screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: SHAFT-iOS
 
   ShareExtension-iOS:
     type: app-extension
@@ -328,6 +348,8 @@ targets:
     info:
       path: Generated/watchOS-Info.plist
       properties:
+        # HTTPS and Keychain use only the operating system's exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleDisplayName: SHAFT
         WKApplication: true
         WKCompanionAppBundleIdentifier: $(SHAFT_BUNDLE_PREFIX).shaft
@@ -390,3 +412,10 @@ schemes:
     test:
       config: Debug
       targets: [SHAFTMacTests]
+  SHAFT-Screenshots:
+    build:
+      targets:
+        SHAFT-iOS: all
+    test:
+      config: Debug
+      targets: [SHAFTScreenshots]

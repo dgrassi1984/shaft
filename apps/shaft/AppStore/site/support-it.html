@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHAFT Assistenza</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<p class="lang"><a href="support.html" hreflang="en">English</a></p>
+<h1>SHAFT: assistenza</h1>
+<p class="meta">Per le app SHAFT per iPhone, iPad e Apple Watch. L'interfaccia dell'app è in inglese: i nomi dei
+comandi qui sotto sono quelli che vedi nell'app.</p>
+
+<h2>Contatti</h2>
+<p>Scrivi a <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a> per segnalare un problema o fare una domanda. Indica il
+dispositivo e la versione dell'app (Settings → App → Version) e cosa ti aspettavi che succedesse. Per un problema di
+sicurezza, scrivi "Security" nell'oggetto.</p>
+<p>SHAFT è un progetto di una sola persona: le risposte arrivano appena c'è tempo.</p>
+
+<h2>Cosa ti serve</h2>
+<ul>
+<li>Un Mac con macOS 26 o successivo su cui gira SHAFT. L'app SHAFT per Mac lo installa e lo configura.</li>
+<li>Tailscale sul Mac e sull'iPhone o iPad, con lo stesso account (tailnet).</li>
+<li>Un fornitore di modelli configurato sul Mac (per esempio una chiave API di OpenRouter o un piano ChatGPT).</li>
+</ul>
+<p>Vuoi solo dare un'occhiata? Tocca <strong>Try the demo</strong> nella prima schermata dell'app. Funziona con dati
+di esempio e non richiede nulla di quanto sopra.</p>
+
+<h2>Abbina l'iPhone o l'iPad</h2>
+<ol>
+<li>Sul Mac, apri l'app SHAFT → Settings → <strong>Use SHAFT from iPhone/iPad</strong>, oppure esegui
+<code>shaft web pair --name iphone-app</code> nel Terminale. In entrambi i casi ottieni un link di abbinamento che
+funziona una volta, per 10 minuti.</li>
+<li>Copia il link. Gli Appunti universali lo portano sull'iPhone o sull'iPad.</li>
+<li>Nell'app tocca <strong>Paste</strong>, poi <strong>Pair</strong>.</li>
+</ol>
+<p>L'app per Apple Watch non va abbinata: funziona tramite l'iPhone abbinato.</p>
+
+<h2>Problemi comuni</h2>
+<dl>
+<dt><strong>Il server non risponde</strong></dt>
+<dd>Controlla che Tailscale sia connesso sul dispositivo e sul Mac, e che il Mac sia acceso, non in stop, con SHAFT
+attivo.</dd>
+<dt><strong>"This device was unpaired on the Mac"</strong></dt>
+<dd>L'abbinamento è stato revocato (o SHAFT è stato reinstallato). Crea un nuovo link sul Mac e abbina di nuovo.</dd>
+<dt><strong>Nessuna notifica</strong></dt>
+<dd>Le notifiche push non sono ancora disponibili per i server ospitati da te. I nuovi messaggi compaiono mentre l'app
+è aperta.</dd>
+<dt><strong>La modalità voce non parte</strong></dt>
+<dd>Consenti microfono e riconoscimento vocale a SHAFT in Impostazioni → Privacy e sicurezza. Al primo uso può
+essere scaricato il modello vocale della tua lingua.</dd>
+<dt><strong>L'app dice che il server è troppo vecchio</strong></dt>
+<dd>Aggiorna SHAFT sul Mac (app SHAFT → Settings → Services → Update server).</dd>
+</dl>
+
+<h2>Privacy</h2>
+<p>L'app invia i tuoi dati solo al server SHAFT sul tuo Mac. Leggi l'<a href="privacy-it.html">informativa sulla
+privacy</a>.</p>
+
+<footer><a href="privacy-it.html">Informativa privacy</a> · <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a></footer>
+</main>
+</body>
+</html>

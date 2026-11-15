@@ -1,0 +1,1 @@
+AI,agente,assistente,self-hosted,autonomo,LLM,Mac,ricerca,voce,open source,note,memoria,chat

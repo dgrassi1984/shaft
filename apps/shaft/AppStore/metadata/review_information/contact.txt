@@ -1,0 +1,3 @@
+# Filled in App Store Connect → App Review Information (not uploaded from here):
+# first name, last name, phone, email of the person App Review should contact.
+# Sign-in required: NO (the app has no accounts; "Try the demo" needs none).

@@ -17,6 +17,8 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
 | `watchOS/` | the Apple Watch app: talk to an instance from the wrist, through the iPhone app (below) |
 | `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
+| `ScreenshotTests/` | `SHAFTScreenshots`: a UI test that drives the iOS demo and writes the App Store screenshots ([AppStore/README.md](AppStore/README.md)) |
+| `AppStore/` | the App Store listing: text, screenshots, the support and privacy pages, and the scripts that make them |
 
 | Target | Platform | Bundle id |
 |---|---|---|
@@ -26,6 +28,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `NotificationService-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
 | `SHAFT-watchOS` | watchOS 26+, embedded in `SHAFT-iOS` | `$(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp` |
 | `SHAFTMacTests` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
+| `SHAFTScreenshots` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.Screenshots` (UI test, the `SHAFT-Screenshots` scheme's test action) |
 
 All of them use Swift 6 with complete strict concurrency, automatic signing with your local team and bundle prefix. The apps depend on
 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui), pinned to exactly 2.4.1.
@@ -78,6 +81,16 @@ The nearest reachable `v[0-9]*` tag supplies the plain release version. The buil
 plus 100, preserving the offset needed after a history rewrite. No version override is needed.
 Settings shows the git description with `+changes` when tracked files differ from HEAD.
 Building requires git and a reachable release tag; missing tags fail the build.
+
+## The demo
+
+The iPhone and iPad pairing screen offers **Try the demo**: the real app over sample data built into SHAFTKit
+(`Packages/SHAFTKit/Sources/SHAFTKit/Demo/`). `DemoServer`, a `URLProtocol`, answers the `/app/v1` routes the app and
+its watch relay use for three sample instances, and refuses every other host, so nothing leaves the device. Nothing is
+saved to the Keychain; the demo's drafts and outbox live in a temporary folder that Leave the demo (Settings) removes,
+and a relaunch starts unpaired. It is how App Review sees the app working, since no reviewer can reach a server on a
+tailnet. A Debug build opens it at launch with `SHAFT_START_DEMO=1` (`SIMCTL_CHILD_SHAFT_START_DEMO=1` through
+simctl), so the watch app has the iPhone's sample instances.
 
 ## Try it against a fixture server
 
@@ -288,7 +301,7 @@ instance on the watch again fetches it (`latest`).
 The iPhone Air simulator is paired with an Apple Watch simulator (`xcrun simctl list pairs`). The iOS build embeds the
 watch app; install it on both and launch the iPhone app first. The watch's dictation sheet can't be scripted, so a Debug
 build takes the first turn from `SHAFT_WATCH_SAY` (through simctl, `SIMCTL_CHILD_SHAFT_WATCH_SAY`): it opens the first
-instance and sends that text as if dictated.
+instance and sends that text as if dictated; `SHAFT_WATCH_OPEN=1` opens the first instance without sending anything.
 
 ```bash
 # Working directory: apps/shaft/, after the iOS simulator build above; the iPhone app paired with the fixture server
@@ -323,7 +336,8 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=m
 
 ## Sign and install on your own devices
 
-Xcode installs the apps directly, development-signed (no TestFlight or App Store).
+Xcode Run installs the apps directly, development-signed. For TestFlight or App Store distribution, see
+[Release to the App Store](#release-to-the-app-store).
 
 1. In Xcode → Settings → Accounts, sign in with your own Apple Developer account.
    Set its team and your bundle prefix in `Signing.local.yml`, then regenerate the project.
@@ -420,3 +434,40 @@ prints every command, signing and contacting Apple for nothing), `--self-test` (
 on synthetic plists; signs nothing). It stops at the first failed step, and when Apple
 rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
 SHA-256.
+
+## Release to the App Store
+
+The iPhone/iPad app, its Share and notification extensions, and its embedded Apple Watch app ship together.
+The Mac app stays outside the Store: its setup wizard runs tools and writes the server installation without App
+Sandbox. Its Developer ID distribution remains [Release a signed build](#release-a-signed-build).
+
+One-time setup, with a paid Apple Developer team:
+
+1. Set the team and bundle prefix in `Signing.local.yml`. Register explicit App IDs for `<prefix>.shaft`,
+   `<prefix>.shaft.ShareExtension`, `<prefix>.shaft.NotificationService` and `<prefix>.shaft.watchkitapp`.
+   Enable Push Notifications for the iOS app and Keychain Sharing for the app and its iOS extensions.
+2. Create the iOS app record in App Store Connect with the app's bundle ID.
+3. Sign in to Xcode → Settings → Accounts. Automatic signing creates the Apple Distribution certificate and
+   provisioning profiles with `-allowProvisioningUpdates`; the account needs permission to manage them.
+
+From a clean checkout on a release tag:
+
+```bash
+# Working directory: apps/shaft/
+Scripts/release-ios.sh
+# Export, verify, then upload using the account signed in to Xcode:
+Scripts/release-ios.sh --out build/app-store-upload --upload
+```
+
+The script archives Release with production APNs, then exports `build/release-ios/export/SHAFT.ipa` by default.
+It checks the exported app's signed production push entitlement, all four bundles and their privacy manifests,
+matching version and build numbers, the app's exempt-encryption declaration, and the absence of
+`NSAllowsLocalNetworking` in every bundle. It prints the IPA path. With `--upload`, it first verifies a local export,
+then exports the same archive with destination `upload`. App Store Connect still processes and validates the upload.
+
+Options: `--team TEAMID`, `--out DIR` (choose a fresh export directory), `--allow-untagged` (allows an untagged or dirty
+trial build), `--dry-run` (preconditions and printed commands; no signing or Apple requests), and `--self-test`
+(synthetic plist checks). To authenticate with an App Store Connect API key instead of the Xcode account, pass
+`--api-key-path PATH --api-key-id ID --api-issuer ID` together. No password is passed to the script.
+
+Listing material is in [AppStore/README.md](AppStore/README.md).

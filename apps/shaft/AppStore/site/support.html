@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHAFT Support</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<p class="lang"><a href="support-it.html" hreflang="it">Italiano</a></p>
+<h1>SHAFT Support</h1>
+<p class="meta">For the SHAFT apps for iPhone, iPad and Apple Watch.</p>
+
+<h2>Contact</h2>
+<p>Email <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a> to report a problem or ask a question. Say which device and
+app version you use (Settings → App → Version) and what you expected to happen. For a security problem, put
+"Security" in the subject.</p>
+<p>SHAFT is a one-person project: questions are answered as time allows.</p>
+
+<h2>What you need</h2>
+<ul>
+<li>A Mac with macOS 26 or later running SHAFT. The SHAFT app for Mac installs and sets it up.</li>
+<li>Tailscale on the Mac and on your iPhone or iPad, signed in to the same tailnet.</li>
+<li>A model provider set up on the Mac (for example an OpenRouter API key or a ChatGPT plan).</li>
+</ul>
+<p>Just looking? Tap <strong>Try the demo</strong> on the app's first screen. It runs on sample data and needs none
+of the above.</p>
+
+<h2>Pair your iPhone or iPad</h2>
+<ol>
+<li>On the Mac, open the SHAFT app → Settings → <strong>Use SHAFT from iPhone/iPad</strong>, or run
+<code>shaft web pair --name iphone-app</code> in a terminal. Either gives you a pairing link that works once, for
+10 minutes.</li>
+<li>Copy the link. Universal Clipboard carries it to your iPhone or iPad.</li>
+<li>In the app, tap <strong>Paste</strong>, then <strong>Pair</strong>.</li>
+</ol>
+<p>The Apple Watch app needs no pairing of its own: it works through the paired iPhone.</p>
+
+<h2>Common problems</h2>
+<dl>
+<dt><strong>The app cannot reach your Mac</strong></dt>
+<dd>Check that Tailscale is connected on this device and on the Mac, and that the Mac is awake and SHAFT is running.</dd>
+<dt><strong>"This device was unpaired on the Mac"</strong></dt>
+<dd>The pairing was revoked (or SHAFT was reinstalled). Make a new link on the Mac and pair again.</dd>
+<dt><strong>No notifications</strong></dt>
+<dd>Push notifications are not yet available for self-hosted servers. New messages appear while the app is open.</dd>
+<dt><strong>Voice mode does not start</strong></dt>
+<dd>Allow the microphone and speech recognition for SHAFT in Settings → Privacy &amp; Security. The first use may
+download the speech model for your language.</dd>
+<dt><strong>The app says the server is too old</strong></dt>
+<dd>Update SHAFT on the Mac (SHAFT app → Settings → Services → Update server).</dd>
+</dl>
+
+<h2>Privacy</h2>
+<p>The app sends your data only to the SHAFT server on your own Mac. Read the <a href="privacy.html">privacy
+policy</a>.</p>
+
+<footer><a href="privacy.html">Privacy policy</a> · <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a></footer>
+</main>
+</body>
+</html>
