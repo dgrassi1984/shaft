@@ -182,14 +182,20 @@ private final class DemoState: @unchecked Sendable {
             let ids = name == "ada" ? ["ada-ideas", "ada-notes"] : ["\(name)-chat"]
             order[name] = ids
             for (index, cid) in ids.enumerated() {
-                let title = name == "ada" ? ["Ideas worth exploring", "Field notes"][index]
-                    : name == "tundra" ? "A quieter week" : "Weekly digest"
+                let title = name == "ada" ? ["Weekly review", "Field notes"][index]
+                    : name == "tundra" ? "Build speed" : "Weekly digest"
                 feeds[cid] = DemoData.feed(name, cid: cid, title: title, at: now)
             }
             var from = DemoData.feed(name, cid: "from", title: "From \(name)", at: now)
             from["chat"] = NSNull()
+            // From holds what an instance sent on its own (its question), not the chat's turns.
+            from["items"] = (from["items"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "sent" }
+            if name == "wisp" {
+                from["items"] = [DemoData.digest(at: now.addingTimeInterval(-6 * 86_400))]
+                    + (from["items"] as? [[String: Any]] ?? [])
+            }
             if name == "ada" {
-                from["items"] = [DemoData.assistant("Explore Ideas worth exploring and Field notes in the threads list. A sample document is ready in Documents.", k: 0, at: now.addingTimeInterval(-180))]
+                from["items"] = [DemoData.assistant("This week's field notes are in Documents, and the weekly review has its own thread.", k: 0, at: now.addingTimeInterval(-180))]
             }
             feeds["\(name)-from"] = from
         }
@@ -260,15 +266,19 @@ private final class DemoState: @unchecked Sendable {
             let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             func value(_ name: String) -> String? { query.first { $0.name == name }?.value }
             let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            if parts == ["version"], method == "GET" { return .json(["server": "v0.60.0", "api": 1]) }
+            // Always the api this app needs, so a later app never finds its own demo "too old".
+            if parts == ["version"], method == "GET" {
+                return .json(["server": "demo", "api": max(1, ServerCompatibility.minimumServerAPI)])
+            }
             if parts == ["instances"], method == "GET" {
                 return .json(["instances": names.map { name -> [String: Any] in
                     ["name": name, "state": "idle", "since": "", "model": "Demo", "usd_today": 0,
-                     "line": name == "wisp" ? "Which summary format should I use?" : "A little room to think.",
+                     "line": ["tundra": "Build time: three experiments", "wisp": "How should I send the digest?",
+                              "ada": "The field notes are ready in Documents."][name]!,
                      "last": DemoData.stamp(now.addingTimeInterval(-180)), "replying": false,
                      "unread": unread.contains(name), "unread_main": name == "wisp" && unread.contains(name),
                      "unread_threads": unread.contains(name) ? 1 : 0, "threads": order[name]!.count,
-                     "threads_rev": String(revision), "next_cycle": "Sample schedule", "voice_mode": "off"]
+                     "threads_rev": String(revision), "next_cycle": "for \(name)'s next cycle", "voice_mode": "on"]
                 }, "badge": unread.count, "instances_rev": revision])
             }
             if parts == ["push", "status"], method == "GET" {
@@ -384,7 +394,7 @@ private final class DemoState: @unchecked Sendable {
                               "in_chat": true, "threads": []])
             case ("GET", "plan") where parts.count == 2: return .json(DemoData.plan())
             case ("GET", "cycles"):
-                let goals = ["Gather a few ideas", "Draft the field notes", "Review the next step"]
+                let goals = ["Benchmark three build changes", "Draft the cache change", "Write this week's field notes"]
                 if parts.count == 3, let index = Int(action), goals.indices.contains(index) {
                     return .json(DemoData.cycle(action, at: now.addingTimeInterval(Double(index - 3) * 1800), goal: goals[index]))
                 }

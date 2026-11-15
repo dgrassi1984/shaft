@@ -165,7 +165,7 @@ struct DemoTests {
         defer { session.leaveDemo(); try? FileManager.default.removeItem(at: root) }
         let client = try #require(session.store?.client)
         #expect(FeedRows.waitingQuestions(try await feed(client, "wisp")).first?.choices?.options.map(\.label)
-                == ["Bullet points", "Short paragraph", "Table"])
+                == ["Five-line summary", "A paragraph each", "Only the top three"])
         let request = ChoiceAnswerRequest(cid: "wisp-chat", file: "demo-question.md", picked: [2], other: nil)
         let answer = try await client.answer("wisp", request)
         #expect(answer.answer.picked == [2])
@@ -177,10 +177,27 @@ struct DemoTests {
                 result = from
             } else { result = try await feed(client, "wisp", cid: cid) }
             #expect(FeedRows.waitingQuestions(result).isEmpty)
-            guard case .sent(let question) = result.content?.items.first else { Issue.record("Missing question"); return }
+            let sent = result.content?.items.compactMap { item -> SentItem? in
+                if case .sent(let question) = item { return question } else { return nil }
+            }
+            guard let question = sent?.first(where: { $0.choices != nil }) else { Issue.record("Missing question"); return }
             #expect(question.answer?.picked == [2])
             #expect(!question.open)
         }
+    }
+
+    /// The demo is App Review's only way in: it must never answer as a server too old for this app, and its instances
+    /// offer voice mode, which the review notes walk through.
+    @Test func DemoServerIsAlwaysCompatibleAndOffersVoice() async throws {
+        let (session, root) = try session()
+        defer { session.leaveDemo(); try? FileManager.default.removeItem(at: root) }
+        let client = try #require(session.store?.client)
+        let version = try await client.version()
+        #expect(ServerCompatibility.verdict(.success(version)) == .compatible(server: "demo"))
+        #expect(ServerCompatibility.verdict(.success(version), minimum: ServerCompatibility.setupServerAPI)
+                == .compatible(server: "demo"))
+        guard case .value(let list, _) = try await client.instances() else { Issue.record("No instances"); return }
+        #expect(list.instances.allSatisfy { $0.voiceMode == "on" })
     }
 
     @Test func DemoUnknownRouteReturnsServerError() async throws {

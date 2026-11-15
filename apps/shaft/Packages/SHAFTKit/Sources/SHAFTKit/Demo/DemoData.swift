@@ -1,44 +1,50 @@
+import CryptoKit
 import Foundation
 
 /// Fictional response bodies in the app API's wire format. Dates are relative to the start of this run.
 enum DemoData {
     static let reply = "This is the demo: replies here are canned. Paired with your own SHAFT server, the instance answers for real."
     static let markdown = """
-    ## A little room to think
+    ## Build time: three experiments
 
-    Here is a sample plan for a quieter week.
+    I ran each change five times overnight and kept the median.
 
-    - Leave space for focused work.
-    - Collect loose ideas in one place.
-    - Review what changed before choosing the next step.
+    | Change | Median build | Effort |
+    | --- | --- | --- |
+    | Cache dependencies | 6:40 → 2:55 | Low |
+    | Split the test suite | 6:40 → 4:10 | Medium |
+    | Bigger runner | 6:40 → 5:30 | Costs more |
 
-    | Part | Next step |
-    | --- | --- |
-    | Explore | Gather three ideas |
-    | Make | Try one small draft |
-    | Reflect | Keep what helped |
+    - Caching wins on its own: **56% faster** with one config change.
+    - Splitting the suite only helps once the cache is in.
 
-    ```python
-    ideas = ["explore", "make", "reflect"]
-    for idea in ideas:
-        print(idea)
+    ```yaml
+    cache:
+      key: deps-${{ hashFiles('uv.lock') }}
+      paths: [.venv]
     ```
     """
     static let document = """
     # Field notes
 
-    A sample document, kept entirely on this device during the demo.
+    What this week's cycles taught me, and what changes next.
 
-    ## A useful rhythm
+    ## What worked
 
-    1. Notice an idea.
-    2. Give it a small experiment.
-    3. Write down what changed.
+    1. Checking sources before summarising cut corrections from five to one.
+    2. Batching small tasks into one cycle saved about twenty minutes a day.
+    3. Asking one clear question beat guessing twice.
 
-    > Small steps leave room for discovery.
+    ## To try next
+
+    - Measure the digest's open rate before changing its format again.
+    - Keep each experiment to one change, so the result means something.
+
+    > Measure first, then change one thing at a time.
     """
 
-    static let documentSHA = "05a84536793c9e03b569208c89cab522cc3d64e0f0c3558dfee6c75f7006e1a9"
+    /// The document's version as the server names it: the SHA-256 of its bytes.
+    static let documentSHA = SHA256.hash(data: Data(document.utf8)).map { String(format: "%02x", $0) }.joined()
 
     static func stamp(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
@@ -56,25 +62,46 @@ enum DemoData {
 
     static func question(at: Date) -> [String: Any] {
         ["key": "sdemo-question.md", "type": "sent", "file": "demo-question.md", "ts": stamp(at),
-         "kind": "question", "read": false, "text": "Which summary format should I use for the weekly digest?",
+         "kind": "question", "read": false, "text": "Your reading list has 14 new articles this week. How should I send the digest?",
          "attachments": [], "choices": ["multiple": false, "options":
-            ["Bullet points", "Short paragraph", "Table"].map { ["label": $0] }],
+            ["Five-line summary", "A paragraph each", "Only the top three"].map { ["label": $0] }],
          "answer": NSNull(), "open": true, "from_cycle": false, "re": NSNull(), "rating": NSNull()]
+    }
+
+    /// Last week's digest, which wisp sent from a cycle: what From holds above its question.
+    static func digest(at: Date) -> [String: Any] {
+        ["key": "sdemo-digest.md", "type": "sent", "file": "demo-digest.md", "ts": stamp(at), "kind": "message",
+         "read": true, "text": """
+         **Last week's digest:** 11 articles saved, 3 worth your time.
+
+         1. **Why small test suites fail slowly**: flaky tests cost more than slow ones. *6 min*
+         2. **A field guide to caching builds**: what to cache, and what never to. *9 min*
+         3. **Writing notes your future self can use**: one idea per note. *4 min*
+
+         The other eight repeat these, so I left them out.
+         """, "attachments": [], "choices": NSNull(), "answer": NSNull(), "open": false, "from_cycle": true,
+         "re": NSNull(), "rating": NSNull()]
     }
 
     static func feed(_ name: String, cid: String, title: String, at: Date) -> [String: Any] {
         let items: [[String: Any]]
         if name == "wisp" {
-            items = [question(at: at.addingTimeInterval(-180))]
+            items = [user("Can you keep an eye on my reading list and send me a weekly digest?", k: 0, mid: "demo-0",
+                          at: at.addingTimeInterval(-1100)),
+                     assistant("Yes. Every Sunday I'll go through what you saved that week, drop the duplicates and send you the digest here.",
+                               k: 1, at: at.addingTimeInterval(-1040)),
+                     question(at: at.addingTimeInterval(-180))]
         } else if name == "tundra" {
-            items = [user("Help me sketch a quieter week.", k: 0, mid: "demo-0", at: at.addingTimeInterval(-900)),
+            items = [user("How did the build-time experiments go?", k: 0, mid: "demo-0", at: at.addingTimeInterval(-900)),
                      assistant(markdown, k: 1, at: at.addingTimeInterval(-840)),
-                     user("Keep it small enough to try tomorrow.", k: 2, mid: "demo-2", at: at.addingTimeInterval(-600)),
-                     assistant("Start with one idea and a twenty-minute draft. We can review what you learn afterward.",
+                     user("Great. Draft the cache change for me.", k: 2, mid: "demo-2", at: at.addingTimeInterval(-600)),
+                     assistant("Done: **build-cache.md** is in Documents, with the config change and how to roll it back. I'll measure again after tonight's builds.",
                                k: 3, at: at.addingTimeInterval(-540))]
         } else {
-            items = [user("Let's collect a few ideas here.", k: 0, mid: "demo-0", at: at.addingTimeInterval(-700)),
-                     assistant(cid == "ada-notes" ? "The field notes are ready in Documents." : "A blank page, a short walk, a new perspective. Which shall we explore?",
+            items = [user(cid == "ada-notes" ? "Write up what you learned this week." : "What's on your list for the weekly review?",
+                          k: 0, mid: "demo-0", at: at.addingTimeInterval(-700)),
+                     assistant(cid == "ada-notes" ? "The field notes are ready in Documents: three things that worked and two to try next."
+                               : "Three items: close the open questions from Monday, re-check last week's numbers, and plan two experiments.",
                                k: 1, at: at.addingTimeInterval(-650))]
         }
         return ["instance": name, "partial": false, "version": "1", "live": "", "reply": NSNull(),
@@ -85,22 +112,62 @@ enum DemoData {
     }
 
     static func plan() -> [String: Any] {
-        ["now": ["state": "idle", "since": NSNull(), "goal": NSNull()],
-         "check": ["next": "", "skipped": "Sample schedule", "paused": false],
-         "unfinished": ["Collect the next set of ideas"], "commitments": [], "commitments_error": "",
-         "queue": ["state": "rows", "open": 0, "overdue": 0, "error": "", "rows": []],
-         "projects": ["open": 0, "rows": [], "error": ""], "goals": "Explore, draft, reflect.",
-         "goals_error": "", "improvement_error": ""]
+        let now = Date()
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm"
+        return ["now": ["state": "idle", "since": NSNull(), "goal": NSNull()],
+                "check": ["next": clock.string(from: now.addingTimeInterval(5400)), "skipped": "", "paused": false],
+                "next_step": ["action": "Re-run the build benchmark after tonight's builds",
+                              "revise_if": "The cache change is not merged yet", "at": stamp(now.addingTimeInterval(-600))],
+                "unfinished": ["Compare the cached build on a cold runner"], "commitments": [], "commitments_error": "",
+                "queue": ["state": "rows", "open": 2, "overdue": 0, "error": "", "rows": [
+                    ["id": 1, "task": "Send the weekly digest", "due_at": stamp(now.addingTimeInterval(86_400)), "overdue": false],
+                    ["id": 2, "task": "Ask before changing the test split", "due_at": NSNull(), "overdue": false,
+                     "due_at_text": "when ready"]]],
+                "projects": ["open": 1, "error": "", "rows": [
+                    ["id": "demo-build", "name": "Faster builds", "success": "Median build under three minutes",
+                     "status": "open", "opened_at": stamp(now.addingTimeInterval(-3 * 86_400)),
+                     "deadline": stamp(now.addingTimeInterval(4 * 86_400)), "health": "on track", "hours_left": 96.0,
+                     "calls": 18, "budget_calls": 60, "usd": 0.42, "budget_usd": 3.0, "evidence": NSNull(),
+                     "closed_at": NSNull()]]],
+                "goals": "Keep the build fast and the weekly digest worth reading.",
+                "goals_error": "", "improvement": NSNull(), "improvement_error": ""]
     }
 
+    /// One past cycle; `goal` picks its story (the three goals the cycles route lists).
     static func cycle(_ id: String, at: Date, goal: String) -> [String: Any] {
-        ["id": id, "at": stamp(at), "kind": "cycle",
-         "planned": ["goal": goal, "success_criterion": "A clear sample note", "origin": "operator",
-                     "predictions": ["One small next step will emerge"], "attention": []],
-         "did": ["what_happened": "Prepared a sample note and reviewed the next step.", "duration_s": 42,
-                 "tool_calls": 2, "delivered_via": "message"],
-         "result": ["claim": "yes", "surprises": [], "doubts": [], "judge_error": "",
-                    "judge": ["verdict": "yes", "reasoning": "The sample note includes a clear next step.", "error": ""]],
-         "left": ["unfinished": [], "next_goal": "Review the next idea"]]
+        let story: (ref: String, prediction: String, happened: String, seconds: Int, usd: Double, calls: Int,
+                    surprises: [String], next: String)
+        switch goal {
+        case "Draft the cache change":
+            story = ("chat, Build speed", "The change fits in one config file",
+                     "Wrote build-cache.md with the config change, the measured gain and how to roll it back.",
+                     540, 0.07, 6, [], "Measure again after tonight's builds")
+        case "Write this week's field notes":
+            story = ("weekly review", "At least one habit is worth keeping",
+                     "Read this week's cycle records and wrote field-notes.md: three things that worked, two to try next.",
+                     780, 0.11, 9, [], "Measure the digest's open rate")
+        default:
+            story = ("chat, Build speed", "Caching alone halves the build time",
+                     "Ran the benchmark five times per change, kept the medians and wrote up the comparison.",
+                     1260, 0.18, 14,
+                     ["expected: splitting the suite helps most; observed: caching did; so what: cache first"],
+                     "Draft the cache change")
+        }
+        return ["id": id, "at": stamp(at), "kind": "cycle", "content": NSNull(),
+                "planned": ["goal": goal, "success_criterion": "A measured result the operator can act on",
+                            "origin": "operator", "origin_ref": story.ref, "confidence": 0.7,
+                            "predictions": [story.prediction],
+                            "attention": ["source: build logs; why: the median, not one lucky run"]],
+                "did": ["what_happened": story.happened, "duration_s": story.seconds, "usd": story.usd,
+                        "tool_calls": story.calls, "ended_by": "answer", "wrapped_up": NSNull(),
+                        "delivered_via": "message"],
+                "result": ["claim": "yes", "surprises": story.surprises, "doubts": [], "judge_error": "",
+                           "judge": ["verdict": "yes", "claim_supported": true, "first_error": NSNull(),
+                                     "reasoning": "The work is measured, written down and states its next step.",
+                                     "model": "judge", "error": ""],
+                           "second": NSNull()],
+                "left": ["unfinished": [], "next_action": ["action": story.next, "revise_if": NSNull()],
+                         "next_goal": story.next]]
     }
 }
