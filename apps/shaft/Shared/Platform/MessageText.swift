@@ -26,9 +26,17 @@ extension EnvironmentValues {
 /// An answer or a message the instance sent: rendered Markdown.
 struct MessageMarkdown: View {
     let source: String
+    @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
         MarkdownText(source: source)
+            .environment(\.openURL, OpenURLAction { url in
+                if let path = ChatLink.document(url) {
+                    screen.openDocument(path)
+                    return .handled
+                }
+                return ChatLink.opensOutside(url) ? .systemAction : .discarded
+            })
     }
 }
 

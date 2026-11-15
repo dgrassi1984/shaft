@@ -85,6 +85,16 @@ struct MessageTextView: NSViewRepresentable {
             show(previous.source, markdown: previous.markdown, scale: previous.scale)
         }
 
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let url = (link as? URL) ?? (link as? String).flatMap { URL(string: $0) }
+            guard let url else { return true }
+            if let path = ChatLink.document(url) {
+                screen.openDocument(path)
+                return true
+            }
+            return !ChatLink.opensOutside(url)
+        }
+
         func textViewDidChangeSelection(_ notification: Notification) {
             view?.updateReplyButton()
         }

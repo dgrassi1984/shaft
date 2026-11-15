@@ -174,3 +174,46 @@ struct SidebarRowPresentationTests {
         #expect(!SidebarMoveAvailability(id: "missing", ids: ids).down)
     }
 }
+
+struct ChatLinkTests {
+    @Test func aDocumentLinkInAChatOpensTheDocumentNotTheSystem() throws {
+        for (link, path) in [
+            ("notes/docs/danos/streaming-confronto-2026-11-15.md", "danos/streaming-confronto-2026-11-15.md"),
+            ("./notes/docs/a.md", "a.md"),
+            ("/notes/docs/a.md", "a.md"),
+            ("notes/docs/my%20plan.md", "my plan.md"),
+            ("notes/docs/a.md#part", "a.md"),
+            ("notes/docs/a.MD?view=raw", "a.MD"),
+        ] {
+            #expect(ChatLink.document(try #require(URL(string: link))) == path)
+        }
+        for link in [
+            "notes/docs/../secret.md", "notes/docs/a.txt", "notes/journal.md", "notes/docs/",
+            "https://example.com/notes/docs/a.md", "file:///notes/docs/a.md",
+            "notes/docs/./a.md", "notes/docs//a.md", "notes/docs/%2E%2E/secret.md",
+            "//example.com/notes/docs/a.md",
+        ] {
+            #expect(ChatLink.document(try #require(URL(string: link))) == nil)
+        }
+    }
+
+    @Test func onlyWebLinkSchemesOpenOutsideTheChat() throws {
+        for link in ["https://example.com", "http://example.com", "mailto:operator@example.com", "HTTPS://example.com"] {
+            #expect(ChatLink.opensOutside(try #require(URL(string: link))))
+        }
+        for link in ["notes/docs/a.md", "file:///x", "javascript:alert(1)"] {
+            #expect(!ChatLink.opensOutside(try #require(URL(string: link))))
+        }
+    }
+
+    @Test @MainActor func unsupportedChatLinksRenderAsPlainText() throws {
+        let rendered = MarkdownAttributed.render(
+            "[x](notes/journal.md) and [y](notes/docs/a.md) and [z](https://example.com)", scale: 1)
+        for (word, target) in [("x", nil), ("y", "notes/docs/a.md"), ("z", "https://example.com")] {
+            let range = (rendered.text.string as NSString).range(of: word)
+            try #require(range.location != NSNotFound)
+            let link = rendered.text.attribute(.link, at: range.location, effectiveRange: nil) as? URL
+            #expect(link == target.flatMap { URL(string: $0) })
+        }
+    }
+}
