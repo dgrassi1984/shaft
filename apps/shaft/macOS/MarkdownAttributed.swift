@@ -309,7 +309,9 @@ enum MarkdownAttributed {
                 attributes[.backgroundColor] = MacColor.elevated
                 attributes[.inlineCode] = true
             }
-            if let link { attributes[.link] = link }
+            if let link, ChatLink.document(link) != nil || ChatLink.opensOutside(link) {
+                attributes[.link] = link
+            }
             if style.rule {
                 // Foundation hands a rule over as three em-dashes: it is a line, not text.
                 text = " "

@@ -27,6 +27,33 @@ extension Color {
     static let rowSelected = Color("hairline")
 }
 
+/// Chat opens documents here and web links outside; the web shows other links as text.
+enum ChatLink {
+    /// A Markdown document in the instance's notes/docs folder, relative to that folder.
+    static func document(_ url: URL) -> String? {
+        guard url.scheme == nil, url.host == nil else { return nil }
+        var path = url.path(percentEncoded: false)
+        if path.isEmpty { path = url.relativePath.removingPercentEncoding ?? url.relativePath }
+        if path.hasPrefix("./") {
+            path.removeFirst(2)
+        } else if path.hasPrefix("/") {
+            path.removeFirst()
+        }
+        guard path.hasPrefix("notes/docs/") else { return nil }
+        let document = String(path.dropFirst("notes/docs/".count))
+        guard !document.isEmpty, document.lowercased().hasSuffix(".md"),
+              document.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({
+                  !$0.isEmpty && $0 != "." && $0 != ".."
+              }) else { return nil }
+        return document
+    }
+
+    /// Only the schemes the web allows may open outside the chat.
+    static func opensOutside(_ url: URL) -> Bool {
+        ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "")
+    }
+}
+
 /// The native apps' shared type, spacing and shape.
 enum Design {
     static let measure: CGFloat = 620
