@@ -40,13 +40,20 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
 }
 
 @Suite @MainActor struct ReadAloudPlayerTests {
+    /// Waits for the stall timeout to act, up to 5 s. A fixed 0.2 s sleep failed when the full suite ran in parallel on
+    /// a loaded machine (2026-11-15): the main actor ran the timeout late, not never.
+    private func waitUntil(_ done: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !done(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    }
+
     @Test func speechThatNeverStartsClearsPlayingAfterTheStallTimeout_20261114() async throws {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.05)
         player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
         #expect(player.playing == "a")
         let before = synth.stops
-        try await Task.sleep(for: .seconds(0.2))
+        try await waitUntil { player.playing == nil }
         #expect(player.playing == nil)
         #expect(synth.stops == before + 1)
     }
@@ -60,7 +67,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
         #expect(player.playing == "a")
         let before = synth.stops
-        try await Task.sleep(for: .seconds(0.2))
+        try await waitUntil { player.playing == nil }
         #expect(player.playing == nil, "no word for longer than the stall timeout: the reading is over")
         #expect(synth.stops == before + 1)
     }
