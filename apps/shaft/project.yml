@@ -63,12 +63,16 @@ targets:
         PRODUCT_NAME: SHAFT
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Everyday builds use development push; release-ios.sh overrides this for the App Store archive.
+        SHAFT_APS_ENVIRONMENT: development
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     info:
       path: Generated/iOS-Info.plist
       properties:
+        # HTTPS and Keychain use only the operating system's exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleDisplayName: SHAFT
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # audio: a voice session goes on with the iPhone locked or the app in the background.
@@ -115,7 +119,7 @@ targets:
     entitlements:
       path: Generated/iOS.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(SHAFT_APS_ENVIRONMENT)
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
   SHAFT-macOS:
@@ -328,6 +332,8 @@ targets:
     info:
       path: Generated/watchOS-Info.plist
       properties:
+        # HTTPS and Keychain use only the operating system's exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleDisplayName: SHAFT
         WKApplication: true
         WKCompanionAppBundleIdentifier: $(SHAFT_BUNDLE_PREFIX).shaft
