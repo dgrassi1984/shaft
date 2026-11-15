@@ -397,12 +397,17 @@ private enum SidebarMetrics {
     static let compose: CGFloat = 20
     static let controlHeight: CGFloat = 24
     static let rowInsets = EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
+    /// A thread row ends where its instance's buttons start, so the times form one column.
+    static let threadTrailing: CGFloat = compose + chevron + 8
     #else
     static let state: CGFloat = 14
     static let chevron: CGFloat = 44
     static let compose: CGFloat = 44
     static let controlHeight: CGFloat = 44
     static let rowInsets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+    /// A thread row has no buttons: reserving the instance row's two 44 pt buttons left an iPad sidebar's thread title
+    /// four letters (2026-11-15), so its time sits at the row's end instead.
+    static let threadTrailing: CGFloat = 8
     #endif
 }
 
@@ -428,7 +433,9 @@ struct InstanceRowView: View {
                 Spacer(minLength: 4)
                 #if os(iOS)
                 if let last = main?.last ?? row.last {
+                    // Never squeezed: the title's layout priority would wrap it one character per line.
                     Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
+                        .fixedSize()
                 }
                 #endif
                 if unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
@@ -831,10 +838,9 @@ struct ThreadRowView: View {
             if thread.unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
             #endif
             if let last = thread.last {
+                // Never squeezed, on iOS too: the title's layout priority wrapped it one character per line on iPad.
                 Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
-                    #if os(macOS)
                     .fixedSize()
-                    #endif
             }
             #if os(iOS)
             if thread.unread { Circle().fill(Color.brand).frame(width: 6, height: 6) }
@@ -842,7 +848,7 @@ struct ThreadRowView: View {
         }
         .foregroundStyle(Color.textPrimary)
         .padding(.leading, SidebarMetrics.nameIndent)
-        .padding(.trailing, SidebarMetrics.compose + SidebarMetrics.chevron + 8)
+        .padding(.trailing, SidebarMetrics.threadTrailing)
         #if os(macOS)
         .frame(minHeight: 24)
         #else

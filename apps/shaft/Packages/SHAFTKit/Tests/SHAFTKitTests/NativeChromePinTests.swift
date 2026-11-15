@@ -27,6 +27,23 @@ struct NativeChromePinTests {
         #expect(try shared("Shared/Chat/ChatScreenModel.swift").contains("sidePanel = .documents"))
     }
 
+    /// Bug (2026-11-15, the App Store screenshots): the sidebar titles took layout priority and the iOS timestamps had no
+    /// fixed size, so on iPad a thread's time wrapped one digit per line. Every sidebar stamp keeps its own width.
+    @Test func sidebarTimestampsAreNeverSqueezedByTheTitle() throws {
+        let source = try shared("Shared/Root/SessionViews.swift")
+        let stamp = "Text(SidebarStamp.text(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)"
+        let sites = source.components(separatedBy: stamp).dropFirst()
+        #expect(sites.count == 3)
+        for site in sites {
+            #expect(site.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(".fixedSize()"))
+        }
+        // The other half of that bug: an iOS thread row reserved its instance's two 44 pt buttons, leaving its title four
+        // letters in an iPad sidebar.
+        let ios = try #require(source.range(of: "static let threadTrailing: CGFloat = 8"))
+        #expect(source[..<ios.lowerBound].contains("#else"))
+        #expect(source.contains(".padding(.trailing, SidebarMetrics.threadTrailing)"))
+    }
+
     @Test func theSidePanelUsesASystemSegmentedControl() throws {
         #expect(try shared("Shared/Cycles/SidePanel.swift").contains(".pickerStyle(.segmented)"))
     }
