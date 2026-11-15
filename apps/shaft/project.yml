@@ -316,11 +316,15 @@ targets:
       - path: watchOS
         excludes: ["**/*.md"]
       - path: Packages/SHAFTKit/Sources/SHAFTKit/Watch/WatchProtocol.swift
+      # The shared catalog's AppIcon has a watchOS image (watch-1024.png, opaque): App Store Connect refuses an upload
+      # whose watch app names no CFBundleIconName.
+      - path: Shared/Assets.xcassets
     settings:
       base:
         PRODUCT_NAME: SHAFT
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp
         TARGETED_DEVICE_FAMILY: "4"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Generated/watchOS-Info.plist
       properties:
