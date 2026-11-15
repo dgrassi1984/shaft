@@ -323,7 +323,8 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=m
 
 ## Sign and install on your own devices
 
-Xcode installs the apps directly, development-signed (no TestFlight or App Store).
+Xcode Run installs the apps directly, development-signed. For TestFlight or App Store distribution, see
+[Release to the App Store](#release-to-the-app-store).
 
 1. In Xcode → Settings → Accounts, sign in with your own Apple Developer account.
    Set its team and your bundle prefix in `Signing.local.yml`, then regenerate the project.
@@ -420,3 +421,40 @@ prints every command, signing and contacting Apple for nothing), `--self-test` (
 on synthetic plists; signs nothing). It stops at the first failed step, and when Apple
 rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
 SHA-256.
+
+## Release to the App Store
+
+The iPhone/iPad app, its Share and notification extensions, and its embedded Apple Watch app ship together.
+The Mac app stays outside the Store: its setup wizard runs tools and writes the server installation without App
+Sandbox. Its Developer ID distribution remains [Release a signed build](#release-a-signed-build).
+
+One-time setup, with a paid Apple Developer team:
+
+1. Set the team and bundle prefix in `Signing.local.yml`. Register explicit App IDs for `<prefix>.shaft`,
+   `<prefix>.shaft.ShareExtension`, `<prefix>.shaft.NotificationService` and `<prefix>.shaft.watchkitapp`.
+   Enable Push Notifications for the iOS app and Keychain Sharing for the app and its iOS extensions.
+2. Create the iOS app record in App Store Connect with the app's bundle ID.
+3. Sign in to Xcode → Settings → Accounts. Automatic signing creates the Apple Distribution certificate and
+   provisioning profiles with `-allowProvisioningUpdates`; the account needs permission to manage them.
+
+From a clean checkout on a release tag:
+
+```bash
+# Working directory: apps/shaft/
+Scripts/release-ios.sh
+# Export, verify, then upload using the account signed in to Xcode:
+Scripts/release-ios.sh --out build/app-store-upload --upload
+```
+
+The script archives Release with production APNs, then exports `build/release-ios/export/SHAFT.ipa` by default.
+It checks the exported app's signed production push entitlement, all four bundles and their privacy manifests,
+matching version and build numbers, the app's exempt-encryption declaration, and the absence of
+`NSAllowsLocalNetworking` in every bundle. It prints the IPA path. With `--upload`, it first verifies a local export,
+then exports the same archive with destination `upload`. App Store Connect still processes and validates the upload.
+
+Options: `--team TEAMID`, `--out DIR` (choose a fresh export directory), `--allow-untagged` (allows an untagged or dirty
+trial build), `--dry-run` (preconditions and printed commands; no signing or Apple requests), and `--self-test`
+(synthetic plist checks). To authenticate with an App Store Connect API key instead of the Xcode account, pass
+`--api-key-path PATH --api-key-id ID --api-issuer ID` together. No password is passed to the script.
+
+Listing material is in [AppStore/README.md](AppStore/README.md).
