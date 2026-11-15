@@ -104,6 +104,12 @@ struct PairingView: View {
                 .buttonStyle(ProminentAction())
                 .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairing)
                 #if os(iOS)
+                Button("Try the demo") { session.startDemo() }
+                    .buttonStyle(.bordered)
+                    .disabled(pairing)
+                Text("Explore SHAFT with sample instances. Nothing leaves this device.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSecondary)
                 Button("Settings") { settings = true }
                     .foregroundStyle(Color.brand)
                 #endif
@@ -160,19 +166,26 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 AppearanceSection()
-                if let version = AppVersion.label(info: Bundle.main.infoDictionary) {
-                    Section("App") {
+                Section("App") {
+                    if let version = AppVersion.label(info: Bundle.main.infoDictionary) {
                         LabeledContent("Version", value: version)
                     }
-                    .listRowBackground(Color.elevated)
+                    // App Review asks for the privacy policy inside the app as well as on the listing.
+                    Link("Privacy policy", destination: Self.privacyPolicy)
+                        .foregroundStyle(Color.brand)
                 }
+                .listRowBackground(Color.elevated)
                 if let credential = session.credential {
                     Section("Server") {
-                        LabeledContent("Address", value: credential.baseURL.absoluteString)
-                        LabeledContent("Tailnet login", value: credential.login)
-                        if let version = session.store?.services.serverVersion {
-                            LabeledContent("Version", value: version)
+                        #if os(iOS)
+                        if session.isDemo {
+                            Text("Demo (sample data)")
+                        } else {
+                            serverDetails(credential)
                         }
+                        #else
+                        serverDetails(credential)
+                        #endif
                     }
                     .listRowBackground(Color.elevated)
                     Section("This device") {
@@ -195,21 +208,20 @@ struct SettingsView: View {
                         if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                     }
                     .listRowBackground(Color.elevated)
-                    if let store = session.store {
-                        ServerSection(store: store.services)
+                    #if os(iOS)
+                    if session.isDemo {
+                        Section {
+                            Button("Leave the demo") { session.leaveDemo(); dismiss() }
+                                .foregroundStyle(Color.brand)
+                                .buttonStyle(.plain)
+                        }
+                        .listRowBackground(Color.elevated)
+                    } else {
+                        pairingControls
                     }
-                    Section {
-                        Button("Unpair this device", role: .destructive) { unpairing = true }
-                            .foregroundStyle(Color.danger)
-                            .rowTextButton()
-                        Button("Forget the pairing here only") { forgetting = true }
-                            .foregroundStyle(Color.brand)
-                            .rowTextButton()
-                    } footer: {
-                        Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
-                            .foregroundStyle(Color.textSecondary)
-                    }
-                    .listRowBackground(Color.elevated)
+                    #else
+                    pairingControls
+                    #endif
                 }
                 if let problem = session.problem {
                     Text(problem).foregroundStyle(Color.danger)
@@ -228,7 +240,7 @@ struct SettingsView: View {
             .formStyle(.grouped)
             #endif
             .task {
-                guard session.isPaired else { return }
+                guard session.isPaired, !session.isDemo else { return }
                 do {
                     push = try await session.store?.client.pushStatus()
                 } catch {
@@ -249,6 +261,37 @@ struct SettingsView: View {
                 Button("Forget", role: .destructive) { session.forget() }
             }
         }
+    }
+
+    /// The published app's privacy policy (apps/shaft/AppStore/site/privacy.html, served by publish-site.sh).
+    static let privacyPolicy = URL(string: "https://dgrassi1984.github.io/shaft-app/privacy.html")!
+
+    @ViewBuilder
+    private func serverDetails(_ credential: ServerCredential) -> some View {
+        LabeledContent("Address", value: credential.baseURL.absoluteString)
+        LabeledContent("Tailnet login", value: credential.login)
+        if let version = session.store?.services.serverVersion {
+            LabeledContent("Version", value: version)
+        }
+    }
+
+    @ViewBuilder
+    private var pairingControls: some View {
+        if let store = session.store {
+            ServerSection(store: store.services)
+        }
+        Section {
+            Button("Unpair this device", role: .destructive) { unpairing = true }
+                .foregroundStyle(Color.danger)
+                .rowTextButton()
+            Button("Forget the pairing here only") { forgetting = true }
+                .foregroundStyle(Color.brand)
+                .rowTextButton()
+        } footer: {
+            Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
+                .foregroundStyle(Color.textSecondary)
+        }
+        .listRowBackground(Color.elevated)
     }
 }
 

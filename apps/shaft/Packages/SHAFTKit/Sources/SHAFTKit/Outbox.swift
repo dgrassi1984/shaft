@@ -49,6 +49,14 @@ public final class Outbox {
     public private(set) var entries: [OutboxEntry] = []
     public let directory: URL
     @ObservationIgnored public var sender: (any MessageSending)?
+    @ObservationIgnored private var discarded = false
+
+    /// Stop a throwaway outbox from writing after its demo has been removed, including sends still returning.
+    func discard() {
+        discarded = true
+        entries = []
+        sender = nil
+    }
 
     public init(directory: URL, sender: (any MessageSending)? = nil) throws {
         self.directory = directory
@@ -116,6 +124,7 @@ public final class Outbox {
     /// Put a message in the outbox, its files copied into the outbox's storage, without sending it yet: `deliver`
     /// sends it. The composer enqueues, clears its draft, then delivers.
     public func enqueue(_ message: OutgoingMessage, to instance: String) throws(APIError) {
+        guard !discarded else { throw .notPaired }
         var entry = OutboxEntry(instance: instance, cid: message.cid, mid: message.mid, text: message.text,
                                 mode: message.mode,
                                 quotes: message.quotes, retryOf: message.retryOf, files: [], created: Date(),
@@ -264,6 +273,7 @@ public final class Outbox {
     }
 
     private func persist() throws {
+        guard !discarded else { return }
         try LocalFiles.write(try SHAFTJSON.encoder().encode(entries), to: directory.appending(path: "outbox.json"))
     }
 }

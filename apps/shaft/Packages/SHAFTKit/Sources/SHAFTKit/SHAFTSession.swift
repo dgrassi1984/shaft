@@ -23,6 +23,10 @@ public final class SHAFTSession {
     @ObservationIgnored private let drafts: DraftStore
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private var deviceToken: Data?
+    @ObservationIgnored private var demoRun: (id: String, session: URLSession)?
+    /// The throwaway storage for this run, removed on leave.
+    public private(set) var demoDirectory: URL?
+    public private(set) var isDemo = false
 
     public init(pairing: PairingStore, outbox: Outbox, drafts: DraftStore, session: URLSession = .shared) {
         self.pairing = pairing
@@ -44,9 +48,55 @@ public final class SHAFTSession {
 
     public var isPaired: Bool { credential != nil }
 
+    /// Open a fresh offline demo without saving a pairing or using the paired server's stores.
+    public func startDemo() {
+        guard !isPaired else { return }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "shaft-demo-\(UUID().uuidString)")
+        do {
+            let outbox = try Outbox(directory: directory.appending(path: "outbox"))
+            let drafts = DraftStore(directory: directory.appending(path: "drafts"))
+            try FileManager.default.createDirectory(at: drafts.directory, withIntermediateDirectories: true)
+            let run = DemoServer.start()
+            let credential = ServerCredential(baseURL: DemoServer.baseURL, device: "demo", secret: "demo",
+                                              name: "demo", login: "demo")
+            demoRun = run
+            demoDirectory = directory
+            isDemo = true
+            self.credential = credential
+            let store = InstancesStore(client: APIClient(credential: credential, session: run.session),
+                                       outbox: outbox, drafts: drafts)
+            store.onBadge = { [weak self] count in self?.onBadge?(count) }
+            self.store = store
+            problem = nil
+            loss = nil
+            pushStatus = "Not used in the demo"
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            problem = error.localizedDescription
+        }
+    }
+
+    /// Discard the demo's conversations and files and return to the pairing screen.
+    public func leaveDemo() {
+        guard isDemo else { return }
+        store?.outbox.discard()
+        close()
+        // Remove the run before cancelling. A send still preparing its upload gets a local refusal.
+        if let demoRun { DemoServer.finish(demoRun.id) }
+        demoRun?.session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+        demoRun = nil
+        if let demoDirectory { try? FileManager.default.removeItem(at: demoDirectory) }
+        demoDirectory = nil
+        isDemo = false
+        pushStatus = nil
+        problem = nil
+        loss = nil
+    }
+
     /// Pair with a pasted link (§2). False when it failed: `problem` says why.
     @discardableResult
     public func pair(pasted: String) async -> Bool {
+        guard !isDemo else { return false }
         do {
             try open(try await pairing.pair(pasted: pasted))
             problem = nil
@@ -64,6 +114,7 @@ public final class SHAFTSession {
     /// server. False when it failed: `problem` says why.
     @discardableResult
     public func pair(credential: ServerCredential) async -> Bool {
+        guard !isDemo else { return false }
         do {
             try pairing.save(credential)
             try open(credential)
@@ -78,6 +129,7 @@ public final class SHAFTSession {
 
     /// Unpair on the server and here.
     public func unpair() async {
+        if isDemo { leaveDemo(); return }
         do {
             try await pairing.unpair()
             close()
@@ -90,6 +142,7 @@ public final class SHAFTSession {
 
     /// Forget the pairing here only (the server could not be reached).
     public func forget() {
+        if isDemo { leaveDemo(); return }
         try? pairing.forget()
         close()
         loss = .operatorChose
@@ -99,6 +152,7 @@ public final class SHAFTSession {
     /// pairing, since it may come before one.
     public func registerPush(token: Data) async {
         deviceToken = token
+        guard !isDemo else { pushStatus = "Not used in the demo"; return }
         guard let store else { return }
         do {
             let answer = try await PushRegistrar(client: store.client).register(token: token)
