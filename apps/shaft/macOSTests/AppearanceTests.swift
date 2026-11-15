@@ -86,6 +86,28 @@ struct AppearanceTests {
 }
 
 struct SidebarRowPresentationTests {
+    @Test func sidebarStampStaysShortSoTitlesAreNotTruncated() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "Europe/Rome"))
+        func date(_ year: Int, _ month: Int, _ day: Int) throws -> Date {
+            try #require(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 10)))
+        }
+        let now = try date(2026, 11, 15)
+        let dates = try [now, date(2026, 11, 14), date(2026, 11, 11), date(2026, 10, 1), date(2025, 11, 14)]
+        let stamps = dates.map { SidebarStamp.text($0, now: now, calendar: calendar) }
+        let time = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).hour().minute()
+        #expect(stamps[0] == now.formatted(time))
+        #expect(stamps[1] == "Yesterday")
+        #expect(stamps[2].count <= 4)
+        #expect(!stamps[3].contains("2026"))
+        #expect(stamps[4].contains("2025"))
+        for (index, stamp) in stamps.enumerated() {
+            #expect(stamp.count <= 11)
+            #expect(!stamp.contains(" at "))
+            if index != 0 { #expect(!stamp.contains(":")) }
+        }
+    }
+
     private func instance(replying: Bool = false) throws -> SHAFTKit.InstanceRow {
         let json = """
         {"name":"example","state":"idle","since":"","model":"example","usdToday":0,

@@ -282,6 +282,22 @@ struct ConversationRowState {
     }
 }
 
+/// Compact dates leave room for sidebar titles.
+enum SidebarStamp {
+    static func text(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date),
+                                           to: calendar.startOfDay(for: now)).day
+        let style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone)
+        if days == 0 { return date.formatted(style.hour().minute()) }
+        if days == 1 { return String(localized: "Yesterday") }
+        if let days, (2...6).contains(days) { return date.formatted(style.weekday(.abbreviated)) }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            return date.formatted(style.day().month(.abbreviated))
+        }
+        return date.formatted(style.day().month(.abbreviated).year())
+    }
+}
+
 enum SidebarRowLabels {
     static func disclosure(_ name: String, expanded: Bool) -> String {
         expanded ? "Collapse threads for \(name)" : "Expand threads for \(name)"
