@@ -10,7 +10,7 @@
 <main>
 <p class="lang"><a href="privacy-it.html" hreflang="it">Italiano</a></p>
 <h1>SHAFT Privacy Policy</h1>
-<p class="meta">For the SHAFT apps for iPhone, iPad and Apple Watch. Last updated 15 November 2026.</p>
+<p class="meta">For the SHAFT apps for iPhone, iPad, Apple Watch and Mac. Last updated 16 November 2026.</p>
 
 <p>SHAFT is an open-source system that runs AI agents ("instances") on your own Mac. The SHAFT app is a client for the
 SHAFT server <em>you</em> run. The developer runs no service that your data passes through, and receives none of it.</p>
@@ -51,6 +51,16 @@ audio is never sent anywhere and is not kept. The microphone is used only while 
 <h2>Apple Watch</h2>
 <p>The watch app holds no credential and talks to nothing on the network. It passes your question to the SHAFT app on
 your paired iPhone, which sends it to your server and returns the answer.</p>
+
+<h2>Updates of the Mac app</h2>
+<p>Only the official Developer ID download of the Mac app uses Sparkle to check for updates once a day. You can turn
+this off in Settings. The check fetches the <a href="https://dgrassi1984.github.io/shaft-app/appcast.xml">update feed</a>
+from GitHub Pages. Its User-Agent header carries the app's name and version, and GitHub sees your IP address. No
+system profile is sent. Builds you make yourself do not check for updates.</p>
+<p>An update downloads from GitHub as a DMG attached to a release only when you click Install. Sparkle verifies its
+EdDSA signature before opening it. The developer receives no data from these checks or downloads. GitHub keeps its
+own logs under its <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">privacy
+statement</a>.</p>
 
 <h2>Notifications</h2>
 <p>When notifications are available, a push travels through Apple's Push Notification service and carries only a

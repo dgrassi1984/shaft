@@ -10,7 +10,7 @@
 <main>
 <p class="lang"><a href="privacy.html" hreflang="en">English</a></p>
 <h1>SHAFT: informativa sulla privacy</h1>
-<p class="meta">Per le app SHAFT per iPhone, iPad e Apple Watch. Ultimo aggiornamento: 15 novembre 2026.</p>
+<p class="meta">Per le app SHAFT per iPhone, iPad, Apple Watch e Mac. Ultimo aggiornamento: 16 novembre 2026.</p>
 
 <p>SHAFT è un sistema open source che fa girare agenti AI ("istanze") sul tuo Mac. L'app SHAFT è un client per il
 server SHAFT che fai girare <em>tu</em>. Lo sviluppatore non gestisce alcun servizio attraverso cui passino i tuoi
@@ -56,6 +56,17 @@ voce è aperta.</li>
 <h2>Apple Watch</h2>
 <p>L'app per Apple Watch non custodisce credenziali e non comunica con la rete. Passa la tua domanda all'app SHAFT
 sull'iPhone abbinato, che la invia al tuo server e restituisce la risposta.</p>
+
+<h2>Aggiornamenti dell'app per Mac</h2>
+<p>Solo la versione ufficiale dell'app per Mac distribuita con firma Developer ID usa Sparkle per cercare aggiornamenti
+una volta al giorno. Puoi disattivare il controllo nelle Impostazioni dell'app. Il controllo scarica il
+<a href="https://dgrassi1984.github.io/shaft-app/appcast.xml">feed degli aggiornamenti</a> da GitHub Pages. L'intestazione
+User-Agent contiene il nome e la versione dell'app, e GitHub vede il tuo indirizzo IP. Non viene inviato alcun profilo
+del sistema. Le versioni che compili tu non cercano aggiornamenti.</p>
+<p>L'aggiornamento viene scaricato da GitHub, come DMG allegato a una release, solo quando fai clic su Installa (Install). Sparkle
+ne verifica la firma EdDSA prima di aprirlo. Lo sviluppatore non riceve dati da questi controlli o download. GitHub
+conserva i propri log secondo la sua
+<a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">informativa sulla privacy</a>.</p>
 
 <h2>Notifiche</h2>
 <p>Quando le notifiche sono disponibili, una notifica push passa dal servizio di notifiche push di Apple e contiene solo
