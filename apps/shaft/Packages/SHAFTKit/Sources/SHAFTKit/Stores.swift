@@ -24,6 +24,8 @@ public final class InstancesStore {
     @ObservationIgnored private var migrated: Set<String> = []
     /// Created ids stay open until a successful list read checks them.
     @ObservationIgnored private var createdThreads: [String: Set<String>] = [:]
+    /// Instances a New thread is being started for, until the server answers: the buttons show it and take no second tap.
+    public private(set) var creatingThread: Set<String> = []
 
     @ObservationIgnored public let client: APIClient
     @ObservationIgnored public let outbox: Outbox
@@ -226,12 +228,19 @@ public final class InstancesStore {
     /// thread more or less), or that were never read; `all`: of every instance (pull to refresh). A server before
     /// threads is asked once per instance.
     public func refreshMovedThreads(all: Bool = false) async {
-        for row in instances {
-            await refreshNotes(row.name)
-            if threadsState(row.name) == .unsupported { continue }
-            if !all, threadsReadAt[row.name] == row, threadsError[row.name] == nil { continue }
-            await refreshThreads(row.name)
+        // Each instance on its own, all at once: one after another, a phone paid two round trips per instance in turn.
+        await withTaskGroup(of: Void.self) { group in
+            for row in instances {
+                group.addTask { await self.refreshMoved(row, all: all) }
+            }
         }
+    }
+
+    private func refreshMoved(_ row: InstanceRow, all: Bool) async {
+        await refreshNotes(row.name)
+        if threadsState(row.name) == .unsupported { return }
+        if !all, threadsReadAt[row.name] == row, threadsError[row.name] == nil { return }
+        await refreshThreads(row.name)
     }
 
     /// Something moved in one of `name`'s conversations (a send, a reply, a thread ended or renamed): read its threads
@@ -241,16 +250,28 @@ public final class InstancesStore {
         Task { await refreshThreads(name) }
     }
 
-    /// Start a thread (§7.7): it ends no other. Returns its identity even if the list refresh fails; nil when refused.
+    /// Start a thread (§7.7): it ends no other. Returns its identity even if the list refresh fails; nil when refused,
+    /// or while one is already being started for `name` (a second tap). `opened` gets it as soon as the server made it,
+    /// before the list is read again: the screen shows the thread after one round trip, not two (the read stays here,
+    /// awaited, and `createdThreads` keeps the thread open until it lands).
     @discardableResult
-    public func newThread(_ name: String, title: String? = nil) async -> ChatRef? {
+    public func newThread(_ name: String, title: String? = nil,
+                          opened: @MainActor (ChatRef) -> Void = { _ in }) async -> ChatRef? {
+        guard !creatingThread.contains(name) else { return nil }
+        TransitionClock.begin("new thread")
+        creatingThread.insert(name)
         do {
             let answer = try await client.newThread(name, title: title)
+            creatingThread.remove(name)
             createdThreads[name, default: []].insert(answer.chat.id)
             threadsGeneration[name, default: 0] += 1
+            let ref = ChatRef.thread(answer.chat.id)
+            opened(ref)
             await refreshThreads(name)
-            return .thread(answer.chat.id)
+            return ref
         } catch {
+            creatingThread.remove(name)
+            TransitionClock.cancel()
             guard let apiError = APIError.from(error) else { return nil }
             report(apiError)
             return nil

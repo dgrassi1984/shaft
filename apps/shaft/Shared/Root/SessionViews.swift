@@ -579,6 +579,7 @@ struct InstancesList: View {
             await store.refreshMovedThreads(all: true)
         }
         .onChange(of: selection) { _, chosen in
+            if chosen != nil { TransitionClock.beginIfIdle("open chat") }
             if let chosen { SidebarDisclosure.set(chosen.instance, expanded: true) }
         }
         .navigationTitle(title)
@@ -700,7 +701,7 @@ struct InstancesList: View {
 
     private func composeButton(_ name: String) -> some View {
         Button { newThread(name) } label: {
-            Image(systemName: "square.and.pencil")
+            NewThreadIcon(starting: store.creatingThread.contains(name))
                 #if os(iOS)
                 .frame(width: SidebarMetrics.compose, height: SidebarMetrics.controlHeight)
                 .contentShape(Rectangle())
@@ -708,7 +709,7 @@ struct InstancesList: View {
         }
         .buttonStyle(.borderless)
         .focused($composeFocus, equals: name)
-        .disabled(store.threads(name) == nil)
+        .disabled(store.threads(name) == nil || store.creatingThread.contains(name))
         .accessibilityLabel("New thread with \(name)")
     }
 
@@ -768,7 +769,7 @@ struct InstancesList: View {
     }
 
     private func newThread(_ name: String) {
-        Task { if let ref = await store.newThread(name) { selection = ChatSelection(name, ref) } }
+        Task { await store.newThread(name) { selection = ChatSelection(name, $0) } }
     }
 
     private func closeThread(_ name: String, _ id: String) {

@@ -205,6 +205,7 @@ struct ChatScreen: View {
         .environment(screen)
         .environment(preview)
         .onAppear {
+            TransitionClock.mark("shown")
             visible = true
             screen.documentsCover = covers
             // The shell's documents follow the chat on display (an earlier chat's are read-only); open stays open.
@@ -250,6 +251,7 @@ struct ChatScreen: View {
                 if !visible { stopMarkingSeen() }
                 markSeen()
             }
+            .onAppear { TransitionClock.mark("loaded") }
         } else if case .stopped(let error) = chat.connection {
             MarkMessage("Could not open the chat", message: Text(error.message)) {
                 Button("Try again") { chat.start() }.buttonStyle(ProminentAction())
@@ -389,8 +391,8 @@ struct ChatScreen: View {
         }
         if hasThreads {
             // A thread more, beside this one: it ends nothing, so nothing to confirm.
-            Button { newThread() } label: { Image(systemName: "square.and.pencil") }
-                .disabled(screen.archived || chat.isEarlier)
+            Button { newThread() } label: { NewThreadIcon(starting: store.creatingThread.contains(chat.instance)) }
+                .disabled(screen.archived || chat.isEarlier || store.creatingThread.contains(chat.instance))
                 .accessibilityLabel("New thread with \(chat.instance)")
                 .accessibilityHint("Starts another conversation with \(chat.instance); this one stays open")
         } else {
@@ -445,10 +447,10 @@ struct ChatScreen: View {
         }
     }
 
-    /// New thread: started on the server, then shown.
+    /// New thread: shown as soon as the server made it (the thread list is read again behind it).
     private func newThread() {
         Task {
-            if let ref = await store.newThread(chat.instance) { openThread(ref) }
+            await store.newThread(chat.instance) { openThread($0) }
         }
     }
 
@@ -653,5 +655,18 @@ private struct PendingNotesView: View {
         }
         .frame(maxHeight: 400)
         .task { await store.refreshNotes(instance) }
+    }
+}
+
+/// The New thread button's face: the pencil, or a small spinner in its place while the server starts the thread (a tap
+/// shows at once that it was taken; the thread opens when the server has made it).
+struct NewThreadIcon: View {
+    let starting: Bool
+
+    var body: some View {
+        Image(systemName: "square.and.pencil")
+            .opacity(starting ? 0 : 1)
+            .overlay { if starting { ProgressView().controlSize(.small) } }
+            .accessibilityValue(starting ? Text("Starting") : Text(""))
     }
 }

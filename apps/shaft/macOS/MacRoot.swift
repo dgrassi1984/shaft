@@ -79,7 +79,7 @@ final class MacState {
     func newThread() {
         guard let store, let name = selection?.instance else { return }
         Task {
-            if let ref = await store.newThread(name) { open(ChatSelection(name, ref)) }
+            await store.newThread(name) { self.open(ChatSelection(name, $0)) }
         }
     }
 

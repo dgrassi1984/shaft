@@ -19,9 +19,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import apns, app_api, autonomy, commitments, core, docs, feedback, messages, panel, projects, web
+from supervisor import apns, app_api, autonomy, commitments, core, dashboard, docs, feedback, messages, panel, projects, web
 from supervisor import web_chat, web_seen, webpush, reply_links, outcomes
-from supervisor.tests.test_web import HOST, ME, WebTest, snap
+from supervisor.tests.test_web import HOST, ME, WebTest, live_snap, snap
 
 FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
 CID = "web-3f9a1c0d7e2b4a65"
@@ -415,7 +415,7 @@ class CyclesTest(AppTest):
         self.assertEqual(first["improvement"]["at"], app_api.stamp("2026-11-05T04:00:00"))
 
     def test_now_since_is_time_of_day_sent_as_given_not_an_offset_timestamp(self):
-        with mock.patch.object(web, "_live", return_value={"state": "in a cycle", "since": "18:06"}):
+        with mock.patch.object(dashboard, "live_state", return_value=live_snap(state="in a cycle", since="18:06")):
             self.assertEqual(self.get("/app/v1/plan/wisp")["now"]["since"], "18:06")
 
     def test_fixture_queue_rows_use_real_status_instead_of_done(self):
@@ -497,7 +497,7 @@ class CyclesTest(AppTest):
             self.error(self.api("/app/v1/" + path), 404, "not_found")
 
     def test_no_payload_carries_tool_results_or_doing(self):
-        with mock.patch.object(web, "overview", return_value=snap(state="in a cycle", doing="run SECRET")):
+        with mock.patch.object(dashboard, "live_state", return_value=live_snap(state="in a cycle", doing="run SECRET")):
             for path in ("/app/v1/plan/wisp", "/app/v1/cycles/wisp",
                          "/app/v1/cycles/wisp/2026-11-03T13:58:40"):
                 self.assertNotIn("SECRET", json.dumps(self.get(path)))
@@ -513,7 +513,7 @@ class CyclesTest(AppTest):
                   "c2": {"id": "c2", "promise": "Review", "due": "2099-11-05", "status": "open"}}
         with mock.patch.object(commitments, "ledger", return_value=ledger):
             for since in ("12:34", "2026-11-03T12:34:00"):
-                with mock.patch.object(web, "overview", return_value=snap(since=since)):
+                with mock.patch.object(dashboard, "live_state", return_value=live_snap(since=since)):
                     plan = self.get("/app/v1/plan/wisp")
                 self.assertEqual(plan["now"]["since"], since if since == "12:34" else app_api.stamp(since))
                 self.assertEqual([c["due"] for c in plan["commitments"]],

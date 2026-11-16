@@ -115,15 +115,34 @@ def _value(js: list[dict] | None) -> float | None:
         return None
 
 
-def instance_state(name: str, now: float | None = None) -> dict:
-    from . import autonomy
+_paused_marker_cache: dict[Path, tuple[tuple[int, int, int], bool]] = {}
+
+
+def _paused_marker(root: Path) -> bool:
+    """Scan scratch entries only when the directory's identity or mtime changes."""
+    directory = root / ".tmp"
+    try:
+        st = os.stat(directory, follow_symlinks=False)
+    except OSError:
+        return any(n.startswith("paused-") for n in list_beneath(root, ".tmp"))
+    key = (st.st_dev, st.st_ino, st.st_mtime_ns)
+    hit = _paused_marker_cache.get(directory)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    result = any(n.startswith("paused-") for n in list_beneath(root, ".tmp"))
+    _paused_marker_cache[directory] = (key, result)
+    return result
+
+
+def live_state(name: str, now: float | None = None) -> dict:
+    """Current activity, state and spend, without dashboard history or wake scheduling."""
     from .runner import busy_with, open_conversations
     now = now or time.time()
     root = instance_root(name)
     busy = busy_with(name) or ""
     convs = open_conversations(name)
     act = activity(root)
-    is_paused = any(n.startswith("paused-") for n in list_beneath(root, ".tmp"))
+    is_paused = _paused_marker(root)
     if paused(name):
         state = "paused by you"
     elif is_paused:
@@ -152,18 +171,23 @@ def instance_state(name: str, now: float | None = None) -> dict:
     if cfg.get("LLM_BASE_URL") == "broker":
         from . import planchannel, selfhosted
         channel = planchannel.label(model) + " " if planchannel.serves(model) else "self-hosted " if selfhosted.serves(model) else "cloud "
+    return {"name": name, "state": state, "since": busy.partition(" since ")[2], "doing": doing,
+            "goal": act.get("goal", "") if act else "", "model": channel + model.split("/")[-1],
+            "conversations": len(convs), "usd_today": _usd_today(name)}
+
+
+def instance_state(name: str, now: float | None = None) -> dict:
+    from . import autonomy
+    now = now or time.time()
+    live = live_state(name, now)
     interval = autonomy.wake_interval(name)
     next_wake = autonomy.next_wake(name, datetime.fromtimestamp(now), interval)
-    calls, tokens = _today_usage(root)
+    calls, tokens = _today_usage(instance_root(name))
     js = _judgments(name)
     n_judged, rate, achieved = _judged(js)
-    return {"name": name, "state": state, "since": busy.partition(" since ")[2], "doing": doing,
-            "goal": act.get("goal", "") if act else "",
-            "model": channel + model.split("/")[-1],
-            "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
-            "next_wake": next_wake, "wake_skipped": autonomy.last_skip(name), "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
-            "usd_today": _usd_today(name), "judged": n_judged, "success": rate, "achieved": achieved,
-            "value": _value(js),
+    return {**live, "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
+            "next_wake": next_wake, "wake_skipped": autonomy.last_skip(name), "calls_today": calls, "tokens_today": tokens,
+            "judged": n_judged, "success": rate, "achieved": achieved, "value": _value(js),
             "tools_off": sorted(disabled_tools(name)), "trial": _trial_line(name)}
 
 
