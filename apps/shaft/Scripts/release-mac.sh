@@ -3,7 +3,10 @@
 # It never uploads anything. apps/shaft/README.md ("Release a signed build") has the one-time setup.
 #
 #   Scripts/release-mac.sh --notary-profile NAME [--team TEAMID] [--out DIR] [--allow-untagged] [--dry-run]
-#   Scripts/release-mac.sh --self-test      (checks the entitlement helpers on synthetic plists; signs nothing)
+#     [--feed-url URL] [--download-base URL]
+# --feed-url defaults to https://dgrassi1984.github.io/shaft-app/appcast.xml.
+# --download-base defaults to the tagged GitHub release download URL; required when untagged.
+#   Scripts/release-mac.sh --self-test      (checks helpers on synthetic data; signs nothing)
 #
 # --dry-run checks every precondition and prints each command it would run; it signs, uploads and contacts Apple
 # for nothing, and exits 1 if a precondition fails.
@@ -19,14 +22,18 @@ out="$app_dir/build/release"
 allow_untagged=0
 dry=0
 self_test_requested=0
+feed_url=https://dgrassi1984.github.io/shaft-app/appcast.xml
+download_base=""
 
 usage() {
-  sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --feed-url) feed_url=${2?--feed-url needs a value}; shift 2 ;;
+    --download-base) download_base=${2?--download-base needs a value}; shift 2 ;;
     --team) team=${2:?--team needs a value}; shift 2 ;;
     --notary-profile) notary_profile=${2:?--notary-profile needs a value}; shift 2 ;;
     --out) out=${2:?--out needs a value}; shift 2 ;;
@@ -62,6 +69,7 @@ run() {
 
 # Signing.local.yml (git-ignored) holds the team and the bundle prefix.
 local_setting() {
+  [ -f "$app_dir/Signing.local.yml" ] || return 0
   sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" "$app_dir/Signing.local.yml" 2>/dev/null | head -n 1 | tr -d '"' | tr -d "'"
 }
 
@@ -104,6 +112,55 @@ profile_aps() {
   val=$(plist_value "$tmp" 'Entitlements.com\.apple\.developer\.aps-environment') || rc=$?
   rm -f "$tmp"
   case $rc in 0) echo "$val" ;; 3) echo absent ;; *) die "cannot read the provisioning profile of $1 (see message above)." ;; esac
+}
+
+# ---------------------------------------------------------------- Sparkle helpers
+url_allowed() {
+  local https='^https://([A-Za-z0-9-]+\.)*[A-Za-z0-9-]+(:[0-9]+)?(/[^[:space:]]*)?$'
+  local http='^http://(127\.0\.0\.1|localhost)(:[0-9]+)?(/[^[:space:]]*)?$'
+  [[ $1 =~ $https || $1 =~ $http ]]
+}
+
+keys_match() { [ -n "$1" ] && [ "$1" = "$2" ]; }
+
+parse_sign_output() {
+  local shape='^sparkle:edSignature="([A-Za-z0-9+/=]+)" length="([0-9]+)"$'
+  [[ $1 =~ $shape ]] || { echo "invalid sign_update output: '$1'" >&2; return 1; }
+  printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+}
+
+# appcast_xml VERSION BUILD MINOS ENCLOSURE_URL LENGTH SIGNATURE NOTES_URL PUBDATE
+appcast_xml() {
+  local version build minos enclosure length signature notes pubdate
+  [[ $7 != *']]>'* ]] || { echo "release notes URL contains ]]>: $7" >&2; return 1; }
+  version=$(xml_escape "$1"); build=$(xml_escape "$2"); minos=$(xml_escape "$3")
+  enclosure=$(xml_escape "$4"); length=$(xml_escape "$5"); signature=$(xml_escape "$6")
+  notes=$(xml_escape "$7"); pubdate=$(xml_escape "$8")
+  cat <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>SHAFT</title>
+    <item>
+      <title>SHAFT $version</title>
+      <pubDate>$pubdate</pubDate>
+      <sparkle:version>$build</sparkle:version>
+      <sparkle:shortVersionString>$version</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>$minos</sparkle:minimumSystemVersion>
+XML
+  if [ -n "$7" ]; then
+    printf '      <description><![CDATA[<p><a href="%s">What changed</a></p>]]></description>\n' "$notes"
+  fi
+  cat <<XML
+      <enclosure url="$enclosure" length="$length" type="application/octet-stream" sparkle:edSignature="$signature"/>
+    </item>
+  </channel>
+</rss>
+XML
 }
 
 self_test() {
@@ -158,6 +215,27 @@ P
   m=$(plist_value "$t/bad.plist" x 2>&1 || true)
   if [[ $m == *"not a valid plist"* ]]; then ok=yes; else ok=no; fi
   expect "malformed plist: message says so" "yes" "$ok"
+  for url in https://example.com/a http://127.0.0.1:8765/a http://localhost/a; do
+    expect "URL allowed: $url" 0 "$(url_allowed "$url"; echo $?)"
+  done
+  for url in http://example.com http://127.0.0.1.evil.com/ http://localhost@evil.com/ ftp://example.com/ '' https:///; do
+    expect "URL refused: $url" 1 "$(url_allowed "$url"; echo $?)"
+  done
+  expect "parse signature" 'Ab+/= 123' "$(parse_sign_output 'sparkle:edSignature="Ab+/=" length="123"')"
+  expect "bad signature length" 1 "$(parse_sign_output 'sparkle:edSignature="Ab==" length="abc"' >/dev/null 2>&1; echo $?)"
+  expect "empty signature output" 1 "$(parse_sign_output '' >/dev/null 2>&1; echo $?)"
+  expect "matching keys" 0 "$(keys_match abc abc; echo $?)"
+  expect "different keys" 1 "$(keys_match abc def; echo $?)"
+  expect "empty keys" 1 "$(keys_match '' ''; echo $?)"
+  appcast_xml '1.2.3' 123 26.0 'https://example.com/a?x=1&y=2' 456 'Ab+/=' 'https://example.com/notes?a=1&b=2' 'Mon, 16 Nov 2026 12:00:00 +0000' >"$t/appcast.xml"
+  if command -v xmllint >/dev/null 2>&1; then
+    expect "appcast is well-formed XML" 0 "$(xmllint --noout - <"$t/appcast.xml"; echo $?)"
+  else
+    echo "skip appcast XML well-formedness: xmllint is not installed."
+  fi
+  expect "exact enclosure attributes and escaped URL" 0 "$(grep -Fq '<enclosure url="https://example.com/a?x=1&amp;y=2" length="456" type="application/octet-stream" sparkle:edSignature="Ab+/="/>' "$t/appcast.xml"; echo $?)"
+  expect "empty notes omit description" 1 "$(appcast_xml 1 2 26 https://example.com/a 3 abc '' date | grep -q '<description>'; echo $?)"
+  expect "notes refuse CDATA terminator" 1 "$(appcast_xml 1 2 26 url 3 abc 'https://example.com/]]>' date >/dev/null 2>&1; echo $?)"
   d=$t; rm -rf "$d"
   if [ "$fails" -ne 0 ]; then echo "$fails self-test(s) failed." >&2; exit 1; fi
   echo "self-test passed."
@@ -185,6 +263,19 @@ tag=$(git -C "$app_dir" describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/
 if [ -z "$tag" ] && [ "$allow_untagged" -eq 0 ]; then
   problem "HEAD is not on a v* tag. Tag the release first, or pass --allow-untagged for a trial build."
 fi
+if [ -z "$download_base" ]; then
+  if [ -n "$tag" ]; then
+    download_base="https://github.com/dgrassi1984/shaft/releases/download/$tag/"
+  else
+    problem "an untagged build has no release to download from: pass --download-base"
+  fi
+fi
+url_allowed "$feed_url" || problem "--feed-url is not an allowed URL: '$feed_url'"
+url_allowed "$download_base" || problem "--download-base is not an allowed URL: '$download_base'"
+[[ $download_base == */ ]] || download_base="$download_base/"
+# Only whether the item exists: no -w/-g, so the private key is never read here (sign_update reads it later).
+security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/null 2>&1 ||
+  problem "No Sparkle EdDSA key in the login keychain. See README.md 'Release a signed build' for one-time key setup."
 echo "git: ${tag:-untagged HEAD $(git -C "$app_dir" rev-parse --short HEAD)}"
 
 command -v xcodegen >/dev/null 2>&1 || problem "xcodegen is not installed (brew install xcodegen)."
@@ -253,11 +344,28 @@ fi
 
 step "Archive (Release)"
 if [ "$dry" -eq 1 ]; then
-  echo "[dry-run] would run: xcodebuild -project $app_dir/SHAFT.xcodeproj -scheme $scheme -configuration Release -destination generic/platform=macOS -archivePath $archive -derivedDataPath $out/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$team SHAFT_APS_ENVIRONMENT=production archive"
+  echo "[dry-run] would run: xcodebuild -project $app_dir/SHAFT.xcodeproj -scheme $scheme -configuration Release -destination generic/platform=macOS -archivePath $archive -derivedDataPath $out/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$team SHAFT_APS_ENVIRONMENT=production SHAFT_UPDATE_FEED=$feed_url archive"
 else
   xcodebuild -project "$app_dir/SHAFT.xcodeproj" -scheme "$scheme" -configuration Release \
     -destination 'generic/platform=macOS' -archivePath "$archive" -derivedDataPath "$out/dd" \
-    -allowProvisioningUpdates DEVELOPMENT_TEAM="$team" SHAFT_APS_ENVIRONMENT=production archive
+    -allowProvisioningUpdates DEVELOPMENT_TEAM="$team" SHAFT_APS_ENVIRONMENT=production SHAFT_UPDATE_FEED="$feed_url" archive
+fi
+
+sparkle_bin="$out/dd/SourcePackages/artifacts/sparkle/Sparkle/bin"
+archive_info="$archive/Products/Applications/SHAFT.app/Contents/Info.plist"
+if [ "$dry" -eq 1 ]; then
+  echo "[dry-run] would require executable: $sparkle_bin/sign_update and $sparkle_bin/generate_keys"
+  echo "[dry-run] would run: $sparkle_bin/generate_keys -p | tr -d '[:space:]'"
+  echo "[dry-run] would run: plist_value $archive_info SUPublicEDKey"
+  echo "[dry-run] would require: keys_match signing and archived public keys; shipping a mismatch would strand every installed copy"
+else
+  for tool in sign_update generate_keys; do
+    [ -x "$sparkle_bin/$tool" ] || die "Sparkle tool is not executable: $sparkle_bin/$tool"
+  done
+  public_key=$("$sparkle_bin/generate_keys" -p | tr -d '[:space:]')
+  archived_key=$(plist_value "$archive_info" SUPublicEDKey) || die "Cannot read SUPublicEDKey in $archive_info."
+  keys_match "$public_key" "$archived_key" ||
+    die "Sparkle signing public key '$public_key' differs from archived SUPublicEDKey '$archived_key'; shipping it would strand every installed copy."
 fi
 
 step "Export with Developer ID signing"
@@ -289,6 +397,12 @@ if [ "$dry" -eq 1 ]; then
 [dry-run] would require: app signed entitlement com.apple.developer.aps-environment = production
 [dry-run] would require: embedded.provisionprofile in the app and the extension, app profile with aps-environment production
 [dry-run] would require: codesign -dv shows 'Authority=Developer ID Application' and flags runtime (hardened) on both
+[dry-run] would require: plist_value $app/Contents/Info.plist SUFeedURL equals $feed_url, SUPublicEDKey non-empty, SUVerifyUpdateBeforeExtraction and SURequireSignedFeed true
+[dry-run] would require framework: $app/Contents/Frameworks/Sparkle.framework
+[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework
+[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate
+[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+[dry-run] would require: Developer ID Application and flags runtime on all three Sparkle bundles
 EOT
 else
   codesign --verify --deep --strict --verbose=2 "$app"
@@ -306,6 +420,22 @@ else
     printf '%s\n' "$info" | grep -q 'flags=.*runtime' || die "$b lacks the hardened runtime."
   done
   [ "$(profile_aps "$app")" = "production" ] || die "The app's provisioning profile does not grant aps-environment production (is Push Notifications on for its App ID?)."
+  app_info="$app/Contents/Info.plist"
+  actual_feed=$(plist_value "$app_info" SUFeedURL) || die "Cannot read SUFeedURL in $app_info."
+  [ "$actual_feed" = "$feed_url" ] || die "SUFeedURL is '$actual_feed', expected '$feed_url'."
+  exported_key=$(plist_value "$app_info" SUPublicEDKey) || die "Cannot read SUPublicEDKey in $app_info."
+  [ -n "$exported_key" ] || die "SUPublicEDKey in $app_info is empty."
+  for key in SUVerifyUpdateBeforeExtraction SURequireSignedFeed; do
+    value=$(plist_value "$app_info" "$key") || die "Cannot read $key in $app_info."
+    [ "$value" = true ] || die "$key in $app_info is '$value', expected true."
+  done
+  framework="$app/Contents/Frameworks/Sparkle.framework"
+  [ -d "$framework" ] || die "Sparkle framework is missing: $framework"
+  for b in "$framework" "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app"; do
+    info=$(codesign -dv "$b" 2>&1) || die "Cannot read signature of $b: $info"
+    printf '%s\n' "$info" | grep -q 'Authority=Developer ID Application' || die "$b is not signed with Developer ID Application: $info"
+    printf '%s\n' "$info" | grep -q 'flags=.*runtime' || die "$b lacks the hardened runtime: $info"
+  done
   echo "app: not sandboxed, hardened, aps-environment production; extension: sandboxed."
 fi
 
@@ -357,12 +487,45 @@ else
   printf '%s\n' "$assess" | grep -q 'accepted' || die "spctl did not say accepted: $assess"
 fi
 
+step "Sparkle appcast"
+notes_url=""
+[ -z "$tag" ] || notes_url="https://github.com/dgrassi1984/shaft/releases/tag/$tag"
+enclosure_url="${download_base}SHAFT-$version.dmg"
+appcast="$out/appcast.xml"
+if [ "$dry" -eq 1 ]; then
+  run "$sparkle_bin/sign_update" "$dmg"
+  echo "[dry-run] would parse_sign_output of sign_update into signature and length"
+  run "$sparkle_bin/sign_update" --verify "$dmg" '<signature>'
+  for key in CFBundleVersion CFBundleShortVersionString LSMinimumSystemVersion; do
+    echo "[dry-run] would run: plist_value $app/Contents/Info.plist $key (required non-empty)"
+  done
+  echo "[dry-run] would run: LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000'"
+  echo "[dry-run] would write: appcast_xml $version <build> <minimum macOS> $enclosure_url <length> <signature> '$notes_url' <pubdate> > $appcast"
+else
+  sig_line=$("$sparkle_bin/sign_update" "$dmg")
+  parsed=$(parse_sign_output "$sig_line") || die "Cannot parse DMG signature (see message above)."
+  signature=${parsed% *}
+  length=${parsed##* }
+  "$sparkle_bin/sign_update" --verify "$dmg" "$signature"
+  build=$(plist_value "$app/Contents/Info.plist" CFBundleVersion) || die "Cannot read CFBundleVersion in $app/Contents/Info.plist."
+  version=$(plist_value "$app/Contents/Info.plist" CFBundleShortVersionString) || die "Cannot read CFBundleShortVersionString in $app/Contents/Info.plist."
+  minos=$(plist_value "$app/Contents/Info.plist" LSMinimumSystemVersion) || die "LSMinimumSystemVersion is absent or unreadable in $app/Contents/Info.plist."
+  [ -n "$build" ] && [ -n "$version" ] && [ -n "$minos" ] || die "Empty app metadata: build='$build', version='$version', minimum macOS='$minos'."
+  pubdate=$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')
+  appcast_xml "$version" "$build" "$minos" "$enclosure_url" "$length" "$signature" "$notes_url" "$pubdate" >"$appcast" || die "Cannot write $appcast."
+fi
+run "$sparkle_bin/sign_update" "$appcast"
+run "$sparkle_bin/sign_update" --verify "$appcast"
+
 step "Result"
 if [ "$dry" -eq 1 ]; then
   echo "[dry-run] would print the path and SHA-256 of $dmg"
-  [ "$problems" -eq 0 ] || exit 1
 else
   echo "$dmg"
   shasum -a 256 "$dmg"
-  echo "Nothing was uploaded. Attach the DMG to the GitHub release yourself."
 fi
+echo "$appcast"
+echo "Upload the DMG to the GitHub release ${tag:-for the trial build}: $enclosure_url"
+echo "Copy the signed feed with AppStore/publish-site.sh --appcast '$appcast' --email <address> --to <site-checkout>, then review and push the site repository."
+echo "Nothing was uploaded."
+[ "$problems" -eq 0 ] || exit 1
