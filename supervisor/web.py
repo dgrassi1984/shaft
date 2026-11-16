@@ -870,7 +870,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import cycles
-        return _html(200, v.cycles_next(cycles.plan(m[1], _live(m[1]))))
+        return _html(200, v.cycles_next(cycles.plan(m[1], dashboard.live_state(m[1]))))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
         if m[1] not in names:
             return None
@@ -886,7 +886,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         from . import web_chat
         if m[2]:
             past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
-            return _html(200, v.chat_header(m[1], _live(m[1]), None, past, from_feed=True))
+            return _html(200, v.chat_header(m[1], dashboard.live_state(m[1]), None, past, from_feed=True))
         if qs.get("away"):                          # its page went hidden on this device: push From to it again
             web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")), cid="from")
             return Response(204, b"")
@@ -900,12 +900,12 @@ def _get(req: Request, csrf: str) -> Response | None:
         from . import web_chat
         past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
         if not qs.get("id"):                 # an older page of the instance's own chat: Main's header
-            return _html(200, v.chat_header(m[1], _live(m[1]), None, past, from_feed=True))
+            return _html(200, v.chat_header(m[1], dashboard.live_state(m[1]), None, past, from_feed=True))
         chat = web_chat.load(qs["id"])
         if not chat or chat.get("instance") != m[1]:
             return None
         read_only = chat.get("state") == "ended"
-        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=read_only))
+        return _html(200, v.chat_header(m[1], dashboard.live_state(m[1]), chat, past, read_only=read_only))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -1305,7 +1305,7 @@ def _live(name: str) -> dict:
 
 def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
                    doc_sort: str = "") -> Response | None:
-    from . import panel, web_views as v
+    from . import dashboard, panel, web_views as v
     from .core import instance_root, journal_entries
     if tab in ("files", "file"):
         return _instance_files(name, tab, qs, names, csrf)
@@ -1346,7 +1346,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         doc, panel = _docs_panel(name, web_chat.from_chat(name), qs.get("doc", ""), qs.get("thread", ""),
                                  att=qs.get("att", ""), folder=qs.get("dir", ""), sort=doc_sort,
                                  listing_only=qs.get("list") == "1")
-        return _html(200, v.from_page(name, web_chat.from_feed(name, whole=whole), past, _live(name), names, csrf,
+        return _html(200, v.from_page(name, web_chat.from_feed(name, whole=whole), past, dashboard.live_state(name), names, csrf,
                                       later=_next_cycle(name), whole=whole, panel=panel, doc=doc,
                                       att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
@@ -1362,7 +1362,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only,
                                  att=qs.get("att", ""), folder=qs.get("dir", ""), sort=doc_sort,
                                  listing_only=qs.get("list") == "1")
-        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, read_only), past, _live(name), names, csrf,
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, read_only), past, dashboard.live_state(name), names, csrf,
                                       read_only=read_only, selected=bool(qs.get("id")),
                                       panel=panel, doc=doc, att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
@@ -1391,7 +1391,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         filt = qs.get("f", "") if qs.get("f", "") in v.TX_FILTERS else ""
         if filt == "conversations":
             es = [e for e in panel.transcripts(name) if e["kind"] == "conversation"]
-            return _html(200, v.transcripts_page(name, es, filt, panel.transcript_summary, _live(name), names, csrf))
+            return _html(200, v.transcripts_page(name, es, filt, panel.transcript_summary, dashboard.live_state(name), names, csrf))
         before = qs.get("before", "")
         try:
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", before):
@@ -1401,7 +1401,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
         except ValueError:
             before = None
         filt = filt if filt in cycles.FILTERS else ""
-        return _html(200, v.cycles_page(name, cycles.plan(name, _live(name)),
+        return _html(200, v.cycles_page(name, cycles.plan(name, dashboard.live_state(name)),
                                         cycles.days(name, before=before, limit=3, filt=filt), filt, names, csrf))
     if tab == "transcript":
         e = next((e for e in panel.transcripts(name) if e["id"] == qs.get("id")), None)

@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import core, web, web_pages
+from supervisor import core, dashboard, web, web_pages
 
 HOST = "mac.tail1234.ts.net:8444"
 ME = "operator@example.com"
@@ -26,6 +26,13 @@ def snap(**inst) -> dict:
             "instances": [i], "events": ["12:00:00 wisp: cycle done"], "messages": [], "alerts": [], "spend": 0.42}
 
 
+def live_snap(**inst) -> dict:
+    """Only the fields dashboard.live_state returns, without dashboard history or scheduling."""
+    row = snap(**inst)["instances"][0]
+    return {key: row[key] for key in ("name", "state", "since", "doing", "goal", "model",
+                                     "conversations", "usd_today")}
+
+
 class WebTest(unittest.TestCase):
     def setUp(self):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-web-"))
@@ -37,6 +44,8 @@ class WebTest(unittest.TestCase):
                         mock.patch.object(web, "allowed_logins", return_value={ME}),
                         mock.patch.object(web, "allowed_hosts", return_value={HOST}),
                         mock.patch.object(web, "overview", return_value=snap()),
+                        mock.patch.object(dashboard, "live_state",
+                                          side_effect=lambda n: live_snap(name=n)),
                         mock.patch("supervisor.web_actions._update_question",
                                    side_effect=lambda n: ("", f"{n} is already on the current template"))]
         for p in self.patches:

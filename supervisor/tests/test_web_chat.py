@@ -13,8 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import messages, web, web_chat, web_pages
-from supervisor.tests.test_web import WebTest, snap
+from supervisor import dashboard, messages, web, web_chat, web_pages
+from supervisor.tests.test_web import WebTest, live_snap, snap
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
 
@@ -1253,8 +1253,10 @@ class ClearInHeaderTest(ChatRoutesCase):
         first = self.req("/fragment/chat/wisp/header", cookie=self.cookie)
         self.assertEqual(first.status, 200)
         self.assertIn('>Pause<', first.body.decode())
-        with mock.patch.object(web, "overview", return_value=snap(state="paused by you", model="different-model",
-                                                                usd_today=1.25)):
+        with mock.patch.object(dashboard, "live_state", return_value=live_snap(
+                state="paused by you", model="different-model", usd_today=1.25)), \
+                mock.patch.object(web, "overview", side_effect=AssertionError("dashboard read")), \
+                mock.patch.object(dashboard, "snapshot", side_effect=AssertionError("dashboard read")):
             body = self.req("/fragment/chat/wisp/header", cookie=self.cookie).body.decode()
         self.assertIn('>Resume<', body)
         self.assertNotIn('>Pause<', body)

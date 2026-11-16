@@ -16,6 +16,17 @@ D = datetime.fromisoformat
 H2 = timedelta(hours=2)
 
 
+class ServicePriorityTest(unittest.TestCase):
+    def test_only_web_and_api_plists_use_interactive_process_type(self):
+        for name in autonomy.SERVICES:
+            with self.subTest(service=name):
+                plist = autonomy._plist(name)
+                if name in ("web", "api"):
+                    self.assertEqual(plist["ProcessType"], "Interactive")
+                else:
+                    self.assertNotIn("ProcessType", plist)
+
+
 class SleepDueTest(unittest.TestCase):
     def test_a_missed_sleep_is_made_up_later_that_day(self):
         # Regression: launchd's domain went on-demand-only; the 04:00 sleep never started and nobody noticed.

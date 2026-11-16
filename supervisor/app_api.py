@@ -259,7 +259,7 @@ def _unpair(req: Request) -> Response:
 
 # -- the chat list (§3) -----------------------------------------------------------------------------------------------
 def _instances(req: Request) -> Response:
-    from . import core, messages, opconfig, web_chat, web_seen, web_views
+    from . import core, dashboard, messages, opconfig, web_chat, web_seen, web_views
     history = messages.history()
     names = web._names()
     summaries = {n: web_chat.summary(n, history) for n in names}
@@ -267,7 +267,7 @@ def _instances(req: Request) -> Response:
     unread = {n: any(marks.values()) for n, marks in conversations.items()}
     rows = []
     for n in names:
-        live, s = web._live(n), summaries[n]
+        live, s = dashboard.live_state(n), summaries[n]
         state = live.get("state") or "?"
         threads = web_chat.threads(n)
         replying = any(c.get("state") == "replying" for c in web_chat.open_chats(n))
@@ -300,8 +300,8 @@ def _due_stamp(value: str | None) -> str | None:
 
 
 def _plan(req: Request, n: str) -> Response:
-    from . import cycles
-    out = cycles.plan(n, web._live(n))
+    from . import cycles, dashboard
+    out = cycles.plan(n, dashboard.live_state(n))
     since = out["now"]["since"]
     if since and re.match(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", since):
         out["now"]["since"] = stamp(since)

@@ -59,13 +59,15 @@ SERVICES = {
     "model": {"label": localmodel.LABEL,
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"],
               "plist": {"RunAtLoad": False, "KeepAlive": {"SuccessfulExit": False}}},
-    "api": {"label": "com.shaft.api", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "api", "serve"]},
+    "api": {"label": "com.shaft.api", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "api", "serve"],
+            "plist": {"ProcessType": "Interactive"}},
     "embed": {"label": "com.shaft.embed",
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.embed_server"]},
     "scheduler": {"label": "com.shaft.scheduler",
                   "args": [PYTHON, "-E", "-s", "-m", "supervisor", "autonomy", "serve"]},
     "telegram": {"label": "com.shaft.telegram", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "telegram", "serve"]},
-    "web": {"label": "com.shaft.web", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "web", "serve"]},
+    "web": {"label": "com.shaft.web", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "web", "serve"],
+            "plist": {"ProcessType": "Interactive"}},
 }
 
 

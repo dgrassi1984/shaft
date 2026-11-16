@@ -540,6 +540,136 @@ struct ThreadsTests {
         #expect(await store.chat("wisp").rename("x") == false)
     }
 
+    /// Bug (2026-11-16, "New thread takes a while"): the new thread was shown only after the create request AND a second
+    /// read of the thread list; it must open right after the create answers, the list read following behind it.
+    @Test func newThreadOpensBeforeTheListIsReadAgain() async throws {
+        let folder = try temporaryFolder("thread-new-opens")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try threadsServer()
+        server.setAnswer { request in
+            switch request.path {
+            case "/app/v1/instances": return .json(200, fixtureText(try DecodingTests.fixture("instances")))
+            case "/app/v1/threads/wisp": return .json(200, Self.threadsJSON)
+            case "/app/v1/chat/wisp/new":
+                return .json(200, #"{"chat": {"id": "web-bbbb000000000002", "title": "New thread"}, "said": "thread created"}"#)
+            default: return .json(200, #"{"said": "ok"}"#)
+            }
+        }
+        let store = try makeStore(server, folder: folder)
+        await store.refresh()
+        var openedAfter: [String] = []
+        var startingWhenOpened: Bool?
+        let ref = await store.newThread("wisp") { ref in
+            #expect(ref == .thread(Self.threadB))
+            openedAfter = server.requests.map(\.path)
+            startingWhenOpened = store.creatingThread.contains("wisp")
+        }
+        #expect(ref == .thread(Self.threadB))
+        #expect(openedAfter.last == "/app/v1/chat/wisp/new")
+        #expect(startingWhenOpened == false)
+        #expect(server.requests.last?.path == "/app/v1/threads/wisp")       // the list is still read, after
+        #expect(store.resolve("wisp", .thread(Self.threadB)) == .thread(Self.threadB))
+        #expect(store.creatingThread.isEmpty)
+    }
+
+    /// A second New thread tap while the first is being made starts no second thread.
+    @Test func aSecondNewThreadTapWhileStartingMakesNothing() async throws {
+        let folder = try temporaryFolder("thread-new-twice")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try threadsServer()
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var held = StubServer.Response.json(
+            200, #"{"chat": {"id": "web-bbbb000000000002", "title": "New thread"}, "said": "thread created"}"#)
+        held.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let created = held
+        server.setAnswer { request in
+            switch request.path {
+            case "/app/v1/instances": return .json(200, fixtureText(try DecodingTests.fixture("instances")))
+            case "/app/v1/threads/wisp": return .json(200, Self.threadsJSON)
+            case "/app/v1/chat/wisp/new": return created
+            default: return .json(200, #"{"said": "ok"}"#)
+            }
+        }
+        let store = try makeStore(server, folder: folder)
+        await store.refresh()
+        let first = Task { await store.newThread("wisp") }
+        for await _ in began.stream { break }
+        #expect(store.creatingThread == ["wisp"])
+        #expect(await store.newThread("wisp") == nil)
+        release.continuation.finish()
+        #expect(await first.value == .thread(Self.threadB))
+        #expect(server.requests.filter { $0.path == "/app/v1/chat/wisp/new" }.count == 1)
+        #expect(store.creatingThread.isEmpty)
+    }
+
+    @Test func anEarlierThreadListRefreshDoesNotClearALaterCreatesStartingFlag() async throws {
+        final class RequestCounts: @unchecked Sendable {
+            private let lock = NSLock()
+            private var counts: [String: Int] = [:]
+
+            func next(_ path: String) -> Int {
+                lock.withLock {
+                    counts[path, default: 0] += 1
+                    return counts[path]!
+                }
+            }
+        }
+
+        let folder = try temporaryFolder("thread-new-overlapping-refresh")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try threadsServer()
+        let listBegan = AsyncStream<Void>.makeStream()
+        let releaseList = AsyncStream<Void>.makeStream()
+        let postBegan = AsyncStream<Void>.makeStream()
+        let releasePost = AsyncStream<Void>.makeStream()
+        defer {
+            listBegan.continuation.finish(); releaseList.continuation.finish()
+            postBegan.continuation.finish(); releasePost.continuation.finish()
+        }
+        var heldList = StubServer.Response.json(200, Self.threadsJSON)
+        heldList.beforeReply = {
+            listBegan.continuation.yield(())
+            for await _ in releaseList.stream { break }
+        }
+        var heldPost = StubServer.Response.json(
+            200, #"{"chat": {"id": "web-aaaa000000000001", "title": "Second"}, "said": "thread created"}"#)
+        heldPost.beforeReply = {
+            postBegan.continuation.yield(())
+            for await _ in releasePost.stream { break }
+        }
+        let listResponse = heldList
+        let postResponse = heldPost
+        let counts = RequestCounts()
+        server.setAnswer { request in
+            let count = counts.next(request.path)
+            switch request.path {
+            case "/app/v1/threads/wisp":
+                return count == 1 ? listResponse : .json(200, Self.threadsJSON)
+            case "/app/v1/chat/wisp/new":
+                return count == 2 ? postResponse : .json(
+                    200, #"{"chat": {"id": "web-bbbb000000000002", "title": "First"}, "said": "thread created"}"#)
+            default: return .json(200, #"{"said": "ok"}"#)
+            }
+        }
+        let store = try makeStore(server, folder: folder)
+        let first = Task { await store.newThread("wisp") }
+        for await _ in listBegan.stream { break }
+        let second = Task { await store.newThread("wisp") }
+        for await _ in postBegan.stream { break }
+        releaseList.continuation.finish()
+        #expect(await first.value == .thread(Self.threadB))
+        #expect(store.creatingThread == ["wisp"])
+        #expect(await store.newThread("wisp") == nil)
+        releasePost.continuation.finish()
+        #expect(await second.value == .thread(Self.threadA))
+        #expect(store.creatingThread.isEmpty)
+    }
+
     // MARK: Notifications
 
     @Test func aNotificationShowsAndOpensItsThread() {
