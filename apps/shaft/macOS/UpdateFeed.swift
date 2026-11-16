@@ -20,8 +20,8 @@ enum UpdateFeed: Equatable {
         }
         let key = (info?["SUPublicEDKey"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !key.isEmpty else { return .refused("the build has no public update key") }
-        // Without these Sparkle installs an archive whose app merely matches our code signature, and trusts an
-        // unsigned feed: the build is misconfigured, so it checks nothing.
+        // Both are on in project.yml: the archive's signature is checked before Sparkle unpacks it, and the feed itself
+        // must be signed. A build without them was not made by project.yml, so it checks nothing.
         for flag in ["SUVerifyUpdateBeforeExtraction", "SURequireSignedFeed"] where info?[flag] as? Bool != true {
             return .refused("the build does not set \(flag)")
         }

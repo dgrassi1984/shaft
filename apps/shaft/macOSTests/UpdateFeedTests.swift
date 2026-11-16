@@ -1,8 +1,8 @@
 import XCTest
 
 /// Regression guard: an everyday build must never offer itself the official download, and a build whose feed or
-/// settings cannot be trusted must not check at all (Sparkle would otherwise install an archive whose app merely
-/// matches the code signature, or follow an unsigned feed).
+/// settings cannot be trusted (plain http to another host, no public key, archives unpacked before their signature is
+/// checked, an unsigned feed accepted) must not check at all.
 final class UpdateFeedTests: XCTestCase {
     private let key = "UL5pMxmGBWOti6qcS1cTtSEHib522ioxVhuK7wJ7TjE="
 

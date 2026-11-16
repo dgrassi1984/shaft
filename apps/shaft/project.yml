@@ -178,7 +178,7 @@ targets:
             CFBundleURLSchemes: [shaft]
         # Sparkle: checked once a day without asking first (an explicit SUEnableAutomaticChecks skips its prompt),
         # installed only when the user says so, no system profile sent. The archive's EdDSA signature is checked
-        # before it is opened, and the feed itself must be signed (both need the key above).
+        # before the DMG is even mounted, and the feed itself must be signed (both need the key above).
         SUFeedURL: $(SHAFT_UPDATE_FEED)
         SUPublicEDKey: $(SHAFT_UPDATE_KEY)
         SUEnableAutomaticChecks: true
