@@ -32,6 +32,13 @@ class AppUpdatesTest(unittest.TestCase):
         self.assertEqual([name for name, block in blocks.items() if "package: Sparkle" in block], ["SHAFT-macOS"])
         self.assertEqual(spec.count("package: Sparkle"), 1)
 
+    def test_signer_checks_read_the_authority_lines(self):
+        """Bug 2026-11-16: the release read the signer with `codesign -dv`, which prints no Authority= lines, so it
+        died with "not signed with Developer ID Application" on every correctly signed app."""
+        script = RELEASE.read_text()
+        self.assertIn("Authority=Developer ID Application", script)
+        self.assertNotRegex(script, r"codesign -dv[^v]", "use codesign -dvv: -dv does not print the signing authority")
+
     @unittest.skipUnless(sys.platform == "darwin", "Release helpers require macOS plutil")
     def test_release_self_test(self):
         done = subprocess.run(["bash", str(RELEASE), "--self-test"], capture_output=True, text=True)

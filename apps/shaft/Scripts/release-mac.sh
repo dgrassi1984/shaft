@@ -396,12 +396,12 @@ if [ "$dry" -eq 1 ]; then
 [dry-run] would require: codesign -d --entitlements :- $appex  has com.apple.security.app-sandbox = true
 [dry-run] would require: app signed entitlement com.apple.developer.aps-environment = production
 [dry-run] would require: embedded.provisionprofile in the app and the extension, app profile with aps-environment production
-[dry-run] would require: codesign -dv shows 'Authority=Developer ID Application' and flags runtime (hardened) on both
+[dry-run] would require: codesign -dvv shows 'Authority=Developer ID Application' and flags runtime (hardened) on both
 [dry-run] would require: plist_value $app/Contents/Info.plist SUFeedURL equals $feed_url, SUPublicEDKey non-empty, SUVerifyUpdateBeforeExtraction and SURequireSignedFeed true
 [dry-run] would require framework: $app/Contents/Frameworks/Sparkle.framework
-[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework
-[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate
-[dry-run] would run: codesign -dv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+[dry-run] would run: codesign -dvv $app/Contents/Frameworks/Sparkle.framework
+[dry-run] would run: codesign -dvv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate
+[dry-run] would run: codesign -dvv $app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 [dry-run] would require: Developer ID Application and flags runtime on all three Sparkle bundles
 EOT
 else
@@ -415,7 +415,8 @@ else
   for b in "$app" "$appex"; do
     [ -f "$b/Contents/embedded.provisionprofile" ] ||
       die "$b has no embedded provisioning profile. A Developer ID app using push or a keychain group needs one; see README.md 'Release a signed build'."
-    info=$(codesign -dv "$b" 2>&1)
+    # -dvv: plain -dv prints no Authority= lines, so the check below failed every correctly signed build.
+    info=$(codesign -dvv "$b" 2>&1)
     printf '%s\n' "$info" | grep -q 'Authority=Developer ID Application' || die "$b is not signed with Developer ID Application."
     printf '%s\n' "$info" | grep -q 'flags=.*runtime' || die "$b lacks the hardened runtime."
   done
@@ -432,7 +433,7 @@ else
   framework="$app/Contents/Frameworks/Sparkle.framework"
   [ -d "$framework" ] || die "Sparkle framework is missing: $framework"
   for b in "$framework" "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app"; do
-    info=$(codesign -dv "$b" 2>&1) || die "Cannot read signature of $b: $info"
+    info=$(codesign -dvv "$b" 2>&1) || die "Cannot read signature of $b: $info"
     printf '%s\n' "$info" | grep -q 'Authority=Developer ID Application' || die "$b is not signed with Developer ID Application: $info"
     printf '%s\n' "$info" | grep -q 'flags=.*runtime' || die "$b lacks the hardened runtime: $info"
   done
