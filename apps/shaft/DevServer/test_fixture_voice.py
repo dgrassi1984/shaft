@@ -13,7 +13,8 @@ import fixture_server as fixture
 class FixtureVoiceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.directory = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
+        cls.directory = tempfile.TemporaryDirectory(prefix="shaft-fixture-test-")
+        cls.addClassCleanup(cls.directory.cleanup)   # also when setUpClass fails (tearDownClass is then skipped)
         cls.previous = os.environ.get("SHAFT_SUPERVISOR_DIR")
         cls.web, cls.chat, _, _ = fixture.setup(Path(cls.directory.name), 8899)
         response = cls.web.respond(cls.web.Request("POST", "/app/v1/pair", {
@@ -26,7 +27,6 @@ class FixtureVoiceTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         mock.patch.stopall()
-        cls.directory.cleanup()
         if cls.previous is None:
             os.environ.pop("SHAFT_SUPERVISOR_DIR", None)
         else:

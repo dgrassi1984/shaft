@@ -7,3 +7,5 @@
 /build/
 DerivedData/
 xcuserdata/
+# Scratch folders a killed or failed fixture test run left behind (tests now use the system temp dir)
+/DevServer/tmp*/
