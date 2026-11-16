@@ -46,6 +46,17 @@ class AppUpdatesTest(unittest.TestCase):
         self.assertTrue(archive_lines, done.stdout + done.stderr)
         archive = archive_lines[0]
         self.assertIn("SHAFT_UPDATE_FEED=https://dgrassi1984.github.io/shaft-app/appcast.xml", archive)
+        # The safety steps must stay, in this order: the archived key checked against the signing key, the DMG
+        # stapled before its EdDSA signature (stapling changes its bytes), then the feed written, signed and verified.
+        plan = done.stdout
+        steps = ["keys_match signing and archived public keys", "stapler staple", "sign_update " ,
+                 "sign_update --verify ", "appcast_xml ", "/sign_update " + str(APP / "build/release/appcast.xml"),
+                 "sign_update --verify " + str(APP / "build/release/appcast.xml")]
+        at = -1
+        for step in steps:
+            found = plan.find(step, at + 1)
+            self.assertGreater(found, at, f"release plan lost or reordered: {step!r}\n{plan}")
+            at = found
         done = subprocess.run([*args, "--feed-url", "http://example.com/a.xml"], capture_output=True, text=True)
         self.assertIn("PRECONDITION FAILED: --feed-url is not an allowed URL: 'http://example.com/a.xml'", done.stderr)
 
