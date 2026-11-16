@@ -28,6 +28,11 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
+  # The Mac app's self-update (macOS/AppUpdates.swift). A binary xcframework; its bin/ tools (generate_keys,
+  # sign_update) land in DerivedData's SourcePackages/artifacts/sparkle/Sparkle/bin/, where release-mac.sh uses them.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 
 # The keychain group the apps and their notification extensions share: the pairing credential lives there, so an
 # extension fetches the notification's body with the app's bearer (SHAFTKit KeychainStore). Each target's Info.plist
@@ -134,12 +139,20 @@ targets:
     dependencies:
       - package: SHAFTKit
       - package: MarkdownUI
+      - package: Sparkle
       - target: NotificationService-macOS
     settings:
       base:
         PRODUCT_NAME: SHAFT
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft
         ENABLE_HARDENED_RUNTIME: YES
+        # Self-update (macOS/AppUpdates.swift). The feed is empty in every build but the Developer ID one:
+        # Scripts/release-mac.sh passes SHAFT_UPDATE_FEED for its archive, and the "Drop an empty update feed" step
+        # below removes the key otherwise, so an everyday build never offers itself the official download. The key is
+        # the public half of the EdDSA pair whose private half signs each release (README.md "Release a signed
+        # build"); release-mac.sh refuses to sign with any other.
+        SHAFT_UPDATE_FEED: ""
+        SHAFT_UPDATE_KEY: UL5pMxmGBWOti6qcS1cTtSEHib522ioxVhuK7wJ7TjE=
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # The APNs environment the entitlement below names. Everyday builds, Release included, are signed with an
@@ -163,7 +176,30 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: $(SHAFT_BUNDLE_PREFIX).shaft
             CFBundleURLSchemes: [shaft]
+        # Sparkle: checked once a day without asking first (an explicit SUEnableAutomaticChecks skips its prompt),
+        # installed only when the user says so, no system profile sent. The archive's EdDSA signature is checked
+        # before the DMG is even mounted, and the feed itself must be signed (both need the key above).
+        SUFeedURL: $(SHAFT_UPDATE_FEED)
+        SUPublicEDKey: $(SHAFT_UPDATE_KEY)
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
+        SUAutomaticallyUpdate: false
+        SUEnableSystemProfiling: false
+        SUVerifyUpdateBeforeExtraction: true
+        SURequireSignedFeed: true
     postBuildScripts:
+      # No feed, no key: Sparkle reads an empty SUFeedURL as a feed. AppUpdates also refuses to start without one.
+      - name: Drop an empty update feed
+        script: |
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          feed=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$plist" 2>/dev/null || true)
+          if [ -z "$feed" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$plist" 2>/dev/null || true
+          fi
+          touch "$DERIVED_FILE_DIR/drop-empty-feed.stamp"
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/drop-empty-feed.stamp]
+        basedOnDependencyAnalysis: false
       # Plain http to this machine in every configuration: the Mac app's setup wizard talks to the server it starts on
       # 127.0.0.1 (and the fixture server in Debug). iOS stays Debug-only above.
       - name: Allow local http
@@ -211,6 +247,7 @@ targets:
       - path: macOS/SelectionReplyButton.swift
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift
+      - path: macOS/UpdateFeed.swift
       - path: macOS/Setup/SetupGate.swift
       - path: macOS/Setup/MacSetup.swift
       - path: macOS/Setup/SetupForms.swift

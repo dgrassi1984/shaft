@@ -396,9 +396,9 @@ wizard in a dev run"); its pasted-link pairing is the wizard's "Connect to an ex
 
 ## Release a signed build
 
-`Scripts/release-mac.sh` makes the Mac app's download: a Developer ID signed, notarized, stapled
-`build/release/SHAFT-<version>.dmg` (with an Applications shortcut). It uploads nothing; attach the file to the release
-yourself.
+`Scripts/release-mac.sh` makes the Mac app's download, a Developer ID signed, notarized, stapled
+`build/release/SHAFT-<version>.dmg` (with an Applications shortcut), and its signed update feed,
+`build/release/appcast.xml`. It uploads nothing.
 
 One-time setup, with your paid Apple Developer team:
 
@@ -421,6 +421,16 @@ One-time setup, with your paid Apple Developer team:
    `SHAFT_APS_ENVIRONMENT=production` for its archive. It checks the exported bundles and fails if a profile is missing,
    the app's does not grant production push, or the signed app's `aps-environment` is not `production`.
 
+4. **Update signing key.** Run Sparkle's `generate_keys` once. It comes with the Sparkle package: after any build
+   it is in the derived data's `SourcePackages/artifacts/sparkle/Sparkle/bin/` (`release-mac.sh` uses
+   `build/release/dd/SourcePackages/artifacts/sparkle/Sparkle/bin/`). It stores the EdDSA private key in the login
+   keychain, service `https://sparkle-project.org`, account `ed25519`. Set its public half as `SHAFT_UPDATE_KEY` in
+   `project.yml`; it goes into every shipped app for good. Back up the private key with `generate_keys -x <file>`
+   into a password manager, then delete the file. Never put the private key in the repository or send it anywhere.
+   Losing it means updates can only be shipped by rotating the key with a Developer ID-signed DMG from the same
+   team. Sparkle allows changing the key or the code signature, never both at once. On a new Mac, import the backup
+   with `generate_keys -f <file>`, then delete the file.
+
 Then, from a clean checkout on a release tag:
 
 ```bash
@@ -429,11 +439,34 @@ Scripts/release-mac.sh --notary-profile shaft-notary
 ```
 
 Options: `--team TEAMID` (default: `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
-`--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the preconditions and
-prints every command, signing and contacting Apple for nothing), `--self-test` (checks the script's entitlement readers
-on synthetic plists; signs nothing). It stops at the first failed step, and when Apple
-rejects the notarization it prints the submission id and `notarytool log`. On success it prints the DMG's path and
-SHA-256.
+`--feed-url URL` (default `https://dgrassi1984.github.io/shaft-app/appcast.xml`; baked into the shipped app, so never
+change it for released apps), `--download-base URL` (default: the tag's GitHub release download URL; required for an
+untagged trial), `--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the
+preconditions and prints every command, signing and contacting Apple for nothing), `--self-test` (checks the script's
+entitlement readers, URL rules and appcast writer on synthetic data; signs nothing). Both URL options accept `https`, or `http` to `127.0.0.1`
+or `localhost` only, for a local test. It stops at the first failed step, and when Apple rejects the notarization it
+prints the submission id and `notarytool log`.
+
+The script refuses to sign when the keychain key's public half differs from the app's `SUPublicEDKey`. It checks
+the exported app's update settings and the Developer ID signatures of Sparkle's helpers. After stapling, it
+EdDSA-signs the DMG and writes `build/release/appcast.xml`, a single-item feed; both are signed and verified.
+On success it prints the DMG's path and SHA-256, and the feed's path.
+
+Per release:
+
+1. Attach the DMG to the tag's GitHub release under its exact name, `SHAFT-<version>.dmg`.
+2. From `apps/shaft/`, run
+   `AppStore/publish-site.sh --appcast build/release/appcast.xml --email <address> --to <site checkout>`.
+3. Review and push the site repository. Publish the feed only after the DMG is downloadable. Never edit
+   `appcast.xml` by hand: it is signed, and installed apps refuse a modified feed.
+
+**Test an update locally.** Make two trial builds from two commits, A older and B newer, each with
+`--allow-untagged --feed-url http://127.0.0.1:<port>/appcast.xml --download-base http://127.0.0.1:<port>/ --out <dir>`,
+choosing a port nothing else listens on (`lsof -nP -iTCP:<port> -sTCP:LISTEN` prints nothing): both URLs are
+baked into the builds and the signed feed. Use a separate output directory for each. Serve B's DMG and
+`appcast.xml` from one folder with `python3 -m http.server <port> --bind 127.0.0.1`. Copy A's app somewhere other than `/Applications`, open it, and
+choose **Check for Updates…**. With the app closed, `defaults delete <bundle id> SULastCheckTime` makes a scheduled
+check due at the next launch. Everyday builds, not from `release-mac.sh`, carry no feed and never check.
 
 ## Release to the App Store
 

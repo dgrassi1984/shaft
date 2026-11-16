@@ -103,6 +103,8 @@ The Mac app installs and runs SHAFT for you. Its download is a Developer ID sign
 attached to the [releases](https://github.com/dgrassi1984/shaft/releases) cut after the Mac app's installer landed;
 until a release carries one, use the [terminal quickstart](#quickstart-cloud-only) below, or build the app yourself
 ([native apps](apps/shaft/README.md)).
+The downloaded app checks for updates once a day and installs them when you click Install;
+Settings lets you turn the check off.
 
 1. Download `SHAFT-<version>.dmg` from a release that has one, open it and drag SHAFT to Applications.
 2. Open SHAFT. With no SHAFT installed in `~/SHAFT`, it opens its setup wizard. Read the Welcome page: it states what
