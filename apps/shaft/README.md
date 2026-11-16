@@ -461,9 +461,10 @@ Per release:
    `appcast.xml` by hand: it is signed, and installed apps refuse a modified feed.
 
 **Test an update locally.** Make two trial builds from two commits, A older and B newer, each with
-`--allow-untagged --feed-url http://127.0.0.1:8765/appcast.xml --download-base http://127.0.0.1:8765/ --out <dir>`.
-Use a separate output directory for each. Serve B's DMG and `appcast.xml` from one folder with
-`python3 -m http.server 8765 --bind 127.0.0.1`. Copy A's app somewhere other than `/Applications`, open it, and
+`--allow-untagged --feed-url http://127.0.0.1:<port>/appcast.xml --download-base http://127.0.0.1:<port>/ --out <dir>`,
+choosing a port nothing else listens on (`lsof -nP -iTCP:<port> -sTCP:LISTEN` prints nothing): both URLs are
+baked into the builds and the signed feed. Use a separate output directory for each. Serve B's DMG and
+`appcast.xml` from one folder with `python3 -m http.server <port> --bind 127.0.0.1`. Copy A's app somewhere other than `/Applications`, open it, and
 choose **Check for Updates…**. With the app closed, `defaults delete <bundle id> SULastCheckTime` makes a scheduled
 check due at the next launch. Everyday builds, not from `release-mac.sh`, carry no feed and never check.
 
