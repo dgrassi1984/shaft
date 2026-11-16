@@ -31,6 +31,7 @@ class ConsultTest(unittest.TestCase):
             self.enterContext(mock.patch.object(module, attr, value))
         self.enterContext(mock.patch.object(autonomy, "next_wake", return_value=None))
         self.urlopen = self.enterContext(mock.patch("urllib.request.urlopen", side_effect=AssertionError("unexpected HTTP")))
+        self.addCleanup(self.wait_for_catalogue_refresh)
         self.model = consult.MODELS[0]
         self.body = {"model": self.model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 100}
         self.catalogue = {"fetched": time.time(), "models": [
@@ -41,6 +42,12 @@ class ConsultTest(unittest.TestCase):
         self.b = broker.Broker("wisp", self.sup, {"OPENROUTER_API_KEY": "fake"}, self.sup / "broker.log",
                                root=self.sup / "copy", share=False, network=False)
         self.b.run_kind, self.b.run_started = "live", "2026-10-27T12:00:00"
+
+    def wait_for_catalogue_refresh(self):
+        """A background catalogue refresh called the next test's urlopen (2026-11-16)."""
+        if not consult._refreshing.acquire(timeout=10):
+            raise AssertionError("a background catalogue refresh outlived its test and would call the next test's urlopen")
+        consult._refreshing.release()
 
     def cache(self):
         (self.sup / "consult_catalogue.json").write_text(json.dumps(self.catalogue))
@@ -113,6 +120,38 @@ class ConsultTest(unittest.TestCase):
     def test_token_authentication(self):
         self.assertEqual(self.http(token="bad")[0], 403)
         self.urlopen.assert_not_called()
+
+    def test_a_background_catalogue_refresh_never_outlives_its_test_20261116(self):
+        """A background catalogue refresh leaked into the next test's urlopen (2026-11-16)."""
+        finish = threading.Event()
+        lock = consult._refreshing
+
+        def upstream(*args, **kwargs):
+            finish.wait(10)
+            raise OSError("offline")
+
+        def acquire(*args, **kwargs):
+            if kwargs.get("timeout") == 10:
+                self.assertIs(urllib.request.urlopen, self.urlopen)
+                finish.set()
+            return lock.acquire(*args, **kwargs)
+
+        self.urlopen.side_effect = upstream
+        self.catalogue["fetched"] = 0
+        self.cache()
+        with mock.patch.object(consult, "_refreshing", wraps=lock) as refreshing:
+            refreshing.acquire.side_effect = acquire
+            try:
+                consult.menu("wisp", fetch=False)
+                self.assertTrue(lock.locked())
+                self.assertTrue(self.doCleanups())
+                refreshing.acquire.assert_any_call(timeout=10)
+                self.assertFalse(lock.locked())
+                self.urlopen.assert_called_once_with("https://openrouter.ai/api/v1/models", timeout=30)
+            finally:
+                finish.set()
+                if lock.acquire(timeout=10):
+                    lock.release()
 
     def test_cost_provider_policy_and_http_reply(self):
         self.upstream(self.reply(0.00123))
