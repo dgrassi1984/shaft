@@ -96,9 +96,17 @@ def setup(base: Path, port: int):
     from supervisor import calendar as calendar_mod, google as google_mod, mail as mail_mod   # never Google here
     from supervisor import telegram as telegram_mod    # the real pairing state, on this folder (SUP_DIR above)
 
-    # setup can be called again in the same test process after supervisor imports are cached.
+    # setup can be called again in the same test process after supervisor imports are cached: move SUP_DIR and every
+    # module-level path built from it at import (feedback.FILE = SUP_DIR / "feedback.jsonl"), or a second test file
+    # writes into the first one's deleted folder.
+    old_sup, new_sup = core.SUP_DIR.resolve(), (base / "sup").resolve()
     for module_name, module in list(sys.modules.items()):
-        if module_name.startswith("supervisor.") and hasattr(module, "SUP_DIR"):
+        if not module_name.startswith("supervisor."):
+            continue
+        for attr, value in list(vars(module).items()):
+            if isinstance(value, Path) and old_sup != new_sup and (value == old_sup or old_sup in value.parents):
+                mock.patch.object(module, attr, new_sup / value.relative_to(old_sup)).start()
+        if hasattr(module, "SUP_DIR"):
             mock.patch.object(module, "SUP_DIR", base / "sup").start()
 
     mock.patch.object(version, "SERVICES", base / "sup" / "services").start()
@@ -833,7 +841,7 @@ def _run(web_chat, relay) -> None:
             said = " ".join(words[: int(len(words) * (i - 2) / (ticks - 3))])
         with web_chat._lock(cid):
             chat = web_chat.load(cid)
-            if chat.get("state") != "replying":
+            if not chat or chat.get("state") != "replying":   # gone (deleted, or its test's folder removed) or done
                 return
             chat["reply"].update(activity=activity, answer=said)
             heard = chat["reply"].get("interjections", 0)

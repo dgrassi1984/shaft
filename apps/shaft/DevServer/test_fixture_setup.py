@@ -15,8 +15,8 @@ KEY = "sk-or-v1-fixture-never-written-91c3"
 
 class FixtureSetupTest(unittest.TestCase):
     def test_the_wizard_from_model_to_hello(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
-            base = Path(directory)
+        with tempfile.TemporaryDirectory(prefix="shaft-fixture-test-") as directory:
+            base = Path(directory).resolve()   # setup resolves it too: /var is /private/var on macOS
             previous = os.environ.get("SHAFT_SUPERVISOR_DIR")
             try:
                 web, chat, messages, push = fixture.setup(base, 8899)
