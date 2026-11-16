@@ -247,6 +247,7 @@ targets:
       - path: macOS/SelectionReplyButton.swift
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift
+      - path: macOS/UpdateFeed.swift
       - path: macOS/Setup/SetupGate.swift
       - path: macOS/Setup/MacSetup.swift
       - path: macOS/Setup/SetupForms.swift

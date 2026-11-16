@@ -161,6 +161,9 @@ struct SettingsView: View {
     @State private var pushProblem: String?
     @State private var unpairing = false
     @State private var forgetting = false
+    #if os(macOS)
+    @Environment(\.appUpdates) private var updates
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -173,6 +176,9 @@ struct SettingsView: View {
                     // App Review asks for the privacy policy inside the app as well as on the listing.
                     Link("Privacy policy", destination: Self.privacyPolicy)
                         .foregroundStyle(Color.brand)
+                    #if os(macOS)
+                    if let updates { AppUpdatesRows(updates: updates) }
+                    #endif
                 }
                 .listRowBackground(Color.elevated)
                 if let credential = session.credential {

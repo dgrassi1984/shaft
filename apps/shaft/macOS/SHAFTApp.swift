@@ -4,7 +4,7 @@ import SwiftUI
 import UserNotifications
 
 /// The Mac app's entry point (native SwiftUI, not Catalyst): one window (`MacRoot`: the instances, the chat, its
-/// documents), the menu commands (`MacCommands`) and a Settings window. The app delegate takes the push token and
+/// documents), the menu commands (`MacCommands`, and "Check for Updates…" in the app menu) and a Settings window. The app delegate takes the push token and
 /// notification clicks, hands them to `AppModel`, and keeps the app running with its window closed, so a push still
 /// arrives and a click brings the window back on that chat.
 @main
@@ -14,13 +14,17 @@ struct SHAFTApp: App {
     var body: some Scene {
         Window("SHAFT", id: MacRoot.windowID) {
             MacRoot(model: delegate.model, state: delegate.state, setup: delegate.setup)
+                .environment(\.appUpdates, delegate.updates)
                 .modifier(MacAppearance())
         }
         .defaultSize(width: 1100, height: 760)
-        .commands { MacCommands(state: delegate.state, menu: delegate.state.menu) }
+        .commands {
+            MacCommands(state: delegate.state, menu: delegate.state.menu)
+            CommandGroup(after: .appInfo) { CheckForUpdatesCommand(updates: delegate.updates) }
+        }
 
         Settings {
-            MacSettings(model: delegate.model, setup: delegate.setup)
+            MacSettings(model: delegate.model, setup: delegate.setup, updates: delegate.updates)
                 .modifier(MacAppearance())
         }
     }
@@ -32,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let state = MacState()
     /// The setup gate: the wizard, or pairing with this Mac's SHAFT without a link.
     let setup = MacSetup()
+    /// Self-update, in the Developer ID download only (`AppUpdates`, `UpdateFeed`).
+    let updates = AppUpdates()
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 
@@ -127,10 +133,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
-/// The Settings window (⌘,): the server, this device, notifications, Update server and Unpair (Shared's SettingsView).
+/// The Settings window (⌘,): the server, this device, notifications, Update server and Unpair (Shared's SettingsView),
+/// the app's own updates among them. Before pairing it still offers the app's updates.
 struct MacSettings: View {
     let model: AppModel
     let setup: MacSetup
+    let updates: AppUpdates
 
     var body: some View {
         Group {
@@ -139,10 +147,19 @@ struct MacSettings: View {
                     .environment(\.serverUpdater, setup.updater(for: session))
                     .environment(\.phoneAccess, setup.phoneAccess(for: session))
             } else {
-                MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
+                VStack(spacing: 0) {
+                    Form {
+                        Section("Updates") { AppUpdatesRows(updates: updates) }
+                            .listRowBackground(Color.elevated)
+                    }
+                    .formStyle(.grouped)
+                    .frame(height: 150)
+                    MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
+                }
             }
         }
         .environment(model)
+        .environment(\.appUpdates, updates)
         .frame(width: 480, height: 556)
         .scrollContentBackground(.hidden)
         .containerBackground(Color.canvas, for: .window)
