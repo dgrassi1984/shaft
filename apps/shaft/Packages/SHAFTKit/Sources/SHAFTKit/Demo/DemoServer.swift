@@ -279,7 +279,7 @@ private final class DemoState: @unchecked Sendable {
                      "unread": unread.contains(name), "unread_main": name == "wisp" && unread.contains(name),
                      "unread_threads": unread.contains(name) ? 1 : 0, "threads": order[name]!.count,
                      "threads_rev": String(revision), "next_cycle": "for \(name)'s next cycle", "voice_mode": "on"]
-                }, "badge": unread.count, "instances_rev": revision])
+                }, "paused": [], "badge": unread.count, "instances_rev": revision])
             }
             if parts == ["push", "status"], method == "GET" {
                 return .json(["on": false, "reason": "Not used in the demo"])

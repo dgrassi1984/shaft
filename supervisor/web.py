@@ -846,8 +846,10 @@ def _get(req: Request, csrf: str) -> Response | None:
     path, qs = req.path, req.query
     names = _names()
     if path == "/":                                  # chat first: the instance last talked to
+        from . import core
+        visible = [n for n in names if not core.paused_alone(n)]
         last = _last_chat(req)
-        to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
+        to = f"/i/{last}/chat" if last in visible else f"/i/{visible[0]}/chat" if visible else "/overview"
         return Response(302, b"", {"Location": to})
     if path == "/fragment/calendar-proposals":
         from . import calendar_proposals

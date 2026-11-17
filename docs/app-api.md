@@ -178,7 +178,9 @@ it. Shared read marks remain. Request `{}`. Response 200 `{"said": "This device 
 
 ### `GET /app/v1/instances`
 
-The rail has one row per instance in the operator's saved order (`supervisor.order.instances`). New instances go last.
+The rail has one row per instance in the operator's saved order (`supervisor.order.instances`). New instances go last. An instance
+the operator paused on its own (`.supervisor/paused-<name>`) has no row: it is listed under `paused` instead, and the
+app offers Resume from Settings. Pause-all hides nothing.
 
 - **Auth:** §1.2.
 - **Conditional:** the response carries an `ETag`; with a matching `If-None-Match` the answer is `304`. The app polls
@@ -189,7 +191,8 @@ The rail has one row per instance in the operator's saved order (`supervisor.ord
   |---|---|---|
   | `instances` | list | the rows below |
   | `instances_rev` | int | saved instance order revision |
-  | `badge` | int | instances with something the operator has not seen (`web_seen.badge`, §12) |
+  | `badge` | int | listed instances with something the operator has not seen (`web_seen.badge`, §12) |
+  | `paused` | list | instances paused on their own, in the saved order: `{"name": str, "since": str \| null}` (§1.6 stamp of the pause flag; absent from an older server) |
 
   Each row:
 

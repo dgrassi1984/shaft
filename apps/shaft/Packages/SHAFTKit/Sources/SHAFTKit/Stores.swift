@@ -7,6 +7,7 @@ import Observation
 @Observable
 public final class InstancesStore {
     public private(set) var instances: [InstanceRow] = []
+    public private(set) var paused: [PausedInstance] = []
     /// Instances with something this device has not seen (§12): the app badge.
     public private(set) var badge = 0
     /// The last failure to load the list; nil once it loads again.
@@ -82,10 +83,21 @@ public final class InstancesStore {
                     instancesRev = answer.instancesRev
                 }
                 instances = answer.instances
+                paused = answer.paused ?? []
                 reportBadge(answer.badge)
             }
             loaded = true
             error = nil
+        } catch {
+            guard let error = APIError.from(error) else { return }
+            report(error)
+        }
+    }
+
+    public func resume(_ name: String) async {
+        do {
+            _ = try await client.setPaused(name, paused: false)
+            await refresh()
         } catch {
             guard let error = APIError.from(error) else { return }
             report(error)

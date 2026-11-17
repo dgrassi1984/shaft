@@ -262,6 +262,23 @@ def _instances(req: Request) -> Response:
     from . import core, dashboard, messages, opconfig, web_chat, web_seen, web_views
     history = messages.history()
     names = web._names()
+    paused = []
+    visible = []
+    for n in names:
+        if core.paused_alone(n):
+            flag = core.SUP_DIR / f"paused-{n}"
+            try:
+                try:
+                    since = stamp(flag.read_text().strip())
+                except (OSError, UnicodeError):
+                    since = None
+                since = since or stamp(flag.stat().st_mtime)
+            except OSError:
+                since = None
+            paused.append({"name": n, "since": since})
+        else:
+            visible.append(n)
+    names = visible
     summaries = {n: web_chat.summary(n, history) for n in names}
     conversations = {n: web_seen.unread_conversations(req.device, n) for n in names}
     unread = {n: any(marks.values()) for n, marks in conversations.items()}
@@ -280,7 +297,8 @@ def _instances(req: Request) -> Response:
                      "unread_threads": sum(v for cid, v in conversations[n].items() if cid != "from"),
                      "next_cycle": web._next_cycle(n),
                      "voice_mode": opconfig.voice_mode(core.instance_config(n))})
-    return _etagged(req, {"instances": rows, "instances_rev": order.instance_rev(), "badge": sum(unread.values())})
+    return _etagged(req, {"instances": rows, "paused": paused, "instances_rev": order.instance_rev(),
+                          "badge": sum(unread.values())})
 
 
 def _etagged(req: Request, data: dict) -> Response:

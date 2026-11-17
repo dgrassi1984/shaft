@@ -738,6 +738,11 @@ set by `SHAFT_APP_API_FIXTURES`.
   runs from); an app that needs a newer server says so instead of failing call by call. The Mac app's **Update
   server** runs `shaft deploy` from that checkout ([deploy](deploy.md)). See
   [the contract](app-api.md#19-version-and-compatibility).
+- **Paused instances.** The web rail and `GET /app/v1/instances` omit instances with an individual
+  `paused-<name>` flag. Pause-all hides nothing. Direct chat routes still work and paused instances still answer.
+  The app response includes `paused: [{"name": "example", "since": "2026-11-03T14:02:11+01:00"}]` in server order.
+  `since` uses the flag's timestamp or modification time. The response's badge counts only visible instances.
+  Native Settings lists paused instances with a Resume button.
 - **One chat model.** The JSON feed and the web page's feed are drawn from one function (`web_chat.build`), so the app
   shows what the PWA shows: the same items with the same keys, the 80-message window, the reply running now, what is
   queued, feedback waiting for your next message.

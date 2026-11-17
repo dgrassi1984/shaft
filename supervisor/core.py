@@ -605,6 +605,11 @@ def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
 
 
+def paused_alone(name: str) -> bool:
+    """Only the individual flag hides a sidebar row; pause-all must keep rows visible."""
+    return (SUP_DIR / f"paused-{name}").exists()
+
+
 def long_pauses(now: datetime | None = None) -> list[dict]:
     """Operator flags past the alert threshold (2026-10-28, A1): a forgotten
     operator pause has no expiry. Old or damaged flag contents fall back to their file's modification time."""

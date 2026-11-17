@@ -9,6 +9,17 @@ import Testing
 /// A fixture is matched to its model by its shape (its top-level keys), so a new one needs no code here. A fixture
 /// that matches no model fails: either the contract grew or the fixture is not an /app/v1 answer.
 struct FixtureTests {
+    @Test func pausedInstancesDecodeWithDatesAndAreOptionalForOlderServers() throws {
+        let current = Data(#"{"instances":[],"badge":0,"paused":[{"name":"example","since":"2026-11-03T14:02:11+01:00"},{"name":"other","since":null}]}"#.utf8)
+        let answer = try SHAFTJSON.decoder().decode(InstancesResponse.self, from: current)
+        let paused = try #require(answer.paused)
+        #expect(paused.map(\.name) == ["example", "other"])
+        #expect(paused[0].since == SHAFTJSON.parseStamp("2026-11-03T14:02:11+01:00"))
+        #expect(paused[1].since == nil)
+        let old = try SHAFTJSON.decoder().decode(InstancesResponse.self, from: Data(#"{"instances":[],"badge":0}"#.utf8))
+        #expect(old.paused == nil)
+    }
+
     @Test func sentIdentityUsesTheServerShapeAndIsOptionalForOlderServers() throws {
         let fixture = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("sent")) as? [String: Any])
         let items = try #require(fixture["items"] as? [[String: Any]])

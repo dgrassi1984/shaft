@@ -62,9 +62,9 @@ struct MacLayoutPinTests {
         }
     }
 
-    /// Bug: Settings' Unpair and Forget were tinted pills inside a row.
+    /// Bug: Settings' Unpair and Forget were tinted pills inside a row. Paused instances' Resume is text too.
     @Test func settingsActionsAreText() throws {
         let settings = try source("Shared/Root/SessionViews.swift")
-        #expect(settings.components(separatedBy: ".rowTextButton()").count == 3)
+        #expect(settings.components(separatedBy: ".rowTextButton()").count == 4)
     }
 }
