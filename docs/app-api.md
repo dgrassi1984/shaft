@@ -1253,7 +1253,11 @@ plugin grants or global settings.
 | `voice_mode` | `{"value": str, "choices": ["on", "off"]}`: `VOICE_MODE`, `"off"` when its `config.env` has none |
 | `voice_effort` | `{"value": str, "choices": [str] or null}`: `VOICE_REASONING_EFFORT`, the reasoning effort on spoken turns. `""` (also when not set) means its `effort`. Choices are `""` and the effort choices; null when those are |
 
-Model choices come from `opconfig.model_choices()`. A current model absent from that list is appended with its
+Model choices come from `opconfig.model_choices()`. Codex, Grok and Antigravity use their cached provider
+listings, restricted by their `SHAFT_*_MODELS` settings when nonempty. Hidden Codex models are omitted.
+Antigravity offers only Gemini bases with low, medium and high variants. Stale model lists return immediately
+while one background refresh runs per provider in the process; without cached data the first read fetches inline.
+A current model absent from that list is appended with its
 model name as its label. Effort choices are the intersection of the instance's own `shaft/config.py` CHOICES
 (parsed as text without importing or executing it) and the selected model's levels, ordered low, medium, high,
 xhigh, max, ultra. The supervisor reads Codex levels from app-server `model/list` and OpenRouter levels from

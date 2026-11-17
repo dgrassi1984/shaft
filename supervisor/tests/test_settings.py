@@ -27,6 +27,15 @@ class FileCase(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="shaft-settings-"))
         self.file = self.dir / "settings.env"
+        from supervisor import agycli, codexcli, effortcatalog, grokcli
+        self.enterContext(mock.patch.object(core, "SUP_DIR", self.dir))
+        self.enterContext(mock.patch.object(codexcli, "MODELS", []))
+        for module, listing, catalog in (
+                (codexcli, "_effort_listing", {"gpt-6-astra": effortcatalog.entry(["low", "high"], "low"),
+                                               "gpt-6.1-sol": effortcatalog.entry(["low", "high"], "low")}),
+                (grokcli, "_model_listing", {}), (agycli, "_model_listing", {})):
+            self.enterContext(mock.patch.object(module, listing, return_value=catalog))
+        codexcli.models()  # Populate the cache used by import-time knob parsers.
         for p in (mock.patch.object(core, "SETTINGS_FILE", self.file), mock.patch.object(core, "SUP_DIR", self.dir),
                   mock.patch.object(settings, "log")):
             p.start()

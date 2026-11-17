@@ -88,8 +88,9 @@ def available(model: str, secrets: dict | None = None) -> str | None:
         return None if keys.get("SHAFT_CUSTOM_API_KEY") else "no SHAFT_CUSTOM_API_KEY in the supervisor's .env"
     if model.startswith("codex/"):
         from . import codexcli
-        if model not in codexcli.MODELS:
-            return f"{model} is not one of SHAFT_CODEX_MODELS ({', '.join(codexcli.MODELS)})"
+        listed = codexcli.models()
+        if listed and model not in listed:
+            return f"{model} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})"
         if not (Path(codexcli.HOME).expanduser() / "auth.json").is_file():
             return core.say("Codex login missing: run shaft codex login",
                             "Codex is not signed in: sign in with ChatGPT on the Model step")

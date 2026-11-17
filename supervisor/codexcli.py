@@ -26,7 +26,7 @@ def serves(model: str | None) -> bool:
 
 def _models(value: str) -> list[str]:
     names = [s.strip() for s in value.split(",") if s.strip()]
-    if not names or not all(serves(s) for s in names):
+    if not all(serves(s) for s in names):
         raise ValueError("must name codex/ models separated by commas")
     return names
 
@@ -42,8 +42,8 @@ HOME, _ = knob("SHAFT_CODEX_HOME", str(SUP_DIR / "codex-home"), Path,
     "private Codex configuration and login directory", group="Codex", services=("runs", "api"))
 BIN, _ = knob("SHAFT_CODEX_BIN", "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", str,
     "Codex CLI executable", group="Codex", services=("runs", "api"))
-MODELS, _ = knob("SHAFT_CODEX_MODELS", "codex/gpt-6-astra,codex/gpt-6.1-sol", _models,
-    "Codex models offered to instances, comma separated", group="Codex", services=("runs", "api"))
+MODELS, _ = knob("SHAFT_CODEX_MODELS", "", _models,
+    "only these of the models Codex lists, comma separated; empty: every model Codex lists", group="Codex", services=("runs", "api"))
 WEEKLY_PCT, _ = knob("SHAFT_CODEX_WEEKLY_PCT", "85", _percent,
     "stop Codex calls at this percentage of the weekly allowance", group="Codex", services=("runs", "api"))
 FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", channel_fallback,
@@ -90,8 +90,12 @@ class CodexSecurity(CodexFailure, planchannel.ChannelSecurity):
     pass
 
 
-def models() -> list[str]:
-    return list(MODELS)
+def models(refresh: bool = True) -> list[str]:
+    from . import effortcatalog
+    listed = effortcatalog.listed("codex", _effort_listing, refresh=refresh)
+    if listed is None:
+        return list(MODELS)
+    return ["codex/" + m for m in listed if not MODELS or "codex/" + m in MODELS]
 
 
 # Keep the Codex-specific entry points for operators and existing integrations.
@@ -550,7 +554,7 @@ def _effort_listing() -> dict:
             for item in result["data"]:
                 models[item["model"]] = effortcatalog.entry(
                     [e["reasoningEffort"] for e in item["supportedReasoningEfforts"]],
-                    item.get("defaultReasoningEffort"))
+                    item.get("defaultReasoningEffort"), hidden=item.get("hidden", False))
             cursor = result.get("nextCursor")
             if cursor is None:
                 return models

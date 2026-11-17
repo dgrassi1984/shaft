@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from supervisor import __main__ as cli
-from supervisor import cloudllm, codexcli, core, modelcall, provider, settings
+from supervisor import cloudllm, codexcli, core, effortcatalog, modelcall, provider, settings
 from supervisor.tests.test_custom_route import chat
 from supervisor.tests.test_modelcall import ALL_KEYS, Case as ProviderCase
 
@@ -67,7 +67,7 @@ class UseTest(Case):
         self.assertEqual(self.written()["SHAFT_JUDGE2_MODEL"], "codex/gpt-6.1-sol")
         self.assertEqual(self.written()["SHAFT_CODEX_FALLBACK_MODEL"], "none")
         self.assertEqual(self.written()["SHAFT_TRIAL_FALLBACK_MODEL"], "codex/gpt-6-astra")
-        self.assertEqual(self.written()["SHAFT_CONSULT_MODELS"], ",".join(codexcli.MODELS))
+        self.assertEqual(self.written()["SHAFT_CONSULT_MODELS"], "codex/gpt-6-astra,codex/gpt-6.1-sol")
         self.assertEqual(sorted(r["covers"]), sorted(set(provider.FUNCTIONS) - {"instances"}))
         self.assertEqual(r["model"], "codex/gpt-6-astra")
         self.assert_consistent(r)
@@ -131,6 +131,18 @@ class UseTest(Case):
         self.assertEqual(code, 0)
         self.assertEqual((self.written()["SHAFT_JUDGE_MODELS"], self.written()["SHAFT_JUDGE2_MODEL"]),
                          ("codex/gpt-6-astra", "codex/gpt-6-astra"))
+
+    def test_a_model_codex_newly_lists_does_not_join_the_judges_2026_11_17(self):
+        # The menu now offers every model Codex lists; the preset's judges stay the chosen pair, not all of them.
+        listing = {name: effortcatalog.entry(["low", "high"], "low")
+                   for name in ("gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-luna")}
+        with mock.patch.object(codexcli, "_effort_listing", lambda: listing):
+            (core.SUP_DIR / "effort_catalog.json").unlink(missing_ok=True)
+            self.assertIn("codex/gpt-6.2-sol", codexcli.models())
+            code, (r,), _ = self.run_cli("use", "codex")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.written()["SHAFT_JUDGE_MODELS"], "codex/gpt-6.1-sol")
+        self.assertEqual(self.written()["SHAFT_CONSULT_MODELS"], "codex/gpt-6-astra,codex/gpt-6.1-sol")
 
     def test_codex_without_login_is_off_with_the_login_reason(self):
         (self.codex.home / "auth.json").unlink()

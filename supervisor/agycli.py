@@ -29,7 +29,7 @@ def serves(model):
 
 def _models(value):
     names = [s.strip() for s in value.split(',') if s.strip()]
-    if not names or not all(serves(s) for s in names):
+    if not all(serves(s) for s in names):
         raise ValueError('must name antigravity/ models separated by commas')
     return names
 
@@ -39,8 +39,8 @@ HOME, _ = knob("SHAFT_ANTIGRAVITY_HOME", str(SUP_DIR / 'agy-home'), Path,
     services=('runs', 'api'))
 BIN, _ = knob("SHAFT_ANTIGRAVITY_BIN", str(Path.home() / '.local/bin/agy'), str,
     'Antigravity CLI executable', group='Antigravity', services=('runs', 'api'))
-MODELS, _ = knob("SHAFT_ANTIGRAVITY_MODELS", 'antigravity/gemini-4-argon,antigravity/gemini-3.8-flash', _models,
-    'Gemini models offered to instances through the Antigravity plan, comma separated', group='Antigravity',
+MODELS, _ = knob("SHAFT_ANTIGRAVITY_MODELS", "", _models,
+    "only these of the models Antigravity lists, comma separated; empty: every model Antigravity lists", group='Antigravity',
     services=('runs', 'api'))
 FALLBACK_MODEL, _ = knob("SHAFT_ANTIGRAVITY_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', cloud_model,
     'cloud model used for the run after an Antigravity plan failure', group='Antigravity', services=('runs', 'api'))
@@ -56,8 +56,12 @@ CLOSE_CANCEL_S = 30
 TOKEN_PATH = ('.gemini', 'antigravity-cli', 'antigravity-oauth-token')
 
 
-def models():
-    return list(MODELS)
+def models(refresh: bool = True) -> list[str]:
+    from . import effortcatalog
+    listed = effortcatalog.listed("antigravity", _model_listing, refresh=refresh)
+    if listed is None:
+        return list(MODELS)
+    return ["antigravity/" + m for m in listed if not MODELS or "antigravity/" + m in MODELS]
 
 
 def home() -> Path:
@@ -72,6 +76,23 @@ def child_env(home_dir: Path, folder: Path) -> dict:
     servers, plugins, conversations) is SHAFT's own and never the operator's."""
     return dict(HOME=str(home_dir), USER=os.environ.get('USER', ''), PATH='/usr/bin:/bin:/usr/sbin:/sbin',
                 TMPDIR=str(folder), LANG='en_US.UTF-8')
+
+
+def _model_listing() -> dict:
+    from . import effortcatalog
+    home_dir = home()
+    with tempfile.TemporaryDirectory(prefix='sa-', dir='/tmp') as temporary:
+        folder = Path(temporary).resolve()
+        result = subprocess.run([BIN, 'models'], cwd=folder, env=child_env(home_dir, folder),
+                                capture_output=True, text=True, timeout=20, check=True)
+    models = {}
+    for line in result.stdout.splitlines():
+        ident, sep, _ = line.strip().partition('\t')
+        base, _, level = ident.rpartition('-')
+        if sep and base.startswith('gemini-') and level in ('low', 'medium', 'high', 'xhigh', 'max'):
+            models.setdefault(base, []).append(level)
+    return {base: effortcatalog.entry(levels, 'medium' if 'medium' in levels else None)
+            for base, levels in models.items() if {'low', 'medium', 'high'}.issubset(levels)}
 
 
 def logged_in() -> bool:
