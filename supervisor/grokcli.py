@@ -80,7 +80,7 @@ def _model_listing() -> dict:
         folder = Path(temporary).resolve()
         (folder / 'home').mkdir()
         (folder / '.git').mkdir()  # Stop upward project discovery.
-        result = subprocess.run([BIN, 'models'], cwd=folder, env=child_env(home, folder),
+        result = subprocess.run([str(Path(BIN).expanduser()), 'models'], cwd=folder, env=child_env(home, folder),
                                 capture_output=True, text=True, timeout=20, check=True)
     # Signed out, grok lists older models only (grok-4.6 and grok-4.5 while signed in lists grok-4.7, 2026-11-17):
     # caching that would hide the real list for SHAFT_EFFORT_CATALOG_HOURS after the login.

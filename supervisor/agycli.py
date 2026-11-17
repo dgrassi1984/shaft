@@ -85,7 +85,7 @@ def _model_listing() -> dict:
     home_dir = home()
     with tempfile.TemporaryDirectory(prefix='sa-', dir='/tmp') as temporary:
         folder = Path(temporary).resolve()
-        result = subprocess.run([BIN, 'models'], cwd=folder, env=child_env(home_dir, folder),
+        result = subprocess.run([str(Path(BIN).expanduser()), 'models'], cwd=folder, env=child_env(home_dir, folder),
                                 capture_output=True, text=True, timeout=20, check=True)
     models = {}
     for line in result.stdout.splitlines():

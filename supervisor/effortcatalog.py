@@ -55,15 +55,15 @@ def _write(path, provider, catalog):
 def _cached(path, provider):
     catalog = _read(path).get(provider, {})
     try:
-        models = {key: entry(value["levels"], value.get("default"), value.get("hidden", False))
+        if catalog.get("version") != VERSION:
+            return None, False
+        models = {key: entry(value["levels"], value.get("default"), value["hidden"])
                   for key, value in catalog["models"].items()}
     except (KeyError, ValueError, TypeError, AttributeError):
         return None, False
     try:
         stamp = datetime.fromisoformat(catalog["fetched_at"])
-        fresh = (catalog.get("version") == VERSION
-                 and all("hidden" in value for value in catalog["models"].values())
-                 and (datetime.now(timezone.utc) - stamp).total_seconds() < HOURS * 3600)
+        fresh = (datetime.now(timezone.utc) - stamp).total_seconds() < HOURS * 3600
     except (KeyError, ValueError, TypeError):
         fresh = False
     return models, fresh
@@ -100,7 +100,7 @@ def _load(provider, fetch, *, refresh=True, background=False):
     if fresh or not refresh:
         return models
     lock = _locks[provider]
-    # Menu reads must not wait behind either a background refresh or an effort lookup.
+    # Cached menu and effort reads must not wait behind a refresh.
     if not lock.acquire(blocking=not (background and models is not None)):
         return models
     try:
@@ -124,6 +124,6 @@ def listed(provider: str, fetch: Callable[[], dict], *, refresh=True) -> list[st
 
 
 def lookup(provider: str, model: str, fetch: Callable[[], dict]) -> tuple[tuple[str, ...], str | None] | None:
-    models = _load(provider, fetch)
+    models = _load(provider, fetch, background=True)
     found = models.get(model) if models is not None else None
     return (tuple(found["levels"]), found["default"]) if found is not None else None

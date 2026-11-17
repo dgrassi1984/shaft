@@ -541,6 +541,9 @@ class _CatalogChannel(Channel):
 
 def _effort_listing() -> dict:
     from . import effortcatalog
+    if not (Path(HOME).expanduser() / "auth.json").is_file():
+        raise CodexFailure(core.say("Codex login missing; run shaft codex login",
+                                    "Codex is not signed in: sign in with ChatGPT on the Model step"))
     channel = _CatalogChannel("effort-catalog", "effort-catalog", lambda message: None)
     channel.deadline = time.monotonic() + 15  # leave time for process cleanup within 20 seconds
     try:

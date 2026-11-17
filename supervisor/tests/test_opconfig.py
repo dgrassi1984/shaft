@@ -550,6 +550,9 @@ class ModelEffortsTest(OpConfigTest):
             catalog["codex"]["fetched_at"] = "2000-01-01T00:00:00+00:00"
             path.write_text(json.dumps(catalog))
             self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            lock = effortcatalog._locks["codex"]
+            self.assertTrue(lock.acquire(timeout=3))
+            lock.release()
             self.assertEqual(json.loads(path.read_text()), catalog)
             self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
             fetch.assert_called_once_with()
@@ -645,6 +648,10 @@ class ModelEffortsTest(OpConfigTest):
 
     def test_codex_listing_initializes_paginates_and_closes(self):
         from supervisor import codexcli
+        home = self.dir / "codex-home"
+        home.mkdir()
+        (home / "auth.json").write_text("{}")
+        self.enterContext(mock.patch.object(codexcli, "HOME", home))
         responses = [{"data": [{"model": "gpt-6.1-sol", "supportedReasoningEfforts": [
             {"reasoningEffort": level, "description": "effort"} for level in ("ultra", "low", "minimal")],
             "defaultReasoningEffort": "low"}], "nextCursor": "page2"},

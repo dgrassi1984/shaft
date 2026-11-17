@@ -88,14 +88,14 @@ def available(model: str, secrets: dict | None = None) -> str | None:
         return None if keys.get("SHAFT_CUSTOM_API_KEY") else "no SHAFT_CUSTOM_API_KEY in the supervisor's .env"
     if model.startswith("codex/"):
         from . import codexcli
-        listed = codexcli.models()
-        if listed and model not in listed:
-            return f"{model} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})"
         if not (Path(codexcli.HOME).expanduser() / "auth.json").is_file():
             return core.say("Codex login missing: run shaft codex login",
                             "Codex is not signed in: sign in with ChatGPT on the Model step")
         if not os.access(codexcli.BIN, os.X_OK):
             return f"no Codex CLI at {codexcli.BIN} (SHAFT_CODEX_BIN)"
+        listed = codexcli.models()
+        if (codexcli.MODELS and model not in codexcli.MODELS) or (listed and model not in listed):
+            return f"{model} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})"
         return None
     return f"{model!r} is not a model the supervisor can call (claude-…, openrouter/…, custom/… or codex/…)"
 

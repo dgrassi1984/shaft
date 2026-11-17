@@ -131,33 +131,54 @@ class CatalogTest(unittest.TestCase):
         core.log.assert_called_once()
         self.assertEqual(list(json.loads(self.path.read_text())["codex"]["models"]), ["old"])
 
-    def test_stale_menu_does_not_wait_for_an_inline_effort_refresh(self):
+    def test_lookup_uses_stale_cache_without_waiting_for_background_refresh(self):
         self.cache({"old": effortcatalog.entry(["low"], "low")}, stale=True)
         started, release = threading.Event(), threading.Event()
         def fetch():
             started.set()
-            release.wait(3)
+            if not release.wait(3):
+                raise AssertionError("refresh was never released")
             return {"new": effortcatalog.entry(["high"], "high")}
         listing = mock.Mock(side_effect=fetch)
         with ThreadPoolExecutor(max_workers=2) as readers:
-            effort = readers.submit(effortcatalog.lookup, "codex", "new", listing)
             try:
+                effort = readers.submit(effortcatalog.lookup, "codex", "old", listing)
                 self.assertTrue(started.wait(1))
+                self.assertEqual(effort.result(timeout=1), (("low",), "low"))
+                effort = readers.submit(effortcatalog.lookup, "codex", "old", listing)
+                self.assertEqual(effort.result(timeout=1), (("low",), "low"))
                 menu = readers.submit(effortcatalog.listed, "codex", listing)
                 self.assertEqual(menu.result(timeout=1), ["old"])
+                self.assertIsNone(effortcatalog.lookup("codex", "new", listing))
             finally:
                 release.set()
-            self.assertEqual(effort.result(timeout=1), (("high",), "high"))
+                lock = effortcatalog._locks["codex"]
+                if lock.acquire(timeout=3):
+                    lock.release()
+                else:
+                    self.fail("background refresh did not finish")
+        self.assertEqual(effortcatalog.lookup("codex", "new", listing), (("high",), "high"))
         listing.assert_called_once_with()
 
     def test_pre_hidden_cache_is_refetched_even_with_a_recent_stamp(self):
-        for version, models in ((None, {"old": {"levels": [], "default": None}}),
+        for version, models in ((None, {"old": effortcatalog.entry([], None)}),
                                 (effortcatalog.VERSION, {"old": {"levels": [], "default": None}})):
             with self.subTest(version=version):
                 self.cache(models, version=version)
+                if version is None:
+                    catalog = json.loads(self.path.read_text())
+                    del catalog["codex"]["version"]
+                    self.path.write_text(json.dumps(catalog))
                 fetch = mock.Mock(return_value={"new": effortcatalog.entry([], None)})
+                try:
+                    self.assertEqual(effortcatalog.listed("codex", fetch), ["new"])
+                finally:
+                    lock = effortcatalog._locks["codex"]
+                    if lock.acquire(timeout=3):
+                        lock.release()
+                    else:
+                        self.fail("background refresh did not finish")
                 self.assertEqual(effortcatalog.lookup("codex", "new", fetch), ((), None))
-                self.assertEqual(effortcatalog.listed("codex", fetch), ["new"])
                 fetch.assert_called_once_with()
                 self.assertEqual(json.loads(self.path.read_text())["codex"]["version"], effortcatalog.VERSION)
 
@@ -184,6 +205,28 @@ class CatalogTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS.*codex/new"):
                     core.any_model("codex/other")
             fetch.assert_not_called()
+
+    def test_codex_restrictions_reject_models_when_catalog_overlap_is_empty(self):
+        self.cache({"listed": effortcatalog.entry([], None)})
+        (self.root / "auth.json").write_text("{}")
+        with mock.patch.object(codexcli, "MODELS", ["codex/allowed"]), \
+                mock.patch.object(codexcli, "HOME", self.root), \
+                mock.patch.object(modelcall.os, "access", return_value=True):
+            self.assertEqual(codexcli.models(), [])
+            for model in ("codex/listed", "codex/other"):
+                with self.subTest(model=model):
+                    with self.assertRaisesRegex(ValueError, "SHAFT_CODEX_MODELS"):
+                        core.any_model(model)
+                    self.assertIn("SHAFT_CODEX_MODELS", modelcall.available(model, secrets={}))
+
+    def test_available_checks_codex_login_and_binary_before_listing(self):
+        with mock.patch.object(codexcli, "HOME", self.root), \
+                mock.patch.object(codexcli, "models", return_value=[]) as listing, \
+                mock.patch.object(modelcall.os, "access", return_value=False):
+            self.assertIn("Codex login missing", modelcall.available("codex/new", secrets={}))
+            (self.root / "auth.json").write_text("{}")
+            self.assertIn("no Codex CLI", modelcall.available("codex/new", secrets={}))
+            listing.assert_not_called()
 
     def test_uniform_models_refresh_reaches_every_backend(self):
         from supervisor import claudecli
@@ -267,13 +310,32 @@ class ListingTest(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     module._model_listing()
 
+    def test_provider_listings_expand_tilde_in_binary_path(self):
+        for module in (agycli, grokcli):
+            with self.subTest(provider=module.__name__), \
+                    mock.patch.object(module, "BIN", "~/example/cli"), \
+                    mock.patch.object(module.subprocess, "run", return_value=mock.Mock(stdout="")) as run:
+                module._model_listing()
+                self.assertEqual(run.call_args.args[0], [str(Path("~/example/cli").expanduser()), "models"])
+
+    def test_codex_signed_out_listing_refuses_before_creating_channel(self):
+        with mock.patch.object(codexcli, "HOME", self.home / "missing"), \
+                mock.patch.object(codexcli, "_CatalogChannel") as channel:
+            channel.return_value._request.return_value = {"data": []}
+            with self.assertRaisesRegex(codexcli.CodexFailure, "Codex login missing"):
+                codexcli._effort_listing()
+            channel.assert_not_called()
+        self.assertFalse((self.home / "missing").exists())
+
     def test_codex_listing_preserves_hidden_flags_across_pages(self):
+        (self.home / "auth.json").write_text("{}")
         channel = mock.Mock()
         channel._request.side_effect = [
             {"data": [{"model": "gpt-6.2-sol", "supportedReasoningEfforts": [{"reasoningEffort": "high"}]}],
              "nextCursor": "next"},
             {"data": [{"model": "gpt-reserve", "supportedReasoningEfforts": [], "hidden": True}]}]
-        with mock.patch.object(codexcli, "_CatalogChannel", return_value=channel):
+        with mock.patch.object(codexcli, "HOME", self.home), \
+                mock.patch.object(codexcli, "_CatalogChannel", return_value=channel):
             self.assertEqual(codexcli._effort_listing(), {
                 "gpt-6.2-sol": {"levels": ["high"], "default": None, "hidden": False},
                 "gpt-reserve": {"levels": [], "default": None, "hidden": True}})

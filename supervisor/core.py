@@ -293,7 +293,7 @@ def any_model(s: str) -> str:
     if s.startswith("codex/"):
         from . import codexcli
         listed = codexcli.models(refresh=False)
-        if listed and s not in listed:
+        if (codexcli.MODELS and s not in codexcli.MODELS) or (listed and s not in listed):
             raise ValueError(f"{s!r} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})")
         return s
     if s.startswith("custom/"):
