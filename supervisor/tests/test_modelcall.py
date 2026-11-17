@@ -54,6 +54,15 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="shaft-modelcall-")).resolve()
         self.addCleanup(shutil.rmtree, self.root, True)
+        from supervisor import agycli, codexcli, effortcatalog, grokcli
+        self.enterContext(mock.patch.object(core, "SUP_DIR", self.root))
+        self.enterContext(mock.patch.object(codexcli, "MODELS", []))
+        for module, listing, catalog in (
+                (codexcli, "_effort_listing", {"gpt-6-astra": effortcatalog.entry(["low", "high"], "low"),
+                                               "gpt-6.1-sol": effortcatalog.entry(["low", "high"], "low")}),
+                (grokcli, "_model_listing", {}), (agycli, "_model_listing", {})):
+            self.enterContext(mock.patch.object(module, listing, return_value=catalog))
+        codexcli.models()  # Populate the cache used by import-time knob parsers.
         self.claude, self.custom = FakeClaude(), Stub()
         self.router = FakeOpenRouter(reply={
             "id": "gen-1", "provider": "Novita", "choices": [{"index": 0, "finish_reason": "stop", "message": {

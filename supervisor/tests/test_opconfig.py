@@ -18,6 +18,7 @@ from unittest import mock
 from supervisor import core, opconfig
 from supervisor.tests import test_config_writers as cw
 from supervisor.cloudllm import _effort_listing as real_listing
+from supervisor.codexcli import _effort_listing as real_codex_listing
 
 TEMPLATE = ('# A local server, or "broker".\nLLM_BASE_URL="http://127.0.0.1:8780/v1"   # SHAFT\'s own\n'
             'LLM_MODEL="ternary-bonsai-2-27b-mlx"\nLLM_API_KEY=""\n# How hard I think.\nLLM_REASONING_EFFORT="medium"\n'
@@ -55,6 +56,12 @@ class OpConfigTest(unittest.TestCase):
                   mock.patch("supervisor.cloudllm._effort_listing", return_value={
                       "xiaomi/mimo-v2.6-pro": {"levels": [], "default": None},
                       "openai/gpt-6.1-sol": {"levels": ["low", "medium", "high", "xhigh", "max"], "default": "medium"}}),
+                  mock.patch("supervisor.codexcli.MODELS", []),
+                  mock.patch("supervisor.codexcli._effort_listing", return_value={
+                      "gpt-6-astra": {"levels": ["low", "high"], "default": "low"},
+                      "gpt-6.1-sol": {"levels": ["low", "high"], "default": "low"}}),
+                  mock.patch("supervisor.agycli._model_listing", return_value={}),
+                  mock.patch("supervisor.grokcli._model_listing", return_value={}),
                   mock.patch.object(opconfig, "log")):
             p.start()
             self.addCleanup(p.stop)
@@ -526,15 +533,15 @@ class ModelEffortsTest(OpConfigTest):
             self.assertEqual(opconfig.effort_choices(self.root, "openrouter/z-ai/glm"), ("low", "high", "max"))
             self.assertEqual(opconfig.model_efforts("openrouter/z-ai/glm"), (("low", "high", "max"), "high"))
             get.assert_called_once_with("https://openrouter.ai/api/v1/models", timeout=10)
-        self.assertEqual(effortcatalog.entry(["minimal", "none"], "none"), {"levels": [], "default": None})
+        self.assertEqual(effortcatalog.entry(["minimal", "none"], "none"), {"levels": [], "default": None, "hidden": False})
 
     def test_live_cache_fresh_stale_failure_and_missing_failure(self):
         from datetime import datetime, timezone
         from supervisor import codexcli, effortcatalog
         path = core.SUP_DIR / "effort_catalog.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        catalog = {"codex": {"fetched_at": datetime.now(timezone.utc).isoformat(),
-                             "models": {"gpt-6.1-sol": {"levels": ["low", "max"], "default": "low"}}}}
+        catalog = {"codex": {"version": effortcatalog.VERSION, "fetched_at": datetime.now(timezone.utc).isoformat(),
+                             "models": {"gpt-6.1-sol": effortcatalog.entry(["low", "max"], "low")}}}
         path.write_text(json.dumps(catalog))
         with mock.patch.object(codexcli, "_effort_listing", side_effect=OSError("offline")) as fetch, \
                 mock.patch.object(core, "log") as log:
@@ -543,6 +550,9 @@ class ModelEffortsTest(OpConfigTest):
             catalog["codex"]["fetched_at"] = "2000-01-01T00:00:00+00:00"
             path.write_text(json.dumps(catalog))
             self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
+            lock = effortcatalog._locks["codex"]
+            self.assertTrue(lock.acquire(timeout=3))
+            lock.release()
             self.assertEqual(json.loads(path.read_text()), catalog)
             self.assertEqual(opconfig.model_efforts("codex/gpt-6.1-sol"), (("low", "max"), "low"))
             fetch.assert_called_once_with()
@@ -576,7 +586,8 @@ class ModelEffortsTest(OpConfigTest):
             fetch.assert_called_once_with()
         saved = json.loads(path.read_text())
         self.assertEqual(saved["openrouter"], other)
-        self.assertEqual(saved["codex"]["models"]["gpt-6.1-sol"], {"levels": ["low", "max"], "default": "low"})
+        self.assertEqual(saved["codex"]["models"]["gpt-6.1-sol"],
+                         {"levels": ["low", "max"], "default": "low", "hidden": False})
         self.assertNotEqual(saved["codex"]["fetched_at"], other["fetched_at"])
 
     def test_set_validates_both_efforts_for_the_effective_model(self):
@@ -637,6 +648,10 @@ class ModelEffortsTest(OpConfigTest):
 
     def test_codex_listing_initializes_paginates_and_closes(self):
         from supervisor import codexcli
+        home = self.dir / "codex-home"
+        home.mkdir()
+        (home / "auth.json").write_text("{}")
+        self.enterContext(mock.patch.object(codexcli, "HOME", home))
         responses = [{"data": [{"model": "gpt-6.1-sol", "supportedReasoningEfforts": [
             {"reasoningEffort": level, "description": "effort"} for level in ("ultra", "low", "minimal")],
             "defaultReasoningEffort": "low"}], "nextCursor": "page2"},
@@ -645,9 +660,9 @@ class ModelEffortsTest(OpConfigTest):
         with mock.patch.object(codexcli._CatalogChannel, "_start_server") as start, \
                 mock.patch.object(codexcli._CatalogChannel, "_request", side_effect=responses) as request, \
                 mock.patch.object(codexcli._CatalogChannel, "close") as close:
-            self.assertEqual(codexcli._effort_listing(), {
-                "gpt-6.1-sol": {"levels": ["low", "ultra"], "default": "low"},
-                "gpt-6-luna": {"levels": ["medium"], "default": "medium"}})
+            self.assertEqual(real_codex_listing(), {
+                "gpt-6.1-sol": {"levels": ["low", "ultra"], "default": "low", "hidden": False},
+                "gpt-6-luna": {"levels": ["medium"], "default": "medium", "hidden": False}})
             start.assert_called_once_with()
             self.assertEqual(request.call_args_list, [mock.call("model/list", {"includeHidden": True}),
                 mock.call("model/list", {"includeHidden": True, "cursor": "page2"})])
@@ -655,7 +670,7 @@ class ModelEffortsTest(OpConfigTest):
         with mock.patch.object(codexcli._CatalogChannel, "_start_server", side_effect=OSError("offline")), \
                 mock.patch.object(codexcli._CatalogChannel, "close") as close:
             with self.assertRaises(OSError):
-                codexcli._effort_listing()
+                real_codex_listing()
             close.assert_called_once_with()
 
     def test_known_empty_intersection_is_exposed_and_refuses_explicit_effort(self):

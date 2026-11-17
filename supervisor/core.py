@@ -288,12 +288,13 @@ def instance_model(s: str) -> str:
 
 def any_model(s: str) -> str:
     """A model the supervisor can call for itself (modelcall: judges, recaps, describe_image): claude-…, openrouter/…,
-    a priced custom/… or a codex/… model of SHAFT_CODEX_MODELS (a ChatGPT plan)."""
+    a priced custom/… or a codex/… model, checked against the cached list and SHAFT_CODEX_MODELS when available."""
     s = model_name(s)
     if s.startswith("codex/"):
         from . import codexcli
-        if s not in codexcli.MODELS:
-            raise ValueError(f"{s!r} is not one of SHAFT_CODEX_MODELS ({', '.join(codexcli.MODELS)})")
+        listed = codexcli.models(refresh=False)
+        if (codexcli.MODELS and s not in codexcli.MODELS) or (listed and s not in listed):
+            raise ValueError(f"{s!r} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})")
         return s
     if s.startswith("custom/"):
         return custom_model(s)

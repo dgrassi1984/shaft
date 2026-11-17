@@ -178,7 +178,7 @@ class SelectorTest(unittest.TestCase):
         import types
         module = types.ModuleType("supervisor.fake_bridge")
         module.Channel = BridgeChannel
-        module.models = lambda: ["bridge/model"]
+        module.models = lambda refresh=True: ["bridge/model"]
         module.LABEL, module.VENDOR, module.SEES_IMAGES = "Bridge", "vendor", True
         module.FALLBACK_MODEL = "openrouter/fallback"
         module.STATE = planchannel.ProviderState("bridge", "Bridge")

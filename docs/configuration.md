@@ -108,14 +108,14 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images: claude-…, openrouter/…, a codex/… plan model, or a custom/ model only when SHAFT_CUSTOM_VISION lists it; or `none`: image description is off and no image is sent anywhere | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CODEX_HOME` | `.supervisor/codex-home` | private Codex login and configuration directory, mode 700 | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
-| `SHAFT_CODEX_MODELS` | `codex/gpt-6-astra,codex/gpt-6.1-sol` | Codex models offered to instances, comma separated | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_MODELS` | empty | Only these of the models Codex lists, comma separated; empty: every model Codex lists | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_LOG_HOURS` | `24` | positive integer hours of Codex's own SQLite logs to keep; read by runs and api | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable | [grokcli.py](../supervisor/grokcli.py) |
-| `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_MODELS` | empty | Only these of the models Grok lists, comma separated; empty: every model Grok lists | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain | [grokcli.py](../supervisor/grokcli.py) |
@@ -127,7 +127,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CLAUDE_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_ANTIGRAVITY_HOME` | `.supervisor/agy-home` | Private Antigravity home, mode 700 | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable | [agycli.py](../supervisor/agycli.py) |
-| `SHAFT_ANTIGRAVITY_MODELS` | `antigravity/gemini-4-argon,antigravity/gemini-3.8-flash` | Offered instance models, comma separated | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_MODELS` | empty | Only these of the models Antigravity lists, comma separated; empty: every model Antigravity lists | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -156,7 +156,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_COPY_MAX_GB` | `8` | gigabytes the supervisor copies of an instance's folder for a battery exam or a gate's scratch copy (more, and the exam or the check fails) | [core.py](../supervisor/core.py) |
 | `SHAFT_TREE_MAX_FILES` | `200000` | files and folders the supervisor reads or copies in one walk of an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
 | `SHAFT_TREE_MAX_DEPTH` | `64` | folders deep the supervisor walks in an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
-| `SHAFT_EFFORT_CATALOG_HOURS` | `24` | hours before refreshing live model reasoning levels | [effortcatalog.py](../supervisor/effortcatalog.py) |
+| `SHAFT_EFFORT_CATALOG_HOURS` | `24` | Hours before refreshing live reasoning levels and plan channels' model lists | [effortcatalog.py](../supervisor/effortcatalog.py) |
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
@@ -490,7 +490,7 @@ calls itself (`SHAFT_CLOUD_MODELS`, `SHAFT_JUDGE_MODELS`, `SHAFT_JUDGE2_MODEL`, 
 | Provider | What it writes |
 |---|---|
 | `openrouter` | Every model on OpenRouter: the OpenRouter defaults, with the `claude-…` defaults (coder, describe, recap) replaced by their OpenRouter equivalents, and `SHAFT_CLOUD_MODELS` set to three OpenRouter instance models (plus `--model openrouter/…` when given) |
-| `codex` | The ChatGPT plan (`shaft codex login` first): judges, coder, consults, recap and trial fallback on `SHAFT_CODEX_MODELS` (`--model` the instance's, default `codex/gpt-6-astra`; the judges are the others). `SHAFT_CODEX_FALLBACK_MODEL=none`; describe is `none` when the model cannot read images. `SHAFT_CLOUD_MODELS` is left as it is |
+| `codex` | The ChatGPT plan (`shaft codex login` first): judges, coder, consults, recap and trial fallback on `codex/gpt-6-astra` and `codex/gpt-6.1-sol` (those Codex still lists; a new listed model never joins the judges by itself) (`--model` the instance's, default `codex/gpt-6-astra`; the judges are the others). `SHAFT_CODEX_FALLBACK_MODEL=none`; describe is `none` when the model cannot read images. `SHAFT_CLOUD_MODELS` is left as it is |
 | `custom` | Every function on `custom/<--model>` (judges on `--judge-model` when given). Needs `--base-url` (unless set already), `--price-in` and `--price-out` (and `--judge-price-in`/`--judge-price-out` for a different judge); `--vision` declares the model able to read images. Writes `SHAFT_CUSTOM_BASE_URL`, `SHAFT_CUSTOM_PRICES` and `SHAFT_CUSTOM_VISION` with the preset; the Codex and trial fallbacks are `none`, and describe is `none` unless the model or the judge model reads images |
 
 The preset is written whole. A function whose models cannot be used yet (no key, no login, no price, no endpoint, a
@@ -505,8 +505,18 @@ Source: [provider.py](../supervisor/provider.py).
 
 ### Codex plan channel
 
+`effortcatalog.listed` supplies the plan menus from Codex app-server `model/list`, `grok models`
+and `agy models`. Hidden Codex models are omitted. Antigravity offers only Gemini bases with low,
+medium and high variants. Each channel's `SHAFT_*_MODELS` setting restricts its listing when nonempty.
+Claude Code keeps its configured list because its CLI has no model-listing command.
+The shared `effort_catalog.json` cache expires after `SHAFT_EFFORT_CATALOG_HOURS`.
+A stale menu returns immediately while one background refresh runs per provider in the process.
+Without a cache, the first read fetches inline. A failed fetch retains stale data, or uses the
+operator's explicit model names when no catalog exists. With neither, the menu is empty.
+Source: [effortcatalog.py](../supervisor/effortcatalog.py), `listed` and `lookup`.
+
 Codex plan routing also uses `LLM_BASE_URL="broker"`, with `LLM_MODEL="codex/gpt-6-astra"`
-or another model in `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft codex status`
+or another model Codex lists, restricted by nonempty `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft codex status`
 shows whether login is present, the last observed weekly usage, offered models and any outage.
 The allowance is shared with other Codex use. Calls use no API dollars; after a failure,
 the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
@@ -532,7 +542,7 @@ Source: [codexcli.py](../supervisor/codexcli.py).
 
 ### Grok plan channel
 
-Instance models in `SHAFT_GROK_MODELS` use `LLM_BASE_URL="broker"`.
+Instance models listed by Grok, restricted by nonempty `SHAFT_GROK_MODELS`, use `LLM_BASE_URL="broker"`.
 Run `shaft grok login` first. These models are not accepted for supervisor cloud
 jobs (judging, describing images, consult or recap). Login and channel children
 receive an explicit environment, with imported skills, rules, hooks and MCPs disabled.
@@ -541,7 +551,7 @@ receive an explicit environment, with imported skills, rules, hooks and MCPs dis
 |---|---|---|
 | `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 |
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable |
-| `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated |
+| `SHAFT_GROK_MODELS` | empty | Only these of the models Grok lists, comma separated; empty: every model Grok lists |
 | `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run, or `none` |
 | `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain |
@@ -588,7 +598,7 @@ subscription. Run `shaft antigravity login` first and use `LLM_BASE_URL="broker"
 |---|---|---|
 | `SHAFT_ANTIGRAVITY_HOME` | `.supervisor/agy-home` | Private Antigravity home, mode 700 |
 | `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable |
-| `SHAFT_ANTIGRAVITY_MODELS` | `antigravity/gemini-4-argon,antigravity/gemini-3.8-flash` | Offered instance models, comma separated |
+| `SHAFT_ANTIGRAVITY_MODELS` | empty | Only these of the models Antigravity lists, comma separated; empty: every model Antigravity lists |
 | `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
 | `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
 

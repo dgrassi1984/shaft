@@ -153,6 +153,9 @@ embed` controls the optional memory-search service.
 `shaft codex login`, `shaft grok login`, `shaft claude login` and `shaft antigravity login` authenticate the plan channels.
 Their `status` commands show login,
 offered models, and outages. Codex and Claude also show observed weekly usage.
+Codex, Grok and Antigravity menus use cached provider listings. Their `SHAFT_*_MODELS`
+settings restrict those listings when nonempty; empty settings offer every eligible listed model.
+See [plan channel settings](configuration.md#codex-plan-channel) for caching and failure behavior.
 
 `shaft codex login --json` signs in without a terminal (the Mac app's setup uses it). It runs `codex login
 --device-auth` in SHAFT's private Codex home with stdin closed and prints one JSON line for each event: `{"url"}` (the

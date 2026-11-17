@@ -66,8 +66,8 @@ def efforts(model: str) -> tuple[tuple[str, ...], str | None] | None:
     return provider(model).efforts(model) if serves(model) else None
 
 
-def models() -> list[str]:
-    return [m for prefix in PROVIDERS for m in provider(prefix).models()]
+def models(refresh: bool = True) -> list[str]:
+    return [m for prefix in PROVIDERS for m in provider(prefix).models(refresh=refresh)]
 
 
 def channel_for(model, name, usage_name, log):

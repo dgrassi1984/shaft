@@ -118,6 +118,10 @@ Run `bin/shaft codex login` to sign in using SHAFT's private Codex home, then
 The broker keeps one Codex session per run. It needs no local model server and accepts text and images;
 `describe_image` remains available through its configured vision model.
 `bin/shaft codex status` shows login, models, any outage and the last observed weekly percentage.
+The model menu comes from Codex's cached `model/list`, excluding hidden models.
+`SHAFT_CODEX_MODELS` defaults to empty and restricts the listing when nonempty.
+Grok and Antigravity use their own `models` commands with the same cache and restriction behavior;
+Antigravity offers only Gemini bases with low, medium and high variants.
 The costs views show the percentage too. The broker saves it in `.supervisor/codex_rate.json`
 so the panel can read it from another process.
 

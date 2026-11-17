@@ -353,6 +353,18 @@ class SameResponseTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
+    def setUp(self):
+        from supervisor import agycli, codexcli, core, effortcatalog, grokcli
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.enterContext(mock.patch.object(core, 'SUP_DIR', Path(temporary.name)))
+        for module, listing, catalog in (
+                (codexcli, '_effort_listing', {}),
+                (grokcli, '_model_listing', {}),
+                (agycli, '_model_listing', {'gemini-4-argon': effortcatalog.entry(['low', 'medium', 'high'], 'medium')})):
+            self.enterContext(mock.patch.object(module, 'MODELS', []))
+            self.enterContext(mock.patch.object(module, listing, return_value=catalog))
+
     def test_provider_and_bakeoff(self):
         from supervisor import bakeoff, core
         model = 'antigravity/gemini-4-argon'

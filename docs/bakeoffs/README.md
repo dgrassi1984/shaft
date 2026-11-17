@@ -72,6 +72,7 @@ bin/shaft trial models <name> --id <id> --import-verdicts <dir>   # decides each
   `chars_read`, and drop any verdict whose judge read under 95% of its case.
 - Routing and allowed models can be set for one run in the environment (`SHAFT_OPENROUTER_PROVIDER`,
   `SHAFT_CLOUD_MODELS`, `SHAFT_CODEX_MODELS`): the live settings stay as they are.
+  `SHAFT_CODEX_MODELS` restricts Codex's cached provider listing; empty offers every listed, nonhidden model.
 - A dense case can overflow a judge's context, and a judge can skim without saying so. Have each judge report a partial
   read, delete that verdict, and leave the pair unjudged if the case still does not fit. After judging, compare what
   each judge read with its case's size and rerun the report's sums without the low ones.

@@ -354,6 +354,18 @@ class RetentionTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
+    def setUp(self):
+        from supervisor import agycli, codexcli, core, effortcatalog, grokcli
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.enterContext(mock.patch.object(core, 'SUP_DIR', Path(temporary.name)))
+        for module, listing, catalog in (
+                (codexcli, '_effort_listing', {}),
+                (grokcli, '_model_listing', {'grok-4.7': effortcatalog.entry(list(grokcli.EFFORTS[0]), grokcli.EFFORTS[1])}),
+                (agycli, '_model_listing', {})):
+            self.enterContext(mock.patch.object(module, 'MODELS', []))
+            self.enterContext(mock.patch.object(module, listing, return_value=catalog))
+
     def test_provider_and_generic_model_seams(self):
         from supervisor import bakeoff, consultstats, core, judge, localmodel, opconfig, runner, settings, vision
         model='grok/grok-4.7'

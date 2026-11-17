@@ -21,6 +21,9 @@ from .core import NO_FALLBACK
 
 PROVIDERS = ("openrouter", "codex", "custom")
 CODEX_DEFAULT = "codex/gpt-6-astra"
+# The pair the codex preset judges and consults with. The menu offers every model Codex lists (gpt-5.6-luna too);
+# which of them judge is a bake-off's call, not the listing's, so a new model never joins the judges by itself.
+CODEX_PRESET = ("codex/gpt-6-astra", "codex/gpt-6.1-sol")
 # function -> the knobs whose models serve it
 FUNCTIONS = {"instances": ("SHAFT_CLOUD_MODELS",), "judge": ("SHAFT_JUDGE_MODELS",), "judge2": ("SHAFT_JUDGE2_MODEL",),
              "coder": ("SHAFT_CODER_MODEL",), "consult": ("SHAFT_CONSULT_MODELS",), "describe": ("SHAFT_DESCRIBE_MODEL",),
@@ -67,9 +70,12 @@ def _openrouter(model: str | None) -> dict:
 def _codex(model: str | None) -> tuple[dict, dict]:
     from . import codexcli
     model = model or CODEX_DEFAULT
-    others = [m for m in codexcli.MODELS if m != model] or [model]
+    listed = codexcli.models()
+    # Neither of the pair listed any more: the instance's own model judges and consults, never an empty list.
+    models = ([m for m in CODEX_PRESET if m in listed] if listed else list(CODEX_PRESET)) or [model]
+    others = [m for m in models if m != model] or [model]
     out = {"SHAFT_JUDGE_MODELS": ",".join(others), "SHAFT_JUDGE2_MODEL": others[0], "SHAFT_CODER_MODEL": model,
-           "SHAFT_CONSULT_MODELS": ",".join(codexcli.MODELS), "SHAFT_RECAP_MODEL": model,
+           "SHAFT_CONSULT_MODELS": ",".join(models), "SHAFT_RECAP_MODEL": model,
            "SHAFT_CODEX_FALLBACK_MODEL": NO_FALLBACK, "SHAFT_TRIAL_FALLBACK_MODEL": model,
            }
     why = _reads_images(model)

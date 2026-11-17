@@ -30,7 +30,7 @@ def serves(model):
 
 def _models(value):
     names = [s.strip() for s in value.split(',') if s.strip()]
-    if not names or not all(serves(s) for s in names):
+    if not all(serves(s) for s in names):
         raise ValueError('must name grok/ models separated by commas')
     return names
 
@@ -39,8 +39,8 @@ HOME, _ = knob("SHAFT_GROK_HOME", str(SUP_DIR / 'grok-home'), Path,
     'private Grok configuration and login directory', group='Grok', services=('runs', 'api'))
 BIN, _ = knob("SHAFT_GROK_BIN", str(Path.home() / '.grok/bin/grok'), str,
     'Grok CLI executable', group='Grok', services=('runs', 'api'))
-MODELS, _ = knob("SHAFT_GROK_MODELS", 'grok/grok-4.7', _models,
-    'Grok models offered to instances, comma separated', group='Grok', services=('runs', 'api'))
+MODELS, _ = knob("SHAFT_GROK_MODELS", "", _models,
+    "only these of the models Grok lists, comma separated; empty: every model Grok lists", group='Grok', services=('runs', 'api'))
 FALLBACK_MODEL, _ = knob("SHAFT_GROK_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', channel_fallback,
     'cloud model used for the run after a Grok failure (claude-…, openrouter/… or a priced custom/…), or none: the '
     'failure ends the run', group='Grok', services=('runs', 'api'))
@@ -54,8 +54,12 @@ BRIDGE = Path(__file__).with_name('planbridge.py').resolve()
 RESERVED = 'shaft_reserved_no_tools'
 
 
-def models():
-    return list(MODELS)
+def models(refresh: bool = True) -> list[str]:
+    from . import effortcatalog
+    listed = effortcatalog.listed("grok", _model_listing, refresh=refresh)
+    if listed is None:
+        return list(MODELS)
+    return ["grok/" + m for m in listed if not MODELS or "grok/" + m in MODELS]
 
 
 def child_env(home, folder):
@@ -65,6 +69,34 @@ def child_env(home, folder):
         for feature in ('SKILLS', 'RULES', 'AGENTS', 'MCPS', 'HOOKS', 'SESSIONS'):
             env[f'GROK_{vendor}_{feature}_ENABLED'] = '0'
     return env
+
+
+def _model_listing() -> dict:
+    from . import effortcatalog
+    home = Path(HOME).expanduser().resolve()
+    if not home.is_dir():
+        raise RuntimeError('Grok is not signed in (no SHAFT_GROK_HOME): run shaft grok login')
+    with tempfile.TemporaryDirectory(prefix='sg-', dir='/tmp') as temporary:
+        folder = Path(temporary).resolve()
+        (folder / 'home').mkdir()
+        (folder / '.git').mkdir()  # Stop upward project discovery.
+        result = subprocess.run([str(Path(BIN).expanduser()), 'models'], cwd=folder, env=child_env(home, folder),
+                                capture_output=True, text=True, timeout=20, check=True)
+    # Signed out, grok lists older models only (grok-4.6 and grok-4.5 while signed in lists grok-4.7, 2026-11-17):
+    # caching that would hide the real list for SHAFT_EFFORT_CATALOG_HOURS after the login.
+    if 'not authenticated' in result.stdout.lower():
+        raise RuntimeError('Grok is not signed in: run shaft grok login')
+    models, available = {}, False
+    for line in result.stdout.splitlines():
+        if line.strip() == 'Available models:':
+            available = True
+        elif available:
+            found = re.fullmatch(r'\s+[*-]\s+(\S+)(?:\s+\(default\))?\s*', line)
+            if found:
+                models[found[1]] = effortcatalog.entry(list(EFFORTS[0]), EFFORTS[1])
+            elif line.strip():
+                available = False
+    return models
 
 
 def _prune_sessions(home):

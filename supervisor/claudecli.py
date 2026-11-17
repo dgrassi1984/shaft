@@ -63,7 +63,7 @@ LABEL, VENDOR, SEES_IMAGES = 'Claude', 'anthropic', True
 STATE = planchannel.ProviderState('claudecode', LABEL)
 
 
-def models():
+def models(refresh: bool = True) -> list[str]:
     return list(MODELS)
 
 
