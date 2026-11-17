@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, coder, core
+from supervisor import cloudllm, coder, codexcli, core, effortcatalog
 from supervisor.tests.test_modelcall import FakeCodex
 
 FILE = "print('old')\n"
@@ -227,7 +227,10 @@ class CodexTest(Case):
             [{"usage": 100}, {"call": 1, "tool": "read_file", "arguments": {"path": "shaft/x.py"}}],
             [{"usage": 50}, {"call": 2, "tool": "submit", "arguments": {"files": NEW, "summary": "via codex"}}]]}))
         self.use("codex/gpt-6-astra")
-        with mock.patch.object(cloudllm, "_record") as cloud_row:
+        # The fake app-server answers the coder's turns, not model/list: asked for the menu, it hung 15 s (2026-11-17).
+        listing = {"gpt-6-astra": effortcatalog.entry(["low", "high"], "low")}
+        with mock.patch.object(cloudllm, "_record") as cloud_row, \
+                mock.patch.object(codexcli, "_effort_listing", return_value=listing):
             files, summary, usage = coder.write(self.root, "kiln", "make it print new")
         self.assertEqual((files, summary), (NEW, "via codex"))
         start = codex.requests("thread/start")[-1]["params"]
