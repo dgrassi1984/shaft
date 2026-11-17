@@ -80,6 +80,8 @@ def child_env(home_dir: Path, folder: Path) -> dict:
 
 def _model_listing() -> dict:
     from . import effortcatalog
+    if not logged_in():                  # a signed-out list is not the plan's: never cache it
+        raise RuntimeError('Antigravity is not signed in: run shaft antigravity login')
     home_dir = home()
     with tempfile.TemporaryDirectory(prefix='sa-', dir='/tmp') as temporary:
         folder = Path(temporary).resolve()

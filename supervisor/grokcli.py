@@ -74,14 +74,18 @@ def child_env(home, folder):
 def _model_listing() -> dict:
     from . import effortcatalog
     home = Path(HOME).expanduser().resolve()
-    home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    home.chmod(0o700)
+    if not home.is_dir():
+        raise RuntimeError('Grok is not signed in (no SHAFT_GROK_HOME): run shaft grok login')
     with tempfile.TemporaryDirectory(prefix='sg-', dir='/tmp') as temporary:
         folder = Path(temporary).resolve()
         (folder / 'home').mkdir()
         (folder / '.git').mkdir()  # Stop upward project discovery.
         result = subprocess.run([BIN, 'models'], cwd=folder, env=child_env(home, folder),
                                 capture_output=True, text=True, timeout=20, check=True)
+    # Signed out, grok lists older models only (grok-4.6 and grok-4.5 while signed in lists grok-4.7, 2026-11-17):
+    # caching that would hide the real list for SHAFT_EFFORT_CATALOG_HOURS after the login.
+    if 'not authenticated' in result.stdout.lower():
+        raise RuntimeError('Grok is not signed in: run shaft grok login')
     models, available = {}, False
     for line in result.stdout.splitlines():
         if line.strip() == 'Available models:':

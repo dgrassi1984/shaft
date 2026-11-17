@@ -74,6 +74,8 @@ def _refresh(path, provider, fetch, models):
     try:
         models_new = {key: entry(value["levels"], value.get("default"), value.get("hidden", False))
                       for key, value in fetch().items()}
+        if not models_new:               # an empty list is a failed listing: cached, it would empty the menu for hours
+            raise ValueError("the provider listed no models")
         _write(path, provider, {"version": VERSION, "fetched_at": datetime.now(timezone.utc).isoformat(),
                                 "models": models_new})
         _failures.pop(failure_key, None)

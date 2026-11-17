@@ -56,6 +56,7 @@ class CatalogTest(unittest.TestCase):
                                         (grokcli, "_model_listing", "grok")):
             with self.subTest(provider=prefix), mock.patch.object(module, listing, return_value=catalog):
                 self.path.unlink(missing_ok=True)
+                effortcatalog._failures.clear()   # the codex case's menu read failed the others' empty listings
                 self.assertEqual(core.KNOBS[f"SHAFT_{prefix.upper()}_MODELS"].default, "")
                 self.assertEqual(module._models(""), [])
                 with self.assertRaises(ValueError):
@@ -111,6 +112,12 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(effortcatalog.listed("codex", listing), ["new"])
         self.assertEqual(effortcatalog.lookup("codex", "new", listing), (("high",), "high"))
         listing.assert_called_once_with()
+
+    def test_an_empty_listing_is_a_failure_not_an_empty_menu(self):
+        fetch = mock.Mock(return_value={})
+        self.assertIsNone(effortcatalog.listed("codex", fetch))
+        self.assertFalse(self.path.exists())
+        core.log.assert_called_once()
 
     def test_failed_background_refresh_keeps_stale_models_and_backs_off(self):
         self.cache({"old": effortcatalog.entry([], None)}, stale=True)
@@ -196,6 +203,8 @@ class ListingTest(unittest.TestCase):
         self.home = Path(self.temporary.name) / "home"
         self.enterContext(mock.patch.object(agycli, "HOME", self.home))
         self.enterContext(mock.patch.object(grokcli, "HOME", self.home))
+        self.home.mkdir()
+        self.enterContext(mock.patch.object(agycli, "logged_in", return_value=True))
 
     def test_antigravity_lists_only_gemini_bases_with_all_mapped_levels(self):
         output = "Fetching available models...\n\n" + "\n".join(
@@ -218,8 +227,27 @@ class ListingTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
         self.assertTrue(run.call_args.kwargs["check"])
 
-    def test_grok_parses_only_available_models_after_authentication_preamble(self):
-        output = ("You are not authenticated.\nDefault model: grok-ignored\n  - outside\n"
+    def test_a_signed_out_listing_is_refused_not_cached_2026_11_17(self):
+        # Signed out, grok listed grok-4.6 and grok-4.5 only; signed in it lists grok-4.7 first. Cached, the signed-out
+        # list hid grok-4.7 from the menu for a day after the login.
+        output = "You are not authenticated.\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n"
+        with mock.patch.object(grokcli.subprocess, "run", return_value=mock.Mock(stdout=output)):
+            with self.assertRaisesRegex(RuntimeError, "not signed in"):
+                grokcli._model_listing()
+        with mock.patch.object(agycli, "logged_in", return_value=False), \
+                mock.patch.object(agycli.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "not signed in"):
+                agycli._model_listing()
+            run.assert_not_called()
+        self.home.rmdir()
+        with mock.patch.object(grokcli.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "not signed in"):
+                grokcli._model_listing()
+            run.assert_not_called()
+        self.assertFalse(self.home.exists())          # a menu read never creates the login folder
+
+    def test_grok_parses_only_available_models_after_the_preamble(self):
+        output = ("You are logged in with grok.com.\nDefault model: grok-ignored\n  - outside\n"
                   "Available models:\n  * grok-4.7 (default)\n  - grok-4.6\n\n"
                   "Other section:\n  - ignored\n")
         with mock.patch.object(grokcli.subprocess, "run", return_value=mock.Mock(stdout=output)) as run:
