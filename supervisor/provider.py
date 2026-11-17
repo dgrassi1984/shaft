@@ -71,7 +71,8 @@ def _codex(model: str | None) -> tuple[dict, dict]:
     from . import codexcli
     model = model or CODEX_DEFAULT
     listed = codexcli.models()
-    models = [m for m in CODEX_PRESET if m in listed] if listed else list(CODEX_PRESET)
+    # Neither of the pair listed any more: the instance's own model judges and consults, never an empty list.
+    models = ([m for m in CODEX_PRESET if m in listed] if listed else list(CODEX_PRESET)) or [model]
     others = [m for m in models if m != model] or [model]
     out = {"SHAFT_JUDGE_MODELS": ",".join(others), "SHAFT_JUDGE2_MODEL": others[0], "SHAFT_CODER_MODEL": model,
            "SHAFT_CONSULT_MODELS": ",".join(models), "SHAFT_RECAP_MODEL": model,
