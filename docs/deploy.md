@@ -38,13 +38,17 @@ installs the server as a clone detached at its release tag rather than on `main`
 Besides the annotated release tag `vX.Y.Z`, every release records its template commit as a lightweight tag:
 
 ```bash
-git rev-parse template                  # the template commit: the tip of the template branch that passed the gate
+git fetch origin
+# the template commit: origin/template plus the release's own template changes, the one that passed the gate
+git merge-base --is-ancestor origin/template <template commit> || echo "behind origin/template: merge it and re-gate"
 git tag template-vX.Y.Z <template commit>
-git push origin vX.Y.Z template-vX.Y.Z
+git push origin vX.Y.Z template-vX.Y.Z <template commit>:refs/heads/template
 ```
 
-The template commit is the tip of the `template` branch that passed the gate with that release (`bin/shaft gate budget`
-tests committed supervisor and template code together). Tag it before or with the release tag and push both together:
+The template commit is the template that passed the gate with that release (`bin/shaft gate budget` tests committed
+supervisor and template code together). Start it from `origin/template`, never from the local `template` branch: the
+primary checkout's template worktree moves only at a deploy, so it can lag a release behind, and a tag cut there ships
+without the template changes already published (v0.65.0's template lacked v0.62.0's choices prompt). Tag it before or with the release tag and push both together:
 the app's installer clones at `vX.Y.Z` and fetches `template-vX.Y.Z`, and `shaft deploy vX.Y.Z --json` fast-forwards the
 template worktree to it, so a release pushed without it is not installable until the tag exists.
 
