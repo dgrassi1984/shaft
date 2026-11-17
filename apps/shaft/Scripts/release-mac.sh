@@ -5,7 +5,7 @@
 #   Scripts/release-mac.sh --notary-profile NAME [--team TEAMID] [--out DIR] [--allow-untagged] [--dry-run]
 #     [--feed-url URL] [--download-base URL]
 # --feed-url defaults to https://dgrassi1984.github.io/shaft-app/appcast.xml.
-# --download-base defaults to the tagged GitHub release download URL; required when untagged.
+# --download-base defaults to https://dgrassi1984.github.io/shaft-app/ when tagged; required when untagged.
 #   Scripts/release-mac.sh --self-test      (checks helpers on synthetic data; signs nothing)
 #
 # --dry-run checks every precondition and prints each command it would run; it signs, uploads and contacts Apple
@@ -265,9 +265,9 @@ if [ -z "$tag" ] && [ "$allow_untagged" -eq 0 ]; then
 fi
 if [ -z "$download_base" ]; then
   if [ -n "$tag" ]; then
-    download_base="https://github.com/dgrassi1984/shaft/releases/download/$tag/"
+    download_base="https://dgrassi1984.github.io/shaft-app/"
   else
-    problem "an untagged build has no release to download from: pass --download-base"
+    problem "an untagged trial build requires --download-base"
   fi
 fi
 url_allowed "$feed_url" || problem "--feed-url is not an allowed URL: '$feed_url'"
@@ -526,7 +526,12 @@ else
   shasum -a 256 "$dmg"
 fi
 echo "$appcast"
-echo "Upload the DMG to the GitHub release ${tag:-for the trial build}: $enclosure_url"
-echo "Copy the signed feed with AppStore/publish-site.sh --appcast '$appcast' --email <address> --to <site-checkout>, then review and push the site repository."
+if [ -n "$tag" ]; then
+  echo "Copy the DMG and signed appcast.xml into shaft-app/ in the dgrassi1984/dgrassi1984.github.io Pages checkout, then review and push the site repository."
+  echo "The DMG must be downloadable at: $enclosure_url"
+  echo "Optionally attach the DMG to the private GitHub release $tag as an archive copy."
+else
+  echo "Serve the trial DMG at $enclosure_url and the signed appcast.xml at $feed_url."
+fi
 echo "Nothing was uploaded."
 [ "$problems" -eq 0 ] || exit 1
