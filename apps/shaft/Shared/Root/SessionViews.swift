@@ -200,6 +200,28 @@ struct SettingsView: View {
                     }
                     .listRowBackground(Color.elevated)
                 }
+                if !session.isDemo, let store = session.store, !store.paused.isEmpty {
+                    Section {
+                        ForEach(store.paused, id: \.name) { instance in
+                            HStack {
+                                Text(instance.name)
+                                Spacer()
+                                Button("Resume") { Task { await store.resume(instance.name) } }
+                                    .foregroundStyle(Color.brand)
+                                    .rowTextButton()
+                            }
+                        }
+                        if let error = store.error {
+                            Text(error.message).font(.footnote).foregroundStyle(Color.danger)
+                        }
+                    } header: {
+                        Text("Paused")
+                    } footer: {
+                        Text("Paused instances are hidden from the sidebar. They still answer if you open their chat.")
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    .listRowBackground(Color.elevated)
+                }
                 if session.isPaired {
                     Section("Notifications") {
                         if let push {

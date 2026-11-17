@@ -200,13 +200,15 @@ def thread_rows(n: str, threads: list[dict], from_last: str, on: str = "", from_
 
 def rail(names: list[str], current: str = "", snap: dict | None = None, chats: dict | None = None,
          thread: str = "") -> Html:
-    """Main is the instance row; optional children retain the server's manual order."""
-    from . import web_seen
+    """Visible instances and their children retain server order; individual pauses are hidden."""
+    from . import core, web_seen
     from .web_actions import post_attrs
     from .web_views import pending_notes_html
     live = {i["name"]: i for i in (snap or {}).get("instances", [])}
     items = []
     for n in names:
+        if core.paused_alone(n):
+            continue
         c = (chats or {}).get(n) or {}
         threads = c.get("threads") or []
         unread = web_seen.unread_conversations("", n) if "threads" in c else {}

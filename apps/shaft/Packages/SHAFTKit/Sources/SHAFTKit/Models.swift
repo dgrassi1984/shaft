@@ -2,7 +2,7 @@ import Foundation
 
 // The /app/v1 models, field for field as docs/app-api.md lists them. A field the contract says is always present is
 // non-optional, so a server that drops one fails to decode (the fixture tests catch it); `T?` is a field that can be
-// null. The one family of absent fields is a partial feed's († in §4.2): `Feed.content` is nil then.
+// null or absent on an older server. A partial feed († in §4.2) also omits fields: `Feed.content` is nil then.
 
 // MARK: - Pairing (§2)
 
@@ -31,6 +31,12 @@ public struct InstancesResponse: Codable, Sendable, Equatable {
     public var instances: [InstanceRow]
     public var badge: Int
     public var instancesRev: OrderRevision? = nil
+    public var paused: [PausedInstance]? = nil
+}
+
+public struct PausedInstance: Codable, Sendable, Equatable {
+    public var name: String
+    public var since: Date?
 }
 
 public struct InstanceRow: Codable, Sendable, Equatable, Identifiable {

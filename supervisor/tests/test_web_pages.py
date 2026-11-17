@@ -68,6 +68,29 @@ class PagesTest(WebTest):
         return body
 
 
+class PausedSidebarTest(PagesTest):
+    def test_paused_instances_showed_in_the_sidebar(self):
+        (self.sup / "paused-wisp").write_text("2026-11-03T14:02:11")
+        body = web_pages.rail(["shaft", "wisp"])
+        self.assertIn('data-inst="shaft"', body)
+        self.assertNotIn('data-inst="wisp"', body)
+
+    def test_global_pause_and_conversation_pause_keep_sidebar_rows(self):
+        (self.sup / "paused").touch()
+        body = web_pages.rail(["shaft", "wisp"], snap={"instances": [
+            {"name": "wisp", "state": "cycle paused for a conversation"}]})
+        for name in ("shaft", "wisp"):
+            self.assertIn(f'data-inst="{name}"', body)
+
+    def test_landing_skips_paused_last_chat(self):
+        with mock.patch.object(web, "_last_chat", return_value="wisp"):
+            self.assertEqual(self.req("/", cookie=self.cookie).headers["Location"], "/i/wisp/chat")
+            (self.sup / "paused-wisp").touch()
+            self.assertEqual(self.req("/", cookie=self.cookie).headers["Location"], "/i/shaft/chat")
+            (self.sup / "paused-shaft").touch()
+            self.assertEqual(self.req("/", cookie=self.cookie).headers["Location"], "/overview")
+
+
 class EveryPageShowsWhatItsTabShows(PagesTest):
     """The strings test_control_panel.test_every_tab_renders_its_data asserts for each TUI tab."""
 

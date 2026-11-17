@@ -2,7 +2,7 @@
 from contextlib import ExitStack
 from unittest import mock
 
-from supervisor import autonomy, dashboard, runner, web
+from supervisor import app_api, autonomy, core, dashboard, runner, web, web_chat, web_seen
 from supervisor.dashboard import live_state
 from supervisor.tests.test_app_api import AppTest
 
@@ -52,3 +52,47 @@ class LiveStateTest(AppTest):
                     stack.enter_context(mock.patch.object(obj, key, side_effect=AssertionError(key)))
             state = dashboard.live_state("wisp")
         self.assertEqual(state, {k: self.expected[k] for k in state})
+
+
+class PausedSidebarTest(AppTest):
+    def setUp(self):
+        super().setUp()
+        for obj, key, kwargs in (
+            (web, "_names", {"return_value": ["wisp", "example"]}),
+            (core, "instance_config", {"return_value": {}}),
+            (web_chat, "summary", {"return_value": {}}),
+            (web_chat, "threads", {"return_value": []}),
+            (web_chat, "open_chats", {"return_value": []}),
+            (web_seen, "unread_conversations", {"side_effect": lambda device, n: {"from": n == "example"}}),
+        ):
+            self.enterContext(mock.patch.object(obj, key, **kwargs))
+
+    def test_paused_instances_showed_in_the_sidebar(self):
+        flag = self.sup / "paused-example"
+        flag.write_text("2026-11-03T14:02:11")
+        response = self.api("/app/v1/instances")
+        answer = self.get("/app/v1/instances")
+        self.assertEqual([row["name"] for row in answer["instances"]], ["wisp"])
+        self.assertEqual(answer["paused"], [{"name": "example", "since": app_api.stamp("2026-11-03T14:02:11")}])
+        self.assertEqual(answer["badge"], 0)
+        self.assertEqual(self.api("/app/v1/instances", headers={"if-none-match": response.headers["ETag"]}).status, 304)
+        flag.unlink()
+        self.assertEqual(self.api("/app/v1/instances", headers={"if-none-match": response.headers["ETag"]}).status, 200)
+        self.assertEqual(self.get("/app/v1/instances")["badge"], 1)
+
+    def test_paused_since_falls_back_to_mtime_and_keeps_server_order(self):
+        for name in ("wisp", "example"):
+            (self.sup / f"paused-{name}").write_text("old invalid timestamp")
+        answer = self.get("/app/v1/instances")
+        self.assertEqual(answer["instances"], [])
+        self.assertEqual(answer["paused"], [
+            {"name": n, "since": app_api.stamp((self.sup / f"paused-{n}").stat().st_mtime)}
+            for n in ("wisp", "example")])
+
+    def test_global_pause_keeps_all_instances_visible(self):
+        (self.sup / "paused").touch()
+        with mock.patch.object(dashboard, "live_state", return_value={"state": "cycle paused for a conversation"}):
+            answer = self.get("/app/v1/instances")
+        self.assertEqual([row["name"] for row in answer["instances"]], ["wisp", "example"])
+        self.assertEqual(answer["paused"], [])
+        self.assertEqual(answer["badge"], 1)
