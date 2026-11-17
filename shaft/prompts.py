@@ -610,6 +610,11 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None, at: date
     "Now" section says so: the current time comes with each message (TURN_CONTEXT)."""
     root = state.root
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
+    if tools and "send_message" in tools:
+        abilities += (" When asking the operator a question with a few known answers, use send_message choices. "
+                      "Keep the question self-contained and the option labels short. Other free text is always "
+                      "offered, so do not add an Other option. The answer comes back as the operator's next "
+                      "message, quoting the question.")
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
         abilities += DELEGATION
     if tools and "run" in tools and os.environ.get("SHAFT_SHARED"):   # granted by the operator (shaft share <name> <folder>)
