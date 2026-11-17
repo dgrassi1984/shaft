@@ -16,11 +16,13 @@ MONTHS_UNAMBIGUOUS = "|".join(m for m in MONTHS.split("|") if m not in ("gen", "
 STOPWORDS = ("il|lo|la|le|gli|un|una|del|dello|della|dei|degli|delle|dal|dallo|dalla|dai|dagli|dalle|al|allo|alla|"
              "ai|agli|alle|nel|nello|nella|nei|negli|nelle|sul|sullo|sulla|sui|sugli|sulle|col|con|per|tra|fra|da|di|"
              "fino|entro|dopo|prima|ore|ora|circa|oltre|sotto|sopra|verso|contro|ogni|tutti|tutte|resta|restano|"
-             "e|ed|o|ad|in|"
+             "e|ed|ad|in|"
              "lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica|lun|mer|gio|ven|sab|dom|"
              "at|on|by|the|of|to|from|until|since")
 # Stems of four letters or more that name a thing with its number, seen glued in instances' prose before the glue.
-NAMES = ("python", "base", "latin", "sheet", "knowbe", "kali", "auth")
+# Plus model and software names that are written glued ("claude3", "llama3.1", "mistral7b", "sqlite3").
+NAMES = ("python", "base", "latin", "sheet", "knowbe", "kali", "auth", "claude", "llama", "mistral", "mixtral", "gemma",
+         "sqlite")
 # Letters right after a number that stay glued to it: a unit or currency ("30min", "72h", "7.6h", "30d", "12,08EUR").
 UNITS = ("min", "sec", "mln", "mld", "bps", "kbps", "mbps", "gbps", "khz", "mhz", "ghz", "kwh", "mah", "fps", "dpi",
          "ppi", "rpm", "rpc")
@@ -46,7 +48,9 @@ _RULES = [
     re.compile(rf"{_START}(HTTP)(\d{{3}}){_END}"),
 ]
 # A run of letters and numbers standing alone in prose: "riga571", "per24mesi", "creato585entro3giorni".
-_TOKEN = re.compile(r"(?<![\w/\\.@#:+%$\-])(?:[^\W_]|(?<=\d)[.,](?=\d))+(?![\w\\@\-]|/(?!\d)|\.\w)")
+# It ends before a space or punctuation; "-" only before a short number ("sezioni1-5", not "ordine406-9204337-…").
+_TOKEN = re.compile(r"(?<![\w/\\.@#:+%$\-])(?:[^\W_]|(?<=\d)[.,](?=\d))+"
+                    r"(?![\w\\@+]|-(?!\d{1,4}(?![\w\-]))|/(?!\d)|\.\w)")
 _RUN = re.compile(r"\d+(?:[.,]\d+)*|[^\W\d_]+")
 _WORD = re.compile(r"[A-ZÀ-ÖØ-Þ]?[a-zß-öø-ÿ]+")
 _VOWEL = re.compile(r"[aeiouyàáèéìíòóùú]", re.I)
@@ -77,8 +81,8 @@ def _split_glued(token: str) -> str:
                 return token
             pieces.append(run)
         elif i and runs[i - 1][0].isdigit() and (len(run) <= 2 or run.lower() in UNITS or run in CURRENCIES):
-            if i == 1 or i < len(runs) - 1 or not _is_word(runs[i - 2], 4) or runs[i - 2] in _STOP:
-                return token                 # "e2e", "4th", "x2028q4": a name, not a word glued to "30d"
+            if i == 1 or i < len(runs) - 1 or not _is_word(runs[i - 2], 4) or len(runs[i - 2]) < 3:
+                return token                 # "e2e", "4th", "x2028q4": a name; "per24min", "serie30d" are split
             pieces[-1] += run
         elif _is_word(run, 4 if i == 0 else 3, first=i == 0):
             pieces.append(run)
@@ -91,9 +95,17 @@ def _split_glued(token: str) -> str:
     return " ".join(pieces)
 
 
-# Code, URLs, paths (a "/" with a letter or extension after it; "righe553/557." is prose) and hex ids ("dfae5750").
-_SKIP = re.compile(r"```.*?```|`[^`\n]*`|https?://\S+|\b[\w.\-]+/(?=[\w./\-]*(?:[A-Za-z_]|\.\w))[\w./\-]*"
-                   r"|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b", re.S)
+# Code, URLs, Markdown link targets, paths and queries ("notes/x.md", "example.com/s?q=x1") and hex ids ("dfae5750",
+# not "da10000"). A slash run with only numbers after its first "/" is prose ("righe553/557/590"): see _is_path.
+_SKIP = re.compile(r"```.*?```|`[^`\n]*`|https?://\S+|\]\([^)\s]*\)|\b[\w.\-]+/[\w./\-?=&%#~+]*"
+                   rf"|\b(?!(?:{STOPWORDS})\d+\b)(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{{7,}}\b", re.S)
+_PATH_TAIL = re.compile(r"[A-Za-z_]|\.\w")
+
+
+def _is_path(chunk: str) -> bool:
+    """A skipped chunk is kept as it is unless it is a slash run of numbers glued to a word ("righe553/557")."""
+    head, slash, tail = chunk.partition("/")
+    return not slash or not head[:1].isalpha() or bool(_PATH_TAIL.search(tail))
 
 
 def _fix(text: str) -> str:
@@ -113,6 +125,8 @@ def respace(text: str) -> str:
         return text
     out, last = [], 0
     for m in _SKIP.finditer(text):
+        if not _is_path(m.group()):
+            continue                         # prose: fixed with what follows it
         out += [_fix(text[last:m.start()]), m.group()]
         last = m.end()
     out.append(_fix(text[last:]))
