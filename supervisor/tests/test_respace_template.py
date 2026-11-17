@@ -1,8 +1,10 @@
 """The model dropped the space between word and number, 2026-11-13."""
 import io
+import re
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +24,45 @@ class RespaceTest(unittest.TestCase):
         ):
             with self.subTest(original=original):
                 self.assertEqual(respace(original), expected)
+
+    def test_general_word_number_glue_2026_11_17(self):
+        # The narrow rules let "Annex1", "sezioni1–5", "e2nov", "per24mesi" and "riga571" through into a document the
+        # operator read; the instance then copied them from its own notes.
+        for original, expected in (
+            ("Letto fino a sezioni1–5, firme e Annex1; letti Annex2, Annex3 e matrice Annex4.",
+             "Letto fino a sezioni 1–5, firme e Annex 1; letti Annex 2, Annex 3 e matrice Annex 4."),
+            ("Confronto con corpi mail 30 ott e2nov citati", "Confronto con corpi mail 30 ott e 2 nov citati"),
+            ("per24mesi dopo, oltre10settimane.", "per 24 mesi dopo, oltre 10 settimane."),
+            ("Riletti riga571, righe553/557/590 e seguito492; entro7giorni.",
+             "Riletti riga 571, righe 553/557/590 e seguito 492; entro 7 giorni."),
+            ("creato585entro3giorni, recuperato7.6h, serie30d, totale23,70EUR",
+             "creato 585 entro 3 giorni, recuperato 7.6h, serie 30d, totale 23,70EUR"),
+            ("Nuove mail Valeriya17nov12:11/12:22 chiedono", "Nuove mail Valeriya 17 nov 12:11/12:22 chiedono"),
+            ("weekly16, in571, prevede1% del totale", "weekly 16, in 571, prevede 1% del totale"),
+            ("sezioni1-5, righe12-15, da10000 euro, per24min", "sezioni 1-5, righe 12-15, da 10000 euro, per 24min"),
+        ):
+            with self.subTest(original=original):
+                self.assertEqual(respace(original), expected)
+                self.assertIsNone(re.search(r"[a-z]{4}\d", respace(original)))
+
+    def test_names_seen_glued_before_the_glue_are_unchanged(self):
+        # Measured on every instance's prose before 2026-11-08: these are names, ids and units, not glue.
+        text = ("python3 Python3 base64 base64url latin1 Sheet1 knowbe4 Kali365 auth0 sha256 md5 Gen4 v0 user1984 "
+                "MG4 SGIC18 CdA18 UniCredit16 DD24 msg4 cap10 e2e 4th 30min 72h 650k 3pm frmq3 "
+                "'7dcndrb42vh3nnnieoa11kn8kk_20261020T080000Z' 78qdnelhei941gjmaf3de12dr8 "
+                "absqmontage202610211712zab9 zzzabs2028q4 ordine406-9204337-7246705 info1@meet.example.it "
+                "dfae5750 110fecb 0xaf88d065e77c8cc test17b-escape brief4.md notes/riga571.md "
+                # Found by review 2026-11-17: model names, plus-addressed mail, link targets, schemeless queries.
+                "o1 o3 claude3 llama3.1 mistral7b sqlite3 email4+tag@example.com [modello](claude3) "
+                "[scarica](riga571/2026) example.com/search?q=claude3")
+        self.assertEqual(respace(text), text)
+
+    def test_slash_runs_stay_linear(self):
+        # The first path lookahead rescanned the rest of a "123/123/…" run at every slash: quadratic, 2 s at 16 KB.
+        started = time.monotonic()
+        respace("123/" * 50_000)
+        respace("riga571/2 " * 20_000)
+        self.assertLess(time.monotonic() - started, 2.0)
 
     def test_identifiers_and_protected_text_are_unchanged(self):
         for text in (
