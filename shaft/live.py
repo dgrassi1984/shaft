@@ -53,8 +53,9 @@ ATTENTION = {"type": "array", "description": "optional, up to 4: where you expec
 PROMISES = {"type": "array", "description": "promises to the operator or another agent you made this cycle "
             "and will keep later: "
             "{promise, due (YYYY-MM-DD[ HH:MM], today, tomorrow), criterion (how someone else could check), made_to "
-            "(operator or a peer name from list_instances)}; a promise to the operator needs a message you delivered "
-            "to them with send_message this cycle, else it is recorded as self; own plans belong in goals/notes; "
+            "(operator or a peer name from list_instances)}; a promise to the operator needs an operator message in "
+            "this cycle's inbox or a message you delivered to them with send_message this cycle, else it is refused; "
+            "own plans belong in goals/notes; "
             "[] if none",
             "items": {"type": "object", "properties": {"promise": S, "due": S, "criterion": S, "made_to": S},
                       "required": ["promise", "due", "criterion", "made_to"]}}
@@ -361,7 +362,8 @@ def run(cfg, state: State, client: Client) -> str:
 
     def _promise(c: dict) -> str:
         try:
-            return commitments.add(state.root, {**c, **commitments.message_source(toolbox.log)}, "cycle", clock.now())
+            return commitments.add(state.root, {**c, **commitments.cycle_source(toolbox.log, toolbox.commit_inbox)},
+                                   "cycle", clock.now())
         except OSError as e:   # a ledger I cannot write must not cost me the finish
             return f"ERROR: commitment not recorded: {type(e).__name__}: {e}"
 
@@ -525,6 +527,7 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.run = gated_run
 
     inbox = read_inbox(state)
+    toolbox.commit_inbox = [n for n, _ in inbox]   # what woke this cycle: an operator message sources a promise (#238)
     seed = f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}"
     queued = surprises.queue(state.root, started)
     curiosity = surprises.draw(cfg.CURIOSITY_EVERY_CYCLES, bool(queued), [n for n, _ in inbox], seed)
