@@ -125,22 +125,24 @@ class CommitmentsTest(unittest.TestCase):
             self.assertEqual(supervisor.ledger("x", due + timedelta(days=7)),
                              agent.fold(self.root, due + timedelta(days=7)))
 
-    def test_I10_operator_requires_existing_source_and_records_downgrade_note(self):
-        # Grok's review: a note the instance wrote itself, headed "To: operator", is not a message to the operator
+    def test_I10_operator_requires_existing_source_and_refuses_without_one(self):
+        # Grok's review: a note the instance wrote itself, headed "To: operator", is not a message to the operator.
+        # #238: without a source the promise is refused at commit_to, never silently recorded as self.
         for refs in ({}, {"talk_id": "missing"}, {"message_file": "notes/missing.md"},
                      {"message_file": "notes/operator-message.md"},
-                     {"message_file": "../outside.md"}, {"message_file": "/outside.md"}):
+                     {"message_file": "../outside.md"}, {"message_file": "/outside.md"},
+                     {"inbox_file": "20261026-140000-000000-from-operator.md"},   # named, but never received
+                     {"inbox_file": "../20261026-140000-000000-from-operator.md"}):
             with self.subTest(refs=refs):
                 (self.root / agent.FILE).unlink(missing_ok=True)
                 result = agent.add(self.root, {**PROMISE, **refs}, "cycle", NOW)
-                self.assertIn("operator source missing or invalid; recorded as self", result)
-                row = json.loads((self.root / agent.FILE).read_text())
-                self.assertEqual(row["made_to"], "self")
-                self.assertIn("source missing", row["note"])
-                self.assertEqual(agent.fold(self.root, NOW), supervisor.ledger("x", NOW))
+                self.assertTrue(result.startswith("ERROR: commitment not recorded: a promise to the operator needs "
+                                                  "its source"), result)
+                self.assertIn("send_message first", result)
+                self.assertFalse((self.root / agent.FILE).exists())
         _, stub = self.broker()
         for refs in ({"talk_id": "conversation-1"}, {"message_file": MSG}):
-            (self.root / agent.FILE).unlink()
+            (self.root / agent.FILE).unlink(missing_ok=True)
             with stub:
                 result = agent.add(self.root, {**PROMISE, **refs}, "talk", NOW)
             self.assertNotIn("recorded as self", result)
@@ -270,8 +272,99 @@ class CommitmentsTest(unittest.TestCase):
                      {"message_file": forged}, {"message_file": forged.replace("from-x", "from-wisp")}):
             with self.subTest(refs=refs), stub:
                 (self.root / agent.FILE).unlink(missing_ok=True)
-                self.assertIn("recorded as self", agent.add(self.root, {**PROMISE, **refs}, "talk", NOW))
-                self.assertEqual(agent.fold(self.root, NOW), supervisor.ledger("x", NOW))
+                self.assertIn("needs its source", agent.add(self.root, {**PROMISE, **refs}, "talk", NOW))
+                self.assertFalse((self.root / agent.FILE).exists())
+
+    def operator_inbox_message(self, file, sender="operator", logged=True):
+        """A message the supervisor delivered to x's inbox (and logged), as messages._deliver or watch._deliver do."""
+        (self.root / "inbox").mkdir(exist_ok=True)
+        (self.root / "inbox" / file).write_text(f"From: {sender}\nTo: x\nKind: note\nDate: 2026-10-26 14:00\n\nDo it.\n")
+        if logged:
+            log = self.sup / "messages.jsonl"
+            with log.open("a") as out:
+                out.write(json.dumps({"ts": "2026-10-26T14:00:00", "from": sender, "to": "x", "kind": "note",
+                                      "file": file, "text": "Do it."}) + "\n")
+
+    def test_238_cycle_promise_answering_operator_inbox_message_stays_the_operators(self):
+        """#238: a promise made in a cycle that an operator message, chat or mail woke was relabelled as made to
+        itself and expired 24 h after due, unseen ("overdue 0" while it lapsed). Reverting the inbox source makes
+        these rows self again, and refused at commit_to."""
+        from supervisor import messages
+        self.enterContext(mock.patch.object(messages, "SUP_DIR", self.sup))
+        self.enterContext(mock.patch.object(messages, "INSTANCES", self.root.parent))
+        self.enterContext(mock.patch.object(messages, "OPERATOR_INBOX", self.sup / "operator-inbox"))
+        self.enterContext(mock.patch.object(messages, "_cache", {"key": None, "rows": []}))
+        for n, (file, sender) in enumerate((("20261026-140000-000001-from-operator.md", "operator"),
+                                            ("20261026-140000-000002-from-supervisor-gchat-watch.md",
+                                             "supervisor (gchat watch)"),
+                                            ("20261026-140000-000003-from-supervisor-mail-watch.md",
+                                             "supervisor (mail watch)")), 1):
+            with self.subTest(sender=sender):
+                (self.root / agent.FILE).unlink(missing_ok=True)
+                self.operator_inbox_message(file, sender)
+                self.assertEqual(agent.cycle_source([], ["20261026-130000-000000-from-job-x.md", file]),
+                                 {"inbox_file": file})
+                result = agent.add(self.root, {**PROMISE, "inbox_file": file}, "cycle", NOW)
+                self.assertEqual(result, "commitment c1026-1412-1 recorded, due tomorrow")
+                late = NOW + timedelta(days=7)
+                item = supervisor.ledger("x", late)[CID]
+                self.assertEqual((item["made_to"], item["status"]), ("operator", "overdue"))
+                self.assertEqual(supervisor.ledger("x", late), agent.fold(self.root, late))
+                # archived after the cycle (live.archive_inbox): still the operator's in both folds
+                (self.root / "memory/messages").mkdir(exist_ok=True)
+                (self.root / "inbox" / file).rename(self.root / "memory/messages" / file)
+                self.assertEqual(agent.fold(self.root, late)[CID]["made_to"], "operator")
+                self.assertEqual(supervisor.ledger("x", late), agent.fold(self.root, late))
+        # neither a calendar watch, nor a job, nor a file the supervisor never delivered sources a promise
+        for file, sender, logged in (("20261026-140000-000004-from-supervisor-calendar-watch.md",
+                                      "supervisor (calendar watch)", True),
+                                     ("20261026-140000-000005-from-job-x.md", "job x", True),
+                                     ("20261026-140000-000006-from-operator.md", "operator", False)):
+            with self.subTest(file=file):
+                (self.root / agent.FILE).unlink(missing_ok=True)
+                self.operator_inbox_message(file, sender, logged)
+                self.assertEqual(agent.cycle_source([], [file]), {} if "operator" not in file else {"inbox_file": file})
+                if "operator" in file:   # the agent sees its own inbox: the supervisor's log is what counts
+                    self.write_rows([{**MADE, "talk_id": None, "inbox_file": file, "sourced": True}])
+                    self.assertEqual(supervisor.ledger("x", NOW)[CID]["made_to"], "self")
+
+    def test_238_rows_recorded_as_self_before_the_fix_return_to_the_operator(self):
+        """#238: six promises this week were made in cycles that answered the operator (his chat in the inbox, or a
+        message delivered to him after commit_to) and recorded as self. The fold gives them back to the operator."""
+        legacy = {k: v for k, v in MADE.items() if k != "talk_id"} | {"sourced": True}
+        at = datetime.fromisoformat(MADE["at"])
+        cycles = [{**episode((at + timedelta(minutes=5)).isoformat(), ()),
+                   "inbox": ["20261026-140000-000000-from-supervisor-gchat-watch.md"]},
+                  {**episode((at + timedelta(hours=1, minutes=5)).isoformat(),
+                             ("delivered to the operator (note); message_file " + MSG,)), "inbox": []},
+                  {**episode((at + timedelta(hours=2, minutes=5)).isoformat(), ("ERROR: refused",)),
+                   "inbox": ["20261026-150000-000000-from-job-x.md"]}]
+        self.write_episodes(cycles)
+        # what commit_to wrote then: the relabel in the row itself
+        legacy = {**legacy, "made_to": "self", "note": "operator source missing or invalid; recorded as self"}
+        self.write_rows([legacy, {**legacy, "id": "c1026-1412-2", "at": (at + timedelta(hours=1)).isoformat()},
+                         {**legacy, "id": "c1026-1412-3", "at": (at + timedelta(hours=2)).isoformat()},
+                         {**legacy, "id": "c1026-1412-4", "at": (at + timedelta(hours=9)).isoformat(),
+                          "due": "2026-10-27T23:59:59.999999"}])   # no cycle episode within CYCLE_SPAN
+        late = NOW + timedelta(days=7)
+        items = agent.fold(self.root, late)
+        self.assertEqual({cid: it["made_to"] for cid, it in items.items()},
+                         {CID: "operator", "c1026-1412-2": "operator", "c1026-1412-3": "self", "c1026-1412-4": "self"})
+        self.assertEqual(items[CID]["status"], "overdue")
+        self.assertEqual(supervisor.ledger("x", late), items)
+
+    def test_238_commit_to_tool_and_finish_cycle_attach_the_cycle_inbox_source(self):
+        from shaft.tools import Toolbox
+        file = "20261026-140000-000001-from-operator.md"
+        self.operator_inbox_message(file)
+        box = Toolbox(self.root)
+        box.commit_source, box.commit_inbox = "cycle", ["20261026-130000-000000-from-job-x.md", file]
+        with mock.patch("shaft.clock.now", return_value=NOW):
+            self.assertEqual(box.run("commit_to", json.dumps(PROMISE)), "commitment c1026-1412-1 recorded, due tomorrow")
+        self.assertEqual(json.loads((self.root / agent.FILE).read_text())["inbox_file"], file)
+        box.commit_inbox = []
+        with mock.patch("shaft.clock.now", return_value=NOW):
+            self.assertIn("needs its source", box.run("commit_to", json.dumps(PROMISE)))
 
     def test_add_and_ids_and_append(self):
         self.assertEqual(self.add(), "commitment c1026-1412-1 recorded, due tomorrow")
@@ -455,8 +548,8 @@ class CommitmentsTest(unittest.TestCase):
             self.add()
             args = {"id": CID, "status": status, "evidence": "The task changed."}
             self.assertTrue(agent.settle(self.root, args, NOW - timedelta(seconds=1)).startswith("ERROR:"))
-            self.assertEqual(agent.settle(self.root, args, NOW + timedelta(days=3)),
-                             f"settled {CID} as {status} (evidence The task changed.)")
+            self.assertTrue(agent.settle(self.root, args, NOW + timedelta(days=3)).startswith(
+                f"settled {CID} as {status} (evidence The task changed.)"))
             self.assertTrue(agent.settle(self.root, args, NOW + timedelta(days=3)).startswith("ERROR:"))
             self.assertEqual(agent.fold(self.root, NOW + timedelta(days=4))[CID]["status"], status)
             self.assertEqual(supervisor.ledger("x", NOW + timedelta(days=4)),
@@ -526,6 +619,116 @@ class CommitmentsTest(unittest.TestCase):
                                                 "evidence": "2026-10-26T15:00:00"}), "no such episode")
         self.assertEqual(supervisor.ledger("../x"), {})
 
+
+    # -- #239: a promise to the operator settled as broken reached him only when he asked, the next day; the
+    # instance's next message, five minutes after the settlement, was about something else.
+    def notices(self):
+        from supervisor import messages
+        self.messages = messages
+        self.enterContext(mock.patch.object(messages, "SUP_DIR", self.sup))
+        self.enterContext(mock.patch.object(messages, "INSTANCES", self.root.parent))
+        self.enterContext(mock.patch.object(messages, "OPERATOR_INBOX", self.sup / "operator-inbox"))
+        self.enterContext(mock.patch.object(messages, "_cache", {"key": None, "rows": []}))
+        self.sent = []
+        return self
+
+    def said(self, at, text):
+        with (self.sup / "messages.jsonl").open("a") as out:
+            out.write(json.dumps({"ts": at, "from": "x", "to": "operator", "kind": "note",
+                                  "file": f"{at.replace(':', '').replace('-', '')}-from-x.md", "text": text}) + "\n")
+
+    def tell(self, now):
+        return supervisor.tell_broken("x", self.sent.append, now)
+
+    def broken(self, cid=CID, made_to="operator", at="2026-10-26T18:16:00"):
+        return [{**MADE, "id": cid, "made_to": made_to},
+                {"event": "settled", "id": cid, "status": "broken", "evidence": "The change is held by the gate.",
+                 "at": at}]
+
+    def test_239_broken_operator_promise_with_no_message_naming_it_is_told_once(self):
+        self.notices()
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 15)), [])            # the first run marks where it starts
+        self.write_rows(self.broken())
+        self.said("2026-10-26T18:21:00", "Here is the recap you asked for.")    # after it, but about something else
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 30)), [CID])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn(f"Promise {CID} to you is broken: Send the checked report", self.sent[0])
+        self.assertIn("What blocks it: The change is held by the gate.", self.sent[0])
+        self.assertIn("New estimate: none given", self.sent[0])
+        self.assertEqual(self.tell(datetime(2026, 10, 27, 6, 15)), [])          # never twice
+        self.assertEqual(len(self.sent), 1)
+
+    def test_239_instance_message_naming_the_promise_is_enough_and_old_or_other_breaks_are_not_told(self):
+        self.notices()
+        self.tell(datetime(2026, 10, 26, 15))
+        self.write_rows(self.broken() + self.broken("c1026-1412-2", "wisp")
+                        + self.broken("c1026-1412-3", at="2026-10-26T14:00:00")       # before the record began
+                        + self.broken("c1026-1412-4"))
+        self.said("2026-10-26T18:20:00", f"{CID} is late: the gate held it; new estimate tomorrow 12:00.")
+        self.said("2026-10-26T18:00:00", "c1026-1412-4 will be late.")                # before it was settled
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 30)), ["c1026-1412-4"])
+        state = json.loads((self.sup / supervisor.TOLD_DIR / "x.json").read_text())
+        self.assertEqual(state["told"], {CID: "instance", "c1026-1412-4": "supervisor"})
+
+    def test_239_runner_delivers_urgent_from_the_instance_and_tells_the_instance(self):
+        self.notices()
+        from supervisor import runner
+        broker = mock.Mock()
+        with mock.patch.object(supervisor, "tell_broken", side_effect=lambda name, deliver: deliver("Promise c1 broke.")
+                               or ["c1"]), mock.patch.object(runner, "INSTANCES", self.root.parent), \
+                mock.patch.object(runner.core, "SUP_DIR", self.sup), \
+                mock.patch.object(self.messages, "record") as record:
+            (self.root / "inbox").mkdir(exist_ok=True)
+            runner._tell_broken("x", broker)
+        to, file, content, kind, _, text = broker._deliver.call_args.args
+        self.assertEqual((to, kind, text, broker._deliver.call_args.kwargs), ("operator", "note", "Promise c1 broke.",
+                                                                               {"urgent": True}))
+        self.assertTrue(file.endswith("-from-x.md") and content.startswith("From: x\nTo: operator\n"))
+        note, = (self.root / "inbox").glob("*-from-supervisor-promises.md")
+        self.assertIn("I told the operator: Promise c1 broke.", note.read_text())
+        self.assertEqual(record.call_args.args[2:4], ("supervisor (promises)", "x"))
+
+    def test_239_review_ids_are_whole_same_second_order_kept_and_a_failed_delivery_is_never_repeated(self):
+        """Codex's review of #239: "c…-1" matched inside "c…-10"; a message earlier in the same second as the
+        settlement counted as after it (the log keeps whole seconds); a delivery that failed halfway was repeated."""
+        self.notices()
+        self.tell(datetime(2026, 10, 26, 15))
+        self.write_rows(self.broken(at="2026-10-26T18:16:00.900000"))
+        with (self.sup / "messages.jsonl").open("a") as out:
+            for file, text in (("20261026-181600-100000-from-x.md", f"{CID} is on track."),   # before, same second
+                               ("20261026-182000-000000-from-x.md", f"{CID}0 is late.")):        # another promise
+                out.write(json.dumps({"ts": "2026-10-26T18:16:00" if "1816" in file else "2026-10-26T18:20:00",
+                                      "from": "x", "to": "operator", "file": file, "text": text}) + "\n")
+
+        def fail(text):
+            raise OSError("disk full")
+        with self.assertRaises(OSError):
+            supervisor.tell_broken("x", fail, datetime(2026, 10, 26, 18, 30))
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 31)), [])   # recorded before it was sent: not again
+        self.write_rows(self.broken("c1026-1412-2", at="2026-10-26T18:16:00.900000"))
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 32)), ["c1026-1412-2"])
+
+    def test_238_review_promise_made_in_its_cycles_last_second_finds_that_cycle(self):
+        """Codex's review: an episode's ts keeps whole seconds, a row's at microseconds; a finish_cycle promise made
+        in the cycle's last second skipped its own cycle for the next one."""
+        legacy = {k: v for k, v in MADE.items() if k != "talk_id"} | {
+            "sourced": True, "made_to": "self", "note": "operator source missing or invalid; recorded as self",
+            "at": "2026-10-26T14:12:59.900000"}
+        self.write_episodes([{**episode("2026-10-26T14:12:59", ("delivered to the operator (note); message_file "
+                                                                 + MSG,)), "inbox": []},
+                             {**episode("2026-10-26T15:00:00", ()), "inbox": []}])
+        self.write_rows([legacy])
+        late = NOW + timedelta(days=7)
+        self.assertEqual(agent.fold(self.root, late)[CID]["made_to"], "operator")
+        self.assertEqual(supervisor.ledger("x", late), agent.fold(self.root, late))
+
+    def test_239_settle_broken_asks_for_a_message_naming_the_promise(self):
+        self.write_rows([MADE])
+        result = agent.settle(self.root, {"id": CID, "status": "broken", "evidence": "Held by the gate"}, NOW)
+        self.assertIn(f"Tell the operator now with send_message, in one line naming {CID}", result)
+        self.write_rows([MADE])
+        result = agent.settle(self.root, {"id": CID, "status": "broken", "evidence": "Held"}, NOW, can_send=False)
+        self.assertIn("The supervisor tells the operator after this sleep", result)
 
 if __name__ == "__main__":
     unittest.main()

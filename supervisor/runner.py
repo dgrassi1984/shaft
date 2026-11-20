@@ -997,11 +997,41 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                      f"did not complete. What it printed last:\n\n```\n{why}\n```")
     if not _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:]):
         return code or 1
+    if kind in ("live", "sleep") and broker.root == (INSTANCES / name).resolve():
+        _tell_broken(name, broker)
     if kind == "live":
         from . import metrics
         metrics.after_cycle(name)
     commit_state(name, "measurement", [])
     return code
+
+
+def _tell_broken(name: str, broker: Broker) -> None:
+    """A promise to the operator it settled as broken without telling him reaches him now (#239), as an urgent
+    message from the instance (counted as a push, never held for the digest); the instance is told it was sent."""
+    from . import commitments, messages
+
+    def deliver(text: str) -> None:
+        stamp = datetime.now()
+        stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{name}"
+        broker._deliver("operator", f"{stem}.md",
+                        f"From: {name}\nTo: operator\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text}\n",
+                        "note", stamp, text, urgent=True)
+        try:   # the instance's copy, for its morning brief: its failure never costs the operator's notice
+            path = core.safe_write(INSTANCES / name, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-promises.md",
+                                   f"From: supervisor (promises)\nTo: {name}\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}"
+                                   f"\n\nI told the operator: {text}\nList promises to him broken since your last "
+                                   "morning brief in the next one.\n")
+            messages.record(core.SUP_DIR, path, "supervisor (promises)", name, "note", stamp, text)
+        except Exception as e:
+            log(f"{name}: broken-promise note to the instance failed: {type(e).__name__}: {e}")
+    try:
+        sent = commitments.tell_broken(name, deliver)
+    except Exception as e:   # never breaks the schedule; a notice recorded as sent is not sent again (never twice)
+        log(f"{name}: broken-promise notice failed: {type(e).__name__}: {e}")
+        return
+    if sent:
+        log(f"{name}: told the operator of broken promise(s) {', '.join(sent)}")
 
 
 def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict],

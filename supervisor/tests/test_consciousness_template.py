@@ -315,11 +315,25 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
                    {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [
                        {**promise, "promise": "file it", "talk_id": "old-talk",
                         "message_file": "notes/operator-message.md"}]})]}])
-        rows = [json.loads(line) for line in (self.root / commitments.FILE).read_text().splitlines()]
-        self.assertEqual([(r["made_to"], "talk_id" in r, "message_file" in r) for r in rows],
-                         [("self", False, False), ("self", False, False)])
-        self.assertTrue(all("recorded as self" in r for r in self.last()["finish"]["commitments"]))
+        # #238: refused at commit_to and in the finish, never recorded as self
+        self.assertFalse((self.root / commitments.FILE).exists())
+        self.assertTrue(all("needs its source" in r for r in self.last()["finish"]["commitments"]))
         self.assertEqual(commitments.block(self.root, datetime(2026, 10, 26, 10, 30)), "(none)")
+
+
+    def test_238_a_live_cycle_woken_by_the_operator_sources_its_promises_by_that_message(self):
+        """#238: commit_to and finish_cycle in a cycle whose inbox holds the operator's message record it as the
+        source (inbox_file), so the promise stays his. Reverting live.py's commit_inbox refuses both."""
+        file = "20261026-095500-000000-from-operator.md"
+        (self.root / "inbox").mkdir(exist_ok=True)
+        (self.root / "inbox" / file).write_text("From: operator\nTo: x\nKind: note\nDate: 2026-10-26 09:55\n\nPlease.\n")
+        promise = {"promise": "send operator report", "due": "tomorrow", "criterion": "a message", "made_to": "operator"}
+        self.live([{"tool_calls": [("declare_intent", {**DECLARE, "origin": "operator", "origin_ref": f"inbox/{file}"})]},
+                   {"tool_calls": [("commit_to", promise)]},
+                   {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [{**promise, "promise": "file it"}]})]}])
+        rows = [json.loads(line) for line in (self.root / commitments.FILE).read_text().splitlines()]
+        self.assertEqual([(r["made_to"], r["inbox_file"]) for r in rows], [("operator", file)] * 2,
+                         (self.last()["finish"], self.last()["tools"]))
 
 
 class ReviewRegressionTest(Fixture, unittest.TestCase):

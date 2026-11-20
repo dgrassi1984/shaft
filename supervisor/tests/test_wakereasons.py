@@ -25,7 +25,10 @@ class WakeReasonsTest(IsolatedCase):
                 "made_to": "operator", "source": "talk", "talk_id": "example"}
         cases = [({}, True), ({"talk_id": None, "message_file": "example.md", "source": "cycle"}, True),
                  ({"at": (NOW - timedelta(hours=23, minutes=59)).isoformat()}, False),
-                 ({"made_to": "self"}, False), ({"talk_id": None, "source": "cycle"}, False)]
+                 ({"made_to": "self"}, False),
+                 # a row from before the source rule is still the operator's in the ledger (#238): it wakes too
+                 ({"talk_id": None, "source": "cycle"}, True),
+                 ({"talk_id": None, "source": "cycle", "sourced": True}, False)]   # no source: recorded as self
         for changes, expected in cases:
             with self.subTest(changes=changes):
                 self.write(self.root / commitments.FILE, [{**base, **changes}])
@@ -33,6 +36,25 @@ class WakeReasonsTest(IsolatedCase):
         settled = {"event": "settled", "id": base["id"], "at": NOW.isoformat(), "status": "kept", "evidence": "Report checked"}
         self.write(self.root / commitments.FILE, [base, settled])
         self.assertEqual(wakereasons.reasons("ember", NOW), [])
+
+    def test_242_order_wake_waits_until_the_promise_is_due_within_three_days(self):
+        """#242: an operator promise made 11-10 and due 12-10 woke the instance every day from 11-11 (13 wakes for
+        two December promises in one week), with nothing to deliver yet. It wakes nothing until 3 days before due,
+        and the wake says the due date. Reverting DUE_WINDOW makes the 11-19 case wake again."""
+        from datetime import datetime
+        row = {"event": "made", "id": "c1110-1043-1", "at": "2026-11-10T10:43:00", "due": "2026-12-10T23:59:59.999999",
+               "promise": "Remind about the opening", "criterion": "Reminder sent", "made_to": "operator",
+               "source": "talk", "talk_id": "example"}
+        self.write(self.root / commitments.FILE, [row])
+        with mock.patch.object(commitments, "datetime", wraps=datetime) as clock:
+            for now, wakes in ((datetime(2026, 11, 19, 9), False), (datetime(2026, 12, 7, 9), False),
+                               (datetime(2026, 12, 8, 9), True), (datetime(2026, 12, 10, 9), True)):
+                with self.subTest(now=now):
+                    clock.now.return_value = now
+                    rows = wakereasons.reasons("ember", now)
+                    self.assertEqual([k for k, _ in rows], ["order:c1110-1043-1"] if wakes else [])
+                    if wakes:
+                        self.assertIn("due 2026-12-10 23:59", rows[0][1])
 
     def test_mark_paces_each_item_expires_at_pace_and_prunes_closed_items(self):
         path = self.sup / "wake_reasons/ember.json"
