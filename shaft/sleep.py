@@ -238,7 +238,7 @@ def run(cfg, state: State, client: Client) -> str:
             return result
         if name == "settle_commitment" and promises:   # kept only with an episode as evidence (commitments.settle)
             try:
-                result = commitments.settle(state.root, args, clock.now())
+                result = commitments.settle(state.root, args, clock.now(), can_send=False)
             except OSError as e:   # a ledger I cannot read or write must not stop my sleep
                 result = f"ERROR: commitment not settled: {type(e).__name__}: {e}"
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})

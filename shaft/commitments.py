@@ -23,8 +23,10 @@ BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_conf
                "close_surprise")
 
 COMMIT_TO = _spec("commit_to", "Record a promise to the operator or another agent. "
-                  "Operator promises need this conversation or a delivered operator message in this run; "
-                  "otherwise they are recorded as self with a note. My own plans belong in goals/notes.", {
+                  "Operator promises need a source in this run: this conversation, a message I already delivered "
+                  "to the operator with send_message, or an operator message in this cycle's inbox (his own, or "
+                  "his chat or mail watch); without one the promise is refused, not recorded. My own plans belong "
+                  "in goals/notes.", {
     "promise": {"type": "string", "description": "What I will do."},
     "due": {"type": "string", "description": 'YYYY-MM-DD or YYYY-MM-DD HH:MM, or "today"/"tomorrow".'},
     "criterion": {"type": "string", "description": "How someone else could check it was done."},
@@ -132,22 +134,67 @@ def message_file(name: str) -> re.Pattern:
     return re.compile(r"\d{8}-\d{6}-\d{6}-from-" + re.escape(name) + r"\.md")
 
 
-def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str) -> list[dict]:
-    """An operator promise needs the conversation it was made in, or a message I delivered to the operator (review
-    I10). `delivered(file)` confirms a delivered message; a note in my own folder is not one."""
+# What an operator message in my inbox is named: his own (the app, the web, Telegram), or the supervisor's watch of
+# his chat or mail. The calendar watch reports events, not requests. inbox/ is written by the supervisor only.
+OPERATOR_INBOX = re.compile(r"\d{8}-\d{6}-\d{6}-from-(?:operator|supervisor-(?:gchat|mail)-watch)\.md")
+DELIVERED = "delivered to the operator"
+CYCLE_SPAN = timedelta(hours=2)   # longer than any live cycle's budget
+RELABELLED = "operator source missing or invalid; recorded as self"
+
+
+def operator_inbox(file) -> bool:
+    return isinstance(file, str) and bool(OPERATOR_INBOX.fullmatch(file))
+
+
+def _cycle_of(lives: list[dict], at) -> dict | None:
+    """The live cycle a row made at `at` was made in: the first that ended at or after it (one runs at a time), within
+    CYCLE_SPAN; a cycle that wrote no episode is not mistaken for the next one."""
+    at = _at(at)
+    if at is None:
+        return None
+    ep = next((ep for ep in lives if _at(ep["ts"]) >= at), None)
+    return ep if ep and _at(ep["ts"]) - at <= CYCLE_SPAN else None
+
+
+def _cycle_source(ep: dict | None) -> bool:
+    """A live cycle answering the operator (#238): an operator message in its inbox, or a message it delivered to
+    him. What made a promise there one to the operator before the source was recorded on the row."""
+    if not ep:
+        return False
+    if any(operator_inbox(n) for n in ep.get("inbox") or []):
+        return True
+    return any(isinstance(c, dict) and c.get("tool") == "send_message" and isinstance(c.get("result"), str)
+               and c["result"].startswith(DELIVERED) for c in ep.get("tools") or [])
+
+
+def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str, received=None) -> list[dict]:
+    """An operator promise needs the conversation it was made in, a message I delivered to the operator (review
+    I10), or the operator message in my inbox it answers (#238). `delivered(file)` confirms a delivered message, a
+    note in my own folder is not one; `received(file)` confirms an operator message my inbox got. A cycle row with
+    none of them (made before #238, when commit_to recorded it as self) is the operator's when that cycle answered
+    him: it had his message in its inbox or delivered one to him."""
     talks = {ep["talk_id"] for ep in episodes if ep.get("kind") == "talk" and ep.get("role") == "user"
              and not ep.get("speaker") and isinstance(ep.get("talk_id"), str) and ep["talk_id"]}
+    lives = sorted((ep for ep in episodes if ep.get("kind") == "live" and _at(ep.get("ts"))),
+                   key=lambda ep: _at(ep["ts"]))
     out = []
     for row in rows:
         row = dict(row)
         if row.get("event") == "made":
+            if row.get("made_to") == "self" and row.get("note") == RELABELLED and row.get("sourced"):
+                row.update(made_to="operator")   # written as self by commit_to before #238: judged again below
+                del row["note"]
             if row.get("made_to") == "operator" and row.get("sourced"):   # older rows predate the rule: kept as made
-                talk, message = row.get("talk_id"), row.get("message_file")
+                talk, message, inbox = row.get("talk_id"), row.get("message_file"), row.get("inbox_file")
                 valid = isinstance(talk, str) and talk in talks
                 if not valid and isinstance(message, str) and message_file(own).fullmatch(message):
                     valid = delivered(message)
+                if not valid and operator_inbox(inbox) and received is not None:
+                    valid = received(inbox)
+                if not valid and row.get("source") == "cycle" and not (talk or message or inbox):
+                    valid = _cycle_source(_cycle_of(lives, row.get("at")))
                 if not valid:
-                    row.update(made_to="self", note="operator source missing or invalid; recorded as self")
+                    row.update(made_to="self", note=RELABELLED)
             if row.get("made_to") == own:
                 row["self_commitment"] = True
         out.append(row)
@@ -159,13 +206,32 @@ def _delivered(message: str) -> bool:
     return bool(re.search(r"(?m)^To: operator$", broker.call("record", kind="commitment_source", cycle=message)))
 
 
+def _received(root: Path):
+    """An operator message my inbox got: still in inbox/, or archived to memory/messages/ after its cycle."""
+    def check(file: str) -> bool:
+        for folder in ("inbox", "memory/messages"):
+            path = Path(root) / folder / file
+            if path.is_file() and not path.is_symlink():
+                head = path.read_text(errors="replace").split("\n\n", 1)[0]
+                return bool(re.search(r"(?m)^From: (?:operator|supervisor \((?:gchat|mail) watch\))$", head))
+        return False
+    return check
+
+
+def cycle_source(log: list[dict], inbox: list[str]) -> dict:
+    """What sources a promise made in this run (#238): the last message delivered to the operator, and the
+    operator's message in this cycle's inbox (his own first, then his chat or mail watch)."""
+    found = sorted((n for n in inbox if operator_inbox(n)), key=lambda n: not n.endswith("-from-operator.md"))
+    return {**message_source(log), **({"inbox_file": found[0]} if found else {})}
+
+
 def message_source(log: list[dict]) -> dict:
     """The last message delivered to the operator in this run (this conversation or cycle), as send_message
     reported it."""
     for call in reversed(log):
         if call.get("tool") == "send_message" and isinstance(call.get("result"), str):
             match = re.search(r"; message_file (\d{8}-\d{6}-\d{6}-from-[a-z0-9_-]+\.md)", call["result"])
-            if match and call["result"].startswith("delivered to the operator"):
+            if match and call["result"].startswith(DELIVERED):
                 return {"message_file": match[1]}
     return {}
 
@@ -174,7 +240,7 @@ def fold(root: Path, now: datetime) -> dict[str, dict]:
     path = Path(root) / FILE
     rows = _rows(path.read_text(errors="replace")) if path.is_file() else []
     # add() asked the broker before recording a message source; the supervisor's fold checks the inbox again.
-    return _fold(_source_rows(rows, surprises.episodes(root), lambda _: True, Path(root).name), now)
+    return _fold(_source_rows(rows, surprises.episodes(root), lambda _: True, Path(root).name, _received(root)), now)
 
 
 def _append(root: Path, event: dict) -> None:
@@ -216,15 +282,18 @@ def add(root: Path, args: dict, source: str, now: datetime) -> str:
         return "ERROR: due is in the past"
     if source not in ("cycle", "talk"):
         return "ERROR: source must be cycle or talk"
-    refs = {k: args[k] for k in ("talk_id", "message_file") if isinstance(args.get(k), str) and args[k]}
-    event = {"event": "made", **item, **refs, "sourced": True}
+    refs = {k: args[k] for k in ("talk_id", "message_file", "inbox_file") if isinstance(args.get(k), str) and args[k]}
+    event = {"event": "made", **item, **refs, "sourced": True, "source": source, "at": _local(now).isoformat()}
     try:
-        checked = _source_rows([event], surprises.episodes(root), _delivered, Path(root).name)[0]
+        checked = _source_rows([event], surprises.episodes(root), _delivered, Path(root).name, _received(root))[0]
     except broker.BrokerError as e:   # an outage is not a missing source: nothing is recorded
         return f"ERROR: commitment not recorded: could not check the operator message ({e}); try again later"
-    item["made_to"] = checked["made_to"]
-    if "note" in checked:
-        refs["note"] = checked["note"]
+    if checked["made_to"] != item["made_to"]:
+        # #238: it was relabelled as made to myself and expired unseen; now I am told while I can still fix it
+        return ("ERROR: commitment not recorded: a promise to the operator needs its source in this run: this "
+                "conversation, a message already delivered to the operator with send_message, or an operator "
+                "message (his own, or his chat or mail watch) in this cycle's inbox. Tell the operator with "
+                "send_message first, then call commit_to again.")
     items = fold(root, now)
     prefix = f"c{_local(now):%m%d-%H%M}-"
     n = 1
@@ -275,7 +344,7 @@ def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dic
     return ("" if good else "cited evidence has no successful tool call"), ep
 
 
-def settle(root: Path, args: dict, now: datetime) -> str:
+def settle(root: Path, args: dict, now: datetime, can_send: bool = True) -> str:
     cid, status = args.get("id"), args.get("status")
     item = fold(root, now).get(cid) if isinstance(cid, str) else None
     if item is None or _to_self(root, item) or item["status"] not in ("open", "overdue"):
@@ -294,6 +363,13 @@ def settle(root: Path, args: dict, now: datetime) -> str:
             return f"ERROR: {reason}"
     _append(root, {"event": "settled", "id": cid, "status": status, "evidence": evidence,
                    "at": _local(now).isoformat()})
+    if status == "broken" and item["made_to"] == "operator":   # #239: he heard of a miss only when he asked
+        if not can_send:   # sleep has no send_message
+            return (f"settled {cid} as {status} (evidence {evidence}). The supervisor tells the operator after this "
+                    f"sleep; give him a new estimate in the next cycle, naming {cid}.")
+        return (f"settled {cid} as {status} (evidence {evidence}). Tell the operator now with send_message, in one "
+                f"line naming {cid}: what blocks it and a new estimate (or no estimate). If no message to him names "
+                f"{cid}, the supervisor tells him at the end of this run.")
     return f"settled {cid} as {status} (evidence {evidence})"
 
 

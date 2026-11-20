@@ -205,6 +205,7 @@ class Toolbox:
         self.shown: list[Path] = []       # images view_image showed, for the agent loop to send after the results
         self.commit_source = ""           # "cycle" or "talk" where commit_to is offered (COMMITMENTS on), else ""
         self.commit_talk_id = ""   # the conversation open now: what makes a promise there one to the operator
+        self.commit_inbox: list[str] = []   # this live cycle's inbox: an operator message there sources a promise (#238)
 
     # -- discovery ---------------------------------------------------------------
     def _discover_plugins(self) -> dict[str, dict]:
@@ -599,7 +600,8 @@ class Toolbox:
     def _t_commit_to(self, promise: str, due: str, criterion: str, made_to: str) -> str:
         from . import commitments   # an OSError here is a tool failure like any other: run() reports it
         return commitments.add(self.root, {"promise": promise, "due": due, "criterion": criterion, "made_to": made_to,
-                                           "talk_id": self.commit_talk_id, **commitments.message_source(self.log)},
+                                           "talk_id": self.commit_talk_id,
+                                           **commitments.cycle_source(self.log, self.commit_inbox)},
                                self.commit_source, clock.now())
 
     def _t_update_personality(self, layer: str, text: str) -> str:
