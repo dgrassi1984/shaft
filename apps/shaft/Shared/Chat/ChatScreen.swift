@@ -1,6 +1,9 @@
 import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import GameController
+#endif
 
 /// One chat on screen: the header (name and thread, state, Talk, Documents, New thread or New chat, ⋯), the feed and
 /// the composer, with the documents beside it or over it, and voice mode over it (iPhone, iPad) or in the composer's
@@ -45,6 +48,16 @@ struct ChatScreen: View {
         self.backToCurrent = backToCurrent
         self.openThread = openThread
         _screen = State(initialValue: ChatScreenModel(chat: chat, openEarlier: chat.isEarlier ? nil : openArchived))
+    }
+
+    /// The composer takes the keyboard when a chat opens: always on the Mac; on an iPhone or iPad only with a hardware
+    /// keyboard attached, since the on-screen one would cover the chat just opened.
+    private var focusesComposerOnOpen: Bool {
+        #if os(iOS)
+        GCKeyboard.coalesced != nil
+        #else
+        true
+        #endif
     }
 
     private var watched: Bool {
@@ -95,7 +108,9 @@ struct ChatScreen: View {
             VStack(spacing: 0) {
                 if chat.isEarlier { archivedBanner }
                 // The feed fades out before the header and the composer: nothing is legible behind the glass.
-                content
+                // One container whatever the feed's state: on the if/else itself, the switch from Loading to the feed
+                // made the composer anew and dropped its keyboard.
+                ZStack { content }
                     .scrollEdgeEffectHidden(true, for: .all)
                     .feedEdges(pillVisible: screen.latestPill != nil) {
                         if let pill = screen.latestPill {
@@ -207,6 +222,9 @@ struct ChatScreen: View {
         .onAppear {
             TransitionClock.mark("shown")
             visible = true
+            if focusesComposerOnOpen && !chat.isEarlier && !screen.archived {
+                screen.focusComposerOnOpen = true
+            }
             screen.documentsCover = covers
             // The shell's documents follow the chat on display (an earlier chat's are read-only); open stays open.
             if let shell, shell.screen !== screen {

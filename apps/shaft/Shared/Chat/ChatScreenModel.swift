@@ -55,6 +55,8 @@ final class ChatScreenModel {
     var confirmRetry: FailureRetry?
     /// The composer's main field should take the keyboard.
     var focusComposerRequest = 0
+    /// The chat just opened: the composer takes the keyboard once its field is made (Mac, iPad at full width).
+    var focusComposerOnOpen = false
     /// A quote card's answer should take the keyboard (a message's own Reply).
     var focusQuoteRequest: Int?
     /// A send asked for from outside the composer (the Mac's menu: Queue after reply, Next cycle): the composer sends

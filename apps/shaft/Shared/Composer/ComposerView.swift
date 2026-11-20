@@ -125,6 +125,12 @@ struct ComposerView: View {
             screen.sendRequest = nil
             send(mode)
         }
+        // The field exists by now, so the request is not absorbed as already handled.
+        .onChange(of: screen.focusComposerOnOpen, initial: true) { _, open in
+            guard open else { return }
+            screen.focusComposerOnOpen = false
+            screen.focusComposerRequest += 1
+        }
         .onChange(of: screen.focusQuoteRequest) { _, index in
             guard let index else { return }
             focusedAnswer = index

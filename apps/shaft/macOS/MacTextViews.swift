@@ -79,7 +79,13 @@ struct ComposerTextView: NSViewRepresentable {
         }
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+            DispatchQueue.main.async {
+                if textView.window == nil {
+                    textView.focusWhenInWindow = true
+                } else {
+                    textView.window?.makeFirstResponder(textView)
+                }
+            }
         }
         context.coordinator.measure()
     }
@@ -145,9 +151,18 @@ struct ComposerTextView: NSViewRepresentable {
 
 final class ComposerNSTextView: NSTextView {
     weak var coordinator: ComposerTextView.Coordinator?
+    var focusWhenInWindow = false
     var placeholder = ""
     /// The modifiers of the key being handled: Return's command arrives without its event.
     private(set) var keyFlags: NSEvent.ModifierFlags = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if focusWhenInWindow && window != nil {
+            focusWhenInWindow = false
+            window?.makeFirstResponder(self)
+        }
+    }
 
     override func keyDown(with event: NSEvent) {
         keyFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
