@@ -260,6 +260,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_operator_channel.py` | `Sandbox`, `RouteTest`, `DeliverTest`, `WebAlertsTest`, `TalksFileTest`, `ChatShowsWhatItSentTest`, `AnswerQuotedTest`, `ApiChannelTest`, `CommandTest`, `NativeAppsCanAlertTest` | — |
 | `supervisor/tests/test_order.py` | `OrderTest`, `OrderRoutesTest` | — |
 | `supervisor/tests/test_orders.py` | `OrdersTest` | — |
+| `supervisor/tests/test_orders_outside_locks.py` | `OrdersOutsideLocksTest` | — |
 | `supervisor/tests/test_orders_self.py` | `SelfRulesTest`, `OutwardToolsTest` | — |
 | `supervisor/tests/test_own_drive.py` | `FakeDriveTokens`, `FakeDrive`, `DriveCase`, `DriveLoginTest`, `DriveKeyTest`, `BinaryBodyTest`, `DriveReplayTest` | `drive_key` |
 | `supervisor/tests/test_own_mail.py` | `FakeTokens`, `FakeGmail`, `OwnMailCase`, `TokenTest`, `ExamAndReplayTest`, `LoginTest` | `key` |
