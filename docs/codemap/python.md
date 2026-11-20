@@ -62,8 +62,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/families.py` | — | `families`, `no_yield_share`, `record_text`, `stats_lines` |
 | `supervisor/feedback.py` | — | `reply_sha`, `key`, `rate`, `clear`, `mark_sent`, `items`, `by_target`, `down_shas`, `note`, `deliver` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
-| `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut`, `Output` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `warm`, `budget`, `instance_part_failures`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
-| `supervisor/gate_held.py` | — | `save`, `pending`, `waiting`, `applies`, `apply`, `retried`, `drop`, `withdrawal`, `withdraw`, `log_run`, `rows`, `describe` |
+| `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut`, `Output` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `shared_limit`, `warm`, `budget`, `instance_part_failures`, `own_tests_failures`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
+| `supervisor/gate_held.py` | — | `save`, `pending`, `waiting`, `applies`, `on_code`, `held_on_code`, `base_code`, `apply`, `retried`, `drop`, `withdrawal`, `withdraw`, `log_run`, `rows`, `describe` |
 | `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `run_part`, `times`, `main` |
 | `supervisor/gauges.py` | `Reading` | `reading`, `path`, `history`, `choice`, `checked`, `row`, `choose`, `head_lines`, `menu_text` |
 | `supervisor/gchat.py` | `NotVisible`, `Gone`, `Refused` | `marking`, `attachment`, `is_handle`, `parse_handle`, `spaces`, `get_space`, `me`, `conversation_name`, `search`, `get_message`, `time_key`, `newer`, `page`, `render` |
@@ -202,6 +202,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `SharedFixtureCase`, `SharedRecordTest`, `WarmTest`, `StageEndTest`, `GateErrorFailsClosedTest`, `StageTimeoutTest`, `StageProcessGroupTest`, `GateLocalhostTest` | `git` |
 | `supervisor/tests/test_gate_budget.py` | `BudgetTest` | — |
 | `supervisor/tests/test_gate_held.py` | `ClassifyTest`, `HeldCase`, `WithdrawTest`, `HoldTest`, `RegateTest`, `RecheckTest`, `RecordTest`, `SchedulerTest` | — |
+| `supervisor/tests/test_gate_shared_limit.py` | `SharedLimitTest`, `WaitsTest`, `HoldOnCodeCase`, `HoldOnCodeTest`, `TemplateMergeTest`, `BudgetReportTest` | — |
 | `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run`, `Workers` | `plain`, `count` |
 | `supervisor/tests/test_gate_timeout.py` | `GateTimeoutTest` | — |
 | `supervisor/tests/test_gauges.py` | `GaugesTest` | — |
@@ -227,6 +228,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
+| `supervisor/tests/test_live_llm_failure_template.py` | `LiveModelFailureTest` | — |
 | `supervisor/tests/test_live_settle_template.py` | `LiveSettlementTest` | `call` |
 | `supervisor/tests/test_localmodel.py` | `IdleRuleTest`, `ServerIdleExitTest`, `LaunchdTest`, `EnsureTest`, `CallersTest`, `StatusTest` | — |
 | `supervisor/tests/test_loop_effect.py` | `EffectTest`, `AgentEffectTest` | — |
