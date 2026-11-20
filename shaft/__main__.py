@@ -88,7 +88,9 @@ def main(argv: list[str] | None = None) -> int:
                                     cfg.MAX_TOKENS_TALK, purpose="probe")
             print(reply.content.strip())
     except (LLMError, ValueError) as e:
-        print(f"{args.cmd} failed, nothing saved: {e}", file=sys.stderr)
+        # A live cycle saves its record before a model failure ends it (#241); everything else saves nothing.
+        saved = "its record saved" if getattr(e, "outcome", None) is not None and args.cmd == "live" else "nothing saved"
+        print(f"{args.cmd} failed, {saved}: {e}", file=sys.stderr)
         return 1
     return 0
 
