@@ -54,6 +54,7 @@ Open projects: 1
 
 ## How well my confidence tells my met cycles from my missed ones
 - Confidence AUROC 1.00 [1.00, 1.00]; 0.5 means chance; n 20.
+- By week (ending): 11-03 1.00 (n 20); 0.55 or below is chance.
 - Above chance: yes; met 10/20, hit rate 50.0%.
 - Mean confidence 50.0%; bias +0.00; SD 30.0 points.
 - Brier 0.040; reliability 0.040 is calibration error; resolution 0.250 separates outcomes; uncertainty 0.250.

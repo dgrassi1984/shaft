@@ -255,20 +255,94 @@ class JudgingTest(Fixture):
             self.assertEqual(self.ep, original)
             self.assertEqual((self.sup / 'judgments/m.jsonl').read_bytes(), before)
 
+    def test_244_cycles_that_reach_the_operator_are_always_judged_and_kept_out_of_the_sample(self):
+        """#244: with SHAFT_JUDGE_EVERY=2, 29 of 58 cycles that messaged the operator were never judged, including
+        one he called unnecessary. Reverting reaches_operator in judge_pending leaves them unjudged again."""
+        quiet = {'kind': 'live', 'ts': (NOW - timedelta(hours=1)).isoformat(), 'intent': {'goal': 'tidy notes'},
+                 'finish': {'delivered_via': 'none'}, 'tools': [{'tool': 'write_file', 'args': '{}', 'result': 'ok'}]}
+        claimed = {**quiet, 'ts': (NOW - timedelta(hours=2)).isoformat(), 'finish': {'delivered_via': 'mail'}}
+        metrics.live_episodes.return_value = [claimed, quiet, self.ep]
+        with mock.patch.object(judge, 'JUDGE_EVERY', 2), \
+                mock.patch.object(metrics.secrets, 'randbelow', return_value=1):   # the draw leaves every run out
+            self.assertEqual(metrics.judge_pending('m'), 2)
+        judged = {j['episode_ts']: j for j in metrics.judgments('m')}
+        self.assertEqual(set(judged), {self.ep['ts'], claimed['ts']})
+        self.assertTrue(all(j['operator_selected'] for j in judged.values()))
+        self.assertEqual(metrics.unsampled('m'), {quiet['ts']})          # only the quiet one is left out
+        self.assertEqual(metrics.judgments_for_stats('m'), [])           # the random sample stays unbiased
+        self.assertTrue(metrics.reaches_operator({'tools': [{'tool': 'send_message',
+                                                             'result': 'delivered to the operator (note)'}]}))
+        self.assertFalse(metrics.reaches_operator(quiet))
+
+    def test_244_missed_the_ask_is_planted_and_its_catch_rate_reported_apart(self):
+        """#244: the catch rate (6/6) measured only refused deliveries; "delivered, but not what was asked" was never
+        planted. The swapped text comes from a message for another goal; the rate is per kind, never pooled."""
+        other = {'kind': 'live', 'ts': (NOW - timedelta(hours=3)).isoformat(), 'intent': {'goal': 'expense categories'},
+                 'finish': {'delivered_via': 'message'}, 'tools': [
+                     {'tool': 'send_message', 'args': '{"to":"operator","text":"Here are the categories."}',
+                      'result': 'delivered'}]}
+        metrics.live_episodes.return_value = [other, self.ep]
+        self.write('judgments/m.jsonl', [{'episode_ts': ep['ts'], 'delivery_supported': 'yes', 'criterion_met': 'yes',
+                                          'confidence_of': None} for ep in (other, self.ep)])
+        original = copy.deepcopy(self.ep)
+        verdicts = iter([dict(VERDICT, delivery_supported='yes', criterion_met='yes'),     # refused: missed
+                         dict(VERDICT, delivery_supported='yes', criterion_met='no')])     # swapped: caught
+        self.ask.side_effect = lambda *a, **k: next(verdicts)
+        self.assertEqual([judge_probe.run('m'), judge_probe.run('m')], [1, 1])   # one probe each
+        refused, missed = judge_probe.records('m')
+        self.assertEqual((refused['defect'], refused['caught'], missed['defect'], missed['caught']),
+                         ('delivery refused', False, 'missed the ask', True))
+        case = self.ask.call_args.args[1]
+        self.assertIn('Here are the categories.', case)
+        self.assertNotIn('ERROR: delivery refused', case)
+        self.assertEqual(self.ep, original)
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused 0/1; missed the ask 1/1')
+        self.assertIsNone(judge_probe.plant_missed(self.ep, [self.ep]))   # nothing sent for another goal: not planted
+
+    def test_244_review_a_retry_keeps_the_draw_and_the_probe_never_swaps_in_the_same_ask(self):
+        """Codex's review of #244: a run drawn at random whose judge was down drew again on the retry and could come
+        back operator-selected (out of the stats sample); and a goal worded differently for the same ask was used as
+        the "other" message, planting a correct answer."""
+        draws = iter([0, 1])   # the first draw selects it at random; a redraw would leave it out
+        with mock.patch.object(judge, 'JUDGE_EVERY', 2), \
+                mock.patch.object(metrics.secrets, 'randbelow', side_effect=lambda n: next(draws)):
+            with mock.patch.object(judge, 'available', return_value=False), \
+                    mock.patch.object(judge, 'unavailable', return_value='down'):
+                self.assertEqual(metrics.judge_pending('m'), 0)
+            self.assertEqual(metrics.judge_pending('m'), 1)
+        verdict, = metrics.judgments('m')
+        self.assertNotIn('operator_selected', verdict)
+        self.assertEqual(len(metrics.judgments_for_stats('m')), 1)
+        same = {'kind': 'live', 'ts': (NOW - timedelta(hours=3)).isoformat(),
+                'intent': {'goal': 'Send the operator the number of trees', 'success_criterion': 'Operator has the tree count'},
+                'finish': {'delivered_via': 'message'}, 'tools': [
+                    {'tool': 'send_message', 'args': '{"to":"operator","text":"Eight trees."}', 'result': 'delivered'}]}
+        target = {**self.ep, 'intent': {'goal': 'Report the tree count', 'success_criterion': 'Operator has the tree count'}}
+        self.assertIsNone(judge_probe.plant_missed(target, [same]))
+
+    def test_245_review_a_past_review_computes_its_weeks_at_its_own_time(self):
+        """Codex's review of #245: review_text(now=...) passed no time to the weekly line, which used the clock."""
+        past = datetime(2026, 11, 10, 12)
+        self.write('judgments/m.jsonl', [dict(VERDICT, episode_ts=(past - timedelta(hours=1)).isoformat(),
+                                              judged_at=(past - timedelta(hours=1)).isoformat())])
+        with mock.patch('supervisor.metacog.review_line', return_value='x') as line:
+            metrics.review_text(['m'], now=past)
+        self.assertEqual(line.call_args.args[1:], (past,))
+
     def test_m7d_cap_is_three_per_rolling_seven_days(self):
         episodes = [dict(self.ep, ts=(NOW - timedelta(hours=i)).isoformat()) for i in range(5)]
         metrics.live_episodes.return_value = episodes
         self.write('judgments/m.jsonl', [{'episode_ts': ep['ts'], 'delivery_supported': 'yes', 'confidence_of': None} for ep in episodes])
         self.assertEqual([judge_probe.run('m') for _ in range(5)], [1, 1, 1, 0, 0])
         self.assertEqual(self.ask.call_count, 3)
-        self.assertIn('0/3 over 30 days', judge_probe.line('m'))
+        self.assertIn('delivery refused 0/3', judge_probe.line('m'))
 
     def test_m7d_cap_expires_after_seven_days_and_report_after_thirty(self):
         self.write('judge-catch/m.jsonl', [{'at': (NOW - timedelta(days=8)).isoformat(), 'episode_ts': f'old{i}', 'caught': True}
                                           for i in range(3)])
         self.write('judgments/m.jsonl', [{'episode_ts': self.ep['ts'], 'delivery_supported': 'yes', 'confidence_of': None}])
         self.assertEqual(judge_probe.run('m'), 1)
-        self.assertEqual(judge_probe.line('m', NOW + timedelta(days=31)), 'judge catch rate: unmeasured')
+        self.assertEqual(judge_probe.line('m', NOW + timedelta(days=31)), 'judge catch rate over 30 days: delivery refused unmeasured; missed the ask unmeasured')
 
     def test_m7d_refusal_does_not_plant_an_already_failed_call(self):
         self.ep['tools'][0]['result'] = 'ERROR: refused'
@@ -278,13 +352,13 @@ class JudgingTest(Fixture):
         from supervisor import __main__ as cli
         with mock.patch.object(cli, 'instance_root'), mock.patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(cli.main(['judge', 'catch', 'm']), 0)
-        self.assertEqual(output.getvalue(), 'm: judge catch rate: unmeasured\n')
+        self.assertEqual(output.getvalue(), 'm: judge catch rate over 30 days: delivery refused unmeasured; missed the ask unmeasured\n')
         self.ask.assert_not_called()
 
     def test_m7d_unavailable_and_no_rows_are_unmeasured(self):
         with mock.patch.object(judge, 'available', return_value=False):
             self.assertEqual(judge_probe.run('m'), 0)
-        self.assertEqual(judge_probe.line('m'), 'judge catch rate: unmeasured')
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused unmeasured; missed the ask unmeasured')
         self.ask.assert_not_called()
 
     def test_m7d_scheduler_measurement_hook_runs_probe(self):
@@ -328,10 +402,10 @@ class JudgingTest(Fixture):
         path.write_text('torn\nnull\n{}\n{"at": "invalid"}\n{"at": 123}\n'
                         '{"at": "2026-11-06T12:00:00garbage"}\n' + json.dumps(
             {'at': NOW.isoformat(), 'episode_ts': 'old', 'caught': True}) + '\n')
-        self.assertEqual(judge_probe.line('m'), 'judge catch rate: 1/1 over 30 days')
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused 1/1; missed the ask unmeasured')
         self.write('judgments/m.jsonl', [{'episode_ts': self.ep['ts'], 'delivery_supported': 'yes', 'confidence_of': None}])
         self.assertEqual(judge_probe.run('m'), 1)
-        self.assertEqual(judge_probe.line('m'), 'judge catch rate: 1/2 over 30 days')
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused 1/2; missed the ask unmeasured')
 
     def test_failed_probe_attempts_count_toward_cap_but_not_catch_rate(self):
         episodes = [dict(self.ep, ts=(NOW - timedelta(hours=i)).isoformat()) for i in range(5)]
@@ -343,7 +417,7 @@ class JudgingTest(Fixture):
         self.assertEqual([r['error'] for r in rows], ['paid failure'] * 3)
         self.assertEqual(self.ask.call_count, 3)
         self.assertTrue(all('caught' not in r for r in rows))
-        self.assertEqual(judge_probe.line('m'), 'judge catch rate: unmeasured')
+        self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused unmeasured; missed the ask unmeasured')
 
 
 class PlanTest(Fixture):

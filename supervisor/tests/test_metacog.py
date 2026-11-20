@@ -156,14 +156,15 @@ class MetacogTest(unittest.TestCase):
             lines = metacog.section('synthetic')
             text = metacog.report(['synthetic'])
         self.assertTrue(lines[0].startswith('## '))
-        self.assertLessEqual(len(lines), 10)
+        self.assertLessEqual(len(lines), 11)   # #245 added the weekly line
         self.assertIn('judge sees my claim', '\n'.join(lines))
         self.assertIn('Paired v3: non-inferior', text)
         self.assertIn('H1: above chance', text)
         self.assertIn('none: n 40', text)
         self.assertIn('shaft anchoring', text)
         self.assertEqual(metacog.review_line(paired()),
-                         'confidence AUROC 1.00 [1.00, 1.00] (n 40), claim AUROC unavailable, bias +0.00, SD 50.0')
+                         'confidence AUROC 1.00 [1.00, 1.00] (n 40), claim AUROC unavailable, bias +0.00, SD 50.0'
+                         '; by week (ending): unavailable')   # #245: never the pooled figure alone
 
     def test_section_waits_for_five_misses(self):
         """Regression: wisp had 12 met and 1 missed v2/v3 cycle on 2026-10-26, and stats.md would have told it

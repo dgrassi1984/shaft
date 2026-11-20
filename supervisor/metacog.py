@@ -10,6 +10,7 @@ import json
 import random
 from bisect import bisect_left, bisect_right
 from functools import lru_cache
+from datetime import datetime, timedelta
 
 from . import metrics
 
@@ -219,6 +220,29 @@ def summary(rows: list[dict], episodes: dict[str, dict] | None = None, versions:
     return result
 
 
+def weekly(rows: list[dict], now: datetime, weeks: int = 4) -> list[dict]:
+    """#245: current-judge v2/v3 confidence in rolling seven-day windows, newest first."""
+    scored = [(metrics._ts(r.get("episode_ts")), r) for r in rows
+              if metrics._ts(r.get("episode_ts")) and metrics.by_current_judge(r)
+              and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v2", "v3")
+              and r.get("confidence") is not None]
+    result = []
+    for k in range(weeks):
+        end = now - timedelta(days=7 * k)
+        start = end - timedelta(days=7)
+        group = [r for ts, r in scored if start < ts <= end]
+        n = len(group)
+        met = sum(r["criterion_met"] == "yes" for r in group)
+        result.append({"end": end, "n": n,
+                       "auroc": _auc(group) if min(met, n - met) >= MIN_CLASS else None})
+    return result
+
+
+def _weekly_fragment(rows, now):
+    return "; ".join(f"{w['end']:%m-%d} {_number(w['auroc'])} (n {w['n']})"
+                     for w in weekly(rows, now) if w["n"]) or "unavailable"
+
+
 def paired_v3(rows: list[dict]) -> dict:
     """Paired ranking change after seeing the base rate, with a day-cluster interval.
 
@@ -254,7 +278,7 @@ def _paired_line(p):
 
 
 def section(name: str) -> list[str]:
-    """At most ten plain stats.md lines; no section below ten scored confidences."""
+    """At most eleven plain stats.md lines; no section below ten scored confidences."""
     rows = metrics.judgments_for_stats(name)
     scored = [r for r in rows if metrics.by_current_judge(r)
               and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v2", "v3")
@@ -266,6 +290,7 @@ def section(name: str) -> list[str]:
     b, mi = s["brier"], s["meta_i"]
     lines = ["## How well my confidence tells my met cycles from my missed ones",
              f"- Confidence AUROC {_number(s['auroc'])}{_interval(s['ci'])}; 0.5 means chance; n {s['n']}.",
+             f"- By week (ending): {_weekly_fragment(rows, datetime.now())}; 0.55 or below is chance.",
              f"- Above chance: {'yes' if s['h1'] == 'above chance' else 'below' if s['h1'] == 'below chance' else 'not shown yet'}"
              f"; met {s['met']}/{s['n']}, hit rate {s['hit_rate']:.1%}.",
              f"- Mean confidence {s['mean_confidence']:.1f}%; bias {s['bias']:+.2f}; SD {s['sd']:.1f} points.",
@@ -282,12 +307,13 @@ def section(name: str) -> list[str]:
     return lines
 
 
-def review_line(rows: list[dict]) -> str:
+def review_line(rows: list[dict], now: datetime | None = None) -> str:
     """One confidence/claim comparison for the operator's review."""
     s = summary(rows)
     sd = "unavailable" if s["sd"] is None else f"{s['sd']:.1f}"
     return (f"confidence AUROC {_number(s['auroc'])}{_interval(s['ci'])} (n {s['n']}), "
-            f"claim AUROC {_number(s['claim_auroc'])}, bias {_number(s['bias'], True)}, SD {sd}")
+            f"claim AUROC {_number(s['claim_auroc'])}, bias {_number(s['bias'], True)}, SD {sd}"
+            f"; by week (ending): {_weekly_fragment(rows, now if now is not None else datetime.now())}")
 
 
 def report(names: list[str]) -> str:
