@@ -58,7 +58,13 @@ struct ComposerTextView: UIViewRepresentable {
         view.accessibilityLabel = placeholder
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
-            DispatchQueue.main.async { view.becomeFirstResponder() }
+            DispatchQueue.main.async {
+                if view.window == nil {
+                    view.focusWhenInWindow = true
+                } else {
+                    view.becomeFirstResponder()
+                }
+            }
         }
         context.coordinator.measure(view)
     }
@@ -108,7 +114,16 @@ struct ComposerTextView: UIViewRepresentable {
 
 final class ComposerUITextView: UITextView {
     weak var coordinator: ComposerTextView.Coordinator?
+    var focusWhenInWindow = false
     let placeholder = UILabel()
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if focusWhenInWindow && window != nil {
+            focusWhenInWindow = false
+            becomeFirstResponder()
+        }
+    }
 
     /// A field that does not scroll stays at the top: UIKit keeps an offset for the height a shrinking field had.
     override var contentOffset: CGPoint {
