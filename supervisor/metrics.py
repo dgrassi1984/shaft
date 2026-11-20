@@ -804,21 +804,39 @@ def unsampled(name: str) -> set[str]:
     return {r["episode_ts"] for r in unsampled_rows(name)}
 
 
-def judge_sampled(name: str, episode_ts: str) -> bool:
-    """Whether the main judge grades this live run: one in SHAFT_JUDGE_EVERY, drawn when it is first judged (and a run
-    left out recorded), so nothing the instance can see tells it beforehand which of its runs will be graded."""
-    if judge.JUDGE_EVERY <= 1 or secrets.randbelow(judge.JUDGE_EVERY) == 0:
+# The finish channels that carry a cycle's result to the operator (live.DELIVERY_CHANNELS but none).
+OPERATOR_CHANNELS = ("message", "mail", "notion", "web_document")
+
+
+def reaches_operator(ep: dict) -> bool:
+    """A cycle that sent the operator a message, mail or document, or claimed to (#244): half of these were never
+    judged under the 1-in-2 sample, including one the operator called unnecessary."""
+    if (ep.get("finish") or {}).get("delivered_via") in OPERATOR_CHANNELS:
         return True
+    return any(isinstance(c, dict) and c.get("tool") == "send_message"
+               and str(c.get("result", "")).startswith("delivered to the operator") for c in ep.get("tools") or [])
+
+
+def judge_sampled(name: str, episode_ts: str, reaches: bool = False) -> str:
+    """Whether the main judge grades this live run: "random" for the one in SHAFT_JUDGE_EVERY, drawn when it is first
+    judged (and a run left out recorded), so nothing the instance can see tells it beforehand which of its runs will
+    be graded; "operator" for a run the draw left out that reached the operator (#244), always graded but kept out
+    of the sampled aggregates (judgments_for_stats); "" when it is left out."""
+    if judge.JUDGE_EVERY <= 1 or secrets.randbelow(judge.JUDGE_EVERY) == 0:
+        return "random"
+    if reaches:
+        return "operator"
     _unsampled_path(name).parent.mkdir(parents=True, exist_ok=True)
     with _unsampled_path(name).open("a") as f:
         f.write(json.dumps({"episode_ts": episode_ts, "decided_at": datetime.now().isoformat(timespec="seconds"),
                             "every": judge.JUDGE_EVERY}) + "\n")
-    return False
+    return ""
 
 
 def judgments_for_stats(name: str) -> list[dict]:
-    """Random sample only: commitment-selected verdicts are available to verification, not grade aggregates."""
-    return [j for j in judgments(name) if not j.get("cited")]
+    """Random sample only: commitment-selected verdicts, and runs judged because they reached the operator (#244),
+    are available to verification and review, not grade aggregates."""
+    return [j for j in judgments(name) if not j.get("cited") and not j.get("operator_selected")]
 
 
 def judge_pending(name: str) -> int:
@@ -850,7 +868,8 @@ def judge_pending(name: str) -> int:
     for ep in episodes:
         if ep["ts"] in done:
             continue
-        selected = ep["ts"] not in left and judge_sampled(name, ep["ts"])
+        drawn = judge_sampled(name, ep["ts"], reaches_operator(ep)) if ep["ts"] not in left else ""
+        selected = bool(drawn)
         if not selected and ep["ts"] not in cited:
             continue
         if not ep.get("intent"):
@@ -894,6 +913,8 @@ def judge_pending(name: str) -> int:
                 break
         if not selected:
             verdict["cited"] = True
+        elif drawn == "operator":
+            verdict["operator_selected"] = True
         intent = ep.get("intent") or {}
         confidence = intent.get("confidence")
         if intent.get("confidence_of") == CONFIDENCE_V4:
@@ -1766,6 +1787,10 @@ def _sample_note(name: str) -> list[str]:
     left = len(unsampled(name) - {j["episode_ts"] for j in rows})
     cited = sum(bool(j.get("cited")) for j in rows)
     extra = [f"*{cited} additional commitment-cited cycles were judged outside the random sample; excluded from grade aggregates.*"] if cited else []
+    reached = sum(bool(j.get("operator_selected")) for j in rows)
+    if reached:   # #244: every run that reaches the operator is judged; the ones the draw left out stay apart
+        extra.append(f"*{reached} more cycles were judged because they reached the operator outside the random "
+                     "sample; excluded from grade aggregates.*")
     if judge.JUDGE_EVERY <= 1 and not left:
         return extra
     return ["", (f"*The main judge grades one live run in {judge.JUDGE_EVERY}, drawn after the run, so I cannot tell "

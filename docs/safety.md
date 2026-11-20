@@ -472,7 +472,9 @@ A change adopted against a trial's 'worse' verdict is undone on any drop, withou
 One autonomous cycle in `SHAFT_JUDGE_EVERY` (default 2, drawn after the run, so the instance cannot
 tell which) is graded from its tool log by a cloud model picked at random from a rotation (`SHAFT_JUDGE_MODELS`,
 default MiMo and GLM 5.3 Flash), never the model the judged instance runs on; each verdict
-records its judge, and a cycle left out has no verdict rather than a failing one. The second judge's model
+records its judge, and a cycle left out has no verdict rather than a failing one. A cycle that sends the operator
+a message, mail or document (or claims to, in finish_cycle's `delivered_via`) is always graded; one the draw left out
+is marked `operator_selected` and kept out of the sampled grade aggregates, so they stay a random sample. The second judge's model
 (`SHAFT_JUDGE2_MODEL`, DeepSeek V4.1 Flash) stays out of the main rotation, so its cross-check is independent; a
 pool that still lists it uses it only when no other judge may grade, and that cycle gets no second judgment. Every
 judge call goes through `supervisor/modelcall.py`: Claude models straight to the Claude API; OpenRouter ones under the

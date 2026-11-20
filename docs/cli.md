@@ -321,7 +321,8 @@ test. It excludes uncommitted changes.
 `value-regrade` is a paid, value-only dry run, newest matching cycles first. It prints before and after values
 and counts results at or below 3 without writing verdicts. `pushback-outcome` previews eligible cited cycles
 without calls or writes; `--write` pays and stores outcomes separately. Detailed examples follow below.
-`catch` reports the blind planted-delivery catch rate over 30 days. `second` processes sampled second
+`catch` reports the blind planted-defect catch rate over 30 days per defect kind, never pooled: "delivery refused"
+(the operator message refused) and "missed the ask" (delivered, but carrying a message sent for another goal). `second` processes sampled second
 opinions.
 
 `shaft drift` reports personality change and distances between instances. `distinct` tests whether the judge
