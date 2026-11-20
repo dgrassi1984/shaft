@@ -545,6 +545,9 @@ def _reconcile(name: str, root: Path) -> dict:
                 restore = _uncommitted_code(root)
             for p in gate.refused(now):                        # never approved code: a link, a hard link, a pipe
                 restore.setdefault(p, None)                    # the approved file it stands in for comes back
+            from . import gate_held                            # #243: a change held on the code is where a run
+            held = gate_held.held_on_code(name, now)           # starts, unapproved until its re-gate settles it
+            restore = {p: b for p, b in restore.items() if p not in held}
         except RunRefused:
             raise
         except TreeTooBig as e:                                # never an empty or partial answer (core.Budget)
@@ -1088,6 +1091,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         if getattr(test_log, "refused", False):
             raise RunRefused(test_log.why)   # keep code/config unsettled; no revert, hold attempt or probation
         files = touched + (["config.env"] if configured else [])
+        held_on, held_result = ("", "") if ok or configured or linked or not getattr(test_log, "waits", False) \
+            else _hold_on_code(name, root, before["code"], after, touched, test_log, regating)
         if ok:
             kept = files
             log(f"{name}: code change passed tests: {touched} config: {configured}")
@@ -1095,6 +1100,24 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             gate_held.log_run(name, "re-gated" if regating else "kept", files, result="kept" if regating else "")
             if outcome is not None:
                 outcome.update(result="kept", why="", failing=[], mine="")
+        elif held_result:
+            # #243: only the shared tests' clock failed and every check of the change passed: it stays on the code,
+            # neither approved nor committed, and a run starts from it (_reconcile) until its re-gate settles it.
+            approved = None
+            from . import gate_held
+            why = test_log.why
+            log(f"{name}: code change held on its code ({held_result}{f' as {held_on}' if held_on else ''}): {touched}"
+                f" — {why}; every check of the change passed")
+            gate_held.log_run(name, "re-gated" if regating else "held", files, why, [], test_log, held_on,
+                              held_result if regating else "")
+            if outcome is not None:
+                outcome.update(result=held_result, why=why, failing=[], mine="")
+            if not regating:
+                text = (f"held on my code: {why}. My change to {', '.join(touched)} passed every check that reads it; "
+                        "it was not taken off my code and I can use it now, but it is not committed yet. It is gated "
+                        "again automatically once the shared tests pass (I will be told the outcome here).")
+                journal_note(root, "Supervisor: code change held on my code", text)
+                _tell(name, root, "code change held on my code (the shared tests ran out of time)", text)
         else:
             approved = None   # a failed gate records nothing: the record before it is what was put back
             saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
@@ -1213,8 +1236,8 @@ def _hold(name: str, root: Path, before: dict, after: dict, touched: list[str], 
     more try, dropped after gate_held.TRIES. Nothing to hold (only config lines) or a hold that could not be written
     is "baseline-failed": reverted, as before M2, and said so."""
     from . import gate_held
-    if regating is not None:
-        if gate_held.retried(name, regating, why, failing):
+    if regating is not None:   # an on_code change was just put back: from now on it is held off the code
+        if gate_held.retried(name, {**regating, "on_code": False}, why, failing):
             return regating["id"], "held"
         return "", "dropped"
     code = [p for p in touched if isinstance(after.get(p), bytes) or p not in after]
@@ -1231,6 +1254,31 @@ def _hold(name: str, root: Path, before: dict, after: dict, touched: list[str], 
         return "", "baseline-failed"
     log(f"{name}: code change held as {hid} until the gate's baseline is green: {touched}")
     return hid, "held"
+
+
+def _hold_on_code(name: str, root: Path, before: dict, after: dict, touched: list[str], test_log,
+                  regating: dict | None) -> tuple[str, str]:
+    """Hold a change on the instance's code (#243, gate_held on_code): (its id, "held"), ("", "dropped") when a re-gate
+    of one found the clock out again for the last of its tries (it stays on the code, unapproved: the next run's
+    _reconcile gates it), or ("", "") when it cannot be held so — a change of code it does not only write or delete,
+    a re-gate of a change held off the code, a hold that could not be written — and the gate's usual way applies."""
+    from . import gate_held
+    if regating is not None:
+        if not regating.get("on_code"):
+            return "", ""
+        return (regating["id"], "held") if gate_held.retried(name, regating, test_log.why, []) else ("", "dropped")
+    if any(not isinstance(after.get(p), bytes) and p in after for p in touched):
+        return "", ""
+    try:
+        head = git_wt(root, "rev-parse", "HEAD", check=False).stdout.strip()
+    except Exception as e:
+        head = f"unknown ({type(e).__name__}: {e})"
+    try:
+        return gate_held.save(name, head, before, after, touched, test_log.why, [], on_code=True), "held"
+    except (OSError, ValueError) as e:
+        log(f"{name}: a code change only the shared tests' clock failed could NOT be held on its code: "
+            f"{type(e).__name__}: {e}")
+        return "", ""
 
 
 def _tell(name: str, root: Path, subject: str, text: str) -> None:
@@ -1268,6 +1316,27 @@ def regate_held(name: str) -> None:
                 approved = _reconcile(name, root)
                 files = sorted(meta["files"])
                 when = meta.get("held_at", "?").replace("T", " ")
+                if meta.get("on_code") and not gate_held.on_code(meta, approved):
+                    gate_held.drop(name, meta["id"])
+                    gate_held.log_run(name, "re-gated", files, "superseded: its files changed on my code since it "
+                                      "was held, and a later gate checks them", held=meta["id"], result="dropped")
+                    log(f"{name}: held code change {meta['id']} (on its code) dropped: its files changed since")
+                    _tell(name, root, "held code change superseded",
+                          f"re-gate: superseded — my change to {', '.join(files)}, held on my code at {when}, has "
+                          "changed since; what my code holds now is gated like any change.")
+                    continue
+                if meta.get("on_code"):
+                    before = _snapshot(root, gate_held.base_code(name, meta, approved))
+                    log(f"{name}: re-gating held code change {meta['id']} where it stands on its code: {files}")
+                    out = {}
+                    _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out)
+                    result, held_text = out.get("result", ""), _regate_text(meta, files, when, out)
+                    if result in ("kept", "candidate-failed", "dropped") or not result:
+                        gate_held.drop(name, meta["id"])
+                    _tell(name, root, f"held code change re-gated: {result or 'nothing to do'}", held_text)
+                    if result in ("held", "dropped"):
+                        break
+                    continue
                 if (moved := gate_held.applies(meta, approved)):
                     patch = _held_patch(name, meta)
                     gate_held.drop(name, meta["id"])
@@ -1319,6 +1388,30 @@ def regate_held(name: str) -> None:
             "green warm-up")
     except RunRefused as e:
         _refused(name, e)
+
+
+def _regate_text(meta: dict, files: list[str], when: str, out: dict) -> str:
+    """What the instance is told of an on_code held change's re-gate (#243)."""
+    from . import gate_held
+    failing = "".join(f"\n- {n}" for n in out.get("failing") or [])
+    return {
+        "kept": f"re-gated: kept — my change to {', '.join(files)}, held on my code at {when}, passed the gate and is "
+                "committed.",
+        "candidate-failed": f"re-gated: failed — my change to {', '.join(files)}, held on my code at {when}, was gated "
+                            f"again and a check of it fails ({out.get('why')}); it was put back to what it was before "
+                            "and is no longer held." + (f" What I wrote is in {out['mine']}." if out.get("mine") else "")
+                            + (f"\n\nFailing:{failing}" if failing else ""),
+        "held": f"re-gated: still held — {out.get('why')}; my change to {', '.join(files)} "
+                + ("stays on my code" if out.get("why", "").startswith("the shared supervisor tests ran out")
+                   else "was taken off my code and stays held") + " and is tried again after the next green warm-up."
+                + (f"\n\nFailing:{failing}" if failing else ""),
+        "dropped": f"re-gated: no longer held — my change to {', '.join(files)}, held at {when}, found the gate's "
+                   f"baseline red {gate_held.TRIES} times ({out.get('why')})"
+                   + ("; it is still on my code, and my next run gates it like any change."
+                      if out.get("why", "").startswith("the shared supervisor tests ran out") else "; it is off my code.")
+                   + (f"\n\nFailing:{failing}" if failing else ""),
+    }.get(out.get("result", ""), f"re-gated: nothing to do — my change to {', '.join(files)}, held at {when}, is "
+                                 "already in my code; it is no longer held.")
 
 
 def _held_patch(name: str, meta: dict) -> str:

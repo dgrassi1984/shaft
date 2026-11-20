@@ -27,8 +27,9 @@ python3 -m unittest discover -s supervisor/tests -t .
 
 For separate worktrees, follow `docs/worktrees.md`. Do not copy runtime state.
 Before a merge, commit and run `bin/shaft gate budget`. It checks committed code,
-not uncommitted edits. It rejects failed parts, parts over half the gate timeout,
-tests over 10 seconds, and duplicate tests. The default gate timeout is 300 seconds.
+not uncommitted edits. It rejects failed parts, an instance part over half the gate
+timeout, a shared part over its derived limit (printed), tests over 10 seconds, and
+duplicate tests. The default gate timeout is 300 seconds.
 
 ## Invariants
 

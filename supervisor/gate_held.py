@@ -9,6 +9,11 @@ the code as it is then — only if every file it touched is still as it was when
 run's change. The instance
 cannot write here (its sandbox writes only its own folder): what is re-applied is what it wrote, byte for byte.
 
+A change whose only failure was the shared supervisor tests running out of their time limit, every check of the change
+passing (gate.Output.waits, #243), is held `on_code`: it stays on the instance's code instead of being taken off, its
+base bytes kept here too, and a run starts from it (runner._reconcile) without approving it. The re-gate then gates
+it where it stands — kept and committed, or put back to its base if a check of it fails.
+
 `.supervisor/gate-runs/<name>.jsonl` records every gate an instance's change went through, for record(kind="gate"):
 its own rows only, never another instance's.
 """
@@ -61,10 +66,12 @@ def _patch(paths: list[str], before: dict, after: dict) -> str:
     return text if len(text) <= PATCH_CHARS else text[:PATCH_CHARS] + f"\n[… cut at {PATCH_CHARS} characters]\n"
 
 
-def save(name: str, head: str, before: dict, after: dict, paths: list[str], why: str, failing: list[str]) -> str:
+def save(name: str, head: str, before: dict, after: dict, paths: list[str], why: str, failing: list[str],
+         on_code: bool = False) -> str:
     """Hold the change `before` → `after` on `paths` (runner._settle, after a baseline failure): its bytes, each
-    file's base digest, the instance's commit `head` it was made on, and why it was held. Written whole into a staging
-    folder, then renamed: a half-written held change never exists. Returns its id."""
+    file's base digest, the instance's commit `head` it was made on, and why it was held. `on_code` (#243): it stays on
+    the instance's code; its base bytes are kept as well (base/), to put back if a check of it fails at its re-gate.
+    Written whole into a staging folder, then renamed: a half-written held change never exists. Returns its id."""
     d = _sup() / HELD / name
     d.mkdir(parents=True, exist_ok=True)
     hid = f"{datetime.now():%Y%m%d-%H%M%S-%f}"
@@ -75,14 +82,21 @@ def save(name: str, head: str, before: dict, after: dict, paths: list[str], why:
             new = after.get(p)
             if new is not None and not isinstance(new, bytes):
                 raise ValueError(f"{p}: {new!r} is never held as code")
-            files[p] = {"base": _digest(before.get(p)), "deleted": new is None}
+            files[p] = {"base": _digest(before.get(p)), "deleted": new is None, "after": _digest(new)}
             if new is not None:
                 target = staging / "files" / p
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(new)
+            old = before.get(p)
+            if on_code and old is not None:
+                if not isinstance(old, bytes):
+                    raise ValueError(f"{p}: its base {old!r} cannot be put back")
+                target = staging / "base" / p
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(old)
         (staging / "candidate.patch").write_text(_patch(paths, before, after))
         meta = {"id": hid, "held_at": datetime.now().isoformat(timespec="seconds"), "base_sha": head,
-                "files": files, "why": why, "failing": failing, "tries": 0}
+                "files": files, "why": why, "failing": failing, "tries": 0, "on_code": on_code}
         (staging / "meta.json").write_text(json.dumps(meta, indent=1))
         staging.rename(d / hid)
     except BaseException:
@@ -118,6 +132,35 @@ def applies(meta: dict, code: dict) -> list[str]:
     """The files a held change touched that are no longer as they were when it was held ([]: it applies to `code`,
     a snapshot of the instance's code now)."""
     return [p for p, f in meta["files"].items() if _digest(code.get(p)) != f.get("base")]
+
+
+def on_code(meta: dict, code: dict) -> bool:
+    """An `on_code` held change still standing on `code` (a snapshot): every file it touched as it left it."""
+    return bool(meta.get("on_code")) and all(_digest(code.get(p)) == f.get("after") for p, f in meta["files"].items())
+
+
+def held_on_code(name: str, code: dict) -> dict:
+    """What the instance's on_code held changes left on `code`, file by file (runner._reconcile: the code a run may
+    start from without it being approved). Nothing for one the code no longer holds as it was left."""
+    out = {}
+    for meta in pending(name):
+        if on_code(meta, code):
+            out.update({p: code.get(p) for p in meta["files"]})
+    return out
+
+
+def base_code(name: str, meta: dict, code: dict) -> dict:
+    """`code` with an on_code held change's files at their base again: what its re-gate gates it against."""
+    d = _sup() / HELD / name / meta["id"]
+    out = dict(code)
+    for p, f in meta["files"].items():
+        if f.get("base") is None:
+            out.pop(p, None)
+        else:
+            out[p] = (d / "base" / p).read_bytes()
+            if _digest(out[p]) != f["base"]:
+                raise ValueError(f"{p}: the held base does not match its digest")
+    return out
 
 
 def apply(name: str, root: Path, meta: dict) -> None:
@@ -235,6 +278,7 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None) -> str:
                                                      "baseline green; withdraw with withdraw_held(id, reason))"
                                                      if held else ""))
         for m in held:
-            lines.append(f"  {m['id']} held {m.get('held_at', '?').replace('T', ' ')}, re-gated {m.get('tries', 0)} of "
-                         f"{TRIES} times: {', '.join(m['files'])} — {m.get('why', '')}")
+            lines.append(f"  {m['id']} held {m.get('held_at', '?').replace('T', ' ')}"
+                         + (" (still on my code)" if m.get("on_code") else "")
+                         + f", re-gated {m.get('tries', 0)} of {TRIES} times: {', '.join(m['files'])} — {m.get('why', '')}")
     return "\n".join(lines)

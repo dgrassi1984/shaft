@@ -28,9 +28,18 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual([c["part"] for c in calls], ["instance", "shared"])
         self.assertTrue(all(VAR not in c["env"] for c in calls))
 
-    def test_a_part_over_half_the_stage_limit_is_over_budget(self):
-        self.assertEqual(self.run_budget({"instance": 1, "shared": 151})[0], 1)
-        self.assertEqual(self.run_budget({"instance": 1, "shared": 149})[0], 0)
+    def test_the_instance_part_over_half_the_stage_limit_is_over_budget(self):
+        self.assertEqual(self.run_budget({"instance": 151, "shared": 1})[0], 1)
+        self.assertEqual(self.run_budget({"instance": 149, "shared": 1})[0], 0)
+
+    def test_the_shared_part_is_held_to_its_derived_limit_243(self):
+        """#243 (operator, 2026-11-20): the shared part's limit is derived from its recent passing runs (shared_limit),
+        not half a fixed 300 s; the budget holds it to that limit and runs it within it."""
+        with mock.patch.object(gate, "shared_limit", return_value=(420, "420 s: derived", [])):
+            code, calls = self.run_budget({"instance": 1, "shared": 400})
+            self.assertEqual(code, 0)
+            self.assertEqual(calls[1]["timeout_s"], 420)
+            self.assertEqual(self.run_budget({"instance": 1, "shared": 421})[0], 1)
 
     def test_a_slow_test_a_twice_run_test_or_a_failure_is_over_budget(self):
         slow = gate_suite.TIMES + '{"seconds": 1, "slowest_tests": [["t (m.C.t)", 10.5]], "run_twice": []}'

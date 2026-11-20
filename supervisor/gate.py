@@ -6,7 +6,9 @@ are restored byte-for-byte from the snapshot.
 The supervisor's own tests run in two parts; the shared part's pass is recorded
 per commit. A failed gate says whether the change
 or the supervisor's side (the baseline) failed it (Output); a baseline failure's
-change is held and re-gated once the baseline is green (gate_held, runner.regate_held).
+change is held and re-gated once the baseline is green (gate_held, runner.regate_held). The shared part's time limit
+is derived from its recent passing runs (shared_limit, #243); a gate whose only failure is that limit running out
+holds the change on the instance's code instead of taking it off (Output.waits).
 """
 from __future__ import annotations
 
@@ -501,6 +503,7 @@ SHARED_LOCK = "shared.lock"                 # beside it too: one run of the shar
 WARM_REFRESH_S = TREE_IDLE_S // 2           # a record this old is run again by the warm-up while gates still take it
 WARM_TIMED_OUT = 4                          # retryable: no test verdict within the operator's budget
 WARM_FAILED = 3                             # warm()'s exit when it failed and logged the alert itself
+BUDGET_SHARE = 2     # each part must pass within this share of its limit: room for a loaded machine (shared_limit too)
 
 
 def _python_id() -> str:
@@ -579,6 +582,76 @@ def _shared_lock(tree: Path, timeout_s: int, stage: str):
         yield
 
 
+PARTS_LOG = "gate-parts.jsonl"   # under SUP_DIR: every run of a part of the supervisor's tests, timed out ones included
+LIMIT_RUNS = 5                   # passing runs of the shared part, measured alone, a derived limit needs (#243)
+LIMIT_KEEP = 20                  # the newest this many of them are read: the limit follows the suite as it grows
+LIMIT_DAYS = 14                  # and none older than this
+LIMIT_PERCENTILE = 0.95
+
+
+def _log_part(part: str, label: str, started: datetime, ok: bool | None, tests_run: int | None,
+              limit_s: int) -> None:
+    """One row of PARTS_LOG, best effort: `ok` None is a run that timed out. What shared_limit learns from."""
+    from .core import SUP_DIR
+    row = {"part": part, "label": label, "start": started.isoformat(timespec="milliseconds"),
+           "end": datetime.now().isoformat(timespec="milliseconds"), "ok": ok, "tests_run": tests_run,
+           "limit_s": limit_s, "pid": os.getpid()}
+    try:
+        SUP_DIR.mkdir(parents=True, exist_ok=True)
+        with (SUP_DIR / PARTS_LOG).open("a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        _log(f"gate: a run of the {part} part could not be recorded in {PARTS_LOG}: {e}")
+
+
+def _alone_passes(now: datetime | None = None) -> list[dict]:
+    """The shared part's passing runs (tests run) of the last LIMIT_DAYS that no other run of a part overlapped — the
+    gate measured alone, as the operator asked (#243) — newest LIMIT_KEEP, oldest first, each with its seconds."""
+    from .core import SUP_DIR, jsonl_lines
+    now = now or datetime.now()
+    try:
+        lines = jsonl_lines((SUP_DIR / PARTS_LOG).read_text(errors="replace"))[-20000:]
+    except OSError:
+        return []
+    runs = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+            r["_start"], r["_end"] = datetime.fromisoformat(r["start"]), datetime.fromisoformat(r["end"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if isinstance(r, dict) and now - timedelta(days=LIMIT_DAYS) <= r["_start"] <= now:
+            runs.append(r)
+    alone = []
+    for r in runs:
+        if r.get("part") != "shared" or r.get("ok") is not True or not isinstance(r.get("tests_run"), int) \
+                or r["tests_run"] <= 0:
+            continue
+        if any(o is not r and o["_start"] < r["_end"] and r["_start"] < o["_end"] for o in runs):
+            continue
+        alone.append({"label": r.get("label"), "start": r["start"],
+                      "seconds": (r["_end"] - r["_start"]).total_seconds()})
+    alone.sort(key=lambda r: r["start"])
+    return alone[-LIMIT_KEEP:]
+
+
+def shared_limit(floor_s: int = GATE_TIMEOUT_S) -> tuple[int, str, list[dict]]:
+    """The shared part's time limit (#243): BUDGET_SHARE × the LIMIT_PERCENTILE of its recent passing runs measured
+    alone (_alone_passes), never under `floor_s` (SHAFT_GATE_TIMEOUT_S). With fewer than LIMIT_RUNS such runs,
+    `floor_s`, and it says so. (seconds, how it was set, the runs it came from)."""
+    import math
+    runs = _alone_passes()
+    if len(runs) < LIMIT_RUNS:
+        return floor_s, (f"{floor_s} s, the stage limit: {len(runs)} of the {LIMIT_RUNS} passing runs measured alone "
+                         f"in {LIMIT_DAYS} days that a limit derived from them needs"), runs
+    seconds = sorted(r["seconds"] for r in runs)
+    pct = seconds[max(0, math.ceil(LIMIT_PERCENTILE * len(seconds)) - 1)]
+    limit = max(floor_s, math.ceil(BUDGET_SHARE * pct))
+    return limit, (f"{limit} s: {BUDGET_SHARE} × the {LIMIT_PERCENTILE:.0%} of {len(runs)} passing runs measured "
+                   f"alone since {runs[0]['start'][:16].replace('T', ' ')} ({pct:.0f} s)"
+                   + (f", raised to the {floor_s} s stage limit" if limit == floor_s else "")), runs
+
+
 def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple[bool, str, str, int | None, float]:
     """One part of the supervisor's tests, by the committed tree's own runner: (passed, the section for the
     output, the whole stderr, tests run, seconds). It passes only with exit 0 and the runner's own report carrying
@@ -588,13 +661,18 @@ def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple
     from . import gate_suite
     from .core import PYTHON
     nonce = secrets.token_hex(16)
-    t0 = time.monotonic()
-    p = _stage(f"supervisor invariants ({label}), {part} part",
-               [PYTHON, "-E", "-s", "-m", "supervisor.gate_suite", part, "--nonce-stdin", "--workers", str(GATE_WORKERS)],
-               timeout_s, input=nonce + "\n", cwd=tree, env=env)
+    t0, started = time.monotonic(), datetime.now()
+    try:
+        p = _stage(f"supervisor invariants ({label}), {part} part",
+                   [PYTHON, "-E", "-s", "-m", "supervisor.gate_suite", part, "--nonce-stdin", "--workers",
+                    str(GATE_WORKERS)], timeout_s, input=nonce + "\n", cwd=tree, env=env)
+    except StageTimedOut:
+        _log_part(part, label, started, None, None, timeout_s)
+        raise
     seconds = time.monotonic() - t0
     r = gate_suite.report(p.stdout, nonce)
     ok = p.returncode == 0 and r is not None and r["ok"]
+    _log_part(part, label, started, ok, r["tests_run"] if r is not None else None, timeout_s)
     head = (f"-- {part} part: {r['tests_run']} tests --\n" if r is not None else
             f"-- {part} part: no report from its runner (exit {p.returncode}), counted as failed --\n")
     # The cut section is for the failures: the timings line (kilobytes of test names) stays in the full log only.
@@ -651,7 +729,7 @@ def warm(timeout_s: int = GATE_TIMEOUT_S) -> int:
         if not (tree / SPLIT_RUNNER).is_file():
             raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}")
         env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}   # the key gates compute
-        ok, _, full, ran = _shared_part(tree, label, env, timeout_s, WARM_REFRESH_S)
+        ok, _, full, ran = _shared_part(tree, label, env, shared_limit(timeout_s)[0], WARM_REFRESH_S)
     except StageTimedOut as t:
         _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {t}")
         return WARM_TIMED_OUT
@@ -670,27 +748,31 @@ def warm(timeout_s: int = GATE_TIMEOUT_S) -> int:
     return WARM_FAILED
 
 
-BUDGET_SHARE = 2     # each part must pass within this share of the stage limit: room for a loaded machine
-TEST_BUDGET_S = 10   # and no one supervisor test may take longer: the change that adds a slow test fails, not a later one
+TEST_BUDGET_S = 10   # no one supervisor test may take longer: the change that adds a slow test fails, not a later one
 
 
 def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
     """`shaft gate budget`, the check before a merge: both
     parts of the supervisor's tests on the last commits, the way a gate runs them (committed_tree, _part), the
-    instance part against the template, its own cases included. Fails when a part fails, takes more than
-    1/BUDGET_SHARE of the stage limit, holds a test slower than TEST_BUDGET_S, or runs a test twice; prints where the
-    time went either way. Uncommitted changes are not in it. 0 within budget, 1 not."""
+    instance part against the template, its own cases included. Fails when a part fails, runs out of its limit (the
+    instance part: 1/BUDGET_SHARE of the stage limit; the shared part: its derived limit, shared_limit, #243), holds
+    a test slower than TEST_BUDGET_S, or runs a test twice; prints the shared part's limit and the runs it came from,
+    and where the time went either way. Uncommitted changes are not in it. 0 within budget, 1 not."""
     from . import gate_suite
     tree, label = committed_tree()
     # No instance under test: the invariants then read the tree's template/ and run the template's own cases too (every
     # CONFIDENCE_MODE, TemplateMeasurement), which they skip for an instance (Codex review).
     env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}
-    print(f"gate budget on {label}: each part within {timeout_s // BUDGET_SHARE}s of the {timeout_s}s stage limit, "
-          f"no test over {TEST_BUDGET_S}s, {GATE_WORKERS} workers")
+    limit, how, runs = shared_limit(timeout_s)
+    print(f"gate budget on {label}: the instance part within {timeout_s // BUDGET_SHARE}s of the {timeout_s}s stage "
+          f"limit, the shared part within its limit, no test over {TEST_BUDGET_S}s, {GATE_WORKERS} workers")
+    print(f"shared part's limit: {how}")
+    if runs:
+        print("  from: " + ", ".join(f"{r['start'][5:16].replace('T', ' ')} {r['seconds']:.0f}s" for r in runs))
     within = True
-    for part in ("instance", "shared"):
+    for part, allowed, run_limit in (("instance", timeout_s / BUDGET_SHARE, timeout_s), ("shared", limit, limit)):
         try:
-            ok, section, full, ran, seconds = _part(part, tree, env, timeout_s, label)
+            ok, section, full, ran, seconds = _part(part, tree, env, run_limit, label)
         except StageTimedOut as t:
             print(f"\n{part} part: {t}\n{t.tail}")
             within = False
@@ -698,10 +780,10 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
         times = gate_suite.times(full) or {}
         slow = [(n, s) for n, s in times.get("slowest_tests", []) if s > TEST_BUDGET_S]
         twice = times.get("run_twice", [])
-        over = seconds > timeout_s / BUDGET_SHARE
+        over = seconds > allowed
         within &= ok and not over and not slow and not twice
         print(f"\n{part} part: {ran} tests in {seconds:.0f}s"
-              + ("" if ok else " FAILED") + (f", over its {timeout_s // BUDGET_SHARE}s budget" if over else ""))
+              + ("" if ok else " FAILED") + (f", over its {allowed:.0f}s budget" if over else ""))
         for n, s in slow:
             print(f"  over {TEST_BUDGET_S}s: {n} ({s:.1f}s)")
         for n in twice:
@@ -716,18 +798,27 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
 
 
 def _supervisor_tests(instance_root: Path, tree: Path, label: str,
-                      timeout_s: int) -> tuple[str, str, list[str] | None, list[str] | None]:
+                      timeout_s: int) -> tuple[str, str, list[str] | None, list[str] | None, StageTimedOut | None]:
     """The supervisor's own tests against this instance: the shared part from its
-    record when this commit's passed already, else run (and recorded when it passes); then the instance part, every
-    time. (the section for the output, the whole output for the kept log, the shared part's failing tests, the
-    instance part's): None for a part that passed, its failing names (maybe none) for one that failed."""
+    record when this commit's passed already, else run (and recorded when it passes) within shared_limit; then the
+    instance part, every time. (the section for the output, the whole output for the kept log, the shared part's
+    failing tests, the instance part's, the shared part's timeout): None for a part that passed, its failing names
+    (maybe none) for one that failed. A shared part out of time says nothing of the change (it never reads it), so
+    the checks that do read it still run (#243): their verdict decides whether the change is held or reverted."""
     if not (tree / SPLIT_RUNNER).is_file():
         raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}: the supervisor's tests cannot be split")
     env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
-    shared_ok, shared, shared_full, _ = _shared_part(tree, label, env, timeout_s, TREE_IDLE_S)
+    limit, how, _ = shared_limit(timeout_s)
+    late = None
+    try:
+        shared_ok, shared, shared_full, _ = _shared_part(tree, label, env, limit, TREE_IDLE_S)
+    except StageTimedOut as t:
+        _log(f"gate: {instance_root}: {t} (its limit: {how})")
+        late, shared_ok, shared_full = t, True, t.tail
+        shared = f"-- shared part: {t}; its limit: {how} --\n" + (t.tail[-3000:] + "\n" if t.tail else "")
     inst_ok, inst, inst_full, _, _ = _part("instance", tree, env, timeout_s, label)
     return (shared + inst, shared_full + inst_full, None if shared_ok else failing_tests(shared_full),
-            None if inst_ok else failing_tests(inst_full))
+            None if inst_ok else failing_tests(inst_full), late)
 
 
 def instance_part_failures(instance_root: Path, timeout_s: int = GATE_TIMEOUT_S) -> list[str] | None:
@@ -755,8 +846,12 @@ class Output(str):
     saying which. `failing`: the failing tests' names. `recheck`: when the supervisor's instance part is the only
     check of the change that failed, its failing names, for the caller to run against the approved code (a test that
     fails there too is the baseline's). `refused`: profile infrastructure is unavailable; no check failed and the
-    caller must leave the change unsettled. Other failed gates keep nothing."""
+    caller must leave the change unsettled. `waits`: the only failure was the shared part running out of its limit
+    and every check of the change passed — the caller holds the change on the code instead of taking it off (#243).
+    Other failed gates keep nothing."""
     refused = False   # profile infrastructure unavailable: leave the change unsettled, never a failed check
+    waits = False     # only the shared part's clock failed: hold the change on the code (#243)
+    own_only = False  # the instance's own tests are the only check that failed (a template merge compares them, #243)
     cause: str | None
     why: str
     failing: tuple[str, ...]
@@ -770,6 +865,57 @@ class Output(str):
 
 def _names(names: list[str], most: int = 5) -> str:
     return "; ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+
+
+def _test_profile(instance_root: Path, home: Path, env_root: Path, data_root: Path | None) -> Path:
+    """The sandbox profile the instance's checks run under (a temporary file outside the instance; the caller removes
+    it): the instance's own sandbox, its code read-only."""
+    from . import pyenv
+    fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
+    prof = Path(prof_name)
+    with os.fdopen(fd, "w") as f:
+        if data_root is None:
+            f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
+            # #86: tests may use scratch space, but cannot chmod, replace or rewrite the code they judge.
+            code_root = instance_root.resolve()
+            f.write(f"(deny file-write* (literal {sandbox._q(code_root)}))\n")
+        else:   # the instance's own sandbox, as at launch; the copy read-only but for its scratch space
+            f.write(sandbox.profile(data_root, home, [], env_root=env_root))
+            f.write(sandbox.protected_code(instance_root, home))
+            f.write(f"(allow file-write* (subpath {sandbox._q(instance_root.resolve() / '.tmp')}))\n")
+            code_root = Path(data_root).resolve()
+            for name in pyenv.ENV_DIRS:   # read in place, never changed (#86; Codex review of the fix)
+                f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
+        for name in CODE_PATHS:
+            f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
+    return prof
+
+
+def own_tests_failures(instance_root: Path, home: Path, env_root: Path, data_root: Path | None = None,
+                       timeout_s: int = GATE_TIMEOUT_S) -> list[str] | None:
+    """The instance's own tests alone, against `instance_root` (a template merge: its pre-merge code's protected copy,
+    to tell whether its tests that failed on the merge fail without it too, #243): the failing tests' names, [] when
+    they pass, None when it cannot tell (no tests, it did not run, timed out, or failed naming no test)."""
+    from . import pyenv
+    from .core import safe_mkdir
+    prof = None
+    try:
+        if not (instance_root / "tests").is_dir():
+            return None
+        py = pyenv.python(env_root)
+        tmp = safe_mkdir(instance_root, ".tmp")
+        prof = _test_profile(instance_root, home, env_root, data_root)
+        passed, _, whole = _instance_tests(instance_root, prof, sandbox.agent_env(os.environ, TMPDIR=str(tmp),
+                                                                                  SHAFT_PYTHON=py), py, timeout_s)
+    except Exception as e:   # StageTimedOut included: no answer, never a guess
+        _log(f"gate: the instance's own tests on {instance_root} could not be run for comparison: "
+             f"{type(e).__name__}: {e}")
+        return None
+    finally:
+        if prof is not None:
+            prof.unlink(missing_ok=True)
+    names = failing_tests(whole)
+    return [] if passed else (names or None)
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
@@ -795,6 +941,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     outputs, ok = [], True
     full: list[str] = []   # each stage uncut, in step with outputs, kept in a file when the gate fails (keep_log)
     baseline: list[str] = []      # the supervisor's side failed: why, one line each
+    shared_late = False           # the shared part ran out of its limit (#243)
     candidate: list[str] = []     # a check that reads the change failed: which
     failing: list[str] = []
     recheck: list[str] = []
@@ -810,26 +957,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         py = pyenv.python(env_root)
         tmp = safe_mkdir(instance_root, ".tmp")       # UnsafePath when the instance made .tmp a link: a failed gate
         step = "the gate"
-        fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
-        prof = Path(prof_name)
-        with os.fdopen(fd, "w") as f:
-            if data_root is None:
-                f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
-                # #86: tests may use scratch space, but cannot chmod, replace or rewrite the code they judge.
-                code_root = instance_root.resolve()
-                f.write(f"(deny file-write* (literal {sandbox._q(code_root)}))\n")
-            else:   # the instance's own sandbox, as at launch; the copy read-only but for its scratch space
-                f.write(sandbox.profile(data_root, home, [], env_root=env_root))
-                f.write(sandbox.protected_code(instance_root, home))
-                f.write(f"(allow file-write* (subpath {sandbox._q(instance_root.resolve() / '.tmp')}))\n")
-                code_root = Path(data_root).resolve()
-                for name in pyenv.ENV_DIRS:   # read in place, never changed (#86; Codex review of the fix)
-                    f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
-            for name in CODE_PATHS:
-                f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
-        section, sup_full, shared_bad, inst_bad = _supervisor_tests(instance_root, tree, label, timeout_s)
+        prof = _test_profile(instance_root, home, env_root, data_root)
+        section, sup_full, shared_bad, inst_bad, late = _supervisor_tests(instance_root, tree, label, timeout_s)
         outputs.append(f"== supervisor invariants ({label}) ==\n" + section)
         full.append(f"== supervisor invariants ({label}) ==\n" + sup_full)
+        if late is not None:   # the shared part's clock: the supervisor's side, never the change's (#243)
+            baseline.append(f"the shared supervisor tests ran out of time ({late.seconds} s)")
+            shared_late = True
+            ok = False
         if shared_bad is not None:   # they never read the instance (the cache's guards): never the change's
             baseline.append("the shared supervisor tests fail" + (f": {_names(shared_bad)}" if shared_bad else ""))
             failing += shared_bad
@@ -865,11 +1000,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         _log(f"gate: {instance_root}: {t}")
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
                        + f"{t}; the checks after it did not run")
-        ok = False
-        if t.stage.endswith(", shared part"):   # tests that never read the change (or the wait for another gate's run)
-            baseline.append(f"the shared supervisor tests ran out of time ({t.seconds} s)")
-        else:
-            candidate.append(f"{t.stage} ran out of time ({t.seconds} s)")
+        ok = False   # the shared part's timeout never reaches here: _supervisor_tests goes on to the change's checks
+        candidate.append(f"{t.stage} ran out of time ({t.seconds} s)")
     except Exception as e:
         # Fail closed, like a timeout: any failure of the gate's own machinery (no sandbox-exec, a link where .tmp
         # should be, a full disk) is a failed gate. Only StageTimedOut was caught, so anything else left settlement
@@ -894,8 +1026,11 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     # A check of the change that failed makes it the change's, whatever else failed: the gate's verdict on it stands.
     cause = "baseline" if baseline and not candidate else "candidate"
     only_recheck = candidate == ["the supervisor's tests that read my code fail"]
-    return ok, Output("\n".join(outputs), cause, "; ".join(candidate or baseline), list(dict.fromkeys(failing)),
-                      recheck if only_recheck else ())
+    out = Output("\n".join(outputs), cause, "; ".join(candidate or baseline), list(dict.fromkeys(failing)),
+                 recheck if only_recheck else ())
+    out.waits = shared_late and len(baseline) == 1 and not candidate
+    out.own_only = candidate == ["my own tests fail"] and not baseline
+    return ok, out
 
 
 GATE_LOGS_KEPT = 50

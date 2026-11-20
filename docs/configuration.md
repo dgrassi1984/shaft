@@ -74,7 +74,8 @@ class demotion and restoration are read from supervisor-owned state on each disp
 Calendar proposals retain `SHAFT_CALENDAR_WRITES_PER_DAY` and `SHAFT_CALENDAR_PROPOSAL_HOURS`.
 
 `SHAFT_GATE_TIMEOUT_S` defaults to 300 seconds. The supervisor's tests run in `SHAFT_GATE_WORKERS` processes, and
-`shaft gate budget` keeps each part within half of that limit.
+`shaft gate budget` keeps the instance part within half of that limit. The shared part's limit is derived from its
+recent passing runs and is never under it (see the gate in [safety](safety.md)).
 
 This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
 Defaults below are source defaults, not values read from this checkout's private state.
@@ -160,7 +161,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
-| `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out; positive integer | [gate.py](../supervisor/gate.py) |
+| `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out, and the floor of the shared part's derived limit; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_IDLE_WAKE_MINUTES` | `30` | minutes an instance may go without a cycle before a timed wake starts one with nothing new for it (no unread message, commitment coming due or job result) | [autonomy.py](../supervisor/autonomy.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |

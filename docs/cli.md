@@ -34,7 +34,8 @@ then lets it work on its own, `stay` keeps it paused, answering only when you ta
 that choice while it is still waiting (refused once the first reply has happened). `shaft breed` recombines two
 instances' genes with judge selection and starts a fresh mind.
 
-`shaft update` merges template fixes into instances and runs the gate. Busy instances are queued only when the
+`shaft update` merges template fixes into instances and runs the gate. A failure rolls the merge back, unless the
+instance's own tests are the only failing check and fail the same way on its code before the merge. Busy instances are queued only when the
 scheduler is installed. Otherwise it refuses the busy update with exit status 3. The scheduler applies queued
 updates when the instance is idle, before its next wake.
 
@@ -311,7 +312,8 @@ self-audit shares. `shaft review --hours` reports recent activity.
 `shaft gate warm` runs the shared supervisor tests unless a pass for the current commit is recorded and under
 12 hours old. The scheduler runs it after merges. `regate` retries code changes held while the baseline was
 red; busy or paused instances wait. `budget` runs both test parts on committed supervisor and template code.
-It fails on a failing part, a part exceeding half the gate timeout, a test over 10 seconds, or a duplicate
+It prints the shared part's derived limit and the runs it came from. It fails on a failing part, an instance part
+exceeding half the gate timeout, a shared part exceeding its derived limit, a test over 10 seconds, or a duplicate
 test. It excludes uncommitted changes.
 
 ### Judges and reports

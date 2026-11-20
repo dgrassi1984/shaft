@@ -287,6 +287,24 @@ def _resolve_config_conflict(root) -> bool:
     return True
 
 
+def _fails_without_merge(name: str, root: Path, pre_merge: dict, test_log) -> list[str]:
+    """A template merge whose only failing check is the instance's own tests (gate.Output.own_only): its failing tests
+    when every one of them fails on its pre-merge code as well — a test of its live data (an undated row in a notes
+    file rolled back six merges in a week, #243), not of the merged code — else []."""
+    from . import protected
+    failing = list(getattr(test_log, "failing", ()))
+    if not getattr(test_log, "own_only", False) or not failing:
+        return []
+    try:
+        with protected.copy(pre_merge, SUP_DIR / "protected" / name, name,
+                            runner.safe_read_bytes(root, "config.env", b""), instance=root) as tree:
+            before = gate.own_tests_failures(tree, HOME, env_root=root, data_root=root)
+    except Exception as e:   # no answer: the gate's verdict on the merge stands
+        log(f"{name}: its own tests could not be run on its pre-merge code: {type(e).__name__}: {e}")
+        return []
+    return failing if before is not None and set(failing) <= set(before) else []
+
+
 def _note_update(name: str, root, before: str) -> None:
     """Tell the instance its code changed: a journal note naming the template commits just merged (their
     subjects), committed right after the merge. Without it an instance never learned of an update, and its
@@ -330,6 +348,7 @@ def cmd_update(names: list[str]) -> int:
                     worst = max(worst, 1)
                     continue
                 before = git_wt(root, "rev-parse", "HEAD").stdout.strip()
+                pre_merge = gate.snapshot(root)   # its own tests run on it again if only they fail the merge (#243)
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
                            check=False)
@@ -356,6 +375,14 @@ def cmd_update(names: list[str]) -> int:
                         why += f"; could not uncommit the untested merge: {undo.stderr.strip()}"
                     worst = _refused(name, RunRefused(why))
                     continue
+                if not ok and (unrelated := _fails_without_merge(name, root, pre_merge, test_log)):
+                    log(f"{name}: merged template kept: its own tests {', '.join(unrelated)} fail on its code before "
+                        "the merge too, so not because of it")
+                    journal_note(root, "Supervisor: template merged with my own tests failing",
+                                 "The operator's template update was merged although my own tests fail, because they "
+                                 "fail the same way on my code before the merge (they read my live data, not the "
+                                 "merged code):\n" + "\n".join(f"- {n}" for n in unrelated))
+                    ok = True
                 if not ok:
                     # --keep, not --hard: it undoes only the merge and refuses rather than discard a file
                     # that something changed while the gate ran.
