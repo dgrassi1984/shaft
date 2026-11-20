@@ -44,8 +44,9 @@ MODELS, _ = knob("SHAFT_ANTIGRAVITY_MODELS", "", _models,
     services=('runs', 'api'))
 FALLBACK_MODEL, _ = knob("SHAFT_ANTIGRAVITY_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', cloud_model,
     'cloud model used for the run after an Antigravity plan failure', group='Antigravity', services=('runs', 'api'))
-TIMEOUT_S, _ = knob("SHAFT_ANTIGRAVITY_TIMEOUT_S", '900', positive_int,
-    'seconds Antigravity may take per step; held calls are exempt', group='Antigravity', services=('runs', 'api'))
+TIMEOUT_S, _ = knob("SHAFT_ANTIGRAVITY_TIMEOUT_S", '300', positive_int,
+    'seconds Antigravity may take per step, then the step is asked once more on a new session; held calls are exempt',
+    group='Antigravity', services=('runs', 'api'))
 LABEL, VENDOR, SEES_IMAGES = 'Antigravity', 'google', True
 # agy runs a response's parallel calls one after another: the next one starts ~0.01 s after the previous completes,
 # while a new model response needs a model round trip (>= 2 s measured, 2026-11-12). ACP reports usage only per turn,

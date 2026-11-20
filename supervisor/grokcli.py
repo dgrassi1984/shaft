@@ -44,8 +44,9 @@ MODELS, _ = knob("SHAFT_GROK_MODELS", "", _models,
 FALLBACK_MODEL, _ = knob("SHAFT_GROK_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', channel_fallback,
     'cloud model used for the run after a Grok failure (claude-…, openrouter/… or a priced custom/…), or none: the '
     'failure ends the run', group='Grok', services=('runs', 'api'))
-TIMEOUT_S, _ = knob("SHAFT_GROK_TIMEOUT_S", '900', positive_int,
-    'seconds Grok may take per step; held calls are exempt', group='Grok', services=('runs', 'api'))
+TIMEOUT_S, _ = knob("SHAFT_GROK_TIMEOUT_S", '300', positive_int,
+    'seconds Grok may take per step, then the step is asked once more on a new session; held calls are exempt',
+    group='Grok', services=('runs', 'api'))
 SESSION_HOURS, _ = knob("SHAFT_GROK_SESSION_HOURS", '24', positive_int,
     'hours of Grok session files to keep', group='Grok', services=('runs', 'api'))
 LABEL, VENDOR, SEES_IMAGES = 'Grok', 'xai', True
@@ -589,7 +590,7 @@ class Channel(planchannel.Channel):
                     elif self._calls_ready(step, now):
                         self._finish(step, 'tool_calls')
                     elif not step.calls and not step.turn_ended and now - step.started >= self.timeout_s:
-                        self._fail(self.failure('Grok step timeout'))
+                        self._fail(self._step_timeout())
                         self._kill()
                 self._cv.wait(.025)
 

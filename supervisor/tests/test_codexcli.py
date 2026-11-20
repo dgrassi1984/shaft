@@ -761,8 +761,9 @@ class ChannelTest(unittest.TestCase):
     def test_step_timeout_kills_child(self):
         self.use([[{"sleep": 10}]], hang=True)
         with mock.patch.object(codex, "TIMEOUT_S", 0.2):
-            with self.assertRaisesRegex(codex.CodexFailure, "timeout"):
+            with self.assertRaisesRegex(codex.CodexFailure, "timeout") as caught:
                 self.channel.complete(body())
+        self.assertIs(caught.exception.step_timeout, True)   # #241: the broker retries only a step marked so
         self.channel._process.wait(timeout=1)
 
     def test_held_call_has_no_timeout_and_late_usage_is_recorded(self):

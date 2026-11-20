@@ -334,6 +334,88 @@ class BrokerTest(Case):
         self.assertTrue(all("Codex failed: offline" in r["error"] for r in rows))
         self.channel.complete.assert_called_once()                       # the channel stays down after the first
 
+    def hung(self):
+        exc = codexcli.CodexFailure("Codex step timeout")
+        exc.step_timeout = True
+        return exc
+
+    def sessions(self, *outcomes):
+        """One fake channel per new session; each outcome is the reply its call returns or the failure it raises."""
+        made = []
+        def channel(*args):
+            outcome = outcomes[len(made)]
+            made.append(mock.Mock())
+            for call in (made[-1].complete, made[-1].stream):
+                call.side_effect = outcome if isinstance(outcome, Exception) else None
+            made[-1].complete.return_value = outcome
+            if not isinstance(outcome, Exception):
+                made[-1].stream.side_effect = lambda body, out=outcome: iter_stream(
+                    *cloudllm.as_sse(out).splitlines(keepends=True))
+            return made[-1]
+        self.channel_class.side_effect = channel
+        return made
+
+    def test_bug241_hung_step_is_asked_again_on_a_new_session_without_an_alert(self):
+        """11-16 and 11-19: one Codex step never answered; the broker waited its 900 s step limit, the instance its
+        900 s call limit, and the cycle was lost. Now a step timeout closes that session and the same step is asked
+        once more on a new one: the instance gets the plan model's answer, and nobody is alerted (one hang the retry
+        answers is not an outage). Reverting the retry fails this: the first session's failure goes to the fallback."""
+        self.b.local_fallback = True
+        for streaming in (False, True):
+            with self.subTest(stream=streaming):
+                self.b.channel, self.b.channel_down = None, None
+                self.desktop.reset_mock()
+                made = self.sessions(self.hung(), reply())
+                with mock.patch.object(cloudllm, "complete") as cloud, \
+                        mock.patch.object(cloudllm, "openrouter_stream") as cloud_stream:
+                    h, _ = self.call(stream=streaming)
+                cloud.assert_not_called()
+                cloud_stream.assert_not_called()
+                h.send_response.assert_called_once_with(200)
+                answer = h.wfile.getvalue()
+                self.assertIn(b"hello", answer)
+                self.assertNotIn(b"fallback", answer)
+                self.assertEqual(len(made), 2)
+                made[0].close.assert_called_once()        # the hung session is closed, not reused
+                self.assertIs(self.b.channel, made[1])
+                self.assertIsNone(self.b.channel_down)
+                self.assertIsNone(codexcli.outage())
+                self.desktop.assert_not_called()
+                logged = [c.args[0] for c in self.b._log.call_args_list]
+                self.assertTrue(any("step timeout; asking that step once more" in line for line in logged), logged)
+
+    def test_bug241_second_hang_alerts_once_and_falls_back(self):
+        self.b.local_fallback = True
+        made = self.sessions(self.hung(), self.hung())
+        with mock.patch.object(cloudllm, "complete", side_effect=self.cloud):
+            h, _ = self.call()
+        self.assertEqual(json.loads(h.wfile.getvalue())["model"], LABEL)
+        self.assertEqual(len(made), 2)                    # one retry, never a third session
+        self.assertEqual(self.b.channel_down, "Codex step timeout")
+        self.assertEqual([c.args[0] for c in self.desktop.call_args_list], ["Codex unavailable"])
+
+    def test_bug241_other_failures_are_not_retried(self):
+        self.b.local_fallback = True
+        made = self.sessions(codexcli.CodexFailure("offline"), reply())
+        with mock.patch.object(cloudllm, "complete", side_effect=self.cloud):
+            h, _ = self.call()
+        self.assertEqual(json.loads(h.wfile.getvalue())["model"], LABEL)
+        self.assertEqual(len(made), 1)
+
+    def test_bug241_two_step_limits_and_a_fallback_fit_in_the_instances_call_limit(self):
+        """The 11-16 and 11-19 cycles were lost to a race: the broker's step limit equalled the instance's call limit
+        (both 900 s), so the fallback answer reached a request the instance had already given up on. The default
+        step limit of every plan channel, asked twice, must leave the fallback time inside the template's
+        LLM_TIMEOUT_S default."""
+        import re
+        from supervisor import agycli, claudecli, grokcli   # noqa: F401 (registers their knobs)
+        text = (Path(__file__).resolve().parents[2] / "template/shaft/config.py").read_text()
+        call_limit = int(re.search(r'"LLM_TIMEOUT_S": \(int, (\d+)\)', text).group(1))
+        for name in ("SHAFT_CODEX_TIMEOUT_S", "SHAFT_CLAUDE_TIMEOUT_S", "SHAFT_GROK_TIMEOUT_S",
+                     "SHAFT_ANTIGRAVITY_TIMEOUT_S"):
+            with self.subTest(knob=name):
+                self.assertLessEqual(2 * int(core.KNOBS[name].default) + 120, call_limit)
+
     def test_codex_closed_is_shutdown_without_false_outage_or_paid_fallback(self):
         for streaming in (False, True):
             with self.subTest(stream=streaming):

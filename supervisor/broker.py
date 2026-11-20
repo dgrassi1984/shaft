@@ -1117,6 +1117,19 @@ class Broker:
         # The panel runs in another process. Save the latest observed weekly window on change.
         self._channel_rate = planchannel.save_rate(self._channel_rate, provider)
 
+    def _channel_retry(self, model: str) -> None:
+        """A model step outran its step limit: close that session, so the caller's one retry runs on a new one (#241).
+        No alert and no outage yet: a hang the retry answers is not an outage; a second failure is reported as usual."""
+        from . import planchannel
+        from .core import log
+        line = f"{self.name}: {planchannel.label(model)} step timeout; asking that step once more on a new session"
+        log(line)
+        self._log(line)
+        with self._channel_lock:
+            channel, self.channel = self.channel, None
+        if channel is not None:
+            channel.close()
+
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> str:
         broker = self
@@ -1218,48 +1231,55 @@ class Broker:
                         broker._log(f"{broker.name} llm {body.get('model')} carries {images} image(s)")
                     original = body.get("model")
                     if planchannel.serves(original) and broker.channel_down is None:
-                        try:
-                            with broker._channel_lock:
-                                if broker.channel is None:
-                                    broker.channel = planchannel.channel_for(original, broker.name, broker.usage_name, broker._log)
-                            if body.get("stream"):
-                                def channel_lines():
-                                    sent = False
-                                    with contextlib.closing(broker.channel.stream(body)) as lines:
-                                        try:
-                                            for line in lines:
-                                                sent = True
-                                                yield line
-                                            broker._channel_report(model=original)
-                                        except planchannel.ChannelFailure as e:
-                                            if not sent:
-                                                raise
-                                            if not isinstance(e, planchannel.ChannelClosed):
-                                                broker._channel_report(e, original)
-                                            msg = {"error": {"message": e.reason}}
-                                            yield b"data: " + json.dumps(msg).encode() + b"\n"
-                                            yield b"\n"
+                        # One hung model step (11-16 and 11-19: 900 s, then the cycle lost) is retried once on a
+                        # new session, two step limits inside the instance's call limit; only then an alert (#241).
+                        for attempt in (1, 2):
+                            try:
+                                with broker._channel_lock:
+                                    if broker.channel is None:
+                                        broker.channel = planchannel.channel_for(original, broker.name, broker.usage_name, broker._log)
+                                if body.get("stream"):
+                                    def channel_lines():
+                                        sent = False
+                                        with contextlib.closing(broker.channel.stream(body)) as lines:
+                                            try:
+                                                for line in lines:
+                                                    sent = True
+                                                    yield line
+                                                broker._channel_report(model=original)
+                                            except planchannel.ChannelFailure as e:
+                                                if not sent:
+                                                    raise
+                                                if not isinstance(e, planchannel.ChannelClosed):
+                                                    broker._channel_report(e, original)
+                                                msg = {"error": {"message": e.reason}}
+                                                yield b"data: " + json.dumps(msg).encode() + b"\n"
+                                                yield b"\n"
 
-                                # Prime before HTTP headers so initial failures retain fallback/502 semantics.
-                                lines = channel_lines()
-                                first = next(lines)
+                                    # Prime before HTTP headers so initial failures retain fallback/502 semantics.
+                                    lines = channel_lines()
+                                    first = next(lines)
 
-                                def primed_lines():
-                                    yield first
-                                    yield from lines
+                                    def primed_lines():
+                                        yield first
+                                        yield from lines
 
-                                with contextlib.closing(lines):
-                                    return self._llm_stream(primed_lines(), original)
-                            reply = broker.channel.complete(body)
-                            broker._channel_report(model=original)
-                        except planchannel.ChannelClosed as e:
-                            return self._reply(503, {"error": {"message": e.reason}})
-                        except planchannel.ChannelFailure as e:
-                            broker._channel_report(e, original)
-                            if not broker.local_fallback:
-                                raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {e.reason}") from None
-                        else:
-                            return self._llm_reply(body, reply)
+                                    with contextlib.closing(lines):
+                                        return self._llm_stream(primed_lines(), original)
+                                reply = broker.channel.complete(body)
+                                broker._channel_report(model=original)
+                            except planchannel.ChannelClosed as e:
+                                return self._reply(503, {"error": {"message": e.reason}})
+                            except planchannel.ChannelFailure as e:
+                                if attempt == 1 and e.step_timeout:   # a hung step is asked again on a new session
+                                    broker._channel_retry(original)
+                                    continue
+                                broker._channel_report(e, original)
+                                if not broker.local_fallback:
+                                    raise cloudllm.CloudError(502, f"{planchannel.label(original)} failed: {e.reason}") from None
+                                break
+                            else:
+                                return self._llm_reply(body, reply)
                     label = None
                     if planchannel.serves(original):
                         if not broker.local_fallback:
