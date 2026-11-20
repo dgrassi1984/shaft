@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import fcntl
 import json
+import re
 from datetime import datetime, timedelta
 
 from .core import jsonl_lines
@@ -19,6 +20,7 @@ CATCH_WINDOW_DAYS = 7
 REFUSED, MISSED = "delivery refused", "missed the ask"
 DEFECTS = (REFUSED, MISSED)
 FAILED = ("ERROR", "(repeat: not run)", "(held, not run yet)")
+OTHER_ASK_OVERLAP = 0.2   # word share (Jaccard) of goal + criterion at most this for another ask
 
 
 def _path(name: str):
@@ -61,6 +63,22 @@ def _goal(ep: dict) -> str:
     return " ".join(str((ep.get("intent") or {}).get("goal") or "").lower().split())
 
 
+def _ask_words(ep: dict) -> set[str]:
+    intent = ep.get("intent") or {}
+    text = f"{intent.get('goal') or ''} {intent.get('success_criterion') or ''}".lower()
+    return {w for w in re.findall(r"[^\W\d_]{4,}", text)}
+
+
+def _other_ask(ep: dict, other: dict) -> bool:
+    """A cycle for another ask: its goal and criterion share at most OTHER_ASK_OVERLAP of their words with this one's.
+    A differently worded goal for the same ask ("report the tree count" / "send the number of trees") would plant a
+    correct answer and score the judge's right verdict as a miss (review)."""
+    mine, theirs = _ask_words(ep), _ask_words(other)
+    if not mine or not theirs:
+        return False
+    return len(mine & theirs) / len(mine | theirs) <= OTHER_ASK_OVERLAP
+
+
 def plant_missed(ep: dict, others: list[dict]) -> dict | None:
     """Deliver, but not what was asked: every operator message of the copy carries the text of a message the
     instance sent the operator in another cycle, for another goal. The deliveries still succeed; the cycle's own
@@ -69,7 +87,7 @@ def plant_missed(ep: dict, others: list[dict]) -> dict | None:
         return None
     goal = _goal(ep)
     own = {metrics._arg(c.get("args", ""), "text") for c in _operator_sends(ep)}
-    swap = next((text for other in others if _goal(other) and _goal(other) != goal
+    swap = next((text for other in others if _goal(other) and _goal(other) != goal and _other_ask(ep, other)
                  for c in _operator_sends(other) if (text := metrics._arg(c.get("args", ""), "text")).strip()
                  and text not in own), "")
     planted = copy.deepcopy(ep)

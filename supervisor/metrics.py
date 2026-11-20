@@ -817,15 +817,48 @@ def reaches_operator(ep: dict) -> bool:
                and str(c.get("result", "")).startswith("delivered to the operator") for c in ep.get("tools") or [])
 
 
+def _draws_path(name: str) -> Path:
+    return SUP_DIR / "judgments" / f"{name}-draws.json"
+
+
+def _draws(name: str) -> dict:
+    try:
+        data = json.loads(_draws_path(name).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _keep_draw(name: str, episode_ts: str, drawn: str) -> None:
+    """A run's draw, kept until it has a verdict (a judge down or failing retries it later): drawing again on the
+    retry let a run drawn at random come back operator-selected, or left out, and leave the random sample (#244
+    review). Draws older than DRAWS_KEPT are dropped: their runs were judged long since or never will be."""
+    cut = (datetime.now() - DRAWS_KEPT).isoformat()
+    draws = {ts: d for ts, d in _draws(name).items() if ts >= cut}
+    draws[episode_ts] = drawn
+    path = _draws_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(draws))
+    tmp.replace(path)
+
+
+DRAWS_KEPT = timedelta(days=14)
+
+
 def judge_sampled(name: str, episode_ts: str, reaches: bool = False) -> str:
     """Whether the main judge grades this live run: "random" for the one in SHAFT_JUDGE_EVERY, drawn when it is first
     judged (and a run left out recorded), so nothing the instance can see tells it beforehand which of its runs will
     be graded; "operator" for a run the draw left out that reached the operator (#244), always graded but kept out
     of the sampled aggregates (judgments_for_stats); "" when it is left out."""
-    if judge.JUDGE_EVERY <= 1 or secrets.randbelow(judge.JUDGE_EVERY) == 0:
-        return "random"
-    if reaches:
-        return "operator"
+    kept = _draws(name).get(episode_ts)
+    if kept in ("random", "operator"):   # drawn before, then the judge failed: a retry never draws again
+        return kept
+    drawn = "random" if judge.JUDGE_EVERY <= 1 or secrets.randbelow(judge.JUDGE_EVERY) == 0 else \
+        "operator" if reaches else ""
+    if drawn:
+        _keep_draw(name, episode_ts, drawn)
+        return drawn
     _unsampled_path(name).parent.mkdir(parents=True, exist_ok=True)
     with _unsampled_path(name).open("a") as f:
         f.write(json.dumps({"episode_ts": episode_ts, "decided_at": datetime.now().isoformat(timespec="seconds"),
@@ -2043,7 +2076,7 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         if broken := [j["base_rate_error"] for j in rows if j.get("base_rate_error")]:
             out.append(f"  base rate file unreadable in {len(broken)} cycle(s): {broken[0]}")
         from . import metacog
-        out.append("  metacognition (all judged cycles, not just this window): " + metacog.review_line(js))
+        out.append("  metacognition (all judged cycles, not just this window): " + metacog.review_line(js, now))
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")

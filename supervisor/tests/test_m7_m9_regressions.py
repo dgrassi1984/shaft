@@ -299,6 +299,36 @@ class JudgingTest(Fixture):
         self.assertEqual(judge_probe.line('m'), 'judge catch rate over 30 days: delivery refused 0/1; missed the ask 1/1')
         self.assertIsNone(judge_probe.plant_missed(self.ep, [self.ep]))   # nothing sent for another goal: not planted
 
+    def test_244_review_a_retry_keeps_the_draw_and_the_probe_never_swaps_in_the_same_ask(self):
+        """Codex's review of #244: a run drawn at random whose judge was down drew again on the retry and could come
+        back operator-selected (out of the stats sample); and a goal worded differently for the same ask was used as
+        the "other" message, planting a correct answer."""
+        draws = iter([0, 1])   # the first draw selects it at random; a redraw would leave it out
+        with mock.patch.object(judge, 'JUDGE_EVERY', 2), \
+                mock.patch.object(metrics.secrets, 'randbelow', side_effect=lambda n: next(draws)):
+            with mock.patch.object(judge, 'available', return_value=False), \
+                    mock.patch.object(judge, 'unavailable', return_value='down'):
+                self.assertEqual(metrics.judge_pending('m'), 0)
+            self.assertEqual(metrics.judge_pending('m'), 1)
+        verdict, = metrics.judgments('m')
+        self.assertNotIn('operator_selected', verdict)
+        self.assertEqual(len(metrics.judgments_for_stats('m')), 1)
+        same = {'kind': 'live', 'ts': (NOW - timedelta(hours=3)).isoformat(),
+                'intent': {'goal': 'Send the operator the number of trees', 'success_criterion': 'Operator has the tree count'},
+                'finish': {'delivered_via': 'message'}, 'tools': [
+                    {'tool': 'send_message', 'args': '{"to":"operator","text":"Eight trees."}', 'result': 'delivered'}]}
+        target = {**self.ep, 'intent': {'goal': 'Report the tree count', 'success_criterion': 'Operator has the tree count'}}
+        self.assertIsNone(judge_probe.plant_missed(target, [same]))
+
+    def test_245_review_a_past_review_computes_its_weeks_at_its_own_time(self):
+        """Codex's review of #245: review_text(now=...) passed no time to the weekly line, which used the clock."""
+        past = datetime(2026, 11, 10, 12)
+        self.write('judgments/m.jsonl', [dict(VERDICT, episode_ts=(past - timedelta(hours=1)).isoformat(),
+                                              judged_at=(past - timedelta(hours=1)).isoformat())])
+        with mock.patch('supervisor.metacog.review_line', return_value='x') as line:
+            metrics.review_text(['m'], now=past)
+        self.assertEqual(line.call_args.args[1:], (past,))
+
     def test_m7d_cap_is_three_per_rolling_seven_days(self):
         episodes = [dict(self.ep, ts=(NOW - timedelta(hours=i)).isoformat()) for i in range(5)]
         metrics.live_episodes.return_value = episodes
