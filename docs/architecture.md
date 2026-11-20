@@ -194,7 +194,8 @@ is dropped, so a new scheduler never drains in a loop. `.supervisor/scheduler-dr
 for (`shaft status`, `shaft autonomy status`, the Services page).
 
 Standing reasons come from `supervisor/wakereasons.py`, `reasons`: an open project past a boundary, then an open
-commitment to the operator backed by a conversation or message and at least `STALE=timedelta(hours=24)` old.
+commitment to the operator (the ledger keeps only sourced ones), at least `STALE=timedelta(hours=24)` old and due within
+`DUE_WINDOW=timedelta(days=3)`; the wake text names its due date.
 Overdue commitments already use the due reminder path. `PACE=timedelta(hours=24)` limits each standing item's wakes;
 `SUP_DIR/wake_reasons/<name>.json` keeps the pacing times. A standing reason does not prescribe work.
 
@@ -728,14 +729,24 @@ to the operator (`made_to="operator"`) or a peer returned by `list_instances`. U
 refused; own plans belong in goals/notes. A promise to the operator needs a source the model does not
 name. In a conversation it is the conversation open now (`talk_id`, set by `talk.run`/`talk.answer`; not when
 someone else speaks for the operator). In a live cycle it is the last message delivered to the operator in that run:
-`send_message` returns its `message_file` (`<stamp>-from-<name>.md`) and commit_to and finish_cycle attach it. A
+`send_message` returns its `message_file` (`<stamp>-from-<name>.md`) and commit_to and finish_cycle attach it; or the
+operator message in that cycle's inbox (`inbox_file`: his own `-from-operator.md`, or the supervisor's chat or mail
+watch, never the calendar watch). The supervisor's fold confirms an `inbox_file` against its own message log. A
 note in the instance's own folder, or an earlier conversation, is not a source. `commitments.add` confirms a message
 through the broker's read-only `record(kind="commitment_source", cycle=<file>)`, which reads the operator inbox and
 its `read/` archive without exposing the folder; a broker failure returns an error and records nothing. A trial
 replay counts the messages its own run "delivered" (never written; their stamps on the replayed cycle's clock) and no
-real message newer than its start. Missing or invalid sources are recorded as `made_to="self"` with a note. The
-agent's fold trusts a source `add` checked; the supervisor's fold checks every one again against episodes and the
-inbox, so an operator promise survives the operator reading its message.
+real message newer than its start. A promise to the operator with a missing or invalid source is refused at
+commit_to (and in finish_cycle), with the fix: tell the operator with send_message first. Until 2026-11 such promises
+were recorded as `made_to="self"` with a note and expired unseen; both folds give such a row back to the operator when
+the live cycle it was made in answered him (an operator message in its inbox, or a message it delivered to him). The
+agent's fold trusts a source `add` checked; the supervisor's fold checks every one again against episodes, the inbox
+and its message log, so an operator promise survives the operator reading its message.
+A promise to the operator settled as `broken` reaches him: settle_commitment asks the instance for a one-line message
+naming the promise, and after each live cycle or sleep the supervisor (`commitments.tell_broken`, called by the
+runner) sends one urgent message in the instance's name for every such promise that no later message to the operator
+names, and tells the instance so (for its morning brief). Each is told once (`SUP_DIR/broken_told/<name>.json`); the
+first run only marks where the record starts.
 Self/own records, including those addressed to the instance's own name, expire 24 hours after due, with status
 `expired` and the expiry time retained in history. Earlier settlements remain settled; a later settlement cannot
 revive an expired record. Self records remain excluded from prompts, recall and sleep settlement;

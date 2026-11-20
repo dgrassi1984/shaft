@@ -39,7 +39,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `custom_price`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `custom_stream`, `as_sse`, `efforts` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
-| `supervisor/commitments.py` | — | `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report` |
+| `supervisor/commitments.py` | — | `operator_inbox`, `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report`, `broken_notice`, `tell_broken` |
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `worst_price`, `envelope`, `complete` |
 | `supervisor/consultstats.py` | — | `rows`, `vendor`, `cycle_of`, `submitted`, `models_in`, `section`, `review_line`, `report` |
@@ -53,7 +53,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/docs.py` | `Refused` | `folder`, `sha`, `read`, `raw`, `listing`, `snapshot`, `changed`, `write`, `remove`, `command` |
 | `supervisor/drive_presets.py` | `Missing` | `presets` |
 | `supervisor/drive_proposals.py` | — | `command` |
-| `supervisor/effortcatalog.py` | — | `entry`, `lookup` |
+| `supervisor/effortcatalog.py` | — | `entry`, `listed`, `lookup` |
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
@@ -248,6 +248,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_metacog.py` | `MetacogTest` | `row`, `paired` |
 | `supervisor/tests/test_migrate.py` | `FakeRunner`, `MigCase`, `ShaftProcessTest`, `LiveCheckoutTest`, `InstalledServicesTest`, `SchedulerIdleTest`, `PauseAndWaitTest`, `StopServiceTest`, `ManifestTest`, `CopyTest`, `TargetRefuseTest`, `RepairTest`, `SetupTest`, `RebuildTest`, `StartServicesTest`, `CodexTest`, `StepOrderTest`, `ResumeAndAutonomyTest`, `TailnetCompareTest`, `CommandTest`, `EndToEndCopyTest`, `RemoteSpecTest`, `RetryOrYesTest`, `RequireRemoteNoShaftTest`, `RemotePlistsTest`, `PauseResumeStateTest`, `RequireSourceStoppedTest`, `TargetRefuseSourceStateTest`, `FinishMigrationTest`, `ControlOptsTest`, `RunnerRunTest`, `RemoteFreeKbTest`, `TailscaleJsonTest`, `WaitingOnTest`, `DirtyAndUnpushedTest`, `StopServiceOptionsTest`, `BringBackTest`, `PrintTargetCommandTest`, `CompareRefsTest`, `LaptopTest`, `StartServicesStatusTest`, `RebuildTest`, `CodexRegexTest`, `TalkEachTest`, `TailnetUnknownTest`, `PrintStepCallableTest`, `SourceHostTest`, `FreezeTest`, `CheckTargetFolderTest`, `ControlPathTest`, `StopServiceStderrTest`, `ConfirmPromptTest`, `SourceLiveCheckoutTest`, `LaptopRunYourselfTest`, `RebuildBrewFailureTest`, `EndToEndFullPassTest`, `FourthPassRegressionTest`, `ServiceRunningProbeTest` | `cp` |
 | `supervisor/tests/test_mind.py` | `Project`, `BackfillTest`, `CutoverTest`, `ReadersTest` | `git` |
+| `supervisor/tests/test_model_catalog.py` | `CatalogTest`, `ListingTest` | — |
 | `supervisor/tests/test_model_turns_template.py` | `ModelTurnsTest` | — |
 | `supervisor/tests/test_modelcall.py` | `FakeCodex`, `Case`, `FallbackPriceTest`, `RoutingTest`, `AvailableTest`, `CallersTest` | — |
 | `supervisor/tests/test_network_errors.py` | `CutShort`, `RetryTest`, `BrokerAnswersTest` | — |

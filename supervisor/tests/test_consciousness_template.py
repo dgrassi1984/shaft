@@ -315,10 +315,9 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
                    {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [
                        {**promise, "promise": "file it", "talk_id": "old-talk",
                         "message_file": "notes/operator-message.md"}]})]}])
-        rows = [json.loads(line) for line in (self.root / commitments.FILE).read_text().splitlines()]
-        self.assertEqual([(r["made_to"], "talk_id" in r, "message_file" in r) for r in rows],
-                         [("self", False, False), ("self", False, False)])
-        self.assertTrue(all("recorded as self" in r for r in self.last()["finish"]["commitments"]))
+        # #238: refused at commit_to and in the finish, never recorded as self
+        self.assertFalse((self.root / commitments.FILE).exists())
+        self.assertTrue(all("needs its source" in r for r in self.last()["finish"]["commitments"]))
         self.assertEqual(commitments.block(self.root, datetime(2026, 10, 26, 10, 30)), "(none)")
 
 

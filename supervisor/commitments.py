@@ -92,22 +92,67 @@ def _fold(rows: list[dict], now: datetime) -> dict[str, dict]:
     return items
 
 
-def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str) -> list[dict]:
-    """An operator promise needs the conversation it was made in, or a message the instance delivered to the
-    operator (review I10); a note in its own folder is not one. The agent keeps its own copy."""
+# What an operator message in an instance's inbox is named: his own (the app, the web, Telegram), or the supervisor's
+# watch of his chat or mail. The calendar watch reports events, not requests.
+OPERATOR_INBOX = re.compile(r"\d{8}-\d{6}-\d{6}-from-(?:operator|supervisor-(?:gchat|mail)-watch)\.md")
+DELIVERED = "delivered to the operator"
+CYCLE_SPAN = timedelta(hours=2)   # longer than any live cycle's budget
+RELABELLED = "operator source missing or invalid; recorded as self"
+
+
+def operator_inbox(file) -> bool:
+    return isinstance(file, str) and bool(OPERATOR_INBOX.fullmatch(file))
+
+
+def _cycle_of(lives: list[dict], at) -> dict | None:
+    """The live cycle a row made at `at` was made in: the first that ended at or after it (one runs at a time), within
+    CYCLE_SPAN; a cycle that wrote no episode is not mistaken for the next one."""
+    at = _at(at)
+    if at is None:
+        return None
+    ep = next((ep for ep in lives if _at(ep["ts"]) >= at), None)
+    return ep if ep and _at(ep["ts"]) - at <= CYCLE_SPAN else None
+
+
+def _cycle_source(ep: dict | None) -> bool:
+    """A live cycle answering the operator (#238): an operator message in its inbox, or a message it delivered to
+    him. What made a promise there one to the operator before the source was recorded on the row."""
+    if not ep:
+        return False
+    if any(operator_inbox(n) for n in ep.get("inbox") or []):
+        return True
+    return any(isinstance(c, dict) and c.get("tool") == "send_message" and isinstance(c.get("result"), str)
+               and c["result"].startswith(DELIVERED) for c in ep.get("tools") or [])
+
+
+def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str, received=None) -> list[dict]:
+    """An operator promise needs the conversation it was made in, a message I delivered to the operator (review
+    I10), or the operator message in its inbox it answers (#238). `delivered(file)` confirms a delivered message, a
+    note in its own folder is not one; `received(file)` confirms an operator message its inbox got. A cycle row with
+    none of them (made before #238, when commit_to recorded it as self) is the operator's when that cycle answered
+    him: it had his message in its inbox or delivered one to him."""
     talks = {ep["talk_id"] for ep in episodes if ep.get("kind") == "talk" and ep.get("role") == "user"
              and not ep.get("speaker") and isinstance(ep.get("talk_id"), str) and ep["talk_id"]}
+    lives = sorted((ep for ep in episodes if ep.get("kind") == "live" and _at(ep.get("ts"))),
+                   key=lambda ep: _at(ep["ts"]))
     out = []
     for row in rows:
         row = dict(row)
         if row.get("event") == "made":
+            if row.get("made_to") == "self" and row.get("note") == RELABELLED and row.get("sourced"):
+                row.update(made_to="operator")   # written as self by commit_to before #238: judged again below
+                del row["note"]
             if row.get("made_to") == "operator" and row.get("sourced"):   # older rows predate the rule: kept as made
-                talk, message = row.get("talk_id"), row.get("message_file")
+                talk, message, inbox = row.get("talk_id"), row.get("message_file"), row.get("inbox_file")
                 valid = isinstance(talk, str) and talk in talks
                 if not valid and isinstance(message, str) and _message_file(own).fullmatch(message):
                     valid = delivered(message)
+                if not valid and operator_inbox(inbox) and received is not None:
+                    valid = received(inbox)
+                if not valid and row.get("source") == "cycle" and not (talk or message or inbox):
+                    valid = _cycle_source(_cycle_of(lives, row.get("at")))
                 if not valid:
-                    row.update(made_to="self", note="operator source missing or invalid; recorded as self")
+                    row.update(made_to="self", note=RELABELLED)
             if row.get("made_to") == own:
                 row["self_commitment"] = True
         out.append(row)
@@ -157,8 +202,24 @@ def ledger(name: str, now: datetime | None = None) -> dict[str, dict]:
     if not NAME.fullmatch(name):
         return {}
     text = safe_read(INSTANCES / name, FILE, "", errors="replace")
-    rows = _source_rows(_rows(text), _episodes(name), lambda file: bool(operator_message(name, file)), name)
+    rows = _source_rows(_rows(text), _episodes(name), lambda file: bool(operator_message(name, file)), name,
+                        _received(name))
     return _fold(rows, now if now is not None else datetime.now())
+
+
+def _received(name: str):
+    """An operator message the supervisor delivered to this instance's inbox, by its own message log (the inbox and
+    memory/messages/ folders are the instance's); read once, on the first row that asks."""
+    files: set | None = None
+
+    def check(file: str) -> bool:
+        nonlocal files
+        if files is None:
+            from . import messages
+            files = {m.get("file") for m in messages.history() if m.get("to") == name
+                     and m.get("from") in ("operator", "supervisor (gchat watch)", "supervisor (mail watch)")}
+        return file in files
+    return check
 
 
 def _message_file(name: str) -> re.Pattern:
@@ -290,3 +351,74 @@ def report(names: list[str]) -> str:
                          + (f"; evidence {item['evidence']}" if item["evidence"] else "")
                          + (f"; {item['note']}" if item.get("note") else ""))
     return "\n".join(lines)
+
+
+# -- a broken promise reaches the operator (#239) -----------------------------------------------------------------
+# A promise to the operator settled as broken was recorded and the instance moved on: he heard of the miss the next
+# day, when he asked; the instance's next message, five minutes later, was about something else. After each live
+# cycle or sleep, every operator promise settled broken that no later message of the instance to the operator names
+# (by its id: settle_commitment asks for it) gets one message, sent by the supervisor in the instance's name. Never
+# twice.
+# The first run only marks where it starts: promises broken before it are not announced.
+TOLD_DIR = "broken_told"
+
+
+def _told_path(name: str):
+    return SUP_DIR / TOLD_DIR / f"{name}.json"
+
+
+def _told(name: str) -> dict:
+    try:
+        data = json.loads(_told_path(name).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and isinstance(data.get("told"), dict) else {}
+
+
+def _save_told(name: str, data: dict) -> None:
+    path = _told_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(path)
+
+
+def broken_notice(name: str, item: dict) -> str:
+    """The operator's line: the promise, what blocks it (the settlement's reason), and no new estimate (the
+    supervisor has none; the instance gives one when it answers)."""
+    due = _at(item["due"])
+    return (f"Promise {item['id']} to you is broken: {item['promise']} (due {due:%Y-%m-%d %H:%M}). "
+            f"What blocks it: {item['evidence']} New estimate: none given. "
+            f"(Sent by the supervisor: {name} settled it as broken without telling you.)")
+
+
+def tell_broken(name: str, deliver, now: datetime | None = None) -> list[str]:
+    """Send `deliver(text)` once for each operator promise settled broken since the record began that no later
+    message from the instance to the operator names. Returns the ids sent; the instance's own message is recorded as
+    told by it, so neither is looked at again."""
+    from . import messages
+    now = now or datetime.now()
+    state = _told(name)
+    if not state:
+        _save_told(name, {"since": now.isoformat(timespec="seconds"), "told": {}})
+        return []
+    since = _at(state.get("since")) or now
+    broken = [it for it in ledger(name, now).values() if it["made_to"] == "operator" and it["status"] == "broken"
+              and it["id"] not in state["told"] and (_at(it["settled_at"]) or since) >= since]
+    if not broken:
+        return []
+    said = [(_at(m.get("ts")), m.get("text") or "") for m in messages.history()
+            if m.get("from") == name and m.get("to") == "operator"]
+    sent = []
+    for item in broken:
+        settled = _at(item["settled_at"])
+        if any(at is not None and at >= settled.replace(microsecond=0) and item["id"] in text for at, text in said):
+            state["told"][item["id"]] = "instance"
+            continue
+        deliver(broken_notice(name, item))
+        state["told"][item["id"]] = "supervisor"
+        sent.append(item["id"])
+        _save_told(name, state)   # one at a time: a failed delivery after it never repeats the ones sent
+    _save_told(name, state)
+    return sent
+
