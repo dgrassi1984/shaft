@@ -688,6 +688,40 @@ class CommitmentsTest(unittest.TestCase):
         self.assertIn("I told the operator: Promise c1 broke.", note.read_text())
         self.assertEqual(record.call_args.args[2:4], ("supervisor (promises)", "x"))
 
+    def test_239_review_ids_are_whole_same_second_order_kept_and_a_failed_delivery_is_never_repeated(self):
+        """Codex's review of #239: "c…-1" matched inside "c…-10"; a message earlier in the same second as the
+        settlement counted as after it (the log keeps whole seconds); a delivery that failed halfway was repeated."""
+        self.notices()
+        self.tell(datetime(2026, 10, 26, 15))
+        self.write_rows(self.broken(at="2026-10-26T18:16:00.900000"))
+        with (self.sup / "messages.jsonl").open("a") as out:
+            for file, text in (("20261026-181600-100000-from-x.md", f"{CID} is on track."),   # before, same second
+                               ("20261026-182000-000000-from-x.md", f"{CID}0 is late.")):        # another promise
+                out.write(json.dumps({"ts": "2026-10-26T18:16:00" if "1816" in file else "2026-10-26T18:20:00",
+                                      "from": "x", "to": "operator", "file": file, "text": text}) + "\n")
+
+        def fail(text):
+            raise OSError("disk full")
+        with self.assertRaises(OSError):
+            supervisor.tell_broken("x", fail, datetime(2026, 10, 26, 18, 30))
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 31)), [])   # recorded before it was sent: not again
+        self.write_rows(self.broken("c1026-1412-2", at="2026-10-26T18:16:00.900000"))
+        self.assertEqual(self.tell(datetime(2026, 10, 26, 18, 32)), ["c1026-1412-2"])
+
+    def test_238_review_promise_made_in_its_cycles_last_second_finds_that_cycle(self):
+        """Codex's review: an episode's ts keeps whole seconds, a row's at microseconds; a finish_cycle promise made
+        in the cycle's last second skipped its own cycle for the next one."""
+        legacy = {k: v for k, v in MADE.items() if k != "talk_id"} | {
+            "sourced": True, "made_to": "self", "note": "operator source missing or invalid; recorded as self",
+            "at": "2026-10-26T14:12:59.900000"}
+        self.write_episodes([{**episode("2026-10-26T14:12:59", ("delivered to the operator (note); message_file "
+                                                                 + MSG,)), "inbox": []},
+                             {**episode("2026-10-26T15:00:00", ()), "inbox": []}])
+        self.write_rows([legacy])
+        late = NOW + timedelta(days=7)
+        self.assertEqual(agent.fold(self.root, late)[CID]["made_to"], "operator")
+        self.assertEqual(supervisor.ledger("x", late), agent.fold(self.root, late))
+
     def test_239_settle_broken_asks_for_a_message_naming_the_promise(self):
         self.write_rows([MADE])
         result = agent.settle(self.root, {"id": CID, "status": "broken", "evidence": "Held by the gate"}, NOW)

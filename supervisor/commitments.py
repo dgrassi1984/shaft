@@ -110,6 +110,7 @@ def _cycle_of(lives: list[dict], at) -> dict | None:
     at = _at(at)
     if at is None:
         return None
+    at = at.replace(microsecond=0)   # an episode's ts keeps whole seconds; a row made in its last second is its own
     ep = next((ep for ep in lives if _at(ep["ts"]) >= at), None)
     return ep if ep and _at(ep["ts"]) - at <= CYCLE_SPAN else None
 
@@ -407,18 +408,30 @@ def tell_broken(name: str, deliver, now: datetime | None = None) -> list[str]:
               and it["id"] not in state["told"] and (_at(it["settled_at"]) or since) >= since]
     if not broken:
         return []
-    said = [(_at(m.get("ts")), m.get("text") or "") for m in messages.history()
+    said = [(_sent_at(m), m.get("text") or "") for m in messages.history()
             if m.get("from") == name and m.get("to") == "operator"]
     sent = []
     for item in broken:
-        settled = _at(item["settled_at"])
-        if any(at is not None and at >= settled.replace(microsecond=0) and item["id"] in text for at, text in said):
+        settled, named = _at(item["settled_at"]), re.compile(re.escape(item["id"]) + r"(?!\d)")
+        if any(at is not None and at >= settled and named.search(text) for at, text in said):
             state["told"][item["id"]] = "instance"
             continue
-        deliver(broken_notice(name, item))
+        # recorded before it is sent: a delivery that fails halfway is logged by the caller, never sent twice
         state["told"][item["id"]] = "supervisor"
+        _save_told(name, state)
+        deliver(broken_notice(name, item))
         sent.append(item["id"])
-        _save_told(name, state)   # one at a time: a failed delivery after it never repeats the ones sent
     _save_told(name, state)
     return sent
+
+
+def _sent_at(row: dict) -> datetime | None:
+    """When a logged message was sent, to the microsecond its file name keeps (the log's ts has whole seconds)."""
+    m = re.match(r"(\d{8}-\d{6}-\d{6})-", str(row.get("file") or ""))
+    if m:
+        try:
+            return datetime.strptime(m[1], "%Y%m%d-%H%M%S-%f")
+        except ValueError:
+            pass
+    return _at(row.get("ts"))
 

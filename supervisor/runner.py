@@ -1017,14 +1017,17 @@ def _tell_broken(name: str, broker: Broker) -> None:
         broker._deliver("operator", f"{stem}.md",
                         f"From: {name}\nTo: operator\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text}\n",
                         "note", stamp, text, urgent=True)
-        path = core.safe_write(INSTANCES / name, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-promises.md",
-                               f"From: supervisor (promises)\nTo: {name}\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
-                               f"I told the operator: {text}\nList promises to him broken since your last morning "
-                               "brief in the next one.\n")
-        messages.record(core.SUP_DIR, path, "supervisor (promises)", name, "note", stamp, text)
+        try:   # the instance's copy, for its morning brief: its failure never costs the operator's notice
+            path = core.safe_write(INSTANCES / name, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-promises.md",
+                                   f"From: supervisor (promises)\nTo: {name}\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}"
+                                   f"\n\nI told the operator: {text}\nList promises to him broken since your last "
+                                   "morning brief in the next one.\n")
+            messages.record(core.SUP_DIR, path, "supervisor (promises)", name, "note", stamp, text)
+        except Exception as e:
+            log(f"{name}: broken-promise note to the instance failed: {type(e).__name__}: {e}")
     try:
         sent = commitments.tell_broken(name, deliver)
-    except Exception as e:   # measurement and notices never break the schedule; logged, tried again next run
+    except Exception as e:   # never breaks the schedule; a notice recorded as sent is not sent again (never twice)
         log(f"{name}: broken-promise notice failed: {type(e).__name__}: {e}")
         return
     if sent:
