@@ -152,6 +152,7 @@ def _cycle_of(lives: list[dict], at) -> dict | None:
     at = _at(at)
     if at is None:
         return None
+    at = at.replace(microsecond=0)   # an episode's ts keeps whole seconds; a row made in its last second is its own
     ep = next((ep for ep in lives if _at(ep["ts"]) >= at), None)
     return ep if ep and _at(ep["ts"]) - at <= CYCLE_SPAN else None
 
@@ -239,8 +240,9 @@ def message_source(log: list[dict]) -> dict:
 def fold(root: Path, now: datetime) -> dict[str, dict]:
     path = Path(root) / FILE
     rows = _rows(path.read_text(errors="replace")) if path.is_file() else []
-    # add() asked the broker before recording a message source; the supervisor's fold checks the inbox again.
-    return _fold(_source_rows(rows, surprises.episodes(root), lambda _: True, Path(root).name, _received(root)), now)
+    # add() asked the broker before recording a message source, and checked an inbox source; the supervisor's fold
+    # checks both again (inbox and its own message log), so a source file archived or gone later changes nothing here.
+    return _fold(_source_rows(rows, surprises.episodes(root), lambda _: True, Path(root).name, lambda _: True), now)
 
 
 def _append(root: Path, event: dict) -> None:
