@@ -1397,8 +1397,8 @@ class Broker:
         from .core import SUP_DIR
         path = SUP_DIR / "calendar" / f"{self.name}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        # One instance's cap check and attempt cannot race another run's. Separate
-        # instances have separate files. Keep the audit even when dispatch refuses a disabled or over-budget tool.
+        # Serialize preparation and submission, but release the audit lock during the order judge.
+        # Keep the audit even when dispatch refuses a disabled or over-budget tool.
         with path.open("a+") as log:
             fcntl.flock(log, fcntl.LOCK_EX)
             now = datetime.now().astimezone()
@@ -1408,6 +1408,7 @@ class Broker:
                    "before": None, "after": {k: args[k] for k in ("start", "end", "title") if k in args},
                    "id": args.get("id"), "submitted": False}
             self._calendar_attempt = row
+            self._calendar_audit_log = log
             try:
                 if self.as_of:
                     result = {"ok": False, "error": "calendar writes are not available in trial replays"}
@@ -1422,6 +1423,26 @@ class Broker:
                 return result
             finally:
                 del self._calendar_attempt
+                del self._calendar_audit_log
+
+    def _calendar_check_orders(self, text, tool, acct, grant, original, eid):
+        """#232: judge without the audit lock, then revalidate before submitting or proposing."""
+        from . import calendar as gcal
+        log = self._calendar_audit_log
+        fcntl.flock(log, fcntl.LOCK_UN)
+        try:
+            check, checked = self._check_orders(text, tool, self._message_stamp(), "calendar change")
+        finally:
+            # Refusals also need the lock back before call() appends their audit row.
+            fcntl.flock(log, fcntl.LOCK_EX)
+        log.seek(0)
+        today = datetime.now().astimezone().date().isoformat()
+        rows = [json.loads(line) for line in log if line.strip()]
+        if sum(r.get("submitted", False) for r in rows if r["ts"][:10] == today) >= CALENDAR_WRITES_PER_DAY:
+            raise PermissionError(f"at most {CALENDAR_WRITES_PER_DAY} calendar writes per day")
+        if original and gcal.event(acct, grant['calendar'], eid).get('etag') != original['etag']:
+            raise PermissionError("the event changed while checking standing orders; read it again before changing it")
+        return check, checked
 
     def _call(self, tool: str, args: dict) -> dict:
         started = time.monotonic()
@@ -3078,18 +3099,34 @@ class Broker:
             except PermissionError as e:
                 self._action_denied(tool, {}, str(e))
                 raise
-            if not reply_to and (to is None or subject is None):
-                raise ValueError('a new message needs account, to and subject')
-            # An update replaces the whole draft: omitted fields take the reply defaults again, never the old content.
-            to = to if to is not None else defaults.get('to', [])
-            cc = cc if cc is not None else defaults.get('cc', [])
-            bcc = bcc if bcc is not None else []
-            subject = subject if subject is not None else defaults.get('subject', '')
-            files = self._draft_files(attachments)
-            raw = mail.build_message(acct.address, to, cc, bcc, subject, body, files,
-                                     defaults.get('in_reply_to', ''), defaults.get('references', ''))
-            content = f"To: {', '.join(to)}\nCc: {', '.join(cc)}\nBcc: {', '.join(bcc)}\nSubject: {subject}\n\n{body}"
-            check, checked = self._check_orders(content, tool, self._message_stamp(), "mail draft")
+        if not reply_to and (to is None or subject is None):
+            raise ValueError('a new message needs account, to and subject')
+        # An update replaces the whole draft: omitted fields take the reply defaults again, never the old content.
+        to = to if to is not None else defaults.get('to', [])
+        cc = cc if cc is not None else defaults.get('cc', [])
+        bcc = bcc if bcc is not None else []
+        subject = subject if subject is not None else defaults.get('subject', '')
+        files = self._draft_files(attachments)
+        raw = mail.build_message(acct.address, to, cc, bcc, subject, body, files,
+                                 defaults.get('in_reply_to', ''), defaults.get('references', ''))
+        content = f"To: {', '.join(to)}\nCc: {', '.join(cc)}\nBcc: {', '.join(bcc)}\nSubject: {subject}\n\n{body}"
+        check, checked = self._check_orders(content, tool, self._message_stamp(), "mail draft")
+        with self._draft_registry() as registry:
+            try:
+                # The judge may take 90 seconds. Another run or the operator may now own this version.
+                acct = self._draft_account(account)
+                label_ids = self._draft_labels(account, labels)
+                if did:
+                    if registry.get(did) != prior:
+                        raise PermissionError('the draft changed while checking standing orders; read it again')
+                    current = self._draft_message_id(acct, did)
+                    if current != prior['message_id']:
+                        if current is None:
+                            del registry[did]
+                        raise PermissionError('the operator edited it or it was sent; it is theirs now')
+            except PermissionError as e:
+                self._action_denied(tool, {}, str(e))
+                raise
             action = self._action_route(tool, {})
             if action and action['mode'] != 'direct':   # a demoted class: drafts have no proposal path, so refuse
                 raise PermissionError(f"{action['class']} actions wait for the operator after an over-reach; "
@@ -3718,7 +3755,7 @@ class Broker:
         text = (f"{tool}: {content.get('summary', '')}\nDescription: {content.get('description', '')}\n"
                 f"Location: {content.get('location', '')}\nStart: {content.get('start')}\nEnd: {content.get('end')}\n"
                 f"Attendees: {json.dumps(content.get('attendees', []), ensure_ascii=False)}")
-        check, checked = self._check_orders(text, tool, self._message_stamp(), "calendar change")
+        check, checked = self._calendar_check_orders(text, tool, acct, grant, original, eid)
         proposal = actions.classify(tool, {'attendees': attendees}, event=original, address=acct.address) == 'staged'
         action = self._action_route(tool, {'attendees': attendees}, event=original, address=acct.address)
         if action:
@@ -3816,7 +3853,7 @@ class Broker:
             raise ValueError("the event must include the operator's own attendee and its full attendee list")
         text = (f"calendar_respond: {original.get('summary', '')}\nDescription: {original.get('description', '')}\n"
                 f"Attendees: {json.dumps(attendees, ensure_ascii=False)}\nResponse: {response} ({statuses[response]})")
-        check, checked = self._check_orders(text, "calendar_respond", self._message_stamp(), "calendar change")
+        check, checked = self._calendar_check_orders(text, "calendar_respond", acct, grant, original, eid)
         mine[0]['responseStatus'] = statuses[response]
         self._action_route('calendar_respond', {'id': id, 'response': response}, event=original, address=acct.address)
         answer = self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
