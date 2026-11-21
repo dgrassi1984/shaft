@@ -278,6 +278,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_prompt_knobs_template.py` | `PromptKnobsTest` | — |
 | `supervisor/tests/test_protected_snapshot.py` | `ProtectedSnapshotTest` | — |
 | `supervisor/tests/test_provenance.py` | `ProvenanceTest` | — |
+| `supervisor/tests/test_provenance_index.py` | `ProvenanceIndexTest` | — |
 | `supervisor/tests/test_provider.py` | `Case`, `UseTest`, `CheckTest`, `StaleServiceTest`, `StreamProbeTest` | — |
 | `supervisor/tests/test_provider_alerts.py` | `ProviderAlertsTest` | — |
 | `supervisor/tests/test_public_tree.py` | `PublicTreeTest` | `tracked` |
