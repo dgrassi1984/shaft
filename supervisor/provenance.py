@@ -20,6 +20,7 @@ JOURNAL_BLOCK = re.compile(r"(?m)^## (\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{
 JOURNAL_HEAD_BYTES = re.compile(rb"(?m)^## (\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)[^\n]*\n")
 EPOCH = datetime(1970, 1, 1)
 INDEX_VERSION = 1
+BUSY_TIMEOUT_S = 600   # a waiting stats rebuild must wait for a first build (1-2+ min), not fail
 
 
 def facts(name: str) -> list[dict]:
@@ -154,6 +155,12 @@ def _ingest_journal(raw: bytes, prev: tuple[int, str, int, str] | None, sizes: s
     return new_offset, digest, new_indexed, indexed_digest
 
 
+def _is_corruption(e: sqlite3.DatabaseError) -> bool:
+    """A broken index file (rebuild it) as opposed to busy/locked/I/O, which must leave the file untouched."""
+    code = getattr(e, "sqlite_errorcode", None)   # extended codes (SQLITE_CORRUPT_VTAB, …) keep the primary low byte
+    return code is not None and code & 0xFF in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
+
+
 class _Index:
     """Kept SQLite index of earliest observation and prose timestamps by blake2b-64 shingle hash."""
     def __init__(self, name: str):
@@ -165,8 +172,8 @@ class _Index:
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn = sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_S, isolation_level=None)
+        conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_S * 1000)}")
         return conn
 
     def _remove_db(self) -> None:
@@ -225,10 +232,9 @@ class _Index:
             }
             need_reset = ("sources" not in tables or meta.get("version") != str(INDEX_VERSION)
                           or meta.get("root") != str(self.root))
-            raw_files = None
+            raw_files = self._raw_sources()
             recorded = {}
-            if not need_reset and not self.synced:
-                raw_files = self._raw_sources()
+            if not need_reset:
                 recorded = {
                     r[0]: (int(r[1]), str(r[2]), int(r[3]), str(r[4]))
                     for r in conn.execute("SELECT file, offset, sha256, indexed, indexed_sha256 FROM sources")
@@ -239,7 +245,15 @@ class _Index:
                     # keep the old line's shingles, which a build from scratch would not have.
                     grown_tail = (raw is not None and file != "memory/journal.md" and indexed > offset
                                   and len(raw) > indexed and raw[indexed:indexed + 1] != b"\n")
-                    if (raw is None or offset < 0 or indexed < offset or len(raw) < indexed or grown_tail
+                    # A journal append that continues the last word merges it with the first appended word, so the
+                    # last block's old shingles are stale: rebuild, as from scratch would read the merged word.
+                    split_word = False
+                    if file == "memory/journal.md" and raw is not None and len(raw) > indexed:
+                        before = raw[:indexed].decode("utf-8", errors="replace")
+                        after = raw[indexed:].decode("utf-8", errors="replace")
+                        split_word = bool(before and after and re.match(r"\w", before[-1])
+                                          and re.match(r"\w", after[0]))
+                    if (raw is None or offset < 0 or indexed < offset or len(raw) < indexed or grown_tail or split_word
                             or hashlib.sha256(raw[:offset]).hexdigest() != digest
                             or hashlib.sha256(raw[:indexed]).hexdigest() != indexed_digest):
                         need_reset = True
@@ -256,14 +270,11 @@ class _Index:
                 existing = set()
                 recorded = {}
                 self.ready.clear()
-            if raw_files is None:
-                raw_files = self._raw_sources()
             if not existing:
                 self._write_batch(conn, raw_files, {}, {size}, full=True)
                 existing.add(size)
             else:
-                if not self.synced:
-                    self._write_batch(conn, raw_files, recorded, existing, full=False)
+                self._write_batch(conn, raw_files, recorded, existing, full=False)
                 if size not in existing:
                     self._write_batch(conn, raw_files, {}, {size}, full=True)
                     existing.add(size)
@@ -289,8 +300,8 @@ class _Index:
                         if row and row[0] is not None and (best is None or row[0] < best):
                             best = row[0]
                     return EPOCH + timedelta(microseconds=best) if best is not None else None
-            except sqlite3.DatabaseError:
-                if attempt:
+            except sqlite3.DatabaseError as e:
+                if attempt or not _is_corruption(e):
                     raise
                 self._remove_db()
         return None

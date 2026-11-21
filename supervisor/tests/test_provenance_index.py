@@ -278,6 +278,81 @@ class ProvenanceIndexTest(unittest.TestCase):
         self.assertEqual([s for _, s in self.assert_matches_from_scratch()],
                          ["self-generated", "self-generated", "self-generated"])
 
+    def test_journal_append_continuing_last_word_rebuilds(self):
+        journal = self.root / "memory/journal.md"
+        journal.write_text("## 2026-10-01 08:30 — x\n\none two three four five six seven eight")
+        self.write_facts([{"date": "2026-10-02 10:00", "text": "one two three four five six seven eight",
+                           "src": "log:2026-10-01T08:00:00#1"}])
+        self.assertEqual(provenance.checked("bird")[0][1], "self-generated")
+        with journal.open("a") as f:
+            f.write("EXTRA")
+        self.assertEqual([s for _, s in self.assert_matches_from_scratch()], ["unmatched"])
+
+    def test_journal_append_with_newline_does_not_rebuild(self):
+        journal = self.root / "memory/journal.md"
+        earlier = "The earlier journal block prose that must not be re-shingled."
+        journal.write_text("## 2026-10-01 08:30 — First\n\n" + earlier + "\n\n"
+                           "## 2026-10-01 09:30 — Second\n\nsecond block words here for shingles\n")
+        self.write_facts([{"date": "2026-10-02 10:00", "text": JOURNAL_TEXT, "src": "log:2026-10-01T08:00:00#1"}])
+        self.assertEqual(provenance.checked("bird")[0][1], "unmatched")
+        with journal.open("a") as f:
+            f.write("\nmore words here")
+        with mock.patch.object(provenance, "_shingles", wraps=provenance._shingles) as shingles:
+            provenance.checked("bird")
+        shingled = {call.args[0] for call in shingles.call_args_list}
+        self.assertFalse(any(earlier in text for text in shingled))
+
+    def test_new_size_syncs_existing_sizes_from_the_same_read(self):
+        episodes_path = self.root / "memory/episodes/2026-10-01.jsonl"
+        episodes_path.write_text(json.dumps({"kind": "live", "ts": "2026-10-01T08:00:00",
+                                             "tools": [{"tool": "run", "args": "{}", "result": LOG_TEXT}]}) + "\n")
+        fact8 = {"date": "2026-10-02 10:00", "text": "eight word observation text for the first fact here",
+                 "src": "log:2026-10-01T08:00:00#1"}
+        fact4 = {"date": "2026-10-02 10:00", "text": "four short words here", "src": "log:2026-10-01T08:00:00#1"}
+        self.write_facts([fact8, fact4])
+
+        evidence = provenance._evidence("bird")
+        evidence.check(fact8)
+
+        new_obs = "appended episode observation text with more than eight distinct words here"
+        with episodes_path.open("a") as f:
+            f.write(json.dumps({"kind": "live", "ts": "2026-10-01T11:00:00",
+                                "tools": [{"tool": "run", "args": "{}", "result": new_obs}]}) + "\n")
+
+        evidence.check(fact4)
+
+        for size in (4, 8):
+            shingles = provenance._shingles(new_obs, size)
+            self.assertTrue(shingles)
+            hashes = [provenance._hash(s) for s in shingles]
+            marks = ",".join("?" * len(hashes))
+            with sqlite3.connect(self.db_path()) as conn:
+                n = conn.execute(f"SELECT COUNT(DISTINCT h) FROM obs_{size} WHERE h IN ({marks})",
+                                 hashes).fetchone()[0]
+            self.assertEqual(n, len(hashes))
+
+    def test_busy_locked_database_is_not_deleted(self):
+        episodes_path = self.root / "memory/episodes/2026-10-01.jsonl"
+        episodes_path.write_text(json.dumps({"kind": "live", "ts": "2026-10-01T08:00:00",
+                                             "finish": {"learned": LEARNED_TEXT}}) + "\n")
+        self.write_facts([{"date": "2026-10-02 10:00", "text": LEARNED_TEXT, "src": "log:2026-10-01T08:00:00#1"}])
+        provenance.checked("bird")
+        self.assertTrue(self.db_path().exists())
+
+        holder = sqlite3.connect(self.db_path(), isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            with mock.patch.object(provenance, "BUSY_TIMEOUT_S", 0.1):
+                with self.assertRaises(sqlite3.OperationalError):
+                    provenance.checked("bird")
+            self.assertTrue(self.db_path().exists())
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+        with sqlite3.connect(self.db_path()) as conn:
+            self.assertGreater(conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0], 0)
+
     def test_garbage_db_file_and_version_mismatch_are_replaced(self):
         (self.root / "memory/episodes/2026-10-01.jsonl").write_text(
             json.dumps({"kind": "live", "ts": "2026-10-01T08:00:00",
