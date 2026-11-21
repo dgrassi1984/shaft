@@ -204,7 +204,7 @@ class FeedbackF3Test(unittest.TestCase):
         source_dir = Path(finetune.__file__).parent
         # Include every module directly contributing sections to stats.md, plus judge prompt builders.
         modules = {"metrics", "judge", "pushback", "projects", "metacog", "attention", "commitments",
-                   "provenance", "tom", "consultstats", "evolution", "pushes",
+                   "provenance", "consultstats", "evolution", "pushes",
                    "surprise", "battery", "trial"}
         for module in modules:
             source = (source_dir / f"{module}.py").read_text()

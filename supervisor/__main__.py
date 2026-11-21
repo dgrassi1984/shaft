@@ -1759,8 +1759,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--since", required=True, help="when the window began (M3 live): YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--until", default="", help="when it ends (default: now)")
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
-    # Measurements and kill tests (read the record; only anchoring and tom --score /
-    # --baselines pay a judge, only experiment replays cycles)
+    # Measurements and kill tests (read the record; only anchoring pays a judge,
+    # only experiment replays cycles)
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
                        "its consulted cycles fared")
     p.add_argument("names", nargs="*")
@@ -1785,10 +1785,6 @@ def main(argv: list[str]) -> int:
     p.add_argument("names", nargs="*")
     p = sub.add_parser("provenance", help="where each instance's facts come from, checked against its tool results (C3)")
     p.add_argument("names", nargs="*")
-    p = sub.add_parser("tom", help="what instances expected others to answer, and what they did (C4)")
-    p.add_argument("names", nargs="*")
-    p.add_argument("--score", action="store_true", help="score the expectations now decidable (a judge per reply)")
-    p.add_argument("--baselines", action="store_true", help="also the two information-matched baselines (paid)")
     p = sub.add_parser("experiment", help="kill tests of the self-knowledge mechanisms: cards, attention, commitments, forecast "
                        "(knob trials), workspace, monitors, choice-blindness, privileged, recognition and "
                        "resource-shock; --report shows results")
@@ -2362,19 +2358,6 @@ def _dispatch(args, parser) -> int:
                     print(f"{name}: stopped — {r['stopped']}", file=sys.stderr)
         if args.report or not args.dry_run:
             print(anchoring.report(args.names))
-        return 0
-    if args.cmd == "tom":
-        from . import tom
-        names = args.names or instance_names()
-        for name in names:
-            instance_root(name)
-            if args.score or args.baselines:
-                print(f"{name}: {tom.score(name)} expectation(s) scored")
-            if args.baselines:
-                print(f"{name}: {tom.baselines(name)} baseline prediction(s) made")
-            if name in tom.stopped:
-                print(f"{name}: stopped — {tom.stopped.pop(name)}", file=sys.stderr)
-        print(tom.report(names))
         return 0
     if args.cmd == "experiment":
         from . import experiments, trial

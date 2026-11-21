@@ -216,7 +216,6 @@ class ServerThreadsTest(unittest.TestCase):
         from supervisor.tests.test_api import FakeProc
         self.patch(api, "TALKS", self.root / "talks.json")
         self.patch(api, "log")
-        self.patch(api.tom, "heard")
         self.patch(api, "busy_with", return_value=None)
         self.patch(api, "Reply", return_value=mock.MagicMock(f=None))
         handler = api.Handler.__new__(api.Handler)

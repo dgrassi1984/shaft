@@ -490,10 +490,12 @@ feed `self/stats.md`.
 `supervisor/unrecorded.py` sends the judge the last `TRANSCRIPT_CHARS=24000` characters of an ended,
 written-up conversation, including agent and operator turns, plus that conversation's recorded commitment
 promises and due times and standing-order texts sourced to it. Open conversations are excluded.
-Returned quotes must match visible operator turns. The check runs in `metrics.after_cycle`, with
+Returned quotes must match visible operator turns, outside their quote-reply lines (words found only there are the
+instance's own, quoted back, and are not counted as orders). The check runs in `metrics.after_cycle`, with
 `PER_RUN=3` judge calls at most. A start marker is written even when the judge is down or nothing is pending.
 Write-ups more than `FIRST_RUN_HOURS=24` hours before that marker are skipped.
-It records findings only, never commitments or standing orders.
+It never writes commitments or standing orders: an unrecorded order reaches the instance as an inbox note from
+"supervisor (unrecorded orders)", which it records or ignores. Trial replays never run it.
 
 ## Git
 

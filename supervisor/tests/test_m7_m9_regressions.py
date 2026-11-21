@@ -363,7 +363,7 @@ class JudgingTest(Fixture):
 
     def test_m7d_scheduler_measurement_hook_runs_probe(self):
         with mock.patch.object(metrics, 'judge_pending', return_value=0), mock.patch.object(judge_probe, 'run') as run, \
-                mock.patch('supervisor.tom.score'), mock.patch.object(metrics, 'write_stats'), mock.patch.object(metrics, 'check_probation'):
+                mock.patch.object(metrics, 'write_stats'), mock.patch.object(metrics, 'check_probation'):
             metrics.after_cycle('m')
         run.assert_called_once_with('m')
 

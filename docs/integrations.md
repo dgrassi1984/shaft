@@ -508,7 +508,10 @@ Each run happens in the `run` sandbox, with its own broker and egress proxy:
 - at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most `SHAFT_JOBS_MAX`
   jobs per instance (default 12); beyond it, the rest by name are not run and are named in the problem report.
 
-What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
+What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing, and neither
+does a message identical to that job's last delivered one (its text and handed-over files, compared by digest): the
+run's row says `duplicate`, the job's state counts it, `record(kind="jobs")` and `shaft jobs` show the count, and that
+run does not wake the instance. A job with
 `can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
 Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
 For new mail, calendar changes, or Google Chat messages a job is not needed. The supervisor's watch

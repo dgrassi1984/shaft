@@ -64,8 +64,7 @@ class InstanceFixture:
         self.enterContext(mock.patch.object(broker, "tools", return_value=specs))
         # Patch the transport, not envelope(), so these tests also import on the parent.
         self.enterContext(mock.patch.object(broker, "_request", return_value={"envelope": None}))
-        return self.enterContext(mock.patch.object(broker, "call", side_effect=lambda name, **args:
-            "(nothing recorded yet)" if args.get("kind") == "expectations" else call(name, **args)))
+        return self.enterContext(mock.patch.object(broker, "call", side_effect=call))
 
 
 class OpenTalkContextTest(InstanceFixture, unittest.TestCase):
@@ -172,7 +171,6 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
         self.assertFalse((self.root / "notes/restored.md").exists())
         self.assertEqual(calls.call_args_list, [
             mock.call("record", kind="judgments", limit=20, since="1970-01-01 00:00:00", format="json"),
-            mock.call("record", kind="expectations", limit=50),
             mock.call("history", path="self/goals.md")])
         results = [m["content"] for m in fake.requests[2]["messages"] if m["role"] == "tool"]
         self.assertIn("VERDICT: orchard criterion not met", results[-1])

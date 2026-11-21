@@ -74,7 +74,8 @@ class UnrecordedTest(unittest.TestCase):
         }])
 
     def snapshot(self, root):
-        return {str(p.relative_to(root)): p.read_bytes() if p.is_file() else None for p in root.rglob("*")}
+        return {str(p.relative_to(root)): p.read_bytes() if p.is_file() else None
+                for p in root.rglob("*") if "inbox" not in p.relative_to(root).parts}
 
     def test_open_conversation_is_never_judged_or_transcribed(self):
         """A write-up does not authorize judging a conversation the operator has resumed."""
