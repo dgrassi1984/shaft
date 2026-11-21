@@ -1,4 +1,5 @@
-"""Compare ended conversations with recorded future work, without writing into the instance's mind."""
+"""Compare ended conversations with recorded future work, without writing into the instance's mind: an order left
+unrecorded reaches it as one inbox note per conversation (#248), which it records or ignores."""
 from __future__ import annotations
 
 import fcntl
@@ -82,8 +83,16 @@ def _pending(written: dict[str, str], checked: list[dict]) -> list[str]:
     return sorted(written, key=lambda tid: commitments._at(written[tid]))
 
 
-def _transcript(name: str, tid: str, written_up: str) -> tuple[str, list[str]]:
-    """Clip text and operator spans together so quote checks cannot accept words outside the judge's view."""
+def _quoted(content: str) -> str:
+    """The lines of an operator turn the app sent as a quote-reply ("> …"): the instance's own message (a talk reply or a
+    send_message) quoted back. Not a match against its earlier turns: a short answer ("Yes") is in most of them."""
+    return "\n".join(line.lstrip()[1:] for line in content.splitlines() if line.lstrip().startswith(">"))
+
+
+def _transcript(name: str, tid: str, written_up: str) -> tuple[str, list[str], list[str]]:
+    """Clip text and operator spans together so quote checks cannot accept words outside the judge's view. With each
+    operator span, its quote-reply lines: the instance's own message the operator quoted back (#248). A turn the cut
+    splits loses its partial first line: cut inside a "> " line, the rest would read as his own words."""
     text, spans = "", []
     for ep in metrics._parsed_episodes(core.INSTANCES / name):
         if ep.get("kind") != "talk" or ep.get("talk_id") != tid:
@@ -100,15 +109,23 @@ def _transcript(name: str, tid: str, written_up: str) -> tuple[str, list[str]]:
         if operator:
             spans.append((start, len(text)))
     cut = max(0, len(text) - TRANSCRIPT_CHARS)
-    return text[cut:], [text[max(start, cut):end] for start, end in spans if end > cut]
+    turns = [text[start:end] if start >= cut else text[cut:end].partition("\n")[2]
+             for start, end in spans if end > cut]
+    return text[cut:], turns, [_quoted(turn) for turn in turns]
 
 
-def _validated(verdict: dict, operator_turns: list[str]) -> list[dict]:
-    """Discard malformed items and quotes that are not in a visible operator turn."""
+def _validated(verdict: dict, operator_turns: list[str],
+               quoted: list[str] | None = None) -> tuple[list[dict], int]:
+    """Discard malformed items, quotes outside a visible operator turn, and the operator quoting the instance's own words
+    back (`quoted`: per operator turn, its quote-reply lines, from _transcript), which are counted, not orders."""
     if not isinstance(verdict, dict) or not isinstance(verdict.get("orders"), list):
         raise judge.JudgeError("unrecorded verdict needs an orders array")
-    turns = [" ".join(turn.split()) for turn in operator_turns]
-    out = []
+    quoted = [*(quoted or []), *[""] * len(operator_turns)][:len(operator_turns)]
+    # his own lines (the quote-reply lines out) and, apart, what he quoted
+    own = [" ".join("\n".join(line for line in turn.splitlines() if not line.lstrip().startswith(">")).split()).casefold()
+           for turn in operator_turns]
+    quotes = [" ".join(quote.split()).casefold() for quote in quoted]
+    out, own_quotes = [], 0
     for item in verdict["orders"]:
         if not isinstance(item, dict):
             continue
@@ -117,9 +134,35 @@ def _validated(verdict: dict, operator_turns: list[str]) -> list[dict]:
             continue
         if type(item.get("recorded")) is not bool:
             continue
-        if any(" ".join(words.split()) in turn for turn in turns):
+        collapsed = " ".join(words.split()).casefold()
+        if any(collapsed in turn for turn in own):       # his own lines first: what he says himself is his order
             out.append({"words": words, "recorded": item["recorded"]})
-    return out
+        elif any(collapsed in quote for quote in quotes):
+            own_quotes += 1
+    return out, own_quotes
+
+
+def _tell(name: str, tid: str, words: list[str]) -> bool:
+    """Deliver one inbox note naming the conversation and quoting its unrecorded orders. False only when no note was
+    written (the conversation then stays pending and is told at a later run); a note written but not logged is told."""
+    from . import messages
+    stamp = datetime.now()
+    quoted = "\n".join(f"- {json.dumps(w, ensure_ascii=False)}" for w in words)
+    body = (f"In conversation {tid}, these are things the operator asked for later in that conversation that are not "
+            f"in your commitments or standing orders:\n\n{quoted}\n\n"
+            "Record each that is real (record_commitment / record_order) or ignore it if it was not an order.")
+    try:
+        path = core.safe_write(
+            core.INSTANCES / name, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-orders.md",
+            f"From: supervisor (unrecorded orders)\nTo: {name}\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n")
+    except Exception as e:
+        core.log(f"{name}: unrecorded orders note for {tid} failed, retried at the next run: {type(e).__name__}: {e}")
+        return False
+    try:
+        messages.record(core.SUP_DIR, path, "supervisor (unrecorded orders)", name, "note", stamp, body)
+    except Exception as e:
+        core.log(f"{name}: unrecorded orders note for {tid} delivered but not logged: {type(e).__name__}: {e}")
+    return True
 
 
 def run(name: str, now=None) -> int:
@@ -152,7 +195,7 @@ def run(name: str, now=None) -> int:
             else:
                 if judged >= PER_RUN:
                     continue
-                transcript, turns = _transcript(name, tid, stamp)
+                transcript, turns, quoted = _transcript(name, tid, stamp)
                 if any(turn.strip() for turn in turns):
                     judged += 1
                     try:
@@ -166,11 +209,18 @@ def run(name: str, now=None) -> int:
                                              "standing_orders": standing}, ensure_ascii=False)
                         verdict = judge.ask(SYSTEM, prompt, SCHEMA, purpose=f"unrecorded {name}",
                                             effort="low", exclude=excluded, model=model)
-                        row.update(orders=_validated(verdict, turns), judge=model,
+                        kept, own_quotes = _validated(verdict, turns, quoted)
+                        row.update(orders=kept, judge=model,
+                                   **({"own_quotes": own_quotes} if own_quotes else {}),
                                    **judge.independence(model, excluded))
                     except judge.JudgeError as e:
                         core.log(f"{name}: unrecorded {tid} skipped: {e}")
                         continue
+            unrecorded_words = [item["words"] for item in row["orders"] if item.get("recorded") is False]
+            if unrecorded_words:
+                if not _tell(name, tid, unrecorded_words):
+                    continue   # no row: still pending, told (and judged again) at a later run, never lost
+                row["told"] = True
             with target.open("a+b") as f:
                 # Separate a crashed writer's partial last line from this complete row.
                 if f.tell():

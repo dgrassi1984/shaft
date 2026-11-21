@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import core, judge, metacog, metrics, provenance, tom
+from supervisor import core, judge, metacog, metrics, provenance
 from supervisor.tests.test_metacog import row
 
 NOW = datetime(2026, 11, 3, 12)
@@ -36,7 +36,7 @@ def fixture(count=20, padding=0):
         (root / "memory/episodes").mkdir(parents=True)
         (sup / "judgments").mkdir(parents=True)
         for module in ("core", "metrics", "provenance", "metacog", "attention", "commitments", "consultstats",
-                       "projects", "tom", "pushes", "pushback", "surprise", "battery", "trial"):
+                       "projects", "pushes", "pushback", "surprise", "battery", "trial"):
             mod = importlib.import_module("supervisor." + module)
             for key, value in (("INSTANCES", roots), ("SUP_DIR", sup), ("datetime", Clock)):
                 if hasattr(mod, key):
@@ -145,28 +145,10 @@ class StatsRebuildTest(unittest.TestCase):
             self.assertNotEqual(metacog.summary(rows)["mean_confidence"], first["mean_confidence"])
             self.assertEqual(bootstrap.call_count, 3)
 
-    def test_c14_pending_receipts_list_each_folder_once_and_final_scores_skip_listing(self):
-        from supervisor.tests.test_tom import TomTest
-        case = TomTest()
-        case.setUp()
-        self.addCleanup(case.doCleanups)
-        for i in range(3):
-            tom.record("a", case.receipt(id=str(i), to="operator" if i < 2 else "b", gist=""))
-        case.reply()
-        case.reply(sender="operator")
-        with mock.patch.object(tom, "list_beneath", wraps=tom.list_beneath) as listing, \
-                mock.patch.object(tom, "_rows", wraps=tom._rows) as rows:
-            self.assertEqual(tom.score("a", case.start + timedelta(hours=3)), 3)
-            self.assertEqual([call.args[1] for call in listing.call_args_list], ["inbox", "memory/messages"])
-            listing.reset_mock()
-            self.assertEqual(tom.score("a", case.start + timedelta(hours=3)), 0)
-            listing.assert_not_called()
-            self.assertEqual(sum(call.args == ("a", "-operator-said") for call in rows.call_args_list), 1)
-
 
 def benchmark(baseline=None):
     if baseline:
-        for mod in (metrics, provenance, metacog, tom):
+        for mod in (metrics, provenance, metacog):
             path = Path(baseline) / (mod.__name__.rsplit(".", 1)[-1] + ".py")
             exec(compile(path.read_text(), str(path), "exec"), mod.__dict__)
     with fixture(600, 6500) as (_, path, _):

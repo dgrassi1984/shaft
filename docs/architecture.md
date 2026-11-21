@@ -382,8 +382,15 @@ It makes one judge call per eligible conversation with visible operator text, up
 The first run writes a start marker even if the judge is down or nothing is pending.
 Write-ups more than `FIRST_RUN_HOURS=24` hours before that marker are skipped.
 `TRANSCRIPT_CHARS=24000` bounds the transcript tail; returned quotes must occur in visible operator turns.
+Words found only in a turn's quote-reply lines (`> …`, the app quoting the instance's own message back) are the
+instance's suggestion, not an order: they are counted as `own_quotes` on the row and dropped.
 Results stay in `SUP_DIR/unrecorded_orders/<name>.jsonl`, exposed by the gauge and `record(kind="unrecorded_orders")`.
-This check only reports. It never creates a commitment or standing order.
+A row with an unrecorded order also reaches the instance at its next cycle: one inbox note per conversation,
+`inbox/<stamp>-from-supervisor-orders.md`, quoting the operator's words and naming the conversation, written before
+the row (`told`). A note that could not be written leaves no row: the conversation stays pending and is told at a later
+run; a row already in the ledger is never told again. A turn the transcript cut splits loses its partial first line,
+so the rest of a cut `> ` line never reads as his own words; matching is case-insensitive, his own lines first.
+The check never creates a commitment or standing order itself: recording one is the instance's call.
 
 ### Goals, handoffs and judging
 
@@ -507,9 +514,8 @@ needed result once per fact length. The earliest time each word window was obser
 (the instance's prose, journal included) is kept between rebuilds in `.supervisor/provenance/<name>.sqlite`: a
 rebuild reads only the bytes appended since the last one, and rebuilds it from scratch when a file it was built
 from shrank, vanished or changed before its consumed end (the checks' result is the same either way). Confidence sections check their sample floors before bootstrapping;
-deterministic intervals are cached by judgment content. Reply scoring skips final receipts before listing
-message folders, lists each folder once for pending receipts, and reads the chat ledger once if needed.
-See `supervisor/metrics.py`, `supervisor/provenance.py`, `supervisor/metacog.py`, and `supervisor/tom.py`.
+deterministic intervals are cached by judgment content.
+See `supervisor/metrics.py`, `supervisor/provenance.py`, and `supervisor/metacog.py`.
 
 ### Confidence and calibration
 
@@ -792,9 +798,7 @@ decision, proposal digest and predictions for the instance to read. Falsificatio
 search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
 **forecast** of what comparable goals cost (turns, minutes, calls, how many ran out: no finish, or a forced deadline
 wrap-up; a last-step wrap-up that finished did not), costs only, never a success rate,
-which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
-broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only): an
-inbox file from the recipient, or, for the operator, a chat message the API logged (`<name>-operator-said.jsonl`).
+which would be a second base rate before the v3 confirm.
 `shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much

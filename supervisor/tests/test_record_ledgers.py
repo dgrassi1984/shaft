@@ -39,7 +39,7 @@ class RecordLedgersTest(IsolatedCase):
     def test_every_spec_kind_is_accepted_on_empty_record(self):
         kinds = broker.SPECS["record"]["function"]["parameters"]["properties"]["kind"]["enum"]
         self.assertEqual(set(kinds), {"judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-            "consults", "calendar", "gate", "expectations"} | set(broker.LEDGER_KINDS))
+            "consults", "calendar", "gate"} | set(broker.LEDGER_KINDS))
         # All declared kinds read empty fixture records.
         with mock.patch.object(jobs, "declared", return_value=([], [])), \
              mock.patch.object(jobs, "uncommitted", return_value=set()):

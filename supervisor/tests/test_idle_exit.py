@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, broker, commitments, consult, core, delete, idle, jobs, judge, metrics, tom, trial
+from supervisor import autonomy, broker, commitments, consult, core, delete, idle, jobs, judge, metrics, trial
 
 NOW = datetime(2026, 11, 11, 12)
 
@@ -27,7 +27,7 @@ class IsolatedCase(unittest.TestCase):
         (self.root / "config.env").write_text("")
         self.sup = self.base / "records"
         self.sup.mkdir()
-        for module in (core, metrics, commitments, autonomy, jobs, tom, trial):
+        for module in (core, metrics, commitments, autonomy, jobs, trial):
             if hasattr(module, "INSTANCES"):
                 self.enterContext(mock.patch.object(module, "INSTANCES", self.root.parent))
             if hasattr(module, "SUP_DIR"):

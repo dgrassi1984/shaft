@@ -435,8 +435,13 @@ def _run(name: str, root: Path, job: dict) -> int:
     if ok:
         message, wake, note, files = _outcome(out, job)
         published = _publish(name, root, job)
-        delivered = _deliver_job(name, plugin, message, note, files)
-        row.update(out_chars=len(out), delivered=delivered, wake=wake)
+        outcome = _deliver_job(name, plugin, message, note, files)
+        duplicate = outcome == "duplicate"
+        delivered = outcome is True
+        if duplicate:
+            wake = False
+        row.update(out_chars=len(out), delivered=delivered, wake=wake,
+                   **({"duplicate": True} if duplicate else {}))
         if published:
             row["published"] = published
         if wake:
@@ -468,7 +473,8 @@ def _run(name: str, root: Path, job: dict) -> int:
     _log_row(name, row)
     log(f"{name}: job {plugin} {'ok' if ok else 'resuming' if row.get('resuming') else 'FAILED'} in {seconds}s"
         + (f" (resume {resumed})" if resumed else "")
-        + (f", delivered {row.get('out_chars', 0)} chars" if row.get("delivered") else "")
+        + (f", delivered {row.get('out_chars', 0)} chars" if row.get("delivered") else
+           ", same message as last time, not delivered" if row.get("duplicate") else "")
         + (f", published {', '.join(row['published'])}" if row.get("published") else "")
         + (", asked to wake me" if row.get("wake") else "") + ("" if ok else f" — {row['error'][:200]}"))
     return 0 if ok else 1
@@ -547,7 +553,7 @@ def _handoff(root: Path, plugin: str, files) -> tuple[list[tuple[str, bytes]], l
     return loaded, refused
 
 
-def _deliver_job(name: str, plugin: str, text: str, note: str, files) -> bool:
+def _deliver_job(name: str, plugin: str, text: str, note: str, files) -> bool | str:
     """A run's message to the inbox, with the files it handed over beside it (inbox/<stem>.files/) and, past
     MAX_OUTPUT, its whole text there too, named by the cut. Nothing to say and no file: nothing delivered."""
     from . import messages
@@ -555,6 +561,16 @@ def _deliver_job(name: str, plugin: str, text: str, note: str, files) -> bool:
     loaded, refused = _handoff(root, plugin, files)
     if not text and not loaded and not refused:
         return False
+    refused_note = ("\n\nFiles this job named that were not delivered:\n" + "\n".join(f"- {r}" for r in refused)
+                    if refused else "")
+    h = hashlib.sha256((text[:MAX_KEPT] + note + refused_note).encode("utf-8", errors="replace"))
+    for fname, data in loaded:
+        h.update(b"\0" + fname.encode("utf-8", errors="replace") + b"\0" + len(data).to_bytes(8, "big") + data)
+    digest = h.hexdigest()
+    before = entry(name, plugin)
+    if before.get("last_message") == digest:   # its hand-off stays: no new delivery, so still the only copy
+        _update(name, plugin, duplicates=int(before.get("duplicates") or 0) + 1)
+        return "duplicate"
     _prune_files(root, plugin)
     stamp = datetime.now()
     stem = _stem(stamp, f"job {plugin}")
@@ -572,9 +588,9 @@ def _deliver_job(name: str, plugin: str, text: str, note: str, files) -> bool:
         body += ("\n\nFiles this job handed me, whole (read them with offsets; they are removed once this message is "
                  "archived and the job delivers again — copy what I keep into notes/):\n"
                  + "\n".join(f"- {a['rel']} ({messages.size_text(a['bytes'])})" for a in handed))
-    if refused:
-        body += "\n\nFiles this job named that were not delivered:\n" + "\n".join(f"- {r}" for r in refused)
+    body += refused_note
     _deliver(name, f"job {plugin}", body, stamp=stamp, attachments=atts)
+    _update(name, plugin, last_message=digest)
     return True
 
 
@@ -844,7 +860,7 @@ def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
     """A job's state as its runs in `rows` left it — what entry() held at that moment (the state file keeps only now):
     the same transitions as run(), a failure count restarting when the schedule changed. Rows logged before
     2026-10-25 carry no schedule hash: they count as the schedule declared then."""
-    e = {"last_ok": None, "fails": 0, "hash": None, "last_error": None, "status": None}
+    e = {"last_ok": None, "fails": 0, "hash": None, "last_error": None, "status": None, "duplicates": 0}
     for r in rows:
         if r.get("plugin") != plugin or r.get("skipped"):
             continue
@@ -852,6 +868,8 @@ def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
         if r.get("refused"):
             e.update(last_error=r["refused"], status="refused")
         elif r.get("exit") == 0 and not r.get("timed_out"):
+            if r.get("duplicate"):
+                e["duplicates"] = int(e.get("duplicates") or 0) + 1
             e.update(last_ok=r["ts"], fails=0, hash=h, last_error=None, status="done")
         elif r.get("resuming"):   # a long job stopped after saving its place: not a failure
             n = int(r.get("resumed") or 0) + 1
@@ -886,6 +904,8 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Pa
         state = (f"last ok {e['last_ok']}" if e.get("last_ok") else "not run yet")
         if e.get("fails") and e.get("hash") == j["hash"]:
             state += f" · {e['fails']} failure(s) in a row, now every {int(interval(j, e).total_seconds() // 60)} min"
+        if e.get("duplicates"):
+            state += f" · {e['duplicates']} duplicate(s) not delivered"
         # status: running now, or (a long job) how its last run ended — done, resuming n of N, gave up
         status = (f"running since {e['running']}" if as_of is None and _running(e) else
                   e.get("status") if j["long"] and e.get("status") and e.get("hash") == j["hash"] else "")
@@ -913,7 +933,8 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Pa
                     f"{'ok' if r.get('exit') == 0 else 'stopped' if r.get('resuming') else 'FAILED'} {r.get('seconds')}s"
                     + (f" (resume {r['resumed']})" if r.get("resumed") else "")
                     + (", gave up" if r.get("gave_up") else "")
-                    + (f", delivered {r.get('out_chars')} chars" if r.get("delivered") else "")
+                    + (f", delivered {r.get('out_chars')} chars" if r.get("delivered") else
+                       ", same message as last time, not delivered" if r.get("duplicate") else "")
                     + (f", published {', '.join(map(str, r['published']))}" if isinstance(r.get("published"), list)
                        else "")
                     + (", woke me" if r.get("wake") else "") + (f" — {r['error'][:120]}" if r.get("error") else ""))

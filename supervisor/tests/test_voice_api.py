@@ -8,7 +8,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from unittest import mock
 
-from supervisor import api, judge, metrics, tom
+from supervisor import api, judge, metrics
 from supervisor.tests import test_api as base   # the module, not its classes: their tests must not run twice
 
 # A reply that narrates, checks the weather with a tool, and answers.
@@ -156,7 +156,6 @@ class VoiceApiTest(unittest.TestCase):
                  .read_text().splitlines()]
         self.assertEqual(lines, [{"text": "held, spoken", "voice": True}, {"text": "typed"},
                                  {"text": "and tomorrow", "voice": True}])
-        self.assertEqual([r.get("voice") for r in tom._rows("wisp", "-operator-said")], [True])
         api.Handler.live.end(entry)
 
 
@@ -177,18 +176,6 @@ class SpokenTurnJudgeTest(unittest.TestCase):
         self.assertIn(f"operator ({judge.SPOKEN}): fix the music", lines[0])
         self.assertIn("operator: typed", lines[1])
         self.assertIn("recognition errors", judge.SPOKEN)
-
-    def test_the_reply_prediction_judge_is_told_a_spoken_reply_is_transcribed(self):
-        asked = []
-        with mock.patch.object(judge, "ask", side_effect=lambda system, prompt, *a, **k: asked.append(prompt) or {}):
-            tom._grade("wisp", "yes, go", {"text": "yes go", "voice": True})
-            tom._grade("wisp", "yes, go", {"text": "yes go"})
-        self.assertEqual(json.loads(asked[0]).get("reply_is"), judge.SPOKEN)
-        self.assertNotIn("reply_is", json.loads(asked[1]))
-        row = {"at": "2026-11-09T12:00:00", "channel": "web", "text": "yes go", "voice": True}
-        reply = tom._reply_for("wisp", {"sent_at": "2026-11-09T11:00:00", "within_hours": 2, "to": "operator"}, [],
-                               [row])
-        self.assertIs(reply["voice"], True)
 
 
 if __name__ == "__main__":

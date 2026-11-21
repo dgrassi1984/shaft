@@ -291,7 +291,6 @@ shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]
 shaft attention [names]
 shaft commitments [names]
 shaft provenance [names]
-shaft tom [names] [--score] [--baselines]
 shaft experiment <cards|attention|commitments|forecast> <name> [--n N] [--model M] [--dry-run] [--report]
 shaft experiment workspace <name> [--n N] [--model M] [--dry-run] [--report]
 shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
@@ -334,8 +333,7 @@ stored judges. `surprise-report` reports P1-P5 and sleep dispositions.
 assay. `metacog` reports confidence AUROC, paired v3 results, claim matrices, and doubt/error alignment.
 `anchoring` pays to compare the same judge with the claim shown or withheld. `attention` compares intended and
 actual attention, including unreadable sources. `commitments` reports kept, broken, and overdue promises.
-`provenance` matches facts to tool results. `tom --score` grades expected replies against actual replies;
-`--baselines` also runs paid baselines.
+`provenance` matches facts to tool results.
 
 ### Battery
 

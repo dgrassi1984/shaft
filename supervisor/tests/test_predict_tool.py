@@ -2,7 +2,7 @@
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import claimlint, gauges, judge_probe, metrics, predictions, stats_head, tom, unrecorded
+from supervisor import claimlint, gauges, judge_probe, metrics, predictions, stats_head, unrecorded
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -68,7 +68,7 @@ class PredictToolTest(IsolatedCase):
         self.assertEqual(predictions.fold("ember"), {})
 
     def test_after_cycle_scores_and_scoring_failure_still_writes_stats(self):
-        for module, name in [(metrics, "judge_pending"), (judge_probe, "run"), (tom, "score"),
+        for module, name in [(metrics, "judge_pending"), (judge_probe, "run"),
                              (claimlint, "run"), (unrecorded, "run"), (metrics, "check_probation")]:
             self.enterContext(mock.patch.object(module, name, return_value=0))
         for error in (None, ValueError("broken prediction")):

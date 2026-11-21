@@ -287,11 +287,6 @@ SPECS = {
                           "for a digest during quiet hours or after the daily push budget (the result says when). "
                           "A message to the operator is checked against his standing orders (record_order).",
                           {"to": S, "text": S,
-                           "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
-                                            "timestamped by the supervisor and scored against the reply",
-                                            "properties": {"will_reply": {"type": "integer", "minimum": 0, "maximum": 100},
-                                                           "within_hours": {"type": "integer", "minimum": 1, "maximum": 168},
-                                                           "gist": S}, "required": ["will_reply", "within_hours", "gist"]},
                            "urgent": {"type": "boolean", "default": False,
                                       "description": "time-critical things only; bypasses quiet hours and push budget"},
                            "kind": {"type": "string", "enum": ["question", "note"],
@@ -439,8 +434,7 @@ SPECS = {
         "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer), 'gate' "
         "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
-        "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
-        "did they reply, did the gist match), 'commitment_source' (cycle: an operator message filename; "
+        "baseline was red), 'commitment_source' (cycle: an operator message filename; "
         "confirms it exists and was addressed by you to the operator), 'families' (your goals grouped into the "
         "chains the judge said resemble each other: cycles, value, deliveries, the last time something new came of "
         "each; work on your own capability is read by what survived probation instead), 'habits' (the same script or "
@@ -456,15 +450,15 @@ SPECS = {
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar", "gate", "expectations", "families", "habits",
+                                                    "consults", "calendar", "gate", "families", "habits",
                                                     "usage", "facts", "predictions", "unrecorded_orders"]},
          "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
          "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"},
-         "since": {"type": "string", "description": "judgments or expectations: verdicts judged or predictions scored after this time, e.g. the time "
-                   "of my last review; judgments oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
+         "since": {"type": "string", "description": "judgments only: verdicts judged after this time, e.g. the time "
+                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
          "format": {"type": "string", "enum": ["text", "json"], "description":
                     "judgments with since: text (default) or JSON with verdicts and next_since"}},
         ["kind"]),
@@ -1638,8 +1632,7 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
-                      expect_reply: dict | None = None, urgent: bool = False, conversation: str = "",
-                      choices: dict | None = None) -> str:
+                      urgent: bool = False, conversation: str = "", choices: dict | None = None) -> str:
         from . import messages
         if choices is not None:
             from .questions import validate_choices
@@ -1665,23 +1658,6 @@ class Broker:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         files = self._read_attachments(attachments)              # all checked before anything is delivered
         with_files = f" with {len(files)} attachment(s)" if files else ""
-        expectation = ""
-        valid = isinstance(expect_reply, dict) and all(
-            type(expect_reply.get(k)) is int and low <= expect_reply[k] <= high
-            for k, low, high in (("will_reply", 0, 100), ("within_hours", 1, 168))) and \
-            isinstance(expect_reply.get("gist"), str)
-        if expect_reply is not None and not valid:
-            expectation = "; expectation not recorded: need will_reply 0-100, within_hours 1-168 integers and gist text"
-        elif valid:
-            expectation = "; your expectation of the reply is recorded"
-
-        def record_expectation():
-            if valid and not isinstance(self, ReplayBroker):
-                from . import tom
-                tom.record(self.name, {"id": f"{stamp:%Y%m%d-%H%M%S-%f}-to-{to}",
-                                      "sent_at": stamp.isoformat(timespec="seconds"), "to": to,
-                                      "message": f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md", "text": text[:2000],
-                                      **{k: expect_reply[k] for k in ("will_reply", "within_hours", "gist")}})
         if to == "operator":
             sent = self._operator_sent_today(stamp)
             if OPERATOR_DAILY_LIMIT and sent >= OPERATOR_DAILY_LIMIT:
@@ -1704,12 +1680,11 @@ class Broker:
                     from . import core
                     with contextlib.suppress(Exception):
                         core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
-            record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
             waited = self._waited_share(self.as_of or stamp)
             return (f"delivered to the operator ({kind}){with_files}{where}; their reply, if any, will arrive in your "
-                    f"inbox; message_file {stem}.md" + expectation
+                    f"inbox; message_file {stem}.md"
                     + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}" if push else "")
                     + (f"; its notification is held for the operator's digest at {held[0][:16].replace('T', ' ')} "
                        f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
@@ -1721,7 +1696,6 @@ class Broker:
         body = text.strip() + messages.attachment_lines(atts)
         self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
-        record_expectation()
         if check:
             try:
                 self._log_check(check)
@@ -1729,7 +1703,7 @@ class Broker:
                 from . import core
                 with contextlib.suppress(Exception):
                     core.log(f"{self.name}: outward action succeeded but order check logging failed: {e}")
-        return f"delivered to {to}{with_files}{expectation}{checked}"
+        return f"delivered to {to}{with_files}{checked}"
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
@@ -2489,7 +2463,8 @@ class Broker:
         def jsonl(path: Path, field: str) -> list[dict]:
             rows = [json.loads(l) for l in _tail_lines(path, 100000)]
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
-        if kind in ("judgments", "expectations"):
+        if kind == "judgments":
+            from .metrics import judgments, unsampled_rows
             if since:
                 # A minute means its start: 10:00:30 is strictly after 10:00, not equal to it.
                 if not isinstance(since, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?", since):
@@ -2498,8 +2473,6 @@ class Broker:
                     since = datetime.fromisoformat(since).strftime("%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
-        if kind == "judgments":
-            from .metrics import judgments, unsampled_rows
             settled = cut or (datetime.now() - timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S")
             rows = [dict(r) for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
@@ -2532,25 +2505,6 @@ class Broker:
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
                     "left_out": sorted(left_out), "next_since": _reviewed_at(shown[-1]) if shown else None})
             return text
-        elif kind == "expectations":
-            from . import tom
-            rows = sorted((r for r in tom.scored(self.name)
-                           if known(r["scored_at"].replace("T", " "))
-                           and (not since or r["scored_at"].replace("T", " ") > since)),
-                          key=lambda r: r["scored_at"].replace("T", " "))[-limit:]
-            entries = []
-            for r in rows:
-                gist = " ".join(r["gist"].split())[:200]
-                reason = " ".join(r.get("reason", "").split())[:200]
-                reply = r.get("reply")
-                outcome = (f"replied {reply['at'].replace('T', ' ')[:16]}; "
-                           f"gist match: {r.get('match', '?')} — {reason}." if reply
-                           else "no reply in the window.")
-                if r.get("rescored"):
-                    outcome = "corrected (scored earlier as no reply; a chat reply was missed): " + outcome
-                entries.append(f"{r['sent_at'].replace('T', ' ')[:16]} to {r['to']} — said will_reply "
-                               f"{r['will_reply']}% within {r['within_hours']}h; gist: \"{gist}\". Outcome: {outcome}")
-            text = "\n".join(entries)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
@@ -2607,7 +2561,7 @@ class Broker:
                 more = {"extra": self._sim_predictions()}
             text = module.record_text(self.name, limit=limit, as_of=self.as_of, **more)
         else:
-            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
                              "gate, " + " or ".join([", ".join(list(LEDGER_KINDS)[:-1]), list(LEDGER_KINDS)[-1]]))
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]

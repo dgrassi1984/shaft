@@ -61,7 +61,7 @@ from datetime import datetime
 from urllib.parse import unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import core, tom
+from . import core
 from .core import (jsonl_lines, API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
                    paused, port, safe_write, secrets_env, set_secret_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, Warm, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
@@ -637,7 +637,6 @@ class Handler(BaseHTTPRequestHandler):
         if not ok:
             return self._error(409, f"{model} is not replying in this conversation now: send it as a new message",
                                "conflict")
-        tom.heard(model, text, channel, voice)
         log(f"api: a message for {model}'s running reply ({talk_id})")
         self._json(202, {"interjected": True, "talk_id": talk_id})
 
@@ -691,8 +690,6 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
                 self._response_talk = done.get("talk_id")
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
-        if text := _last_text(messages):
-            tom.heard(model, text, channel, voice)   # what the operator said, for scoring reply predictions (tom.py)
         try:
             talk_id = self.conversations.talk_id(model, messages, cid, channel)
         except core.Restarting as e:
