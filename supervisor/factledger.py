@@ -5,7 +5,7 @@ import json
 from collections import Counter, defaultdict
 from datetime import datetime
 
-from . import core, provenance
+from . import provenance
 
 MATCH_MIN_SHARE = 0.3  # One shared window can be chance; require a share of the fact's shingles.
 
@@ -43,8 +43,7 @@ def rows(name: str, as_of: datetime | None = None) -> list[dict]:
     """Current facts with source checks and distinct later live cycles that restated them."""
     facts = [fact for fact in provenance.facts(name) if fact["file"] == "memory/facts.md"]
     episodes = provenance._episodes(name)
-    journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
-    evidence = provenance._Evidence(episodes, journal)
+    evidence = provenance._evidence(name, episodes)
     pairs = [(fact, evidence.check(fact)) for fact in facts]
     sizes = {provenance._size(fact["text"]) for fact, _ in pairs} - set(range(provenance.MIN_WORDS))
     cutoff = provenance._date(as_of.isoformat()) if as_of is not None else None

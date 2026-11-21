@@ -557,11 +557,11 @@ no instruction, refusal or gate. See [stats head and gauges](architecture.md#sta
 
 `shaft delete` removes the instance folder, branch, mind store, supervisor records, and Telegram token. It
 also removes gauge choices, claim-lint findings and locks, probation history, saved head verdicts, idle exits,
-predictions, and unrecorded-order findings and locks (`supervisor/delete.py`, `own_files`). It
+predictions, unrecorded-order findings and locks, and its provenance index (`supervisor/delete.py`, `own_files`). It
 refuses active instances; kill first. It asks for the name unless `--yes` is set. By default it archives the
 mind store, branch bundle, supervisor records, purged shared-record rows, and instance folder in
 `.supervisor/deleted/<name>-<stamp>.tar.gz`, with `RESTORE.md`. The folder excludes `.git`, `.venv`, `.uv`,
-`.tmp`, and `__pycache__`. The Telegram bot token is excluded; instance-owned secrets in the folder are included. `--no-archive` skips this archive. The name can then be reused.
+`.tmp`, and `__pycache__`; the provenance index is removed but not archived (it is rebuilt from the episodes). The Telegram bot token is excluded; instance-owned secrets in the folder are included. `--no-archive` skips this archive. The name can then be reused.
 
 Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top`
 and the web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names
