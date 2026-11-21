@@ -2,7 +2,8 @@
 
 Refused while anything runs for it (`shaft kill <name>` first). Then, holding its run lock so no reply or wake can
 start: an archive in .supervisor/deleted/<name>-<stamp>.tar.gz (unless --no-archive) — its mind store, a git bundle of
-its branch, its folder without what can be rebuilt (.venv, .uv, .tmp), every file of its under .supervisor/ and every
+its branch, its folder without what can be rebuilt (.venv, .uv, .tmp), every file of its under .supervisor/ but its
+provenance index (provenance.py rebuilds it from the episodes, which the archive holds) and every
 row purged from the shared records — then the removal: the files named by it, its entries and rows in the shared
 files, its Telegram token, its worktree and branch, its mind store last. Each step can run again: a delete interrupted
 half-way is finished by running it again, and it also clears the leftovers of an instance whose folder is gone.
@@ -72,7 +73,8 @@ def own_files(name: str) -> list[Path]:
              s / "probation" / f"{name}.jsonl", s / "verdicts" / f"{name}.json", s / "idle_exits" / f"{name}.jsonl",
              s / "predictions" / f"{name}.jsonl", s / "unrecorded_orders" / f"{name}.jsonl",
              s / "unrecorded_orders" / f"{name}.lock", s / "wake_reasons" / f"{name}.json",
-             s / "wake_reasons" / f"{name}.tmp"]
+             s / "wake_reasons" / f"{name}.tmp",
+             *(s / "provenance" / f"{name}.sqlite{suffix}" for suffix in ("", "-journal", "-wal", "-shm"))]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")
     found += _matching(s / "gate-logs", rf"{n}-{ts}-\d+\.log")
@@ -359,6 +361,8 @@ def _write_archive(f: Found, stamp: str, part: Path) -> None:
         if f.folder:
             tar.add(f.folder, arcname="folder", filter=skip_folder)
         for p in f.files:
+            if p.is_relative_to(SUP_DIR / "provenance"):
+                continue   # removed, not archived: rebuilt from the archived episodes (100+ MB on a long record)
             arc = (f"supervisor/{p.relative_to(SUP_DIR)}" if p.is_relative_to(SUP_DIR)
                    else f"elsewhere/{p.name}" if not p.is_dir() else f"elsewhere/{p.parent.name}/{p.name}")
             tar.add(p, arcname=arc)

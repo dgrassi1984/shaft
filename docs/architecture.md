@@ -503,7 +503,10 @@ unpriced calls separately from their dollar totals.
 
 Stats rebuilds share parsed episode files, invalidated by file name, inode, nanosecond mtime and size;
 reads still refuse links. Provenance indexes citation times and URLs once per rebuild and shingles each
-needed result once per fact length. Confidence sections check their sample floors before bootstrapping;
+needed result once per fact length. The earliest time each word window was observed (tool results) or written
+(the instance's prose, journal included) is kept between rebuilds in `.supervisor/provenance/<name>.sqlite`: a
+rebuild reads only the bytes appended since the last one, and rebuilds it from scratch when a file it was built
+from shrank, vanished or changed before its consumed end (the checks' result is the same either way). Confidence sections check their sample floors before bootstrapping;
 deterministic intervals are cached by judgment content. Reply scoring skips final receipts before listing
 message folders, lists each folder once for pending receipts, and reads the chat ledger once if needed.
 See `supervisor/metrics.py`, `supervisor/provenance.py`, `supervisor/metacog.py`, and `supervisor/tom.py`.
