@@ -168,14 +168,6 @@ def run(cfg, state: State, client: Client) -> str:
                     f"more verdicts remain after {cursor}. Next sleep resumes there.")
             verdicts += "\n\n" + note
             print(note, file=sys.stderr)
-    expectations = "Reply predictions could not be read: no broker available."
-    if broker.available():
-        try:
-            last_sleep = _last_sleep(state)
-            after = {"since": datetime.fromisoformat(last_sleep).strftime("%Y-%m-%d %H:%M:%S")} if last_sleep else {}
-            expectations = broker.call("record", kind="expectations", limit=50, **after)
-        except (broker.BrokerError, ValueError, TypeError) as e:
-            expectations = f"Reply predictions could not be read: {' '.join(str(e).split())}"
     unwritten, turns = recovery.unwritten_transcripts(
         state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
     shingles = set().union(*(_shingles(text) for text in turns))
@@ -300,8 +292,6 @@ def run(cfg, state: State, client: Client) -> str:
              verdicts=fetched["verdicts"] if fetched else [])
          + "\n\n## Stale context review (step 10)\n\n" + stale
          + "\n\n## Possible fact conflicts (step 11; candidates, not proof)\n\n" + fact_candidates(state.root)
-         + "\n\n## What I expected others to answer, and what happened (step 2)\n\n"
-         + (expectations or "(none scored since my last sleep)")
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))

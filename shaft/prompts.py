@@ -350,9 +350,7 @@ read at a glance or repeat each other, rewrite_facts: merge duplicates or trivia
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
 (write the whole file; keep what is still true): also how they answer — what they ask back, how \
 soon, what they say no to — so the file predicts them, not only describes them.
-For each scored prediction below, compare it with the person's file: a reply you put under 50% that came, \
-a reply you put over 50% that did not come, or a gist judged partial or no is a miss; write into that person's \
-file what it got wrong and what predicts them better. Also keep memory/people/<instance name>.md for each \
+Also keep memory/people/<instance name>.md for each \
 other instance you exchanged messages with since your last sleep (their messages are in memory/messages/ \
 as *-from-<name>.md): what they work on, what they ask of you, how and how soon they answer; only peers, \
 not mail correspondents. Write the whole file; keep what is still true.
