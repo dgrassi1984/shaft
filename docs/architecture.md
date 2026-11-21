@@ -387,7 +387,9 @@ instance's suggestion, not an order: they are counted as `own_quotes` on the row
 Results stay in `SUP_DIR/unrecorded_orders/<name>.jsonl`, exposed by the gauge and `record(kind="unrecorded_orders")`.
 A row with an unrecorded order also reaches the instance at its next cycle: one inbox note per conversation,
 `inbox/<stamp>-from-supervisor-orders.md`, quoting the operator's words and naming the conversation, written before
-the row (`told` on the row says whether it was delivered; a row already in the ledger is never told again).
+the row (`told`). A note that could not be written leaves no row: the conversation stays pending and is told at a later
+run; a row already in the ledger is never told again. A turn the transcript cut splits loses its partial first line,
+so the rest of a cut `> ` line never reads as his own words; matching is case-insensitive, his own lines first.
 The check never creates a commitment or standing order itself: recording one is the instance's call.
 
 ### Goals, handoffs and judging

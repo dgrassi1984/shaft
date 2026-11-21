@@ -115,14 +115,63 @@ class UnrecordedOrdersReachInstanceTest(unittest.TestCase):
         self.assertNotIn("own_quotes", row)
         self.assertIs(row["told"], True)
 
-    def test_248_delivery_failure_is_logged_and_keeps_ledger_row_with_told_false(self):
+    def test_248_a_failed_note_leaves_the_conversation_pending_and_is_told_later(self):
+        """A row written with told false was never retried: a disk error lost the order for good (Grok review)."""
         self.fx.talk(tid="talk-fail")
         with mock.patch.object(core, "safe_write", side_effect=OSError("disk full")):
+            self.assertEqual(unrecorded.run("ember", NOW), 0)
+        self.assertEqual(unrecorded.rows("ember"), [])
+        self.assertTrue(any("talk-fail" in call.args[0] and "retried" in call.args[0]
+                            for call in self.fx.log.call_args_list))
+        self.assertEqual(unrecorded.run("ember", NOW + timedelta(minutes=5)), 1)
+        row, = unrecorded.rows("ember")
+        self.assertIs(row["told"], True)
+        self.assertEqual(len(list((self.fx.root / "inbox").glob("*-from-supervisor-orders.md"))), 1)
+
+    def test_248_a_note_written_but_not_logged_is_not_written_twice(self):
+        self.fx.talk(tid="talk-log")
+        with mock.patch("supervisor.messages.record", side_effect=OSError("log full")):
+            self.assertEqual(unrecorded.run("ember", NOW), 1)
+        self.assertIs(unrecorded.rows("ember")[0]["told"], True)
+        self.assertEqual(unrecorded.run("ember", NOW + timedelta(minutes=5)), 0)
+        self.assertEqual(len(list((self.fx.root / "inbox").glob("*-from-supervisor-orders.md"))), 1)
+
+    def test_248_own_line_differing_in_case_from_the_quote_is_still_his_order(self):
+        """Own lines were matched case-sensitively and quotes case-folded: his "send the report tomorrow" under
+        "> Send the report tomorrow", returned by the judge as in the quote, was dropped as a quote (Grok review)."""
+        at = NOW - timedelta(hours=1)
+        self.fx.episodes([
+            {"ts": (at - timedelta(minutes=2)).isoformat(), "kind": "talk", "talk_id": "talk-case",
+             "role": "user", "content": "> Send the report tomorrow?\n\nsend the report tomorrow"},
+            {"ts": at.isoformat(), "kind": "talk_recovered", "talk_id": "talk-case", "content": "Agreed."},
+        ])
+        self.fx.ask.return_value = {"orders": [{"words": "Send the report tomorrow", "recorded": False}]}
+        self.assertEqual(unrecorded.run("ember", NOW), 1)
+        row, = unrecorded.rows("ember")
+        self.assertEqual(row["orders"], [{"words": "Send the report tomorrow", "recorded": False}])
+        self.assertNotIn("own_quotes", row)
+
+    def test_248_a_quote_line_split_by_the_transcript_cut_is_not_his_words(self):
+        """The cut at TRANSCRIPT_CHARS can fall inside a "> " line: its rest lost the marker and read as the
+        operator's own words, so the instance's quoted suggestion was told as an order (Grok review)."""
+        at = NOW - timedelta(hours=1)
+        quote = "> senza attribuire le voci incerte e senza mandare la mail al cliente adesso"
+        content = quote + "\n\nok"
+        self.fx.episodes([
+            {"ts": (at - timedelta(minutes=2)).isoformat(), "kind": "talk", "talk_id": "talk-cut",
+             "role": "user", "content": content},
+            {"ts": at.isoformat(), "kind": "talk_recovered", "talk_id": "talk-cut", "content": "Recap."},
+        ])
+        rest = "e voci incerte e senza mandare la mail al cliente adesso"
+        # the transcript is "operator: " + content: keep exactly `rest` and what follows it
+        with mock.patch.object(unrecorded, "TRANSCRIPT_CHARS", len(content) - content.index(rest)):
+            text, turns, quoted = unrecorded._transcript("ember", "talk-cut", at.isoformat())
+            self.assertTrue(text.startswith(rest))
+            self.fx.ask.return_value = {"orders": [{"words": rest, "recorded": False}]}
             self.assertEqual(unrecorded.run("ember", NOW), 1)
         row, = unrecorded.rows("ember")
-        self.assertIs(row.get("told"), False)
-        self.assertTrue(any("talk-fail" in call.args[0] for call in self.fx.log.call_args_list))
-        self.assertEqual(unrecorded.run("ember", NOW + timedelta(minutes=5)), 0)
+        self.assertEqual(row["orders"], [])
+        self.assertEqual(list((self.fx.root / "inbox").glob("*-from-supervisor-orders.md")), [])
 
 
 class IdenticalJobMessagesDroppedTest(test_jobs.JobCase):

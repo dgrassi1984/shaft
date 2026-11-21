@@ -2535,7 +2535,8 @@ def after_cycle(name: str) -> None:
     for label, step in (("judge_pending", judge_pending), ("judge_catch", judge_probe.run),
                         ("claim_lint", claimlint.run), ("score_predictions", predictions.score),
                         # one judge call per conversation ended and written up since: what the operator ordered for
-                        # later against what was recorded (unrecorded.py); it only reports
+                        # later against what was recorded (unrecorded.py); an unrecorded one reaches the instance's
+                        # inbox as a note, never as a commitment or order
                         ("unrecorded_orders", unrecorded.run),
                         ("write_stats", write_stats), ("check_probation", check_probation)):
         try:

@@ -568,7 +568,7 @@ def _deliver_job(name: str, plugin: str, text: str, note: str, files) -> bool | 
         h.update(b"\0" + fname.encode("utf-8", errors="replace") + b"\0" + len(data).to_bytes(8, "big") + data)
     digest = h.hexdigest()
     before = entry(name, plugin)
-    if before.get("last_message") == digest:
+    if before.get("last_message") == digest:   # its hand-off stays: no new delivery, so still the only copy
         _update(name, plugin, duplicates=int(before.get("duplicates") or 0) + 1)
         return "duplicate"
     _prune_files(root, plugin)

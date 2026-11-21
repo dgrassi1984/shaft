@@ -91,7 +91,8 @@ def _quoted(content: str) -> str:
 
 def _transcript(name: str, tid: str, written_up: str) -> tuple[str, list[str], list[str]]:
     """Clip text and operator spans together so quote checks cannot accept words outside the judge's view. With each
-    operator span, its quote-reply lines: the instance's own message the operator quoted back (#248)."""
+    operator span, its quote-reply lines: the instance's own message the operator quoted back (#248). A turn the cut
+    splits loses its partial first line: cut inside a "> " line, the rest would read as his own words."""
     text, spans = "", []
     for ep in metrics._parsed_episodes(core.INSTANCES / name):
         if ep.get("kind") != "talk" or ep.get("talk_id") != tid:
@@ -106,10 +107,11 @@ def _transcript(name: str, tid: str, written_up: str) -> tuple[str, list[str], l
         start = len(text)
         text += ep["content"]
         if operator:
-            spans.append((start, len(text), _quoted(ep["content"])))
+            spans.append((start, len(text)))
     cut = max(0, len(text) - TRANSCRIPT_CHARS)
-    visible = [span for span in spans if span[1] > cut]
-    return text[cut:], [text[max(start, cut):end] for start, end, _ in visible], [q for _, _, q in visible]
+    turns = [text[start:end] if start >= cut else text[cut:end].partition("\n")[2]
+             for start, end in spans if end > cut]
+    return text[cut:], turns, [_quoted(turn) for turn in turns]
 
 
 def _validated(verdict: dict, operator_turns: list[str],
@@ -120,7 +122,7 @@ def _validated(verdict: dict, operator_turns: list[str],
         raise judge.JudgeError("unrecorded verdict needs an orders array")
     quoted = [*(quoted or []), *[""] * len(operator_turns)][:len(operator_turns)]
     # his own lines (the quote-reply lines out) and, apart, what he quoted
-    own = [" ".join("\n".join(line for line in turn.splitlines() if not line.lstrip().startswith(">")).split())
+    own = [" ".join("\n".join(line for line in turn.splitlines() if not line.lstrip().startswith(">")).split()).casefold()
            for turn in operator_turns]
     quotes = [" ".join(quote.split()).casefold() for quote in quoted]
     out, own_quotes = [], 0
@@ -132,16 +134,17 @@ def _validated(verdict: dict, operator_turns: list[str],
             continue
         if type(item.get("recorded")) is not bool:
             continue
-        collapsed = " ".join(words.split())
-        if any(collapsed in turn for turn in own):
+        collapsed = " ".join(words.split()).casefold()
+        if any(collapsed in turn for turn in own):       # his own lines first: what he says himself is his order
             out.append({"words": words, "recorded": item["recorded"]})
-        elif any(collapsed.casefold() in quote for quote in quotes):
+        elif any(collapsed in quote for quote in quotes):
             own_quotes += 1
     return out, own_quotes
 
 
 def _tell(name: str, tid: str, words: list[str]) -> bool:
-    """Deliver one inbox note naming the conversation and quoting its unrecorded orders."""
+    """Deliver one inbox note naming the conversation and quoting its unrecorded orders. False only when no note was
+    written (the conversation then stays pending and is told at a later run); a note written but not logged is told."""
     from . import messages
     stamp = datetime.now()
     quoted = "\n".join(f"- {json.dumps(w, ensure_ascii=False)}" for w in words)
@@ -152,11 +155,14 @@ def _tell(name: str, tid: str, words: list[str]) -> bool:
         path = core.safe_write(
             core.INSTANCES / name, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-orders.md",
             f"From: supervisor (unrecorded orders)\nTo: {name}\nKind: note\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n")
-        messages.record(core.SUP_DIR, path, "supervisor (unrecorded orders)", name, "note", stamp, body)
-        return True
     except Exception as e:
-        core.log(f"{name}: unrecorded orders note for {tid} failed: {type(e).__name__}: {e}")
+        core.log(f"{name}: unrecorded orders note for {tid} failed, retried at the next run: {type(e).__name__}: {e}")
         return False
+    try:
+        messages.record(core.SUP_DIR, path, "supervisor (unrecorded orders)", name, "note", stamp, body)
+    except Exception as e:
+        core.log(f"{name}: unrecorded orders note for {tid} delivered but not logged: {type(e).__name__}: {e}")
+    return True
 
 
 def run(name: str, now=None) -> int:
@@ -212,7 +218,9 @@ def run(name: str, now=None) -> int:
                         continue
             unrecorded_words = [item["words"] for item in row["orders"] if item.get("recorded") is False]
             if unrecorded_words:
-                row["told"] = _tell(name, tid, unrecorded_words)
+                if not _tell(name, tid, unrecorded_words):
+                    continue   # no row: still pending, told (and judged again) at a later run, never lost
+                row["told"] = True
             with target.open("a+b") as f:
                 # Separate a crashed writer's partial last line from this complete row.
                 if f.tell():
