@@ -1095,6 +1095,10 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             else _hold_on_code(name, root, before["code"], after, touched, test_log, regating)
         if ok:
             kept = files
+            # #243: changes held on the code that this gate's tree carried passed it too (shared part included):
+            # committed with it, never left out of a commit whose code may depend on them (Codex review).
+            riders = _riders(name, after, regating)
+            kept = sorted(set(kept) | {p for m in riders for p in m["files"]})
             log(f"{name}: code change passed tests: {touched} config: {configured}")
             from . import gate_held
             gate_held.log_run(name, "re-gated" if regating else "kept", files, result="kept" if regating else "")
@@ -1180,9 +1184,14 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     committed = commit_state(name, kind, kept, note=note, gated=after)
     _check_kept(name, root, after, kept)
     if approved is not None:
+        # #243: a change held on the code is never approved by a settle that did not gate and commit it (a run that
+        # changed nothing, or a failed commit): its files stay at their base in the record (Codex review).
+        approved = _without_held(name, approved, regating, committed and bool(kept))
         _record_approved(name, root, approved)
     if not committed:
         return False
+    if kept:
+        _retire_riders(name, root, after, regating)
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
     if kept:
         head = git_wt(root, "rev-parse", "HEAD").stdout.strip()
@@ -1254,6 +1263,43 @@ def _hold(name: str, root: Path, before: dict, after: dict, touched: list[str], 
         return "", "baseline-failed"
     log(f"{name}: code change held as {hid} until the gate's baseline is green: {touched}")
     return hid, "held"
+
+
+def _riders(name: str, code: dict | None, regating: dict | None) -> list[dict]:
+    """The instance's changes held on the code that `code` still carries, but the one being re-gated (#243)."""
+    from . import gate_held
+    if code is None:
+        return []
+    return [m for m in gate_held.pending(name)
+            if gate_held.on_code(m, code) and (regating is None or m["id"] != regating["id"])]
+
+
+def _without_held(name: str, approved: dict, regating: dict | None, committed: bool) -> dict:
+    """`approved` with each change held on the code that this settle did not commit back at its base (#243): one it
+    carried without gating it (nothing touched), or any when the commit failed. The re-gated change itself is approved
+    only when its own commit succeeded."""
+    from . import gate_held
+    if not committed:
+        held = [m for m in gate_held.pending(name) if gate_held.on_code(m, approved)]
+    else:
+        held = []   # committed: its riders and the re-gated change went in with it
+    for meta in held:
+        approved = gate_held.base_code(name, meta, approved)
+    return approved
+
+
+def _retire_riders(name: str, root: Path, after: dict, regating: dict | None) -> None:
+    """Changes held on the code that a passing, committed gate carried are kept: no longer held (#243)."""
+    from . import gate_held
+    for meta in _riders(name, after, regating):
+        files = sorted(meta["files"])
+        gate_held.drop(name, meta["id"])
+        gate_held.log_run(name, "re-gated", files, "kept with a later change that passed the gate",
+                          held=meta["id"], result="kept")
+        log(f"{name}: held code change {meta['id']} (on its code) kept and committed with a later change")
+        _tell(name, root, "held code change kept",
+              f"re-gated: kept — my change to {', '.join(files)}, held on my code, passed the gate with a later change "
+              "of mine and is committed.")
 
 
 def _hold_on_code(name: str, root: Path, before: dict, after: dict, touched: list[str], test_log,
@@ -1329,7 +1375,9 @@ def regate_held(name: str) -> None:
                     before = _snapshot(root, gate_held.base_code(name, meta, approved))
                     log(f"{name}: re-gating held code change {meta['id']} where it stands on its code: {files}")
                     out = {}
-                    _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out)
+                    if not _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out):
+                        _commit_failed_at_regate(name, root, meta, files)
+                        break
                     result, held_text = out.get("result", ""), _regate_text(meta, files, when, out)
                     if result in ("kept", "candidate-failed", "dropped") or not result:
                         gate_held.drop(name, meta["id"])
@@ -1353,7 +1401,9 @@ def regate_held(name: str) -> None:
                 gate_held.apply(name, root, meta)
                 log(f"{name}: re-gating held code change {meta['id']}: {files}")
                 out: dict = {}
-                _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out)
+                if not _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out):
+                    _commit_failed_at_regate(name, root, meta, files)
+                    break
                 result = out.get("result", "")
                 failing = "".join(f"\n- {n}" for n in out.get("failing") or [])
                 text = {
@@ -1388,6 +1438,15 @@ def regate_held(name: str) -> None:
             "green warm-up")
     except RunRefused as e:
         _refused(name, e)
+
+
+def _commit_failed_at_regate(name: str, root: Path, meta: dict, files: list[str]) -> None:
+    """A re-gate whose commit failed (core.commit_state logged git's error): the change stays held, never reported
+    kept, and is tried again after the next green warm-up (Codex review of #243)."""
+    log(f"{name}: held code change {meta['id']} re-gated but its commit FAILED: still held")
+    _tell(name, root, "held code change not committed",
+          f"re-gate: my change to {', '.join(files)} could not be committed (the supervisor log has git's error); "
+          "it stays held and is tried again after the next green warm-up.")
 
 
 def _regate_text(meta: dict, files: list[str], when: str, out: dict) -> str:

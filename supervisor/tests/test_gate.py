@@ -574,7 +574,10 @@ class StageTimeoutTest(FakeProjectCase):
         self.assertFalse(ok, out)
         self.assertIn("supervisor invariants (", out)
         self.assertIn("timed out after 3s, counted as failed", out)
-        self.assertNotIn("== instance tests ==", out)                   # the checks after it did not run
+        # #243 (operator, 2026-11-20): the shared part never reads the change, so its timeout no longer stops the checks
+        # that do; the gate still fails, and with only that timeout failing it holds the change on the code (waits).
+        self.assertIn("== instance tests ==", out)
+        self.assertTrue(out.waits, out)
         self.assertIn("supervisor invariants (", logged)
         self.assertIn("timed out after 3s", logged)
 

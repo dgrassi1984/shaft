@@ -365,7 +365,8 @@ read the change still run. When that timeout is the only failure, the change's c
 them (`runner._reconcile` does not gate them), and the re-gate gates them where they stand: kept and committed, put
 back to their base if a check of them fails, still held on the code if the clock runs out again, or taken off the code
 and held as below if the baseline is red. A held change whose files changed since is dropped as superseded: whatever the
-code holds is gated like any change. Config lines are never held on the code: a change that set any is reverted and
+code holds is gated like any change. A later run's passing gate, whose tree carries the held change, commits it with that run's
+change; a settle that did not gate and commit it never records it as approved. A re-gate whose commit fails keeps it held. Config lines are never held on the code: a change that set any is reverted and
 held as below. On any other baseline failure the change's code files are
 also **held** under `.supervisor/gate-held/<name>/<id>/` (the bytes it wrote, each file's base digest, the
 instance's commit, a patch to read; the instance cannot write there), and the instance is told in its inbox and
@@ -550,7 +551,7 @@ says when it last slept and what came of it, even after the entry scrolled out o
 
 The supported path for template fixes is `shaft update`, under its run lock
 and the test gate; never mid-run. A merge whose only failing check is the instance's own tests is kept when every one
-of those tests fails the same way on its code before the merge (a protected copy of it): such a test reads the
+of those tests fails the same way (the same exception and message) on its code before the merge (a protected copy of it): such a test reads the
 instance's live data, not the merged code. The instance is told in its journal. Any other failure rolls the merge back.
 
 ## Scope of these controls

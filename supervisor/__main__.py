@@ -24,7 +24,7 @@ import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
+from . import actions, autonomy, core, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import say as core_say
 from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
@@ -287,22 +287,27 @@ def _resolve_config_conflict(root) -> bool:
     return True
 
 
-def _fails_without_merge(name: str, root: Path, pre_merge: dict, test_log) -> list[str]:
+def _fails_without_merge(name: str, root: Path, pre_merge: dict | None, test_log) -> list[str]:
     """A template merge whose only failing check is the instance's own tests (gate.Output.own_only): its failing tests
-    when every one of them fails on its pre-merge code as well — a test of its live data (an undated row in a notes
-    file rolled back six merges in a week, #243), not of the merged code — else []."""
+    when each one fails the same way (gate.failure_signatures) on its code before the merge as on the merged code — a
+    test of its live data (an undated row in a notes file rolled back six merges in a week, #243), not of the merged
+    code — else []. Either run unreadable: [] (the gate's verdict stands)."""
     from . import protected
-    failing = list(getattr(test_log, "failing", ()))
-    if not getattr(test_log, "own_only", False) or not failing:
+    failing = set(getattr(test_log, "failing", ()))
+    if pre_merge is None or not getattr(test_log, "own_only", False) or not failing:
         return []
     try:
+        after = gate.own_tests_failures(root, HOME, env_root=root)
         with protected.copy(pre_merge, SUP_DIR / "protected" / name, name,
                             runner.safe_read_bytes(root, "config.env", b""), instance=root) as tree:
             before = gate.own_tests_failures(tree, HOME, env_root=root, data_root=root)
+            before = None if before is None else {k: v.replace(str(tree), str(root)) for k, v in before.items()}
     except Exception as e:   # no answer: the gate's verdict on the merge stands
-        log(f"{name}: its own tests could not be run on its pre-merge code: {type(e).__name__}: {e}")
+        log(f"{name}: its own tests could not be compared with its pre-merge code: {type(e).__name__}: {e}")
         return []
-    return failing if before is not None and set(failing) <= set(before) else []
+    if not after or not before or set(after) != failing:
+        return []
+    return sorted(failing) if all(before.get(n) == after[n] for n in failing) else []
 
 
 def _note_update(name: str, root, before: str) -> None:
@@ -348,7 +353,11 @@ def cmd_update(names: list[str]) -> int:
                     worst = max(worst, 1)
                     continue
                 before = git_wt(root, "rev-parse", "HEAD").stdout.strip()
-                pre_merge = gate.snapshot(root)   # its own tests run on it again if only they fail the merge (#243)
+                try:   # its own tests run on it again if only they fail the merge (#243)
+                    pre_merge = gate.snapshot(root)
+                except core.TreeTooBig as e:   # no comparison then: the gate's verdict on the merge stands alone
+                    log(f"{name}: no copy of its code before the merge ({e}): a failed gate rolls the merge back")
+                    pre_merge = None
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
                            check=False)

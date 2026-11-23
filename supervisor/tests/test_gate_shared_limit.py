@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 import unittest
 
-from supervisor import core, gate, gate_held
+from supervisor import broker as broker_mod, core, gate, gate_held, runner as runner_mod
 from supervisor import __main__ as cli
 from supervisor.tests import test_gate as tg
 from supervisor.tests import test_run_transaction as trx
@@ -70,6 +70,15 @@ class SharedLimitTest(unittest.TestCase):
         self.assertEqual(limit, 200)
         self.assertEqual({r["seconds"] for r in runs}, {100})
 
+    def test_a_run_begun_before_the_window_still_overlaps_one_inside_it(self):
+        """Codex review: a part that began before the 14-day cutoff was dropped before the overlap check."""
+        days = 60 * 24 * gate.LIMIT_DAYS
+        for i in range(5):
+            self.run_(60 * (i + 1), 100)
+        self.run_(days - 1, 600)                   # inside the window, by a minute
+        self.run_(days + 2, 600, part="instance")  # began before it, ran across that run
+        self.assertNotIn(600, {r["seconds"] for r in gate._alone_passes()})
+
     def test_never_under_the_stage_limit(self):
         for i in range(6):
             self.run_(60 * (i + 1), 20)
@@ -109,8 +118,9 @@ class WaitsTest(tg.SharedFixtureCase):
             self.assertIsNone(gate.own_tests_failures(self.inst, Path.home(), env_root=self.inst))   # no tests
             (self.inst / "tests").mkdir()
             (self.inst / "tests" / "test_own.py").write_text(OWN_TEST)
-            names = gate.own_tests_failures(self.inst, Path.home(), env_root=self.inst)
-        self.assertTrue(names and "test_own" in names[0], names)
+            got = gate.own_tests_failures(self.inst, Path.home(), env_root=self.inst)
+        self.assertTrue(got and "test_own" in next(iter(got)), got)
+        self.assertIn("AssertionError: mine", next(iter(got.values())))
 
 
 class HoldOnCodeCase(HeldCase):
@@ -193,6 +203,37 @@ class HoldOnCodeTest(HoldOnCodeCase):
         self.assertEqual(self.plugin(), NEW)
         self.assertEqual(self.held(), [])
 
+    def test_a_run_that_changes_nothing_never_approves_it(self):
+        """Codex review: a no-edit run recorded the held bytes as approved, so dropping the hold left them ungated."""
+        held = self.hold_on_code()
+        self.verdict = "pass"
+        self.assertEqual(self.cycle(), 0)                    # changes nothing: no gate
+        with mock.patch.object(core, "SUP_DIR", self.sup):
+            gate_held.drop("kiln", held["id"])               # as a withdrawal would
+        gated = len(self.gated)
+        self.assertEqual(self.cycle(), 0)
+        self.assertEqual(len(self.gated), gated + 1)         # the next run's reconcile gates it, never takes it as approved
+        self.assertEqual(self.gated[-1], NEW)
+
+    def test_a_later_passing_change_commits_it_with_it(self):
+        """Codex review: a later change that may depend on it was committed without it."""
+        self.hold_on_code()
+        self.verdict = "pass"
+        self.assertEqual(self.cycle("import pathlib\npathlib.Path('shaft/extra.py').write_text('X = 1\\n')\n"), 0)
+        self.assertEqual(self.plugin(), NEW)
+        self.assertEqual(self.code_status(), "", "the held file left out of the later commit")
+        self.assertEqual(self.held(), [])
+        self.assertIn("passed the gate with a later change", self.told()[-1])
+
+    def test_a_re_gate_whose_commit_fails_stays_held(self):
+        """Codex review: a failed commit was reported kept and the hold dropped."""
+        self.hold_on_code()
+        self.verdict = "pass"
+        with mock.patch.object(runner_mod, "commit_state", return_value=False):
+            self.regate()
+        self.assertEqual(len(self.held()), 1)
+        self.assertIn("could not be committed", self.told()[-1])
+
     def test_withdrawing_it_says_it_is_still_on_the_code(self):
         held = self.hold_on_code()
         with mock.patch.object(core, "SUP_DIR", self.sup):
@@ -212,33 +253,73 @@ class HoldOnCodeTest(HoldOnCodeCase):
 
 class TemplateMergeTest(unittest.TestCase):
     """shaft update: the instance's own tests failing the same way before the merge never roll it back."""
+    NAME = "FAIL: test_live_file_has_no_undated_row (t.T)"
 
-    def output(self, own_only=True, failing=("FAIL: test_live_file_has_no_undated_row (t.T)",)):
-        out = gate.Output("== instance tests ==\nFAIL", "candidate", "my own tests fail", list(failing))
+    def output(self, own_only=True):
+        out = gate.Output("== instance tests ==\nFAIL", "candidate", "my own tests fail", [self.NAME])
         out.own_only = own_only
         return out
 
-    def check(self, before, **kw):
+    def check(self, after, before, own_only=True, pre_merge=None):
         with mock.patch("supervisor.protected.copy") as copy, \
-                mock.patch.object(gate, "own_tests_failures", return_value=before) as own, \
+                mock.patch.object(gate, "own_tests_failures", side_effect=[after, before]) as own, \
                 mock.patch.object(cli, "log"):
             copy.return_value.__enter__.return_value = Path("/tmp/copy")
-            got = cli._fails_without_merge("kiln", Path("/tmp/kiln"), {}, self.output(**kw))
+            got = cli._fails_without_merge("kiln", Path("/tmp/kiln"), {} if pre_merge is None else pre_merge,
+                                           self.output(own_only))
         return got, own
 
-    def test_bug243_a_live_data_test_failing_before_the_merge_too_keeps_the_merge(self):
-        got, own = self.check(["FAIL: test_live_file_has_no_undated_row (t.T)"])
-        self.assertEqual(got, ["FAIL: test_live_file_has_no_undated_row (t.T)"])
-        own.assert_called_once()
+    def test_bug243_a_live_data_test_failing_the_same_way_before_the_merge_keeps_the_merge(self):
+        same = {self.NAME: "AssertionError: Lists differ: [] != ['- an undated row']"}
+        got, own = self.check(same, dict(same))
+        self.assertEqual(got, [self.NAME])
+        self.assertEqual(own.call_count, 2)
+
+    def test_the_same_test_failing_another_way_rolls_it_back(self):
+        """Codex review: the header alone is not the failure. FileNotFoundError before, AttributeError after."""
+        got, _ = self.check({self.NAME: "AttributeError: 'module' object has no attribute 'x'"},
+                            {self.NAME: "FileNotFoundError: notes/topics.md"})
+        self.assertEqual(got, [])
 
     def test_a_test_the_merge_broke_still_rolls_it_back(self):
-        self.assertEqual(self.check([])[0], [])
-        self.assertEqual(self.check(None)[0], [])            # could not tell: the gate's verdict stands
+        self.assertEqual(self.check({self.NAME: "AssertionError: x"}, {})[0], [])
+        self.assertEqual(self.check({self.NAME: "AssertionError: x"}, None)[0], [])   # could not tell
 
     def test_only_when_the_own_tests_are_the_only_failure(self):
-        got, own = self.check(["FAIL: test_live_file_has_no_undated_row (t.T)"], own_only=False)
+        got, own = self.check({}, {}, own_only=False)
         self.assertEqual(got, [])
         own.assert_not_called()
+
+    def test_signatures_read_the_exception_not_the_header(self):
+        report = ("======================================================================\n"
+                  "ERROR: test_a (t.T.test_a)\n"
+                  "----------------------------------------------------------------------\n"
+                  "Traceback (most recent call last):\n  File \"t.py\", line 3, in test_a\n    open('x')\n"
+                  "FileNotFoundError: [Errno 2] No such file: 'x' at 0x10abc\n\n"
+                  "======================================================================\n"
+                  "FAIL: test_b (t.T.test_b)\n"
+                  "----------------------------------------------------------------------\n"
+                  "Traceback (most recent call last):\n  File \"t.py\", line 6, in test_b\n    self.assertEqual(1, 2)\n"
+                  "AssertionError: 1 != 2\n\n"
+                  "----------------------------------------------------------------------\nRan 2 tests in 0.001s\n")
+        self.assertEqual(gate.failure_signatures(report), {
+            "ERROR: test_a (t.T.test_a)": "FileNotFoundError: [Errno 2] No such file: 'x' at 0x…",
+            "FAIL: test_b (t.T.test_b)": "AssertionError: 1 != 2"})
+
+
+class ChannelRetryTest(unittest.TestCase):
+    def test_a_retry_closes_only_the_session_that_failed(self):
+        """Codex review of #241: two requests timing out on one step; the second must not close the first's new one."""
+        import threading
+        b = broker_mod.Broker.__new__(broker_mod.Broker)
+        b.name, b._log, b._channel_lock = "kiln", mock.Mock(), threading.Lock()
+        failed, replacement = mock.Mock(), mock.Mock()
+        b.channel = replacement
+        with mock.patch("supervisor.core.log"):
+            b._channel_retry("codex/gpt-6-astra", failed)
+        self.assertIs(b.channel, replacement)
+        replacement.close.assert_not_called()
+        failed.close.assert_called_once()
 
 
 class BudgetReportTest(unittest.TestCase):

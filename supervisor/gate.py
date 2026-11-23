@@ -620,12 +620,12 @@ def _alone_passes(now: datetime | None = None) -> list[dict]:
             r["_start"], r["_end"] = datetime.fromisoformat(r["start"]), datetime.fromisoformat(r["end"])
         except (ValueError, TypeError, KeyError):
             continue
-        if isinstance(r, dict) and now - timedelta(days=LIMIT_DAYS) <= r["_start"] <= now:
-            runs.append(r)
+        if isinstance(r, dict) and r["_end"] >= now - timedelta(days=LIMIT_DAYS) and r["_start"] <= now:
+            runs.append(r)   # a run that began before the window still overlaps one inside it (Codex review)
     alone = []
     for r in runs:
         if r.get("part") != "shared" or r.get("ok") is not True or not isinstance(r.get("tests_run"), int) \
-                or r["tests_run"] <= 0:
+                or r["tests_run"] <= 0 or r["_start"] < now - timedelta(days=LIMIT_DAYS):
             continue
         if any(o is not r and o["_start"] < r["_end"] and r["_start"] < o["_end"] for o in runs):
             continue
@@ -892,10 +892,11 @@ def _test_profile(instance_root: Path, home: Path, env_root: Path, data_root: Pa
 
 
 def own_tests_failures(instance_root: Path, home: Path, env_root: Path, data_root: Path | None = None,
-                       timeout_s: int = GATE_TIMEOUT_S) -> list[str] | None:
-    """The instance's own tests alone, against `instance_root` (a template merge: its pre-merge code's protected copy,
-    to tell whether its tests that failed on the merge fail without it too, #243): the failing tests' names, [] when
-    they pass, None when it cannot tell (no tests, it did not run, timed out, or failed naming no test)."""
+                       timeout_s: int = GATE_TIMEOUT_S) -> dict[str, str] | None:
+    """The instance's own tests alone, against `instance_root` (a template merge: its code before and after the merge,
+    to tell whether its tests that failed on the merge fail the same way without it, #243): each failing test's header
+    and how it failed (failure_signatures), {} when they pass, None when it cannot tell (no tests, it did not run,
+    timed out, or a failure whose report could not be read)."""
     from . import pyenv
     from .core import safe_mkdir
     prof = None
@@ -914,8 +915,34 @@ def own_tests_failures(instance_root: Path, home: Path, env_root: Path, data_roo
     finally:
         if prof is not None:
             prof.unlink(missing_ok=True)
+    if passed:
+        return {}
+    signatures = failure_signatures(whole)
     names = failing_tests(whole)
-    return [] if passed else (names or None)
+    return signatures if names and set(names) == set(signatures) else None
+
+
+def failure_signatures(output: str) -> dict[str, str]:
+    """Each failed test of a unittest report, by its FAIL:/ERROR: header: the exception and message it ended with (the
+    lines after the traceback's last frame), addresses (0x…) blanked. Two runs whose test fails with the same signature
+    failed the same way; the same header alone does not say so (Codex review of #243)."""
+    out = {}
+    blocks = re.split(r"^={20,}\n", output, flags=re.M)
+    for block in blocks[1:]:
+        lines = block.split("\n")
+        head = lines[0].strip()
+        if not re.match(r"(FAIL|ERROR): ", head):
+            continue
+        body = block.split("\n" + "-" * 70, 2)
+        trace = body[1] if len(body) > 1 else ""
+        trace = re.split(r"^-{20,}\n|^Ran \d+ test", trace, maxsplit=1, flags=re.M)[0]
+        tlines = trace.strip("\n").split("\n")
+        last = max((i for i, l in enumerate(tlines) if l.startswith("  File ")), default=-1)
+        tail = [l for l in tlines[last + 1:] if not l.startswith("    ")]
+        sig = re.sub(r"0x[0-9a-fA-F]+", "0x…", "\n".join(tail).strip())
+        if sig:
+            out[head] = sig
+    return out
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,

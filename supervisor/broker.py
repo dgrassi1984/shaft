@@ -1117,18 +1117,20 @@ class Broker:
         # The panel runs in another process. Save the latest observed weekly window on change.
         self._channel_rate = planchannel.save_rate(self._channel_rate, provider)
 
-    def _channel_retry(self, model: str) -> None:
+    def _channel_retry(self, model: str, failed) -> None:
         """A model step outran its step limit: close that session, so the caller's one retry runs on a new one (#241).
-        No alert and no outage yet: a hang the retry answers is not an outage; a second failure is reported as usual."""
+        No alert and no outage yet: a hang the retry answers is not an outage; a second failure is reported as usual.
+        Only `failed` is closed: a concurrent request that timed out on the same session finds its replacement and
+        retries on it, never closing it (Codex review)."""
         from . import planchannel
         from .core import log
         line = f"{self.name}: {planchannel.label(model)} step timeout; asking that step once more on a new session"
         log(line)
         self._log(line)
         with self._channel_lock:
-            channel, self.channel = self.channel, None
-        if channel is not None:
-            channel.close()
+            if self.channel is failed:
+                self.channel = None
+        failed.close()
 
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> str:
@@ -1238,10 +1240,11 @@ class Broker:
                                 with broker._channel_lock:
                                     if broker.channel is None:
                                         broker.channel = planchannel.channel_for(original, broker.name, broker.usage_name, broker._log)
+                                    channel = broker.channel   # this request's, whatever a concurrent retry does
                                 if body.get("stream"):
-                                    def channel_lines():
+                                    def channel_lines(channel=channel):
                                         sent = False
-                                        with contextlib.closing(broker.channel.stream(body)) as lines:
+                                        with contextlib.closing(channel.stream(body)) as lines:
                                             try:
                                                 for line in lines:
                                                     sent = True
@@ -1266,13 +1269,13 @@ class Broker:
 
                                     with contextlib.closing(lines):
                                         return self._llm_stream(primed_lines(), original)
-                                reply = broker.channel.complete(body)
+                                reply = channel.complete(body)
                                 broker._channel_report(model=original)
                             except planchannel.ChannelClosed as e:
                                 return self._reply(503, {"error": {"message": e.reason}})
                             except planchannel.ChannelFailure as e:
                                 if attempt == 1 and e.step_timeout:   # a hung step is asked again on a new session
-                                    broker._channel_retry(original)
+                                    broker._channel_retry(original, channel)
                                     continue
                                 broker._channel_report(e, original)
                                 if not broker.local_fallback:
