@@ -57,8 +57,9 @@ WEEKLY_PCT, _ = knob("SHAFT_CLAUDE_WEEKLY_PCT", '85', _percent,
     'stop Claude plan calls at this percentage of the weekly allowance', group='Claude', services=('runs', 'api'))
 FALLBACK_MODEL, _ = knob("SHAFT_CLAUDE_FALLBACK_MODEL", 'openrouter/deepseek/deepseek-v4.1-flash', cloud_model,
     'cloud model used for the run after a Claude plan failure', group='Claude', services=('runs', 'api'))
-TIMEOUT_S, _ = knob("SHAFT_CLAUDE_TIMEOUT_S", '900', positive_int,
-    'seconds Claude Code may take per step; held calls are exempt', group='Claude', services=('runs', 'api'))
+TIMEOUT_S, _ = knob("SHAFT_CLAUDE_TIMEOUT_S", '300', positive_int,
+    'seconds Claude Code may take per step, then the step is asked once more on a new session; held calls are exempt',
+    group='Claude', services=('runs', 'api'))
 LABEL, VENDOR, SEES_IMAGES = 'Claude', 'anthropic', True
 STATE = planchannel.ProviderState('claudecode', LABEL)
 
@@ -676,7 +677,7 @@ class Channel(planchannel.Channel):
                         self._finish(step, 'tool_calls')
                     elif not step.turn_ended and now - step.started >= self.timeout_s and (
                             not step.calls or not (self._turn and self._turn['initialized'])):
-                        self._fail(self.failure('Claude step timeout'))
+                        self._fail(self._step_timeout())
                 self._cv.wait(.025)
 
     def close(self):

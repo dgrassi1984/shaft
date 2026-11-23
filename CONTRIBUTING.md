@@ -40,7 +40,7 @@ Before proposing a merge, commit your change and run:
 bin/shaft gate budget
 ```
 
-This check uses committed supervisor and template code, so it does not test uncommitted edits. It runs both test parts as the instance gate does. It fails if a part fails, exceeds half the gate timeout, contains a test over 10 seconds, or runs a test twice. The default gate timeout is 300 seconds. Tests that wait must wait for an event rather than a fixed sleep. See the gate budget plan.
+This check uses committed supervisor and template code, so it does not test uncommitted edits. It runs both test parts as the instance gate does. It fails if a part fails, if the instance part exceeds half the gate timeout, if the shared part exceeds its limit (derived from its recent passing runs, printed by the check), if a part contains a test over 10 seconds, or if it runs a test twice. The default gate timeout is 300 seconds. Tests that wait must wait for an event rather than a fixed sleep. See the gate budget plan.
 
 ## Architectural invariants
 

@@ -351,8 +351,9 @@ class ChannelTest(unittest.TestCase):
     def test_step_timeout(self):
         self.scenario(mode='hang')
         with mock.patch.object(claude, 'TIMEOUT_S', .2):
-            with self.assertRaisesRegex(planchannel.ChannelFailure, 'step timeout'):
+            with self.assertRaisesRegex(planchannel.ChannelFailure, 'Claude step timeout') as caught:
                 self.channel.complete(body())
+        self.assertIs(caught.exception.step_timeout, True)   # #241: the broker retries only a step marked so
 
     def test_images_and_malformed_image_refusal(self):
         url = png_image((8, 8))

@@ -333,7 +333,10 @@ while a pass is fresh. A module the scan cannot parse also runs at every gate. T
 the tree under `.supervisor/gate-tests/<commits>/`, one file per key (commits, interpreter on disk, `SHAFT_*` settings
 except `SHAFT_UNDER_TEST`), reused for up to a day. Only passes with tests run are recorded, never failures; a shared
 run that fails or times out deletes that key's record. A lock allows one shared run per commit pair at a time; its wait
-is bounded by the stage timeout and fails closed. Each part passes only with exit 0 and its runner's successful
+is bounded by the shared part's limit and fails closed. That limit is derived (`gate.shared_limit`): twice the 95th
+percentile of the shared part's passing runs of the last 14 days that no other run of a part overlapped (the newest
+20), never under `SHAFT_GATE_TIMEOUT_S`; with fewer than five such runs it is `SHAFT_GATE_TIMEOUT_S`, and the gate's
+output says which. Every run of a part, timed out ones included, is a row of `.supervisor/gate-parts.jsonl`. Each part passes only with exit 0 and its runner's successful
 report carrying the token given on stdin. The shared part sets `SHAFT_UNDER_TEST` to an unreadable folder and blocks
 instance-part modules from import, so reaching the instance through a route the split missed fails it. `load_tests`
 hooks fail their part. A test that hides the variable's name AND skips when the folder is unreadable can escape this;
@@ -348,15 +351,23 @@ If sandbox infrastructure is unavailable, `gate.Output.refused` causes `runner._
 Code and config changes remain unsettled, without revert, holding, or probation, and must be checked before
 a later launch. This is distinct from a failed check.
 
-A failed gate is classified (`gate.Output`), and either way the change is
-reverted: the classification never lets a change through.
+A failed gate is classified (`gate.Output`). The classification never lets a change through: it is reverted, or held
+on the code unapproved (below).
 
 | Failure class | Conditions |
 |---|---|
 | Baseline | Shared tests fail or time out; the gate itself errors; a protected copy fails for a reason other than size or invalid entries; or the supervisor's instance-part tests are the only failing check and fail again against approved code. |
 | Candidate | Other failures, including instance-part tests that fail only with the change, plugin checks, instance tests, their timeouts, or a link in place of `.tmp`. |
 
-A candidate failure wins over a baseline one. On a baseline failure the change's code files are
+A candidate failure wins over a baseline one. A shared part out of its limit does not stop the gate: the checks that
+read the change still run. When that timeout is the only failure, the change's code files are **held on the code**
+(`on_code`): not reverted, not approved, not committed; the held record keeps their base bytes too. A run starts from
+them (`runner._reconcile` does not gate them), and the re-gate gates them where they stand: kept and committed, put
+back to their base if a check of them fails, still held on the code if the clock runs out again, or taken off the code
+and held as below if the baseline is red. A held change whose files changed since is dropped as superseded: whatever the
+code holds is gated like any change. A later run's passing gate, whose tree carries the held change, commits it with that run's
+change; a settle that did not gate and commit it never records it as approved. A re-gate whose commit fails keeps it held. Config lines are never held on the code: a change that set any is reverted and
+held as below. On any other baseline failure the change's code files are
 also **held** under `.supervisor/gate-held/<name>/<id>/` (the bytes it wrote, each file's base digest, the
 instance's commit, a patch to read; the instance cannot write there), and the instance is told in its inbox and
 journal; config lines it set are undone and not held. After a green warm-up the scheduler starts `shaft gate regate`:
@@ -539,7 +550,9 @@ says when it last slept and what came of it, even after the entry scrolled out o
 ## Updates
 
 The supported path for template fixes is `shaft update`, under its run lock
-and the test gate; never mid-run.
+and the test gate; never mid-run. A merge whose only failing check is the instance's own tests is kept when every one
+of those tests fails the same way (the same exception and message) on its code before the merge (a protected copy of it): such a test reads the
+instance's live data, not the merged code. The instance is told in its journal. Any other failure rolls the merge back.
 
 ## Scope of these controls
 

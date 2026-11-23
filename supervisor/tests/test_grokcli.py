@@ -166,6 +166,14 @@ class ChannelTest(unittest.TestCase):
         p = self.fake.with_suffix('.jsonl')
         return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
 
+    def test_step_timeout_is_marked_for_one_retry_241(self):
+        self.scenario(mode='hang')
+        with mock.patch.object(grok, 'TIMEOUT_S', .3):
+            with self.assertRaisesRegex(planchannel.ChannelFailure, 'Grok step timeout') as caught:
+                self.channel.complete(body())
+        self.assertIs(caught.exception.step_timeout, True)
+        self.assertFalse(planchannel.ChannelFailure('offline').step_timeout)   # other failures are not retried
+
     def test_text_repeat_extend_rebuild_restart_and_explicit_environment(self):
         first = self.channel.complete(body())
         self.assertEqual(assistant(first)['content'], 'hello')

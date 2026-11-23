@@ -27,6 +27,9 @@ from .core import SUP_DIR
 
 
 class ChannelFailure(Exception):
+    # Set on a step that outran the channel's step limit: the broker retries that step once on a new session (#241).
+    step_timeout = False
+
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
@@ -300,6 +303,12 @@ class Channel:
         tail = self._stderr.decode(errors="replace")[-2000:].strip()
         return (cls or self.failure)(reason + (f"; stderr: {tail}" if tail else ""))
 
+    def _step_timeout(self) -> ChannelFailure:
+        """The failure for a model step that outran timeout_s, marked so the broker retries it once (#241)."""
+        exc = self._failure(f"{self.label} step timeout")
+        exc.step_timeout = True
+        return exc
+
     def _fail(self, exc: ChannelFailure):
         with self._cv:
             if self._closed:
@@ -412,7 +421,7 @@ class Channel:
                     if self._calls_ready(step, now):
                         self._finish(step, "tool_calls")
                     elif not step.calls and now - step.started >= self.timeout_s:
-                        self._fail(self._failure(f"{self.label} step timeout"))
+                        self._fail(self._step_timeout())
                         self._kill()
                 self._cv.wait(0.025)
 

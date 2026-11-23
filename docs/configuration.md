@@ -74,7 +74,8 @@ class demotion and restoration are read from supervisor-owned state on each disp
 Calendar proposals retain `SHAFT_CALENDAR_WRITES_PER_DAY` and `SHAFT_CALENDAR_PROPOSAL_HOURS`.
 
 `SHAFT_GATE_TIMEOUT_S` defaults to 300 seconds. The supervisor's tests run in `SHAFT_GATE_WORKERS` processes, and
-`shaft gate budget` keeps each part within half of that limit.
+`shaft gate budget` keeps the instance part within half of that limit. The shared part's limit is derived from its
+recent passing runs and is never under it (see the gate in [safety](safety.md)).
 
 This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
 Defaults below are source defaults, not values read from this checkout's private state.
@@ -111,25 +112,25 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CODEX_MODELS` | empty | Only these of the models Codex lists, comma separated; empty: every model Codex lists | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [codexcli.py](../supervisor/codexcli.py) |
-| `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_TIMEOUT_S` | `300` | seconds allowed for a Codex model step, then the step is asked once more on a new session; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_LOG_HOURS` | `24` | positive integer hours of Codex's own SQLite logs to keep; read by runs and api | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_MODELS` | empty | Only these of the models Grok lists, comma separated; empty: every model Grok lists | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [grokcli.py](../supervisor/grokcli.py) |
-| `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
+| `SHAFT_GROK_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain | [grokcli.py](../supervisor/grokcli.py) |
 | `SHAFT_CLAUDE_HOME` | `.supervisor/claude-home` | Private Claude Code configuration directory, mode 700 | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_CLAUDE_BIN` | `~/.local/bin/claude` | Claude Code CLI executable | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_CLAUDE_MODELS` | `claudecode/claude-opus-5-5,claudecode/claude-sonnet-5-5` | Offered instance models, comma separated | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_CLAUDE_WEEKLY_PCT` | `85` | Stop calls at this percentage of the weekly allowance | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_CLAUDE_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [claudecli.py](../supervisor/claudecli.py) |
-| `SHAFT_CLAUDE_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [claudecli.py](../supervisor/claudecli.py) |
+| `SHAFT_CLAUDE_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt | [claudecli.py](../supervisor/claudecli.py) |
 | `SHAFT_ANTIGRAVITY_HOME` | `.supervisor/agy-home` | Private Antigravity home, mode 700 | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_MODELS` | empty | Only these of the models Antigravity lists, comma separated; empty: every model Antigravity lists | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run | [agycli.py](../supervisor/agycli.py) |
-| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt | [agycli.py](../supervisor/agycli.py) |
+| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt | [agycli.py](../supervisor/agycli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -160,7 +161,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
-| `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out; positive integer | [gate.py](../supervisor/gate.py) |
+| `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out, and the floor of the shared part's derived limit; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_IDLE_WAKE_MINUTES` | `30` | minutes an instance may go without a cycle before a timed wake starts one with nothing new for it (no unread message, commitment coming due or job result) | [autonomy.py](../supervisor/autonomy.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
@@ -521,7 +522,12 @@ shows whether login is present, the last observed weekly usage, offered models a
 The allowance is shared with other Codex use. Calls use no API dollars; after a failure,
 the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
 `codex/x (fallback y)`; with `SHAFT_CODEX_FALLBACK_MODEL=none` the failure is the run's error instead.
-Trial replays and bake-offs fail instead of falling back. Judges, image descriptions, recaps,
+Trial replays and bake-offs fail instead of falling back.
+A model step that outruns `SHAFT_CODEX_TIMEOUT_S` (and the same setting of the other plan channels) closes its session
+and is asked once more on a new one; only a second failure counts as an outage, with one alert and the fallback.
+Two step limits and the fallback call must fit inside the instance's `LLM_TIMEOUT_S`, or the fallback answer reaches a
+request the instance has already given up on. A live cycle whose model call still fails writes its record of the
+work done (`ended_by` `llm_error`), leaves its inbox unread and exits with an error. Judges, image descriptions, recaps,
 consults (codex/ names in `SHAFT_CONSULT_MODELS`) and coder hand-offs (`SHAFT_CODER_MODEL`) can run
 on the plan too, each through a Codex app-server of the supervisor's own.
 Source: [broker.py](../supervisor/broker.py).
@@ -553,7 +559,7 @@ receive an explicit environment, with imported skills, rules, hooks and MCPs dis
 | `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable |
 | `SHAFT_GROK_MODELS` | empty | Only these of the models Grok lists, comma separated; empty: every model Grok lists |
 | `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run, or `none` |
-| `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+| `SHAFT_GROK_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt |
 | `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain |
 
 Retention runs at channel start, at most once every ten minutes across processes.
@@ -578,7 +584,7 @@ supervisor cloud jobs such as judging, image descriptions, consults or recaps.
 | `SHAFT_CLAUDE_MODELS` | `claudecode/claude-opus-5-5,claudecode/claude-sonnet-5-5` | Offered instance models, comma separated |
 | `SHAFT_CLAUDE_WEEKLY_PCT` | `85` | Stop calls at this percentage of the weekly allowance |
 | `SHAFT_CLAUDE_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
-| `SHAFT_CLAUDE_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+| `SHAFT_CLAUDE_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt |
 
 The allowance is shared with other Claude use. The broker saves observed weekly
 usage in `.supervisor/claudecode_rate.json`. At the ceiling, or after a channel
@@ -600,7 +606,7 @@ subscription. Run `shaft antigravity login` first and use `LLM_BASE_URL="broker"
 | `SHAFT_ANTIGRAVITY_BIN` | `~/.local/bin/agy` | Antigravity CLI executable |
 | `SHAFT_ANTIGRAVITY_MODELS` | empty | Only these of the models Antigravity lists, comma separated; empty: every model Antigravity lists |
 | `SHAFT_ANTIGRAVITY_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
-| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+| `SHAFT_ANTIGRAVITY_TIMEOUT_S` | `300` | Model step timeout, then one retry on a new session; held calls are exempt |
 
 SHAFT launches the unmodified CLI with a private home and never reads the token.
 ACP exposes no allowance percentage, so there is no weekly cap setting or rate file.

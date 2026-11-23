@@ -49,8 +49,9 @@ WEEKLY_PCT, _ = knob("SHAFT_CODEX_WEEKLY_PCT", "85", _percent,
 FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", channel_fallback,
     "cloud model used for the run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or none: the "
     "failure ends the run", group="Codex", services=("runs", "api"))
-TIMEOUT_S, _ = knob("SHAFT_CODEX_TIMEOUT_S", "900", positive_int,
-    "seconds Codex may take for one model step; held tool calls are exempt", group="Codex", services=("runs", "api"))
+TIMEOUT_S, _ = knob("SHAFT_CODEX_TIMEOUT_S", "300", positive_int,
+    "seconds Codex may take for one model step, then the step is asked once more on a new session; held tool calls "
+    "are exempt. Two steps and the fallback must fit in the instance's LLM_TIMEOUT_S", group="Codex", services=("runs", "api"))
 LOG_HOURS, _ = knob("SHAFT_CODEX_LOG_HOURS", "24", positive_int,
     "hours of Codex's own logs to keep", group="Codex", services=("runs", "api"))
 FEATURES = ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "view_image",
