@@ -635,9 +635,11 @@ A second later, only the streamed answer moved (`?since=41d07be2c95a8f13&live=c0
 Returns the From feed from `web_chat.from_feed`, serialized as the full feed in §4.2: From's messages and the turns of
 the From conversation, its running `reply`, `queued` and `can_stop` as a thread's. `chat` is null until the first
 message written in From, then the From conversation (`title` "From <n>"); `can_end` and `can_clear` are always false.
-Times and attachment URLs use the same serializer as thread feeds. This route returns a full snapshot;
-it does not long-poll. `watch=0` and `at` have the same meaning as for a thread feed, scoped to `cid: "from"`;
-`all=1` returns every item (its last 80 otherwise, `earlier` counting the rest).
+Times and attachment URLs use the same serializer as thread feeds. This route long-polls exactly as §4 does:
+`since`, `live`, `wait` (and `all=1`) are parsed and validated the same, and the request is held — 304 after `wait`
+with nothing new, 200 with the whole feed when `version` changes, 200 partial when only `live` changes. `watch=0` and
+`at` have the same meaning as for a thread feed, scoped to `cid: "from"`; `all=1` returns every item (its last 80
+otherwise, `earlier` counting the rest).
 Unknown instances return `404 not_found`.
 Write in From through `/app/v1/chat/<n>/send` with `cid: "from"` and any mode (§6): `now` and `queue` are answered in
 From now, `background` leaves a note for the next cycle that names the From conversation. Its answer `chat` is
