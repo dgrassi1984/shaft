@@ -193,6 +193,12 @@ class HoldOnCodeTest(HoldOnCodeCase):
         self.assertEqual(self.plugin(), NEW)
         self.assertEqual(self.held(), [])
 
+    def test_withdrawing_it_says_it_is_still_on_the_code(self):
+        held = self.hold_on_code()
+        with mock.patch.object(core, "SUP_DIR", self.sup):
+            answer = gate_held.withdrawal("kiln", held["id"], "not needed", gate_held.pending("kiln"))[1]
+        self.assertIn("still on my code", answer)
+
     def test_superseded_by_a_later_kept_change_it_is_dropped(self):
         self.hold_on_code()
         self.verdict = "pass"

@@ -201,7 +201,9 @@ def withdrawal(name: str, hid: str, reason: str, held: list[dict]) -> tuple[dict
     meta = next((m for m in held if m["id"] == hid), None)
     if meta is None:
         raise ValueError(f"no held change {hid!r}; your held ids: " + (", ".join(m["id"] for m in held) or "none"))
-    return meta, f"withdrawn held change {hid}: {', '.join(sorted(meta['files']))}; {reason.strip()}"
+    return meta, (f"withdrawn held change {hid}: {', '.join(sorted(meta['files']))}; {reason.strip()}"
+                  + ("; it is still on my code, unapproved: my next run's gate checks it with its own changes"
+                     if meta.get("on_code") else ""))
 
 
 def withdraw(name: str, hid: str, reason: str) -> str:
