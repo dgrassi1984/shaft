@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import broker, cards, images, loopguard, pausing, surprises
-from .llm import Client, Reply
+from .llm import Client, LLMError, Reply, Truncated
 from .tools import Toolbox, coerce_args, for_log
 
 
@@ -27,7 +27,7 @@ class Control:
 @dataclass
 class Outcome:
     reply: Reply | None
-    ended_by: str                # "answer" | "control" | "steps"
+    ended_by: str                # "answer" | "control" | "steps" | "llm_error" (on LLMError.outcome only)
     steps: int
     transcript: list = field(default_factory=list)
     wrapped_up: str = ""
@@ -321,6 +321,12 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
             continue
+        except Truncated:   # a cut-off answer: nothing of it is kept (llm.py)
+            raise
+        except LLMError as e:   # the model failed for good: the error carries what this run did, for a caller that
+            del messages[mark:]   # keeps it (a live cycle writes its record, #241); the run still ends as a failure
+            e.outcome = ended("llm_error")
+            raise
         turn_step = step
         same_turn = reply.same_turn and bool(reply.tool_calls) and uncounted < SAME_TURN_LIMIT
         if same_turn:

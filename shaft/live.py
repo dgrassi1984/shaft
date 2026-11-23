@@ -26,7 +26,7 @@ import shutil
 from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, projects,
                prompts, recovery, slate, surprises, workspace, x_probes)
 from .agent import Control
-from .llm import Client
+from .llm import Client, LLMError
 from .state import State
 from .tools import MAX_RESULT_CHARS, Toolbox, _spec, completed, for_log
 
@@ -566,12 +566,21 @@ def run(cfg, state: State, client: Client) -> str:
         unlimited = cfg.MAX_STEPS_LIVE <= 0
         return cfg.MAX_STEPS_LIVE + (1 if record["confirm"] and not unlimited else 0)
 
-    outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
-                        max_steps=max_steps, controls=controls,
-                        expected=lambda: record["intent"]["predictions"] if record["intent"] else None,
-                        focus=ws.broadcast if ws.mode != "off" else None, keep_turns=cfg.RESULTS_KEEP_TURNS,
-                        wrap_up="Stop working now and call finish_cycle with an honest report "
-                                "(criterion_met: partial or no if you did not get there).")
+    failure = None
+    try:
+        outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
+                            max_steps=max_steps, controls=controls,
+                            expected=lambda: record["intent"]["predictions"] if record["intent"] else None,
+                            focus=ws.broadcast if ws.mode != "off" else None, keep_turns=cfg.RESULTS_KEEP_TURNS,
+                            wrap_up="Stop working now and call finish_cycle with an honest report "
+                                    "(criterion_met: partial or no if you did not get there).")
+    except LLMError as e:
+        # The model failed for good after its retries (#241: a hung call lost 34 tool calls of work on 11-16): this
+        # cycle still writes its record of what it did, so my next cycle's hand-off has it, then ends as a failure.
+        # Its inbox stays unread: a message it may not have answered is not archived.
+        if getattr(e, "outcome", None) is None:
+            raise
+        failure, outcome = e, e.outcome
 
     intent, fin = record["intent"], record["finish"]
     actions = [e["tool"] for e in toolbox.log if e["tool"] not in controls]
@@ -599,13 +608,17 @@ def run(cfg, state: State, client: Client) -> str:
         last = (outcome.reply.content.strip() if outcome.reply else "")[:1500]
         lines.append(f"**Ended without finish_cycle** ({outcome.ended_by} after {outcome.steps} turns)."
                      + (f" My last words:\n\n{last}" if last else ""))
+    if failure:
+        lines.append(f"**My model call failed:** {str(failure)[:300]}")
     ended = clock.now()
     episode = {"ts": ended.isoformat(timespec="seconds"), "kind": "live", "intent": intent, "finish": fin,
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
                "completed": completed(toolbox.log, toolbox.plugins),
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    if failure:
+        episode["llm_error"] = str(failure)[:300]
     whole = set(read_whole(state, toolbox.log))
-    handled = [n for n, _ in inbox if n in listed or n in whole]
+    handled = [] if failure else [n for n, _ in inbox if n in listed or n in whole]
     deferred = [n for n, _ in inbox if n not in handled]
     if deferred:   # found at the start ("inbox", what a replay restores), but neither listed nor read: still pending
         episode["inbox_deferred"] = deferred
@@ -635,9 +648,12 @@ def run(cfg, state: State, client: Client) -> str:
     if handled:
         lines.append(f"**Messages read:** {', '.join(handled)}")
     if deferred:
-        lines.append(f"**Left in my inbox** (past its budget, not read): {', '.join(deferred)}")
+        lines.append(f"**Left in my inbox** ({'the cycle failed' if failure else 'past its budget, not read'}): "
+                     f"{', '.join(deferred)}")
     body = "\n\n".join(lines)
     state.append_journal(title, body, when=ended)
     state.append_episode(episode)
     archive_inbox(state, handled)
+    if failure:
+        raise failure
     return f"## {title}\n\n{body}"
