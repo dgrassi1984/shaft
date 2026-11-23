@@ -816,6 +816,11 @@ class LongPollTest(AppTest):
         r = self.api(f"/app/v1/chat/wisp/{CID}?" + urllib.parse.urlencode(q))
         return r.status, (json.loads(r.body) if r.body else None), time.monotonic() - start
 
+    def from_poll(self, **q) -> tuple[int, dict | None, float]:
+        start = time.monotonic()
+        r = self.api(f"/app/v1/from/wisp?" + urllib.parse.urlencode(q))
+        return r.status, (json.loads(r.body) if r.body else None), time.monotonic() - start
+
     def test_nothing_new_answers_304_after_wait(self):
         self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
         first = self.get(f"/app/v1/chat/wisp/{CID}")
@@ -876,6 +881,35 @@ class LongPollTest(AppTest):
         self.assertNotIn(self.device, web_chat.watchers("wisp", cid=CID))
         self.get(f"/app/v1/chat/wisp/{CID}?at=2500")                  # sent before it went away: not watching again
         self.assertNotIn(self.device, web_chat.watchers("wisp", cid=CID))
+
+    def test_from_long_polls_nothing_new_answers_304_after_wait(self):
+        """Bug 2026-11-23: /from ignored since/live/wait, so the apps' FeedPoll refetched Main in a tight loop."""
+        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wisp.md", "Unread", read=True, talk=None)
+        first = self.get("/app/v1/from/wisp")
+        status, body, took = self.from_poll(since=first["version"], live=first["live"], wait=1)
+        self.assertEqual((status, body), (304, None))
+        self.assertGreaterEqual(took, 0.9)
+        self.assertLess(took, 3)
+
+    def test_a_new_from_message_answers_at_once_with_the_whole_feed(self):
+        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wisp.md", "Unread", read=True, talk=None)
+        first = self.get("/app/v1/from/wisp")
+
+        def later():
+            time.sleep(0.3)
+            self.message("2026-11-03T14:05:00", "20261103-140500-1-from-wisp.md", "hello", read=True, talk=None)
+        threading.Thread(target=later, daemon=True).start()
+        status, body, took = self.from_poll(since=first["version"], live=first["live"], wait=10)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["partial"])
+        self.assertNotEqual(body["version"], first["version"])
+        self.assertEqual(body["items"][-1]["text"], "hello")    # a cycle's message saves no chat: the 0.5 s look finds it
+        self.assertLess(took, 3)
+
+    def test_from_since_without_live_and_a_wait_out_of_range_are_bad_requests(self):
+        self.error(self.api("/app/v1/from/wisp?since=abc"), 400, "bad_request")
+        self.error(self.api("/app/v1/from/wisp?wait=26"), 400, "bad_request")
+        self.error(self.api("/app/v1/from/wisp?wait=x"), 400, "bad_request")
 
 
 # -- sending (§6) and the chat's actions (§7) ----------------------------------------------------------------------------

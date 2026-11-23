@@ -377,8 +377,13 @@ def _cycle(req: Request, n: str, ts: str) -> Response:
     return _etagged(req, out)
 
 
-# -- the feed (§4) and earlier chats (§5) -----------------------------------------------------------------------------
-def _feed(req: Request, n: str, cid: str | None = None) -> Response:
+# -- the feed (§4), From (§4.10) and earlier chats (§5) ----------------------------------------------------------------
+def _poll(req: Request, n: str, build, watch_cid, cid: str | None = None) -> Response:
+    """One long-poll (§4), shared by a thread's feed and From: parse and validate since/live/wait (the same 400s), mark
+    the device watching, and hold the request until either revision of the feed moves (`version`, `live`) or `wait`
+    seconds pass (304). `build` makes the model each look (web_chat.feed or web_chat.from_feed, `whole` passed); `watch_cid`
+    is the conversation watched — a callable over the model (a thread's chat id) or a literal ("from"); `cid` names it
+    in a 404 (From never 404s: web_chat.from_feed always builds)."""
     from . import web_chat
     # blank values kept: `live=` is the revision of no reply running (web.Request.query drops them)
     qs = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query,
@@ -393,12 +398,12 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
     if (since is None) != (live is None):
         raise Refusal(400, "bad_request", "Send since and live together, from the same answer, or neither.")
     whole, at = qs.get("all") == "1", web._page_ms(qs.get("at"))
-    model = web_chat.feed(n, cid, whole)
+    model = build(whole)
     if model is None:
         raise Refusal(404, "not_found", f"{n} has no chat {cid}.")
-    watch_cid = (model.get("chat") or {}).get("id")
     watch = not model["archived"] and qs.get("watch") != "0"
-    (web_chat.watching if watch else web_chat.unwatch)(n, req.device, at, cid=watch_cid)
+    wcid = watch_cid(model) if callable(watch_cid) else watch_cid
+    (web_chat.watching if watch else web_chat.unwatch)(n, req.device, at, cid=wcid)
     if since is None:
         return _json(200, to_json(model))
     end = marked = time.monotonic()
@@ -412,12 +417,18 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
         if left <= 0:
             return Response(304, b"", {"Cache-Control": "no-store"})
         if watch and at is not None and time.monotonic() - marked >= WATCH_EVERY_S:
-            web_chat.watching(n, req.device, at, cid=watch_cid)  # not after the app said it went away (`at` older than its away)
+            web_chat.watching(n, req.device, at, cid=wcid)  # not after the app said it went away (`at` older than its away)
             marked = time.monotonic()
         web_chat.wait_change(min(LOOK_S, left))
-        model = web_chat.feed(n, cid, whole)
+        model = build(whole)
         if model is None:                         # cannot happen to a chat that existed: chats are never deleted
             raise Refusal(404, "not_found", f"{n} has no chat {cid}.")
+
+
+def _feed(req: Request, n: str, cid: str | None = None) -> Response:
+    from . import web_chat
+    return _poll(req, n, lambda whole: web_chat.feed(n, cid, whole),
+                 lambda model: (model.get("chat") or {}).get("id"), cid)
 
 
 def _threads_rev(n: str, chats: list[dict]) -> str:
@@ -468,11 +479,7 @@ def _notes(req: Request, n: str) -> Response:
 
 def _from(req: Request, n: str) -> Response:
     from . import web_chat
-    model = web_chat.from_feed(n, whole=req.query.get("all") == "1")       # all of From, as a thread's ?all=1
-    at = web._page_ms(req.query.get("at"))
-    (web_chat.unwatch if req.query.get("watch") == "0" else web_chat.watching)(
-        n, req.device, at, cid="from")
-    return _json(200, to_json(model))
+    return _poll(req, n, lambda whole: web_chat.from_feed(n, whole), "from", "from")
 
 
 def _chats(req: Request, n: str) -> Response:
