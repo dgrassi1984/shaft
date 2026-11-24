@@ -33,8 +33,8 @@ TOKEN = "123456:never-in-argv-or-a-log-AAbb"
 
 # The routes only the Mac app on the Mac that runs SHAFT may use (app_api._local_only): the tests reach them on loopback
 # as that app, unless a test asks for the tailnet path (tailnet=True).
-LOCAL_ONLY = ("/app/v1/setup/secret", "/app/v1/setup/provider", "/app/v1/setup/provider/check", "/app/v1/setup/telegram",
-              "/app/v1/setup/telegram/service")
+LOCAL_ONLY = ("/app/v1/setup/secret", "/app/v1/setup/secrets", "/app/v1/setup/provider", "/app/v1/setup/provider/check",
+              "/app/v1/setup/telegram", "/app/v1/setup/telegram/service")
 
 
 class SetupTest(LocalTest):
@@ -92,6 +92,8 @@ class SetupTest(LocalTest):
                         "paused": "--paused-until-first-reply" in args}]
         if args[:2] == ["secrets", "set"]:
             return 0, [{"ok": True, "name": args[2]}]
+        if args == ["secrets", "list", "--json"]:
+            return 0, [{"ok": True, "names": sorted(self.env)}]
         if args[0] == "first-reply":
             return 0, [{"ok": True, "name": args[1], "then": args[2]}]
         if args[:2] == ["provider", "use"]:
@@ -312,6 +314,29 @@ class SecretTest(SetupTest):
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(self.calls, [{"args": ["secrets", "set", "SCRAPEBADGER_API_KEY", "--json"],
                                        "timeout": actions.RUN_NOW_S, "who": "app mac-app", "input": KEY + "\n"}])
+
+    def test_hf_token_goes_on_stdin_and_the_response_has_no_value(self):
+        r = self.api("/app/v1/setup/secret", "POST", {"name": "HF_TOKEN", "value": "hf_example"})
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(json.loads(r.body), {"said": "HF_TOKEN saved"})
+        self.assertEqual(self.calls, [{"args": ["secrets", "set", "HF_TOKEN", "--json"],
+                                       "timeout": actions.RUN_NOW_S, "who": "app mac-app", "input": "hf_example\n"}])
+
+    def test_list_returns_only_settable_names_in_order(self):
+        self.env.update(dict.fromkeys(("HF_TOKEN", "OPENROUTER_API_KEY", "SHAFT_CUSTOM_API_KEY",
+                                       "SHAFT_API_KEY", "TELEGRAM_TOKEN_X"), KEY))
+        r = self.api("/app/v1/setup/secrets")
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(json.loads(r.body), {"names": ["OPENROUTER_API_KEY", "SHAFT_CUSTOM_API_KEY", "HF_TOKEN"]})
+        self.assertEqual(self.calls, [{"args": ["secrets", "list", "--json"], "timeout": actions.RUN_NOW_S,
+                                       "who": "app mac-app", "input": None}])
+
+    def test_list_refusal_says_why(self):
+        for code, ok in ((1, True), (0, False)):
+            with self.subTest(code=code, ok=ok):
+                self.refuse["secrets"] = (code, [{"ok": ok, "error": "Cannot read the secrets file."}])
+                err = self.error(self.api("/app/v1/setup/secrets"), 409, "refused")
+                self.assertEqual(err["message"], "Cannot read the secrets file.")
 
     def test_only_provider_and_tool_keys(self):
         for name in ("SHAFT_API_KEY", "SHAFT_INBOX_KEY", "SHAFT_API_LOGINS", "TELEGRAM_TOKEN_WISP",
@@ -783,6 +808,7 @@ class HelloTest(SetupTest):
 
 # -- who may call them ------------------------------------------------------------------------------------------------
 ROUTES = [("POST", "/app/v1/setup/instance"), ("GET", "/app/v1/setup/drives"), ("POST", "/app/v1/setup/secret"),
+          ("GET", "/app/v1/setup/secrets"),
           ("POST", "/app/v1/setup/provider"), ("POST", "/app/v1/setup/provider/check"),
           ("POST", "/app/v1/setup/telegram"), ("POST", "/app/v1/setup/telegram/service"),
           ("POST", "/app/v1/setup/telegram/pair/wisp"), ("GET", "/app/v1/setup/telegram/status/wisp"),
@@ -812,6 +838,7 @@ class LocalOnlyTest(SetupTest):
     Those routes answer only the Mac app on loopback; the tailnet gets 403 local_only and no verb runs."""
 
     BODIES = {"/app/v1/setup/secret": {"name": "OPENROUTER_API_KEY", "value": KEY},
+              "/app/v1/setup/secrets": None,
               "/app/v1/setup/provider": {"provider": "custom", "model": "m", "base_url": "https://evil.example/v1",
                                          "price_in": 0, "price_out": 0},
               "/app/v1/setup/provider/check": {"provider": "openrouter"},
@@ -822,17 +849,18 @@ class LocalOnlyTest(SetupTest):
         self.assertEqual(set(self.BODIES), set(LOCAL_ONLY))
         for path, body in self.BODIES.items():
             with self.subTest(path=path):
-                err = self.error(self.api(path, "POST", body, tailnet=True), 403, "local_only")
+                err = self.error(self.api(path, "GET" if body is None else "POST", body, tailnet=True), 403,
+                                 "local_only")
                 self.assertEqual(err["message"], "Do this on the Mac that runs SHAFT.")
         self.assertEqual(self.calls, [])
 
     def test_the_mac_app_on_loopback_is_served(self):
         for path, body in self.BODIES.items():
             with self.subTest(path=path):
-                self.assertNotEqual(self.local_api(path, "POST", data=body).status, 403)
+                self.assertNotEqual(self.local_api(path, "GET" if body is None else "POST", data=body).status, 403)
         self.assertEqual([c["args"][:2] for c in self.calls],
-                         [["secrets", "set"], ["provider", "use"], ["provider", "check"], ["telegram", "token"],
-                          ["telegram", "on"]])
+                         [["secrets", "set"], ["secrets", "list"], ["provider", "use"], ["provider", "check"],
+                          ["telegram", "token"], ["telegram", "on"]])
 
     def test_the_custom_endpoint_is_never_set_from_the_web_ui(self):
         from supervisor import settings
@@ -866,6 +894,8 @@ class SetupFixturesTest(SetupTest):
         out["setup-provider"] = self.get("/app/v1/setup/provider", method="POST", data={"provider": "openrouter"})
         out["setup-check"] = self.get("/app/v1/setup/provider/check", method="POST", data={"provider": "openrouter"})
         out["setup-autonomy"] = self.get("/app/v1/setup/autonomy/wisp", method="POST", data={"then": "stay"})
+        self.env.update(dict.fromkeys(("OPENROUTER_API_KEY", "HF_TOKEN", "SHAFT_API_KEY"), KEY))
+        out["setup-secrets"] = self.get("/app/v1/setup/secrets")      # names only; SHAFT_API_KEY filtered out
         with mock.patch.object(web_chat.secrets, "token_hex", return_value="00000000000000a1"):      # its chat id
             out["setup-hello"] = self.get("/app/v1/setup/hello/wisp", method="POST", data={})
         google._save_account("work", {"address": "me@example.com", "refresh_token": "r", "client": "work",

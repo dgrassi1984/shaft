@@ -506,7 +506,7 @@ def secrets_env() -> dict[str, str]:
 
 
 SECRET_NAMES_RE = re.compile(r"^(ANTHROPIC_API_KEY|OPENROUTER_API_KEY|SCRAPEBADGER_API_KEY|SHAFT_CUSTOM_API_KEY|"
-                             r"SHAFT_API_KEY|SHAFT_INBOX_KEY|SHAFT_API_LOGINS|TELEGRAM_TOKEN_[A-Z0-9_]+|"
+                             r"HF_TOKEN|SHAFT_API_KEY|SHAFT_INBOX_KEY|SHAFT_API_LOGINS|TELEGRAM_TOKEN_[A-Z0-9_]+|"
                              r"GMAIL_[A-Z0-9_]+_CLIENT_(ID|SECRET))$")
 
 

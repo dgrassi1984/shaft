@@ -41,6 +41,7 @@ Source: [supervisor/core.py](../supervisor/core.py).
 | `OPENROUTER_API_KEY` | Every `openrouter/…` model: instance models, decision models, consultations, and judges, coding, recaps and image descriptions when their knobs name one | [cloudllm.py](../supervisor/cloudllm.py), [modelcall.py](../supervisor/modelcall.py) |
 | `SHAFT_CUSTOM_API_KEY` | The bearer for the `custom/` endpoint (`SHAFT_CUSTOM_BASE_URL`); a `custom/` model is refused without it, so a server that checks none still needs a placeholder value | [cloudllm.py](../supervisor/cloudllm.py), [modelcall.py](../supervisor/modelcall.py) |
 | `SCRAPEBADGER_API_KEY` | Web search | [broker.py](../supervisor/broker.py) |
+| `HF_TOKEN` | Hugging Face access token for gated model downloads. Stored and listed only: nothing in this release reads it yet | [opsecrets.py](../supervisor/opsecrets.py) |
 | `SHAFT_API_KEY` | API bearer key, created by `shaft api on` | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_KEY` | Separate delivery-only inbox bearer key | [api.py](../supervisor/api.py) |
 | `SHAFT_API_LOGINS` | Allowed tailnet logins; identity policy, not a knob | [api.py](../supervisor/api.py) |
@@ -52,12 +53,12 @@ on --local`) is the one the Mac app's devices paired with `shaft web pair --loca
 tokens and instance-owned keys are stored by their setup commands, not in instance
 `config.env`. See [integrations](integrations.md).
 
-`shaft secrets set NAME` writes one of the keys above to `.env` without a terminal editor: the value is read from stdin
-(one line), never from argv, and never printed or logged; `unset NAME` removes it and `list` prints the names only
-(`--json`: one JSON line). It writes only `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `SCRAPEBADGER_API_KEY`,
-`SHAFT_CUSTOM_API_KEY`, `SHAFT_API_KEY`, `SHAFT_INBOX_KEY`, `SHAFT_API_LOGINS`, `TELEGRAM_TOKEN_<NAME>` and
-`GMAIL_<CLIENT>_CLIENT_ID`/`_SECRET`, through the one atomic `.env` writer (mode 600). The Mac app's setup writes
-only the first four, through `/app/v1/setup/secret`. Source: [opsecrets.py](../supervisor/opsecrets.py).
+`shaft secrets set NAME` writes one of the keys above through the atomic `.env` writer (mode 600). It reads one
+line from stdin and keeps the value out of argv, output, and logs. `shaft secrets unset NAME` removes a key.
+`shaft secrets list` prints names only. With `--json`, each command returns one JSON line.
+The Mac app can write `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`,
+and `HF_TOKEN` through `/app/v1/setup/secret`. The setup wizard uses this route for the keys it asks for.
+The operator can set all five in Settings → Server keys. See [opsecrets.py](../supervisor/opsecrets.py).
 
 Native push needs all three `SHAFT_APNS_*` settings and the operator-provided key at
 `.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`). A missing setting or unreadable key disables native push;

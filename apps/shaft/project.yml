@@ -250,6 +250,7 @@ targets:
       - path: macOS/UpdateFeed.swift
       - path: macOS/Setup/SetupGate.swift
       - path: macOS/Setup/MacSetup.swift
+      - path: macOS/Setup/ServerKeys.swift
       - path: macOS/Setup/SetupForms.swift
       - path: macOS/Setup/SetupSteps.swift
       - path: macOS/Setup/GoogleSetup.swift

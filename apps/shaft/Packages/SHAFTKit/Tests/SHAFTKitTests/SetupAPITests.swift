@@ -27,6 +27,15 @@ struct SetupAPITests {
         #expect(!request.url.absoluteString.contains("sk-or-secret"))
     }
 
+    @Test func setupSecretsReadsTheNamesOfSavedKeys() async throws {
+        let server = StubServer { _ in .json(200, #"{"names":["SCRAPEBADGER_API_KEY","HF_TOKEN"]}"#) }
+        let answer = try await server.client.setupSecrets()
+        #expect(answer.names == ["SCRAPEBADGER_API_KEY", "HF_TOKEN"])
+        let request = try #require(server.requests.first)
+        #expect((request.method, request.path) == ("GET", "/app/v1/setup/secrets"))
+        #expect(request.json == nil)
+    }
+
     @Test func aProviderRequestSendsOnlyItsFieldsInTheServersNames() async throws {
         let server = StubServer { _ in .json(200, Self.fixture("setup-provider")) }
         let answer = try await server.client.setupProvider(ProviderRequest(provider: "openrouter"))

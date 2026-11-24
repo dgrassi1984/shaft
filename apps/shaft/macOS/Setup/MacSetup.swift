@@ -52,6 +52,7 @@ final class MacSetup {
     @ObservationIgnored private var shared: (session: ObjectIdentifier, installer: Installer)?
     @ObservationIgnored private var sharedUpdater: (session: ObjectIdentifier, updater: ServerUpdater)?
     @ObservationIgnored private var sharedPhoneAccess: (session: ObjectIdentifier, access: PhoneAccess)?
+    @ObservationIgnored private var sharedServerKeys: (session: ObjectIdentifier, keys: ServerKeys)?
     @ObservationIgnored private let configure: () throws -> Installer.Configuration
     @ObservationIgnored private let runner: any ProcessRunning
 
@@ -96,6 +97,7 @@ final class MacSetup {
     func update(_ session: SHAFTSession?) {
         guard let session, let configuration else {
             stopPhoneAccess()
+            sharedServerKeys = nil
             route = .session        // SessionRoot shows why the session did not open; MacRoot shows a bad environment
             return
         }
@@ -183,6 +185,25 @@ final class MacSetup {
         access.onConnected = { [weak session] in await session?.store?.services.load() }
         sharedPhoneAccess = (ObjectIdentifier(session), access)
         return access
+    }
+
+    /// Settings → Server keys for this session: offered under the same conditions as the updater, since
+    /// `/setup/secret(s)` answer only the Mac app on loopback. Kept per session.
+    func serverKeys(for session: SHAFTSession) -> ServerKeys? {
+        guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
+              !SetupGate.setupNeeded(home: configuration.home) else {
+            sharedServerKeys = nil
+            return nil
+        }
+        let id = ObjectIdentifier(session)
+        if let sharedServerKeys, sharedServerKeys.session == id { return sharedServerKeys.keys }
+        let keys = ServerKeys { [weak session] in
+            guard let credential = session?.credential, PairingLoss.isLoopback(credential.baseURL),
+                  let client = session?.store?.client else { throw APIError.notPaired }
+            return client
+        }
+        sharedServerKeys = (id, keys)
+        return keys
     }
 
     // MARK: - Local pairing

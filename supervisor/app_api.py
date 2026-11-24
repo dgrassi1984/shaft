@@ -1205,7 +1205,7 @@ def _service_action(req: Request, service: str, act: str) -> Response:
 # The Mac app's setup wizard. Each state change runs the CLI verb an operator would type, as the paired device (_who):
 # JSON verbs through actions.run_json, the others through actions.run_now. A secret goes on the verb's stdin (input=),
 # never in argv, a log line or an answer.
-SETUP_SECRETS = ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "SCRAPEBADGER_API_KEY", "SHAFT_CUSTOM_API_KEY")
+SETUP_SECRETS = ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "SCRAPEBADGER_API_KEY", "SHAFT_CUSTOM_API_KEY", "HF_TOKEN")
 AUTONOMY = {"own": "resume", "talk": "stay"}      # §18.1: what the first reply does to the paused new instance
 BROWSER_INSTALL_S = 900                           # `browser install` downloads Chromium: the request is held this long
 PROVIDERS = ("openrouter", "codex", "custom")
@@ -1329,6 +1329,17 @@ def _setup_secret(req: Request) -> Response:
     if code != 0 or not rows[-1].get("ok"):
         raise Refusal(409, "refused", _verb_said(rows))
     return _said(f"{data['name']} saved")
+
+
+def _setup_secrets(req: Request) -> Response:
+    """`secrets list --json`: which SETUP_SECRETS keys are set, in that order (Settings → Server keys). Names only;
+    the server's own credentials, Google clients and Telegram tokens are left out."""
+    _local_only(req)
+    from . import actions
+    code, rows = actions.run_json(["secrets", "list", "--json"], who=_who(req))
+    if code != 0 or not rows[-1].get("ok"):
+        raise Refusal(409, "refused", _verb_said(rows))
+    return _json(200, {"names": [n for n in SETUP_SECRETS if n in rows[-1]["names"]]})
 
 
 def _provider(data: dict) -> str:
@@ -1620,6 +1631,7 @@ ROUTES: list[tuple[str, dict]] = [
     (r"/setup/instance", {"POST": _setup_instance}),
     (r"/setup/drives", {"GET": _setup_drives}),
     (r"/setup/secret", {"POST": _setup_secret}),
+    (r"/setup/secrets", {"GET": _setup_secrets}),
     (r"/setup/provider", {"POST": _setup_provider}),
     (r"/setup/provider/check", {"POST": _setup_check}),
     (r"/setup/telegram", {"POST": _setup_telegram}),

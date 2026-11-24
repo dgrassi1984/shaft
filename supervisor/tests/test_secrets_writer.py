@@ -106,6 +106,15 @@ class SecretsWriterTest(unittest.TestCase):
         self.assertNotIn("OPENROUTER_API_KEY", core.secrets_env())
         self.assertEqual(self.run_cli("set", None)[0], 2)
 
+    def test_hf_token_is_stored_and_a_similar_name_is_refused(self):
+        code, out, _ = self.run_cli("set", "HF_TOKEN", "hf_example\n")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"ok": True, "name": "HF_TOKEN"})
+        code, out, _ = self.run_cli("set", "HF_TOKENX", "hf_example\n")
+        self.assertEqual(code, 1)
+        self.assertIn("HF_TOKENX", json.loads(out)["error"])
+        self.assertEqual(core.secrets_env(), {"HF_TOKEN": "hf_example"})
+
     def test_list_prints_names_only(self):
         self.env.write_text("ANTHROPIC_API_KEY=sk-ant-HIDDEN\nUNRELATED=HIDDEN2\nTELEGRAM_TOKEN_WISP=123:HIDDEN3\n")
         code, out, err = self.run_cli("list")

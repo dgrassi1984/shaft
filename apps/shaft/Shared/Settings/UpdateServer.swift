@@ -8,6 +8,8 @@ extension EnvironmentValues {
     @Entry var serverUpdater: ServerUpdater? = nil
     /// "Use SHAFT from iPhone/iPad" for this session (MacSetup.phoneAccess): nil under the same conditions.
     @Entry var phoneAccess: PhoneAccess? = nil
+    /// Settings → Server keys for this session (MacSetup.serverKeys): nil under the same conditions.
+    @Entry var serverKeys: ServerKeys? = nil
 }
 
 /// Settings → Services → Update server (docs/app-api.md §19): the newer release, its page, then each step of
