@@ -758,8 +758,15 @@ class ChannelTest(unittest.TestCase):
         self.assertEqual(self.channel.stats["tokens"], 34)
         self.assertTrue(all("answer" not in s for s in self.logs))
 
+    def start_server(self):
+        # RPCs share the step limit. Slow startup failed the live gate on 2026-11-24.
+        model = body()["model"]
+        self.channel._prepare(model, None)
+        self.channel._start(model, None)
+
     def test_step_timeout_kills_child(self):
         self.use([[{"sleep": 10}]], hang=True)
+        self.start_server()
         with mock.patch.object(codex, "TIMEOUT_S", 0.2):
             with self.assertRaisesRegex(codex.CodexFailure, "timeout") as caught:
                 self.channel.complete(body())
@@ -768,6 +775,7 @@ class ChannelTest(unittest.TestCase):
 
     def test_held_call_has_no_timeout_and_late_usage_is_recorded(self):
         self.use([[{"call": 1}, {"sleep": 0.25}, {"usage": 10}], [{"text": "done"}]])
+        self.start_server()
         with mock.patch.object(codex, "TIMEOUT_S", 0.2):
             first = self.channel.complete(body())
             time.sleep(0.3)
