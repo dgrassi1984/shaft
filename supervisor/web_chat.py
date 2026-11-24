@@ -943,20 +943,31 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
     """dialogue(), each item also saying whether it was routed in (True) or is a turn of the thread (False), and who
     wrote it."""
     name = chat["instance"]
-    items = [(t.get("ts", ""), 0, t["role"], t["content"], False, _turn_sender(name, t)) for t in chat.get("turns") or []
-             if not t.get("retried") and (t.get("content") or t["role"] == "user")]
+    turns = chat.get("turns") or []
+    items = []
+    for k, t in enumerate(turns):
+        if t.get("retried") or not (t.get("content") or t["role"] == "user"):
+            continue
+        # A message the reply running when it was sent did not hear (_finish: `after`) comes after that reply's answer,
+        # though sent before it ended: the reply after answers it, and a request must end with the operator (api.py;
+        # 2026-11-23: sorted by time, the follow-up ended with the answer and was refused). Its own time is kept.
+        after = t.get("after")
+        at, pos = ((turns[after].get("ts", ""), after + .5) if isinstance(after, int) and k < after < len(turns)
+                   else (t.get("ts", ""), k))
+        items.append((at, 0, pos, t.get("ts", ""), t["role"], t["content"], False, _turn_sender(name, t)))
     for m in routed(name, chat["id"], history):
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
-            items.append((m["ts"], 1, "assistant", f"[sent at {m['ts'][11:16]} in another conversation, shown in "
-                                                   f"From]\n{m['text']}", True, _sender(INSTANCE, name)))
+            role, who = "assistant", _sender(INSTANCE, name)
+            text = f"[sent at {m['ts'][11:16]} in another conversation, shown in From]\n{m['text']}"
         elif m["from"] == name:
             where = "into this thread" if m.get("thread") else "shown in From"
-            items.append((m["ts"], 1, "assistant", f"[sent from my cycle at {m['ts'][11:16]}, {where}]\n"
-                                                   f"{m['text']}", True, _sender(INSTANCE, name)))
+            role, who = "assistant", _sender(INSTANCE, name)
+            text = f"[sent from my cycle at {m['ts'][11:16]}, {where}]\n{m['text']}"
         else:
-            items.append((m["ts"], 1, "user", f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n"
-                                              f"{m['text']}", True, _sender(OPERATOR)))
-    return [(ts, role, text, rt, who) for ts, _, role, text, rt, who in sorted(items, key=lambda x: (x[0], x[1]))]
+            role, who = "user", _sender(OPERATOR)
+            text = f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n{m['text']}"
+        items.append((m["ts"], 1, 0, m["ts"], role, text, True, who))
+    return [(ts, role, text, rt, who) for *_, ts, role, text, rt, who in sorted(items, key=lambda x: x[:3])]
 
 
 def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str]:
@@ -1227,6 +1238,8 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
         unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
+        for t in interjected[len(interjected) - unheard:] if unheard else []:
+            t["after"] = assistant_index          # read after this answer, by the reply that answers it (_dialogue)
         queued = _flush_queue(chat)
         if unheard or queued:                     # sent too late for this reply: answered by one of their own
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",

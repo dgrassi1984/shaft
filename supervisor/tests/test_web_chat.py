@@ -60,6 +60,9 @@ class FakeApi:
                     if fake.end_status == 404:
                         return self._json(404, {"error": {"message": "no route", "type": fake.end_type}})
                     return self._json(fake.end_status, {"ended": "api-1"})
+                msgs = body.get("messages") or []
+                if not msgs or msgs[-1].get("role") != "user":      # api.py refuses it the same way
+                    return self._json(400, {"error": {"message": "messages must end with a user message"}})
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
@@ -192,7 +195,34 @@ class RelayTest(ChatTest):
         self.assertEqual(len(self.api.chats()), 2)
         self.assertEqual([t["role"] for t in c["turns"]], ["user", "user", "assistant", "assistant"])
         self.assertTrue(c["turns"][1]["interjected"])
-        self.assertIn({"role": "user", "content": "and also this"}, self.api.chats()[1][2]["messages"])
+        # Bug 2026-11-23: the follow-up sorted the unheard message (sent before the answer ended) ahead of the answer,
+        # so the request ended with the assistant and the API refused it ("messages must end with a user message")
+        followup = self.api.chats()[1][2]["messages"]
+        self.assertEqual(followup[-1], {"role": "user", "content": "and also this"})
+        self.assertEqual(followup[-2], {"role": "assistant", "content": "Answer 2."})
+        self.assertEqual(c["turns"][-1]["note"], "")
+        self.assertEqual(c["turns"][-1]["content"], "Answer 3.")     # the fake numbers by requests: chat, interject
+
+    def test_an_unheard_message_goes_after_the_answer_even_when_sent_seconds_before_it_ended(self):
+        """Live 2026-11-23: message at 08:54:31, the reply that did not hear it ended 08:54:39; its follow-up sorted by
+        time ended with the answer and failed. The follow-up answers it, so it reads it last."""
+        self.api.hold.set()
+        chat, _ = say("start", [])
+        time.sleep(0.3)
+        say("and also this", [])
+        with web_chat._lock(chat["id"]):
+            c = web_chat.load(chat["id"])
+            c["turns"][0]["ts"], c["turns"][1]["ts"] = "2026-11-23T08:53:52", "2026-11-23T08:54:31"
+            web_chat.save(c)
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        followup = self.api.chats()[1][2]["messages"]
+        self.assertEqual([m["role"] for m in followup[-3:]], ["user", "assistant", "user"])
+        self.assertEqual(followup[-1]["content"], "and also this")
+        self.assertEqual(c["turns"][-1]["note"], "")
+        # read_thread reads it in the same order, each line keeping its own time
+        self.assertEqual([(ts[11:], role) for ts, role, _ in web_chat.dialogue(c)][:3],
+                         [("08:53:52", "user"), (c["turns"][2]["ts"][11:], "assistant"), ("08:54:31", "user")])
 
     def test_an_interjection_heard_in_time_needs_no_second_reply(self):
         self.api.hold.set()
