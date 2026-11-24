@@ -16,7 +16,7 @@
     "body": {
       "error": {
         "code": "bad_request",
-        "message": "name must be one of OPENROUTER_API_KEY, ANTHROPIC_API_KEY, SCRAPEBADGER_API_KEY, SHAFT_CUSTOM_API_KEY, with its value."
+        "message": "name must be one of OPENROUTER_API_KEY, ANTHROPIC_API_KEY, SCRAPEBADGER_API_KEY, SHAFT_CUSTOM_API_KEY, HF_TOKEN, with its value."
       }
     }
   }

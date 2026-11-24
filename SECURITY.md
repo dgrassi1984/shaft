@@ -108,7 +108,7 @@ web UI pages keep every tailnet check, and answer no one until `shaft web on` re
   with a browser's cookie.
 - **The setup routes.** The wizard's `/app/v1/setup/*` routes run the CLI verbs a terminal would, as the paired device,
   so every verb's own checks apply. `POST /app/v1/setup/secret` writes only an allowlist of provider and tool keys
-  (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`): the server's own keys
+  (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`, `HF_TOKEN`): the server's own keys
   and logins, Google clients and Telegram tokens cannot be written there. A key or token travels on the verb's stdin,
   never in its arguments, a log line or an answer. The Google client's JSON goes on the stdin of `shaft google client`,
   which the app runs as a local process.

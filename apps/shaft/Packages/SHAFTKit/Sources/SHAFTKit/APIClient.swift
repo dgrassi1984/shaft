@@ -500,6 +500,11 @@ public final class APIClient: Sendable {
         try await post("/app/v1/setup/secret", json: ["name": name, "value": value])
     }
 
+    /// Which provider and tool keys the server's `.env` holds (names only, never a value; loopback only).
+    public func setupSecrets() async throws -> SetupSecretNames {
+        try await get("/app/v1/setup/secrets")
+    }
+
     /// `provider use`: held up to the verb's own limit (`actions.SLOW_S`, 90 s) and a margin.
     public func setupProvider(_ request: ProviderRequest) async throws -> ProviderUseResponse {
         try await post("/app/v1/setup/provider", json: request, timeout: 120)

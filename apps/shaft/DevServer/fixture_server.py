@@ -209,6 +209,8 @@ def setup(base: Path, port: int):
             state["secrets"] = sorted({*state.get("secrets", []), args[2]})
             _write_json(setup_state, state)
             return 0, [{"ok": True, "name": args[2]}]
+        if args == ["secrets", "list", "--json"]:
+            return 0, [{"ok": True, "names": state.get("secrets", [])}]
         if args == ["telegram", "pair", "--json"]:          # the real code on this folder; "sent" PAIR_AFTER_S later
             try:
                 code = telegram_mod.new_pairing_code()

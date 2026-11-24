@@ -1504,6 +1504,7 @@ verb's **stdin**, never into its arguments, a log line or an answer.
 | POST | `/setup/instance` | `{name, operator, model, drive, autonomy}` | 200, `{"instance", "done", "paused"}` (§18.1) |
 | GET | `/setup/drives` | | 200, `{"drives": [preset]}` (§18.2) |
 | POST | `/setup/secret` | `{name, value}` | 200, `{"said": "<NAME> saved"}` (§18.3) |
+| GET | `/setup/secrets` | | 200, `{"names": [str]}` (§18.3.1) |
 | POST | `/setup/provider` | `{provider, model?, judge_model?, base_url?, price_in?, price_out?, judge_price_in?, judge_price_out?, vision?}` | 200, the coverage (§18.4) |
 | POST | `/setup/provider/check` | `{provider}` | 200, one row per model (§18.4) |
 | POST | `/setup/telegram` | `{name, token}` | 200, `{"said": <the verb's line>}` (§18.5) |
@@ -1571,11 +1572,16 @@ its key through `/setup/secret`), `telegram`, `mail`, `calendar`, `drive`, `chat
 
 ### 18.3 `POST /setup/secret`
 
-`{"name": str, "value": str}`: `secrets set <NAME> --json`, the value (one line) on stdin. Only the provider and tool
-keys: `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`; any other name is
-`400 bad_request` naming them. The server's own credentials (`SHAFT_API_KEY`, `SHAFT_INBOX_KEY`, `SHAFT_API_LOGINS`),
-Google clients and Telegram tokens are not written here. A value that is empty or more than one line: `400
-bad_request`. The answer never carries the value.
+`{"name": str, "value": str}`: `secrets set <NAME> --json`, the value (one line) on stdin. The allowed names are
+`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `SCRAPEBADGER_API_KEY`, `SHAFT_CUSTOM_API_KEY`, and `HF_TOKEN`.
+Other names get `400 bad_request` with the list of allowed names. The route excludes the server's own credentials
+(`SHAFT_API_KEY`, `SHAFT_INBOX_KEY`, `SHAFT_API_LOGINS`), Google clients, and Telegram tokens.
+An empty or multiline value gets `400 bad_request`. The answer never carries the value.
+
+#### 18.3.1 `GET /setup/secrets`
+
+Runs `secrets list --json` on loopback only. A tailnet device gets `403 local_only`. The response contains only
+names from §18.3 that are set, in that section's order. A verb refusal gets `409 refused`.
 
 ### 18.4 `POST /setup/provider` and `/setup/provider/check`
 

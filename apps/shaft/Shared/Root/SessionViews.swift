@@ -163,6 +163,7 @@ struct SettingsView: View {
     @State private var forgetting = false
     #if os(macOS)
     @Environment(\.appUpdates) private var updates
+    @Environment(\.serverKeys) private var serverKeys
     #endif
 
     var body: some View {
@@ -194,6 +195,11 @@ struct SettingsView: View {
                         #endif
                     }
                     .listRowBackground(Color.elevated)
+                    #if os(macOS)
+                    if let serverKeys {
+                        ServerKeysSection(keys: serverKeys).id(ObjectIdentifier(serverKeys))
+                    }
+                    #endif
                     Section("This device") {
                         LabeledContent("Name", value: credential.name)
                         LabeledContent("Device", value: credential.device)

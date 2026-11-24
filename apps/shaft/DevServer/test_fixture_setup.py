@@ -14,6 +14,25 @@ KEY = "sk-or-v1-fixture-never-written-91c3"
 
 
 class FixtureSetupTest(unittest.TestCase):
+    def test_lists_the_names_of_saved_server_keys(self):
+        with tempfile.TemporaryDirectory(prefix="shaft-fixture-test-") as directory, mock.patch.dict(os.environ):
+            self.addCleanup(mock.patch.stopall)
+            web, *_ = fixture.setup(Path(directory), 8899)
+            device, secret = web.add_device("mac-app", "operator@local", "macos")
+            headers = {"host": "127.0.0.1:8899", "authorization": f"Bearer {device}.{secret}",
+                       "content-type": "application/json"}
+
+            def api(method, path, body=b""):
+                response = web.respond(web.Request(method, f"/app/v1/setup/{path}", headers, body))
+                self.assertEqual(response.status, 200, response.body)
+                return json.loads(response.body)
+
+            self.assertEqual(api("GET", "secrets"), {"names": []})
+            for name, value in (("SCRAPEBADGER_API_KEY", KEY), ("HF_TOKEN", "hf_example")):
+                self.assertEqual(api("POST", "secret", json.dumps({"name": name, "value": value}).encode()),
+                                 {"said": f"{name} saved"})
+            self.assertEqual(api("GET", "secrets"), {"names": ["SCRAPEBADGER_API_KEY", "HF_TOKEN"]})
+
     def test_the_wizard_from_model_to_hello(self):
         with tempfile.TemporaryDirectory(prefix="shaft-fixture-test-") as directory:
             base = Path(directory).resolve()   # setup resolves it too: /var is /private/var on macOS
@@ -83,7 +102,10 @@ class FixtureSetupTest(unittest.TestCase):
                                                               "autonomy": "own"})
                 self.assertEqual(made, {"instance": "ledger", "done": ["new", "config", "drive"], "paused": True})
                 self.assertEqual((base / "instances" / "ledger" / "drive.md").read_text().strip(), drives[0]["text"])
-                self.assertIn("ledger", [i["name"] for i in api("/app/v1/instances")["instances"]])
+                # Paused until its first reply, it is listed under `paused`, not in the sidebar's `instances` (v0.64.0).
+                listed = api("/app/v1/instances")
+                self.assertIn("ledger", [i["name"] for i in listed["paused"]])
+                self.assertNotIn("ledger", [i["name"] for i in listed["instances"]])
                 settings = api("/app/v1/settings/ledger")
                 self.assertTrue(settings["paused"])
                 self.assertEqual(settings["operator_name"]["value"], "Ada")

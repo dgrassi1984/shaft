@@ -146,6 +146,7 @@ struct MacSettings: View {
                 SettingsView(session: session)
                     .environment(\.serverUpdater, setup.updater(for: session))
                     .environment(\.phoneAccess, setup.phoneAccess(for: session))
+                    .environment(\.serverKeys, setup.serverKeys(for: session))
             } else {
                 VStack(spacing: 0) {
                     Form {

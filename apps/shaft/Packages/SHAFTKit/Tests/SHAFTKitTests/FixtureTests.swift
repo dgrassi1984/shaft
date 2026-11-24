@@ -110,7 +110,7 @@ struct FixtureTests {
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
                      "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from",
                      "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-autonomy", "setup-hello",
-                     "setup-errors", "setup-telegram-pair",
+                     "setup-errors", "setup-telegram-pair", "setup-secrets",
                      "access", "google-labels", "google-calendars", "version"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
@@ -257,6 +257,7 @@ enum FixtureShape {
         if has("instance", "done", "paused") { return roundTrip(SetupInstanceResponse.self) }
         if keys == ["instance", "then"] { return roundTrip(SetupAutonomyResponse.self) }
         if keys == ["drives"] { return roundTrip(DrivePresets.self) }
+        if keys == ["names"] { return roundTrip(SetupSecretNames.self) }
         if has("provider", "covers", "off") { return roundTrip(ProviderUseResponse.self) }
         if has("provider", "ok", "models") { return roundTrip(ProviderCheckResponse.self) }
         if has("instance", "browser", "google_accounts") { return roundTrip(AccessResponse.self) }

@@ -1,5 +1,10 @@
 import Foundation
 
+/// `GET /setup/secrets`: the names of the settable keys already stored, in the server's order.
+public struct SetupSecretNames: Codable, Sendable, Equatable {
+    public let names: [String]
+}
+
 // The setup routes (docs/app-api.md §18): what the Mac app's setup wizard reads back. Decoded from the server's own
 // fixtures (supervisor/tests/app_api_fixtures/setup-*.json, access.json, google-*.json).
 
