@@ -36,6 +36,7 @@ AGENT = re.compile(r"(^|\s)-m shaft(\s|$)")                       # the agent: p
 ORPHAN = re.compile(r"(^|\s)-m shaft(\.plugin_runner)?(\s|$)")       # an agent or plugin whose supervisor is gone
 GATE = re.compile(r"(^|\s)-m (unittest|pytest|supervisor\.gate_suite)(\s|$)|shaft\.plugin_runner --check")
 TERM_GRACE_S = 15
+LIST_TIMEOUT_S = 30
 PS, LSOF = "/bin/ps", "/usr/sbin/lsof"
 
 
@@ -47,30 +48,52 @@ class Proc:
     cwd: str = ""
 
 
+def _list_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=LIST_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        try:
+            proc.kill()
+        finally:
+            # A child stuck in the kernel may never exit. Close the pipes without draining them or waiting.
+            proc.stdout.close()
+            proc.stderr.close()
+        raise RuntimeError(f"{argv[0]} timed out after {LIST_TIMEOUT_S:g}s") from e
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
 def processes() -> dict[int, Proc]:
-    """Every process of this user: pid, parent, command line, working folder (lsof; one call for all of them).
+    """List this user's processes and look up working folders in one lsof call.
 
     Both tools by absolute path: the launchd services run with PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     (autonomy.py), which has no /usr/sbin — a bare "lsof" raised FileNotFoundError on the web panel's kill
-    (2026-10-20). No working folders means no process is ever the instance's, so an empty answer is an error, not
-    an empty kill."""
-    out = subprocess.run([PS, "-x", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    (2026-10-20). Looking up the cwd of a process stuck exiting can hang lsof, so exiting processes and zombies
+    keep an empty cwd. Raise RuntimeError if either command times out or no working folders are found.
+    """
+    out = _list_command([PS, "-x", "-o", "pid=,ppid=,stat=,command="]).stdout
     procs: dict[int, Proc] = {}
+    pids = []
     for line in out.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            procs[int(parts[0])] = Proc(int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else "")
-    r = subprocess.run([LSOF, "-a", "-d", "cwd", "-u", str(os.getuid()), "-Fpn"], capture_output=True, text=True)
-    cwd = r.stdout
-    if not procs or "\nn" not in "\n" + cwd:
-        raise RuntimeError(f"cannot list processes and their folders: {PS} gave {len(procs)}, {LSOF} exited "
-                           f"{r.returncode}: {r.stderr.strip()[:300]}")
+        parts = line.split(None, 3)
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            pid, ppid, stat = parts[:3]
+            procs[int(pid)] = Proc(int(pid), int(ppid), parts[3] if len(parts) > 3 else "")
+            if "E" not in stat and "Z" not in stat:
+                pids.append(pid)
+    if not pids:
+        raise RuntimeError(f"cannot list processes and their folders: {PS} gave no eligible pids")
+    r = _list_command([LSOF, "-a", "-d", "cwd", "-p", ",".join(pids), "-Fpn"])
     pid = None
-    for line in cwd.splitlines():
+    for line in r.stdout.splitlines():
         if line.startswith("p") and line[1:].isdigit():
             pid = int(line[1:])
         elif line.startswith("n") and pid in procs:
             procs[pid].cwd = line[1:]
+    # lsof can exit 1 if a pid vanished after ps, even when it found other working folders.
+    if not any(p.cwd for p in procs.values()):
+        raise RuntimeError(f"cannot list processes and their folders: {PS} gave {len(procs)}, {LSOF} exited "
+                           f"{r.returncode}: {r.stderr.strip()[:300]}")
     return procs
 
 
