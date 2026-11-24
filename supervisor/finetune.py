@@ -1,15 +1,21 @@
 """M6 — personality into the weights: a LoRA adapter trained on an instance's own selected experiences.
 
-  shaft dataset <name>    export its experiences as chat-format JSONL (train/valid split)
-  shaft finetune <name>   train a LoRA adapter with MLX, then let the judge compare base vs adapter
-                          on the distinctness probes; the adapter is kept only if it wins
+  shaft dataset <name>                       export experiences as chat-format JSONL (train/valid split)
+  shaft finetune <name>                      train and evaluate a LoRA adapter
+  shaft finetune <name> --evaluate <adapter>  evaluate an existing adapter
 
-Requirements (checked, never silently skipped): `mlx_lm` in the fine-tuning venv
-(SHAFT_FT_PYTHON, default .venv-ft/bin/python — the supervisor itself stays dependency-free)
-and an MLX base model (SHAFT_FT_BASE_MODEL, default mlx-community/Qwen3.8-27B-4bit — the base
-model Ternary-Bonsai-2-27B was made from; the ternary Bonsai pack itself uses custom layers
-mlx_lm's LoRA cannot attach to). Serving the adapter means running the instance on that base
-model (mlx_lm.server on a local port listed in SHAFT_LLM_PORTS).
+The Bonsai backend requires .models/bonsai2-27b-mlx/model.safetensors and SHAFT_BONSAI_PYTHON
+(default .venv-bonsai/bin/python) to exist. That Python runs supervisor.bonsai_lora for training and
+evaluation answers. Its LoRA wraps Bonsai's Packed layers. supervisor/bonsai_server.py --adapter DIR
+loads a kept adapter once at startup. If either path is missing, the mlx_lm backend runs mlx_lm lora
+under SHAFT_FT_PYTHON (default .venv-ft/bin/python) on SHAFT_FT_BASE_MODEL (default mlx-community/Qwen3.8-27B-4bit,
+the conventional base of Ternary-Bonsai-2-27B). To serve that adapter, run the instance on that base via
+mlx_lm.server on a local port in SHAFT_LLM_PORTS. The CLI reports missing prerequisites for the selected backend and
+stops. The supervisor stays dependency-free.
+
+A blind judge compares base and adapter answers on evolution.PROBES and TASK_PROBES. Keeping the adapter requires at
+least the base's effectiveness and a weighted total at least 5% higher (MARGIN). A rise in validation loss from the
+first to the last recorded value rejects the adapter.
 """
 from __future__ import annotations
 
