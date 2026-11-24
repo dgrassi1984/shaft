@@ -19,14 +19,17 @@ in the copy, and deletes the copy, battery.py).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import core
 from .core import INSTANCES, SUP_DIR, log, set_paused
 
 # Also the terminal client, supervisor.talk_ui. Not the gate's test runner (supervisor.gate_suite): it holds no run, and
@@ -37,6 +40,8 @@ ORPHAN = re.compile(r"(^|\s)-m shaft(\.plugin_runner)?(\s|$)")       # an agent 
 GATE = re.compile(r"(^|\s)-m (unittest|pytest|supervisor\.gate_suite)(\s|$)|shaft\.plugin_runner --check")
 TERM_GRACE_S = 15
 LIST_TIMEOUT_S = 30
+PROBE_TIMEOUT_S = 5
+MAX_PROBES = 80
 PS, LSOF = "/bin/ps", "/usr/sbin/lsof"
 
 
@@ -48,10 +53,15 @@ class Proc:
     cwd: str = ""
 
 
-def _list_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
+class _ListTimeout(RuntimeError):
+    pass
+
+
+def _list_command(argv: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    timeout = LIST_TIMEOUT_S if timeout is None else timeout
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        stdout, stderr = proc.communicate(timeout=LIST_TIMEOUT_S)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as e:
         try:
             proc.kill()
@@ -59,18 +69,26 @@ def _list_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
             # A child stuck in the kernel may never exit. Close the pipes without draining them or waiting.
             proc.stdout.close()
             proc.stderr.close()
-        raise RuntimeError(f"{argv[0]} timed out after {LIST_TIMEOUT_S:g}s") from e
+        raise _ListTimeout(f"{argv[0]} timed out after {timeout:g}s") from e
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 def processes() -> dict[int, Proc]:
-    """List this user's processes and look up working folders in one lsof call.
+    """List this user's processes and look up working folders, usually in one lsof call.
 
     Both tools by absolute path: the launchd services run with PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     (autonomy.py), which has no /usr/sbin — a bare "lsof" raised FileNotFoundError on the web panel's kill
-    (2026-10-20). Looking up the cwd of a process stuck exiting can hang lsof, so exiting processes and zombies
-    keep an empty cwd. Raise RuntimeError if either command times out or no working folders are found.
+    (2026-10-20). An ordinary sleeping process whose cwd lookup blocked in the kernel froze every run end.
+    Bisect a timed-out lsof list and remember the blockers. Blockers, exiting processes and zombies keep an
+    empty cwd. Raise RuntimeError if ps times out, the probe limit is reached, or no working folders are found.
     """
+    path = core.SUP_DIR / "cwd-blockers.json"
+    # Share discoveries across callers before another can launch an lsof against the same blocker.
+    with core.config_lock(path):
+        return _processes(path)
+
+
+def _processes(path: Path) -> dict[int, Proc]:
     out = _list_command([PS, "-x", "-o", "pid=,ppid=,stat=,command="]).stdout
     procs: dict[int, Proc] = {}
     pids = []
@@ -81,20 +99,77 @@ def processes() -> dict[int, Proc]:
             procs[int(pid)] = Proc(int(pid), int(ppid), parts[3] if len(parts) > 3 else "")
             if "E" not in stat and "Z" not in stat:
                 pids.append(pid)
+
+    stored = _read_blockers(path)
+    previous = stored or {}
+    blockers = {str(pid): p.command for pid, p in procs.items() if previous.get(str(pid)) == p.command}
+    try:
+        _list_cwds(procs, [pid for pid in pids if pid not in blockers], blockers)
+    finally:
+        # Keep discoveries even if the remaining probes hit the cap.
+        if blockers != stored:
+            _save_blockers(path, blockers)
+            for pid, command in blockers.items():
+                if previous.get(pid) != command:
+                    log(f"skipping cwd lookup for pid {pid} after lsof timed out")
+    return procs
+
+
+def _read_blockers(path: Path) -> dict[str, str] | None:
+    try:
+        stored = json.loads(path.read_text())
+    except OSError:
+        return {}
+    except ValueError:
+        return None
+    return stored if isinstance(stored, dict) else None
+
+
+def _save_blockers(path: Path, blockers: dict[str, str]) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(blockers, stream)
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+def _list_cwds(procs: dict[int, Proc], pids: list[str], blockers: dict[str, str]) -> None:
     if not pids:
         raise RuntimeError(f"cannot list processes and their folders: {PS} gave no eligible pids")
-    r = _list_command([LSOF, "-a", "-d", "cwd", "-p", ",".join(pids), "-Fpn"])
-    pid = None
-    for line in r.stdout.splitlines():
-        if line.startswith("p") and line[1:].isdigit():
-            pid = int(line[1:])
-        elif line.startswith("n") and pid in procs:
-            procs[pid].cwd = line[1:]
-    # lsof can exit 1 if a pid vanished after ps, even when it found other working folders.
+    pending = [pids]
+    result = None
+    for attempt in range(MAX_PROBES + 1):
+        if not pending:
+            break
+        batch = pending.pop()
+        argv = [LSOF, "-a", "-d", "cwd", "-p", ",".join(batch), "-Fpn"]
+        try:
+            result = _list_command(argv, timeout=PROBE_TIMEOUT_S) if attempt else _list_command(argv)
+        except _ListTimeout:
+            if len(batch) == 1:
+                pid = batch[0]
+                blockers[pid] = procs[int(pid)].command
+            else:
+                middle = len(batch) // 2
+                pending.extend((batch[middle:], batch[:middle]))
+            continue
+
+        # Keep each successful batch's results so another lsof call is unnecessary. Even exit 1 can
+        # include working folders if a pid vanished after ps.
+        pid = None
+        for line in result.stdout.splitlines():
+            if line.startswith("p") and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line.startswith("n") and pid in procs:
+                procs[pid].cwd = line[1:]
+    if pending:
+        raise RuntimeError(f"cannot list processes and their folders: {LSOF} exceeded {MAX_PROBES} cwd probes")
     if not any(p.cwd for p in procs.values()):
-        raise RuntimeError(f"cannot list processes and their folders: {PS} gave {len(procs)}, {LSOF} exited "
-                           f"{r.returncode}: {r.stderr.strip()[:300]}")
-    return procs
+        detail = ("timed out for every eligible pid" if result is None
+                  else f"exited {result.returncode}: {result.stderr.strip()[:300]}")
+        raise RuntimeError(f"cannot list processes and their folders: {PS} gave {len(procs)}, {LSOF} {detail}")
 
 
 def _inside(path: str, root: Path) -> bool:
