@@ -534,6 +534,24 @@ class DeployTest(unittest.TestCase):
         self.assertFalse(rows[0]["ok"])
         self.assertIn("ls-remote", rows[0]["error"])
 
+    def test_check_explains_private_repository_access_when_git_cannot_read_username(self):
+        stderr = "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+        real_git = deploy._git
+
+        def git_with_private_origin(repo, *args):
+            if args[0] == "ls-remote":
+                return subprocess.CompletedProcess(args, 128, "", stderr + "\n")
+            return real_git(repo, *args)
+
+        with mock.patch.object(deploy, "_git", side_effect=git_with_private_origin):
+            code, rows = self.deploy("--check")
+        self.assertEqual(code, 1)
+        self.assertFalse(rows[0]["ok"])
+        message = rows[0]["error"]
+        self.assertTrue(message.startswith("GitHub asked for a sign-in"), message)
+        self.assertIn("the repository is private, or this Mac has no access to it", message)
+        self.assertTrue(message.endswith(f"(git ls-remote origin, exit 128: {stderr})"), message)
+
 
 class TemplateTagConventionTest(unittest.TestCase):
     """A release records its template commit as `template-vX.Y.Z`: docs, `shaft deploy` and the app's installer agree."""

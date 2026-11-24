@@ -301,6 +301,28 @@ struct SetupTests {
         #expect(runner.calls.first?.args.first == "ls-remote")
     }
 
+    @Test(arguments: [
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        "remote: Repository not found.",
+    ])
+    func aPrivateRepositoryExplainsGitHubAccessInTheServerStep(_ stderr: String) async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        let runner = FakeRunner { call in
+            if call.args.first == "ls-remote" { return failed(128, stderr + "\n") }
+            return try machine.answer(call)
+        }
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+        await installer.run()
+
+        guard case .failed(let message) = installer.steps[.server] else {
+            Issue.record("the server step did not fail: \(String(describing: installer.steps[.server]))"); return
+        }
+        #expect(message.hasPrefix("GitHub asked for a sign-in to read https://github.com/dgrassi1984/shaft: the repository is private"))
+        #expect(message.hasSuffix("(git ls-remote, exit 128: \(stderr))"))
+    }
+
     @Test func retryRerunsOnlyTheFailedStepAndThoseAfter() async throws {
         let home = try temporaryFolder("setup")
         defer { try? FileManager.default.removeItem(at: home) }
