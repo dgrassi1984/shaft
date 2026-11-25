@@ -287,6 +287,11 @@ Battery self-knowledge misses expose only topics from `battery.SELF_TOPICS` thro
 questions, reference answers or grader reasoning.
 
 `battery.recall_by_age` separates recall scores by entry age at the exam, using `RECALL_OLD_DAYS=14` days.
+Each row keeps its entry's date, and the line states both counts, saying when one side has no question.
+Recall questions are drawn anew (`battery.recall_refresh_why`) only when a comparison period changes anyway: the
+instance's model, the judge rotation or the item version differs from its previous run's, or the set is
+`RECALL_REFRESH_DAYS=28` days old. A new set takes half its questions from entries under 14 days old and half from
+older ones while both exist; a new set changes the checksum and so starts a new era.
 
 ### Goal families and kept changes
 
