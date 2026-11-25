@@ -308,7 +308,9 @@ shaft gate budget
 
 `shaft status` shows instance state, open conversations, and running code. `shaft log` shows recent journal
 entries. `shaft stats` reports achieved difficulty, goal origins, success, calibration, delivery, and
-self-audit shares. `shaft review --hours` reports recent activity.
+self-audit shares. `shaft review --hours` reports recent activity. It also gives three
+weekly counts of messages sent during judged self-origin cycles, grouped by how the
+operator replied or whether the 48-hour reply window is still open.
 
 ### Gate
 
