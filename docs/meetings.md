@@ -9,6 +9,22 @@ indices received so the app can resume a partial upload. To finish, the app send
 and chunk count. A mismatch leaves the chunks available for retry. A successful finish queues the meeting and
 removes the chunk directory. See the [meeting API](app-api.md#20-meetings) for request and response details.
 
+## Record on iPhone or iPad
+
+Open **Meetings** from the chat switcher on iPhone or the sidebar on iPad. Tell the people in the meeting
+that you are recording, then tap **Record**. SHAFT records one channel from the microphone. iOS keeps
+other apps' audio and phone call audio out of the recording. End voice mode before recording a meeting.
+
+Start with SHAFT in the foreground. The microphone keeps recording when the screen locks or SHAFT
+goes into the background. A phone call or Siri can pause the recording. The app notes the gap and
+resumes in the same file if iOS allows it. The transcript marks each gap at the point where audio
+paused and shows how long the gap lasted. If the microphone cannot resume, SHAFT keeps the partial
+recording and shows why it stopped.
+
+Tap **Stop** to save the recording and send it to the paired SHAFT server over the tailnet. Meetings
+shows upload progress and errors. Open SHAFT again to resume a pending upload. The app keeps a
+confirmed recording on the device for seven days and prunes it on a later foreground pass.
+
 ## Set up the Listen worker
 
 On an Apple Silicon Mac with `uv`, run these commands from the SHAFT checkout.
@@ -95,7 +111,7 @@ rejection. [Meeting API](app-api.md#206-speaker-proposals)
 
 ## Point an instance at a meeting
 
-1. In the Mac app, open **Meetings** and select the recording. If it is unfiled, choose an **Account** and click **Save**.
+1. In the paired app, open **Meetings** and select the recording. If it is unfiled, choose an **Account** and click **Save**.
 2. Open the instance's settings. Under **Access**, turn on **Meetings** for the same account.
 3. In **Meetings**, click **Copy Reference** and paste the line into the instance's chat.
 

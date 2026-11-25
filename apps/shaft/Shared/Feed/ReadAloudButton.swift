@@ -14,6 +14,10 @@ final class ReadAloudRequests {
     private(set) var requested: String?
     @ObservationIgnored private var voiceOwners: Set<ObjectIdentifier> = []
 
+    #if os(iOS)
+    var isReading: Bool { requested != nil || ReadAloudPlayer.shared.playing != nil }
+    #endif
+
     func isActive(_ id: String) -> Bool {
         ReadAloudPlayer.shared.playing == id || requested == id
     }
@@ -28,6 +32,9 @@ final class ReadAloudRequests {
     }
 
     func toggle(id: String, source: String, screen: ChatScreenModel, client: APIClient) {
+        #if os(iOS)
+        guard IOSAudioUse.shared.owner != .meeting else { return }
+        #endif
         let stopping = isActive(id)
         stop()
         guard !stopping, !screen.showVoice, voiceOwners.isEmpty else { return }

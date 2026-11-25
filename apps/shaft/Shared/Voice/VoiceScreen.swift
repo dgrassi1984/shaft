@@ -134,6 +134,16 @@ final class VoiceScreenModel {
     }
 
     private func start(_ mine: Int) async {
+        #if os(iOS)
+        let audioUse = IOSAudioUse.shared
+        guard audioUse.claim(.voice) else {
+            let message = audioUse.owner == .meeting ? IOSAudioUse.meetingInProgress : "Voice mode is already in use."
+            phase = .problem(VoiceStartProblem(message: message, fix: nil))
+            return
+        }
+        var started = false
+        defer { if !started { audioUse.release(.voice) } }
+        #endif
         phase = .starting
         let made: VoiceSession
         do {
@@ -159,6 +169,9 @@ final class VoiceScreenModel {
             await made.end()
             return
         }
+        #if os(iOS)
+        started = true
+        #endif
         session = made
         VoiceDebug.current = made
         phase = .running
@@ -169,6 +182,9 @@ final class VoiceScreenModel {
         session = nil
         if VoiceDebug.current === ending { VoiceDebug.current = nil }
         await ending.end()
+        #if os(iOS)
+        IOSAudioUse.shared.release(.voice)
+        #endif
     }
 
     /// What a start failure says, with its fix where one is known: `VoiceSetup`'s own problems as they are, a missing

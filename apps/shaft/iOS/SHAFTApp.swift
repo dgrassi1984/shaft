@@ -8,11 +8,19 @@ import UserNotifications
 @main
 struct SHAFTApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
+
+    private var meetingClient: APIClient? {
+        guard let session = delegate.model.session, !session.isDemo else { return nil }
+        return session.store?.client
+    }
 
     var body: some Scene {
         WindowGroup {
-            IOSRoot(model: delegate.model)
+            IOSRoot(model: delegate.model, recorder: delegate.meetings)
+                .onChange(of: scenePhase, initial: true) { updateMeetingUploads() }
+                .onChange(of: meetingClient.map(ObjectIdentifier.init)) { updateMeetingUploads() }
                 .preferredColorScheme(AppTheme.stored(rawTheme).colorScheme)
                 // shaft://chat/<instance>: the chat a notification tap opens, from a link or a shortcut.
                 .onOpenURL { url in
@@ -21,11 +29,17 @@ struct SHAFTApp: App {
                 }
         }
     }
+
+    private func updateMeetingUploads() {
+        delegate.meetings.updateUploadContext(foreground: scenePhase == .active, client: meetingClient)
+    }
 }
 
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = AppModel()
+    lazy var meetings = IOSMeetingRecorder(audio: SystemMeetingAudio(), audioUse: .shared,
+                                           device: { UIDevice.current.name })
     /// The Apple Watch app's way to the server (it has none of its own).
     private lazy var watch = WatchRelay(model: model)
 

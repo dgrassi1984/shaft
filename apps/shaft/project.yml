@@ -80,12 +80,11 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         CFBundleDisplayName: SHAFT
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
-        # audio: a voice session goes on with the iPhone locked or the app in the background.
+        # Keep voice mode and meeting recording running while the device is locked or the app is in the background.
         UIBackgroundModes: [remote-notification, audio]
-        # Voice mode: asked when voice mode first opens.
         NSMicrophoneUsageDescription: >-
-          SHAFT listens while voice mode is open, so you can talk with an instance. The audio stays on this iPhone:
-          only the transcript of what you say is sent, as your message.
+          SHAFT uses the microphone for voice mode and meeting recordings. Voice mode sends only the transcript.
+          When you record a meeting, SHAFT sends the recording to your paired SHAFT server.
         NSSpeechRecognitionUsageDescription: >-
           SHAFT turns what you say into text on this iPhone while voice mode is open. The audio stays on the device:
           only the transcript is sent, as your message.
@@ -267,6 +266,22 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MacTests
         GENERATE_INFOPLIST_FILE: YES
 
+  SHAFTIOSMeetingTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: iOSTests
+      - path: iOS/Meetings/IOSAudioUse.swift
+      - path: iOS/Meetings/IOSMeetingAudio.swift
+      - path: iOS/Meetings/IOSMeetingRecorder.swift
+      - path: Packages/SHAFTKit/Tests/SHAFTKitTests/StubServer.swift
+    dependencies:
+      - package: SHAFTKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.IOSMeetingTests
+        GENERATE_INFOPLIST_FILE: YES
+
   # The App Store screenshots: drives the iOS app's built-in demo and writes each screen as a PNG
   # (ScreenshotTests/StoreScreenshots.swift; AppStore/README.md says how to run it per device).
   SHAFTScreenshots:
@@ -446,6 +461,9 @@ schemes:
         SHAFT-iOS: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets: [SHAFTIOSMeetingTests]
   SHAFT-macOS:
     build:
       targets:
