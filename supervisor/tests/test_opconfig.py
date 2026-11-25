@@ -324,8 +324,8 @@ class FieldsTest(OpConfigTest):
 
     def test_watch_keys_are_dropdowns_with_help_even_when_unset_20261110(self):
         fs = {f["key"]: f for f in opconfig.fields("wisp")}
-        keys = ["WATCH_MAIL", "WATCH_CALENDAR", "WATCH_GCHAT"]
-        self.assertEqual(list(fs)[-3:], keys)
+        keys = ["WATCH_MAIL", "WATCH_CALENDAR", "WATCH_GCHAT", "WATCH_MEETINGS"]
+        self.assertEqual(list(fs)[-len(keys):], keys)
         for key in keys:
             with self.subTest(key=key):
                 f = fs[key]

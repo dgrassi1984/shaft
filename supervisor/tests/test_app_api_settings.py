@@ -104,6 +104,7 @@ class SettingsTest(AppTest):
             "watch_mail": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_calendar": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "watch_gchat": {"value": "off", "choices": ["off", "inbox", "wake"]},
+            "watch_meetings": {"value": "off", "choices": ["off", "inbox", "wake"]},
             "model": {"value": "openrouter/openai/gpt-6.1-sol", "choices": [
                 {"model": "new-model", "label": "New model"},
                 {"model": "openrouter/openai/gpt-6.1-sol", "label": "openrouter/openai/gpt-6.1-sol"}]},
@@ -127,7 +128,8 @@ class SettingsTest(AppTest):
                 ("wake_interval", 0, 5, "WAKE_INTERVAL_MINUTES", "now"),
                 ("watch_mail", "inbox", "off", "WATCH_MAIL", "now"),
                 ("watch_calendar", "wake", "off", "WATCH_CALENDAR", "now"),
-                ("watch_gchat", "wake", "off", "WATCH_GCHAT", "now")):
+                ("watch_gchat", "wake", "off", "WATCH_GCHAT", "now"),
+                ("watch_meetings", "wake", "off", "WATCH_MEETINGS", "now")):
             with self.subTest(field=field):
                 with mock.patch.object(opconfig, "set_values", wraps=opconfig.set_values) as writer:
                     r = self.save(field, value, expect)

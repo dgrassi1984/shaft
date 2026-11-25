@@ -638,3 +638,9 @@ Italian (`it`). Two instances cannot hold the same identifier for the same langu
 Both tools use the normal broker call budget and tool switches. `shaft tools <name> off list_voices` and
 `shaft tools <name> off propose_voice` hide and refuse them from the next run or conversation; use `on` to restore
 one. Trial proposals are simulated and recorded without changing the store.
+
+## Meeting transcripts
+
+The broker offers `meeting_search`, `meeting_read`, and `meeting_propose_speaker` to instances with meeting
+grants. Each transcript page identifies the speakers' words as data. Speaker proposals wait for the operator.
+[Meeting grants, tools, and watch settings](meetings.md#instance-access)
