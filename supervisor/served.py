@@ -21,7 +21,8 @@ cited as another's) does not count. The digest is of the arguments as the broker
 (`canonical_args`), never their text; the episode's arguments are brought to the same form: parsed from the tool log's
 JSON, typed by the tool's schema as the template's coerce_args types them before the call, and secret_set's value
 withheld as the template's tool log withholds it. Arguments the tool log cut ("[... cut in the log") cannot be
-checked, and the step does not count. A fingerprint kept before arguments were (no `args`) is checked on its result.
+checked, and the step does not count. A fingerprint kept before arguments were (no `args` key) is checked on its
+result; one whose arguments the broker could not digest (`args` null) does not count.
 
 SUP_DIR/served/<name>.jsonl: one row per successful call, {ts, tool, run, len, sha256, cut, args}.
 SUP_DIR/served/<name>.runs.jsonl: {run, kind, event: start|end, ts}. SUP_DIR/served/since: when the record began.
@@ -118,7 +119,7 @@ def args_digest(tool: str, args) -> str | None:
 def episode_args(tool: str, logged) -> tuple[str | None, str]:
     """(digest, "") of the arguments a tool-log step shows, or (None, why they cannot be checked)."""
     if isinstance(logged, dict):
-        return args_digest(tool, logged), ""
+        logged = json.dumps(logged, ensure_ascii=False)   # an older log's dict: checked as its JSON is
     if not isinstance(logged, str):
         return None, "the cited step has no arguments to check"
     if LOG_CUT in logged:
@@ -129,7 +130,12 @@ def episode_args(tool: str, logged) -> tuple[str | None, str]:
         return None, "the cited step's arguments are not JSON"
     if not isinstance(args, dict):
         return None, "the cited step's arguments are not a JSON object"
-    return args_digest(tool, args), ""
+    if tool == "secret_set" and "value" in args and args["value"] != WITHHELD:
+        return None, "the cited step shows a secret's value, which the tool log never holds"
+    try:
+        return args_digest(tool, args), ""
+    except Exception:     # a value no call could have carried (a number too long to read): never costs the check
+        return None, "the cited step's arguments cannot be typed as the call's"
 
 
 def fingerprint(text: str) -> dict:
@@ -271,11 +277,13 @@ class Record:
         same = [r for r in served if matches(r, call.get("result"))]
         if not same:
             return "result differs from the supervisor's record"
-        if any(r.get("args") is None for r in same):
+        if any("args" not in r for r in same):
             return ""         # kept before arguments were fingerprinted: checked on its result
         digest, why = episode_args(tool, call.get("args"))
         if digest is None:
             return why
         if any(r["args"] == digest for r in same):
             return ""
+        if all(r["args"] is None for r in same):
+            return "the supervisor could not fingerprint that call's arguments"
         return "arguments differ from the call the supervisor served with that result"

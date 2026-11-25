@@ -1624,7 +1624,7 @@ class Broker:
             from .commitments import FILE
             try:
                 st = os.lstat(self.root / FILE)
-                sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_mode)
+                sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode)   # ctime: a restored mtime
             except FileNotFoundError:
                 return
             lock = self.__dict__.setdefault("_ledger_lock", threading.Lock())

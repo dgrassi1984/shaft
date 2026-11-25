@@ -52,8 +52,11 @@ class ServedTest(unittest.TestCase):
             served.run_event(name, run, kind, "end", at=end)
         return run
 
-    def keep(self, tool="fetch_page", result="Reading: 42", at=START + timedelta(minutes=5), name="ember", run=RUN):
-        served.keep(name, tool, result, run=run, at=at)
+    def keep(self, tool="fetch_page", result="Reading: 42", at=START + timedelta(minutes=5), name="ember", run=RUN,
+             args=None):
+        """A served call, with the arguments the episode fixture shows unless told otherwise."""
+        served.keep(name, tool, result, run=run, at=at,
+                    args=served.args_digest(tool, args if args is not None else {"url": "https://example.com"}))
 
     # -- the fingerprint ---------------------------------------------------------------------------------------------
     def test_fingerprint_keeps_no_text_and_matches_whole_and_cut_results(self):
@@ -229,8 +232,9 @@ class ServedTest(unittest.TestCase):
         self.keep()
         record = served.Record("ember")
         read = {"tool": "read_file", "args": {}, "result": "notes"}
-        forged = episode(tools=[read, {"tool": "fetch_page", "args": {}, "result": "Reading: 41"}])
-        honest = episode(tools=[read, {"tool": "fetch_page", "args": {}, "result": "Reading: 42"}])
+        url = {"url": "https://example.com"}
+        forged = episode(tools=[read, {"tool": "fetch_page", "args": url, "result": "Reading: 41"}])
+        honest = episode(tools=[read, {"tool": "fetch_page", "args": url, "result": "Reading: 42"}])
         built_in = episode(tools=[read])
         self.assertEqual(commitments._checked_evidence([forged], item, END.isoformat(), record)[0],
                          "result differs from the supervisor's record")
@@ -312,10 +316,11 @@ class ServedTest(unittest.TestCase):
         started last, so an older terminal conversation's honest reply failed while a newer one idled."""
         old = self.add_run(start=START + timedelta(minutes=1), end=None, kind="talk")
         new = self.add_run(start=START + timedelta(minutes=2), end=None, kind="api")
+        url = served.args_digest("web_search", {"url": "https://example.com"})
         served.keep("ember", "web_search", "old reply", run=old, at=START + timedelta(minutes=3), kind="talk",
-                    talk="t-old")
+                    talk="t-old", args=url)
         served.keep("ember", "web_search", "new reply", run=new, at=START + timedelta(minutes=3), kind="api",
-                    talk="t-new")
+                    talk="t-new", args=url)
         record = served.Record("ember")
         for talk, result, reason in (("t-old", "old reply", ""), ("t-new", "new reply", ""),
                                      ("t-old", "new reply", "result differs from the supervisor's record")):
@@ -355,9 +360,6 @@ class ServedTest(unittest.TestCase):
         record = served.Record("ember")
         self.assertEqual(sorted(record.by_tool), ["fetch_page", "web_search"])
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ArgumentsTest(unittest.TestCase):
@@ -421,8 +423,36 @@ class ArgumentsTest(unittest.TestCase):
         self.assertEqual(self.cite(None), "the cited step has no arguments to check")
 
     def test_a_fingerprint_kept_before_arguments_were_is_checked_on_its_result(self):
-        self.keep(result="Forecast: 18C, clear")                       # no args: kept before #22
+        legacy = {"ts": (START + timedelta(minutes=5)).isoformat(timespec="seconds"), "tool": "fetch_page", "run": RUN,
+                  "kind": None, "talk": None, **served.fingerprint("Forecast: 18C, clear")}   # no "args" key at all
+        jsonl.append_locked(self.sup / "served/ember.jsonl", [json.dumps(legacy) + "\n"])
         self.assertEqual(self.cite('{"url": "https://weather.example/milan"}'), "")
+
+    def test_a_fingerprint_whose_arguments_could_not_be_digested_does_not_count(self):
+        """Regression (#22 review): a new row whose digest failed was written as "args": null and read as a row from
+        before arguments were fingerprinted, so any arguments verified against it."""
+        served.keep("ember", "fetch_page", "Forecast: 18C, clear", run=RUN, at=START + timedelta(minutes=5))   # "args": null
+        self.assertEqual(self.cite('{"url": "https://weather.example/milan"}'),
+                         "the supervisor could not fingerprint that call's arguments")
+
+    def test_arguments_no_call_could_carry_cost_only_their_step(self):
+        """Regression (#22 review): a 5000-digit integer string parsed as JSON and then raised in the typing, out of
+        Record.check and every check after it."""
+        tool, key = next((t, k) for t, spec in broker.SPECS.items()
+                         for k, v in spec["function"]["parameters"].get("properties", {}).items()
+                         if v.get("type") == "integer")
+        self.serve({key: 3}, tool=tool)
+        self.assertEqual(self.cite(json.dumps({key: "9" * 5000}), tool=tool),
+                         "the cited step's arguments cannot be typed as the call's")
+        self.assertEqual(self.cite(json.dumps({key: 3}), tool=tool), "")
+
+    def test_a_cited_secret_value_is_never_read_as_withheld(self):
+        """Regression (#22 review): the check replaced whatever value the episode showed with the placeholder, so a
+        step could claim a literal secret the tool log never holds."""
+        self.serve({"name": "API_KEY", "value": "s3cr3t-value"}, result="secret API_KEY set", tool="secret_set")
+        self.assertEqual(self.cite('{"name": "API_KEY", "value": "other"}', result="secret API_KEY set",
+                                   tool="secret_set"),
+                         "the cited step shows a secret's value, which the tool log never holds")
 
     def test_coercion_is_the_templates(self):
         """The supervisor's copy of the template's coerce_args types every value the same way, for every
@@ -444,3 +474,7 @@ class ArgumentsTest(unittest.TestCase):
                              input=raw, capture_output=True, text=True, check=True)
         self.assertEqual(served.episode_args("secret_set", out.stdout.strip())[0],
                          served.args_digest("secret_set", json.loads(raw)))
+
+
+if __name__ == "__main__":
+    unittest.main()

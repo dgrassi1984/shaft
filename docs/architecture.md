@@ -718,7 +718,8 @@ step's logged arguments, typed by the tool's schema as the template types them b
 (a real result cited under another call's arguments does not count; arguments cut in the log cannot be checked).
 Every supervisor-tool step a citation covers must match. Prediction outcomes cite steps
 the same way. The promises section reads the supervisor's copy of the ledger (`supervisor/ledger_mirror.py`), which
-the run's broker updates as the run goes (on every request it serves and every two seconds) and the mind commit
+the run's broker updates as the run goes (before every POST it serves, each model step and tool call, and every
+two seconds) and the mind commit
 completes, so a promise written and taken back within one run is still counted. Built-in and plugin calls never
 reach the broker and cannot be checked this way: evidence made only of them is counted as
 verified but not checkable. The ledger accepts promises only
