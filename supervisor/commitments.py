@@ -30,10 +30,9 @@ def _at(value) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        at = datetime.fromisoformat(value)
-    except ValueError:
+        return _local(datetime.fromisoformat(value))
+    except (ValueError, OverflowError):   # a time no clock holds ("0001-01-01T00:00:00+23:59" in local time): no time
         return None
-    return _local(at)
 
 
 def _local(at: datetime) -> datetime:
@@ -121,10 +120,12 @@ def _cycle_source(ep: dict | None) -> bool:
     him. What made a promise there one to the operator before the source was recorded on the row."""
     if not ep:
         return False
-    if any(operator_inbox(n) for n in ep.get("inbox") or []):
+    inbox, tools = ep.get("inbox"), ep.get("tools")     # the instance's file: a field of another shape is none
+    if isinstance(inbox, list) and any(operator_inbox(n) for n in inbox):
         return True
-    return any(isinstance(c, dict) and c.get("tool") == "send_message" and isinstance(c.get("result"), str)
-               and c["result"].startswith(DELIVERED) for c in ep.get("tools") or [])
+    return isinstance(tools, list) and any(
+        isinstance(c, dict) and c.get("tool") == "send_message" and isinstance(c.get("result"), str)
+        and c["result"].startswith(DELIVERED) for c in tools)
 
 
 def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str, received=None) -> list[dict]:

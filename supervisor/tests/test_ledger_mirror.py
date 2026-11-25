@@ -419,23 +419,49 @@ class WithinARunTest(IsolatedCase):
         self.assertTrue(mark.exists())
         self.assertFalse(ledger_mirror._held("ember", None))
 
-    def test_a_row_no_source_check_can_read_costs_only_itself(self):
-        """Regression (#21 review): a waiting row whose time overflowed the clock raised in every judging sync, so no
-        later promise was ever judged, and the copy kept it forever."""
+    def test_a_row_or_episode_of_the_wrong_shape_never_stops_the_check(self):
+        """Regression (#21 review): a copied row whose time overflowed the local clock, or a live episode whose inbox
+        was not a list, raised in the source check at every commit (so no promise was ever judged again) and in every
+        reader, and the copy kept the row after the instance took it back."""
         from supervisor import ledger_mirror
         ledger_mirror.sync("ember", self.root)
-        bad = {**self.made(1), "source": "cycle", "at": "0001-01-01T00:00:00+23:59"}
+        bad = {**self.made(1), "source": "cycle", "at": "0001-01-01T00:00:00+23:59",
+               "due": "0001-01-01T00:00:00+23:59"}
         del bad["talk_id"]
+        cycle = {**self.made(3), "source": "cycle", "at": (NOW - timedelta(minutes=5)).isoformat()}
+        del cycle["talk_id"]
         good = self.made(2)
-        self.write(self.root / commitments.FILE, [bad, good])
+        self.write(self.root / commitments.FILE, [bad, good, cycle])
         ledger_mirror.observe("ember", self.root)
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
-        ledger_mirror.sync("ember", self.root)          # still in the current ledger: it must not come back from there
+        self.write(self.root / commitments.FILE, [bad])               # one taken back, one still there
+        odd = {"ts": (NOW - timedelta(minutes=1)).isoformat(), "kind": "live", "inbox": 1, "tools": "x"}
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk(), odd])
+        ledger_mirror.sync("ember", self.root)
         recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
-        self.assertEqual(recs[good["id"]]["checked"]["made_to"], "operator")
-        self.assertTrue(recs[bad["id"]].get("unjudged"))
-        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
-        self.assertEqual(set(items), {good["id"]})
+        self.assertEqual({i: r["checked"]["made_to"] for i, r in recs.items()},
+                         {bad["id"]: "self", good["id"]: "operator", cycle["id"]: "self"})
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])   # no reader raises
+        self.assertEqual(set(items), {good["id"], cycle["id"]})                       # a row with no time folds out
+        commitments.recorded("ember", as_of=NOW - timedelta(minutes=1))
+        "\n".join(commitments.section("ember"))
+
+    def test_a_held_commit_defers_a_reopened_legacy_promise_without_its_source(self):
+        """Regression (#21 review): a legacy row recorded as self (note RELABELLED) is reopened by the source check;
+        without its cycle's episode it came back self, unchanged, and a held commit recorded that for good."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        legacy = {**self.made(1), "source": "cycle", "made_to": "self", "note": commitments.RELABELLED}
+        del legacy["talk_id"]
+        self.write(self.root / commitments.FILE, [legacy])
+        ledger_mirror.observe("ember", self.root)
+        with ledger_mirror.holding("ember"):
+            ledger_mirror.sync("ember", self.root)
+        self.assertNotIn("checked", ledger_mirror.records("ember", "commitments")[0])
+        live = {"ts": (NOW - timedelta(minutes=1)).isoformat(), "kind": "live",
+                "inbox": ["20261111-115000-000000-from-operator.md"]}
+        self.write(self.root / "memory/episodes/day.jsonl", [live])       # the cycle ends, answering the operator
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
 
     def test_a_first_backfill_by_the_broker_keeps_history_verdicts_at_their_seen(self):
         """Regression (#21 review): a history row backfilled by observe got its verdict stamped at the judging, so a
@@ -450,23 +476,6 @@ class WithinARunTest(IsolatedCase):
         ledger_mirror.sync("ember", self.root, now=NOW)
         rec = ledger_mirror.records("ember", "commitments", as_of=NOW - timedelta(days=1))[0]
         self.assertEqual(rec["checked"]["made_to"], "operator")
-
-    def test_an_episode_the_check_cannot_read_leaves_every_promise_waiting(self):
-        """Regression (#21 review): an unreadable episode failed every row's check, and each was recorded as unjudged
-        for good; repairing the episode could not bring their verdicts back."""
-        from supervisor import ledger_mirror
-        ledger_mirror.sync("ember", self.root)
-        made = self.made()
-        self.write(self.root / commitments.FILE, [made])
-        ledger_mirror.observe("ember", self.root)
-        broken = {"ts": "0001-01-01T00:00:00+23:59", "kind": "live"}
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk(), broken])
-        with self.assertRaises(OverflowError):
-            ledger_mirror.sync("ember", self.root)
-        self.assertNotIn("unjudged", ledger_mirror.records("ember", "commitments")[0])
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])          # repaired
-        ledger_mirror.sync("ember", self.root)
-        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
 
     def test_relabelled_is_the_commitments_note(self):
         from supervisor import ledger_mirror

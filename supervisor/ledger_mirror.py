@@ -20,8 +20,7 @@ record of the same row, and a reader folds the two.
 <supervisor dir>/ledger_mirror/<name>/commitments.jsonl: {seen, row[, checked][, judge, strict][, judged]}, row being the
 ledger's line as it was parsed and checked the promise as its source was judged. A promise copied without judging has
 judge true (and strict: judged as a row made after the source rule; history: from a first backfill, its verdict
-counting from its `seen` as a backfill's always did); its verdict record has judge false and judged, when, or unjudged
-true for a row the source check could not read (left out of every reading). A cycle paused for a conversation holds
+counting from its `seen` as a backfill's always did); its verdict record has judge false and judged, when. A cycle paused for a conversation holds
 the copy (a lock on `held` its runner keeps): a commit meanwhile records only the promises whose source it finds.
 """
 from __future__ import annotations
@@ -93,7 +92,7 @@ def records(name: str, kind: str, project: Path | None = None, as_of: datetime |
             continue
         if as_of is not None and ((judged := _at(rec.get("judged"))) is None or judged > as_of):
             continue
-        for field in ("checked", "judge", "unjudged"):
+        for field in ("checked", "judge"):
             if field in rec:
                 out[k][field] = rec[field]
     return list(out.values())
@@ -138,30 +137,16 @@ def _checked_batch(name: str, new: list[dict], strict: set[int] = frozenset()) -
     return dict(zip(made, checked))
 
 
-_PROBE = {"event": "made", "id": "c0101-0000-probe", "promise": "-", "criterion": "-", "made_to": "operator",
-          "sourced": True, "source": "talk", "talk_id": "-", "at": "2000-01-01T00:00:00", "due": "2000-01-02T00:00:00"}
+def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict[int, dict]:
+    """_checked_batch. The source check reads the instance's files and never raises on what they hold (a time no
+    clock holds is no time); if it raises anyway, the sync fails before writing, and every promise waits for the next."""
+    return _checked_batch(name, new, strict)
 
 
-def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> tuple[dict[int, dict], set[int]]:
-    """_checked_batch, and the promises the source check cannot read at all (a row whose fields break it, such as a
-    time no clock holds): those cost only themselves, never the verdicts of the rest. When the check fails whatever the
-    row (an episode it cannot read), it raises: nothing is judged, and everything waits for a later sync."""
-    try:
-        return _checked_batch(name, new, strict), set()
-    except Exception:
-        _checked_batch(name, [_PROBE])     # a failure of the episodes, not of a row: raised, so the rows wait
-    verdicts, failed = {}, set()
-    for i, row in enumerate(new):
-        try:
-            verdicts.update({i: v for v in _checked_batch(name, [row], {0} if i in strict else set()).values()})
-        except Exception:
-            failed.add(i)
-    return verdicts, failed
-
-
-def _found(row: dict, checked: dict) -> bool:
-    """The source check found the promise's source (or had none to look for)."""
-    return not (checked.get("made_to") != row.get("made_to") and checked.get("note") == RELABELLED)
+def _found(checked: dict) -> bool:
+    """The source check found the promise's source, or had none to look for: it relabels a promise whose source is
+    missing, a legacy row it reopened included."""
+    return checked.get("note") != RELABELLED
 
 
 def _hold_path(name: str, project: Path | None) -> Path:
@@ -233,23 +218,21 @@ def sync(name: str, root: Path, project: Path | None = None, now: datetime | Non
                     stamps.append(min(committed, stamp) if committed else stamp)
         held = judge and _held(name, project)   # a paused cycle's promises wait for the commit that ends it
         if judge:
-            checked, failed = _checked(name, new, strict)
+            checked = _checked(name, new, strict)
             if held:   # only what the source check finds now is recorded; a missing source may be the paused cycle's
-                checked = {i: v for i, v in checked.items() if _found(new[i], v)}
+                checked = {i: v for i, v in checked.items() if _found(v)}
             out = [{"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {}),
-                    **({"judge": False, "unjudged": True} if i in failed else
-                       {"judge": True, "strict": i in strict} if row.get("event") == "made" and i not in checked
+                    **({"judge": True, "strict": i in strict} if row.get("event") == "made" and i not in checked
                        and held else {})} for i, row in enumerate(new)]
             waiting = [rec for rec in recs if rec.get("judge") is True and "checked" not in rec]
-            verdicts, failed = _checked(name, [rec["row"] for rec in waiting],
-                                        {i for i, rec in enumerate(waiting) if rec.get("strict", True)})
+            verdicts = _checked(name, [rec["row"] for rec in waiting],
+                                {i for i, rec in enumerate(waiting) if rec.get("strict", True)})
             if held:
-                verdicts = {i: v for i, v in verdicts.items() if _found(waiting[i]["row"], v)}
+                verdicts = {i: v for i, v in verdicts.items() if _found(v)}
             # A history row's verdict counts from its `seen`, as a first sync's backfill always recorded it.
-            out += [{"seen": rec["seen"], "row": rec["row"], **({"checked": verdicts[i]} if i in verdicts else {}),
-                     **({"unjudged": True} if i in failed else {}), "judge": False,
+            out += [{"seen": rec["seen"], "row": rec["row"], "checked": verdicts[i], "judge": False,
                      "judged": rec["seen"] if rec.get("history") else stamp}
-                    for i, rec in enumerate(waiting) if i in verdicts or i in failed]
+                    for i, rec in enumerate(waiting) if i in verdicts]
         else:
             out = [{"seen": stamps[i], "row": row,
                     **({"judge": True, "strict": i in strict, **({"history": True} if i in history else {})}
@@ -292,8 +275,8 @@ def merged(name: str, kind: str, current: list[dict], project: Path | None = Non
         every = [rec for rec in every if _key(rec["row"]) not in later]
         # Not yet known then: a row copied after the moment, or stamped after it.
         current = [r for r in current if _key(r) not in later and ((at := _at(r.get("at"))) is None or at <= as_of)]
-    kept = [rec for rec in every if not rec.get("unjudged")]   # a row no source check could read: no reader can either
-    known = {_key(rec["row"]) for rec in every}                 # nor from the current ledger
+    kept = every
+    known = {_key(rec["row"]) for rec in kept}
     now = {_key(r) for r in current}
     ids_now = {r.get("id") for r in current if isinstance(r.get("id"), str)}
     gone = {rec["row"].get("id") for rec in kept

@@ -214,9 +214,9 @@ def keep(name: str, tool: str, result, run: str | None = None, at: datetime | No
 def _at(value) -> datetime | None:
     try:
         at = datetime.fromisoformat(value) if isinstance(value, str) else None
-    except ValueError:
+        return at.astimezone().replace(tzinfo=None) if at is not None and at.tzinfo else at
+    except (ValueError, OverflowError):    # a time no clock holds in local time: no time
         return None
-    return at.astimezone().replace(tzinfo=None) if at is not None and at.tzinfo else at
 
 
 class Record:
