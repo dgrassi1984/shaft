@@ -121,7 +121,7 @@ BUILTINS = [
           "what happened since my last sleep and what it means — what my future self needs once these "
           "journal entries are no longer in view. Kept in memory/digests.md; recent digests are shown to me.",
           {"text": S}),
-    _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
+    _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations, corrections) "
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
     _spec("remember", "Store a durable fact in memory/facts.md with its source: log:<episode ts>[#step], "
@@ -206,12 +206,16 @@ class Toolbox:
         self.commit_source = ""           # "cycle" or "talk" where commit_to is offered (COMMITMENTS on), else ""
         self.commit_talk_id = ""   # the conversation open now: what makes a promise there one to the operator
         self.commit_inbox: list[str] = []   # this live cycle's inbox: an operator message there sources a promise (#238)
+        self.turn = 0                     # which of my replies is running (agent.run): a hold is read in a later one
+        self.corrections_searched = False   # search_corrections ran since my last message to the operator (#11)
+        self.corrections_held: int | None = None   # the reply in which a message to him was held with my corrections
 
     # -- discovery ---------------------------------------------------------------
     def _discover_plugins(self) -> dict[str, dict]:
         found: dict[str, dict] = {}
         base = self.root / "plugins"
-        taken = {t["function"]["name"] for t in BUILTINS}
+        from . import corrections   # it builds its spec with _spec, from this module
+        taken = {t["function"]["name"] for t in BUILTINS + [corrections.SEARCH]}
         for manifest in sorted(base.glob("*/plugin.json")) if base.is_dir() else []:
             where = f"plugins/{manifest.parent.name}"
             try:
@@ -244,8 +248,8 @@ class Toolbox:
             return {}
 
     def _builtins(self) -> list[dict]:
-        from . import commitments   # it builds its spec with _spec, from this module
-        return (BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+        from . import commitments, corrections   # they build their specs with _spec, from this module
+        return (BUILTINS + [corrections.SEARCH] + ([VIEW_IMAGE] if images.vision() else [])
                 + ([commitments.COMMIT_TO] if self.commit_source else []))
 
     def specs(self) -> list[dict]:
@@ -307,7 +311,13 @@ class Toolbox:
         if name in self.plugins:
             return self._run_plugin(name, args)
         if name in self.remote:
-            return broker.call(name, **args)
+            to_operator = name == "send_message" and str(args.get("to", "")).strip().lower() == "operator"
+            if to_operator and (hold := self._corrections_first(args)):
+                return hold
+            result = broker.call(name, **args)
+            if to_operator and not str(result).startswith("ERROR"):
+                self.corrections_searched = False   # delivered: the next message to him needs its own look
+            return result
         return f"ERROR: unknown tool {name!r}. Available: {self.describe()}"
 
     def _path(self, rel: str, for_write: bool = False) -> Path:
@@ -412,6 +422,38 @@ class Toolbox:
         if self.shared and base == self.root:
             rows.append(f"{SHARED}/ (the operator's folder, read-only: list_files {SHARED})")
         return "\n".join(rows[:400]) or "(empty)"
+
+    def _t_search_corrections(self, query: str, k: int = 3) -> str:
+        from . import corrections
+        result = corrections.found(self.root, query, min(max(1, int(k)), 10))
+        self.corrections_searched = self.corrections_searched or bool(str(query).strip())
+        return result
+
+    def _corrections_first(self, args: dict) -> str | None:
+        """A message to the operator waits for a search of my corrections (#11): a quarter of his corrections
+        reopened one I had closed, and I asked him for what I could have looked up. Unless search_corrections ran
+        since my last delivered message to him, the message is held, not sent, with the corrections closest to its
+        text; sending it again in a later reply sends it. Never held when no correction is recorded or the ledger
+        cannot be read."""
+        from . import cards, corrections
+        if self.corrections_searched:
+            return None
+        if self.corrections_held is not None and self.corrections_held != self.turn:
+            self.corrections_held = None   # held in an earlier reply, so I have read what it showed
+            return None
+        if self.corrections_held is not None:
+            return (f"{cards.HELD} A message to the operator was held earlier in this reply with my corrections; "
+                    "read them first, then send in my next reply.")
+        try:
+            shown = corrections.found(self.root, str(args.get("text", "")))
+        except Exception:   # a ledger or search that fails must never stop a message
+            return None
+        if shown == corrections.NONE_RECORDED:
+            return None
+        self.corrections_held = self.turn
+        return (f"{cards.HELD} {corrections.HOLD_LINE} (searched on its text):\n{shown}\nIf one already answers or "
+                "rules out what this message asks, suggests or claims, change it. Otherwise send it again in my next "
+                "reply, saying in it what I found or that none applies.")
 
     def _t_search_memory(self, query: str, k: int = 5) -> str:
         hits = memory.search(self.root, query, k=k)
