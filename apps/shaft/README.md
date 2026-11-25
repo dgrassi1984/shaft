@@ -406,11 +406,17 @@ One-time setup, with your paid Apple Developer team:
 
 1. A **Developer ID Application** certificate in your login keychain (Xcode → Settings → Accounts → Manage
    Certificates → + → Developer ID Application). `security find-identity -v -p codesigning` must list it.
-2. A **notary profile**, so the script never sees an Apple ID password:
+2. Use a **Team App Store Connect API key** with the Developer role or higher for notarization. In App Store
+   Connect, go to Users and Access → Integrations → Team Keys. You can use the same key with `release-ios.sh`.
+
+   For an interactive release, you can use `--notary-profile shaft-notary` instead. A profile saved by
+   `notarytool store-credentials` in the default keychain is unreadable while the Mac's screen is locked.
+   `notarytool` then reports the profile as missing. Use the API key for unattended releases.
+   To create the profile, run this command and enter an app-specific password from account.apple.com
+   (Sign-In and Security) when prompted.
 
    ```bash
-   xcrun notarytool store-credentials shaft-notary --apple-id <your Apple ID> --team-id <TEAMID>
-   # it asks for an app-specific password (account.apple.com → Sign-In and Security) and stores it in the keychain
+   xcrun notarytool store-credentials shaft-notary --apple-id '<your Apple ID>' --team-id '<TEAMID>'
    ```
 
 3. **Provisioning profiles.** A Developer ID app that uses push (`com.apple.developer.aps-environment`) or a
@@ -437,14 +443,18 @@ Then, from a clean checkout on a release tag:
 
 ```bash
 # Working directory: apps/shaft/
-Scripts/release-mac.sh --notary-profile shaft-notary
+Scripts/release-mac.sh --api-key-path '<path to AuthKey_<KEYID>.p8>' \
+  --api-key-id '<KEYID>' --api-issuer '<ISSUER UUID>'
 ```
 
-Options: `--team TEAMID` (default: `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
+Pass one notarization credential. Use `--api-key-path PATH --api-key-id ID --api-issuer ID` together,
+or pass `--notary-profile NAME`.
+
+Other options include `--team TEAMID` (default `DEVELOPMENT_TEAM` in `Signing.local.yml`), `--out DIR` (default `build/release`),
 `--feed-url URL` (default `https://dgrassi1984.github.io/shaft-app/appcast.xml`; baked into the shipped app, so never
 change it for released apps), `--download-base URL` (default for a tagged build:
 `https://dgrassi1984.github.io/shaft-app/`; required for an untagged trial), `--allow-untagged` (a trial build from a commit that is not a `v*` tag), `--dry-run` (checks the
-preconditions and prints every command, signing and contacting Apple for nothing), `--self-test` (checks the script's
+local preconditions and prints the plan without signing or contacting Apple), `--self-test` (checks the script's
 entitlement readers, URL rules and appcast writer on synthetic data; signs nothing). Both URL options accept `https`, or `http` to `127.0.0.1`
 or `localhost` only, for a local test. It stops at the first failed step, and when Apple rejects the notarization it
 prints the submission id and `notarytool log`.

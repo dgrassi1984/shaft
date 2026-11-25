@@ -344,8 +344,8 @@ actual attention, including unreadable sources. `commitments` reports kept, brok
 
 `shaft battery run` runs the capability battery, normally scheduled at night. It accepts `--until HH:MM`,
 `--only <categories>`, `--limit N`, and `--no-control`. `--control-only` runs only the clean-template control on coding and research items, to check that the items discriminate.
-`report` shows results and judge spend. `recall` freezes recall questions; `--force` starts new questions and
-an era. `backup` backs up items. `off` disables both scheduled and manual batteries for the instance.
+`report` shows results and judge spend. `recall` draws recall questions when none exist or a refresh is due (a new model, judge
+rotation or item version since the last run, or a set 28 days old); `--force` draws new ones now. A new set starts an era. `backup` backs up items. `off` disables both scheduled and manual batteries for the instance.
 Perturbation is speculative and off by default. It requires local Bonsai and the night window. The paired
 blind temperature probe reports self and observer d-prime.
 
