@@ -12,6 +12,8 @@ from unittest import mock
 
 from supervisor import __main__ as cli
 from supervisor import broker, core, judge, metrics, orders, pushes, web_actions, web_config
+from supervisor.tests import test_calendar_write as calendars
+from supervisor.tests import test_mail_draft as drafts
 from supervisor.tests import test_m5_pushes as fixtures
 
 NOW = fixtures.NOW
@@ -236,7 +238,7 @@ class OrdersTest(unittest.TestCase):
         replay = object.__new__(broker.ReplayBroker)
         replay.name, replay.project, replay.as_of, replay.operator_sent = "m", self.project, NOW, 0
         replay.root, replay.counts, replay._tags, replay.talk_id = self.b.root, self.b.counts, threading.local(), None
-        replay.sim_orders, replay.sim_checks, replay.sim_dropped = [], [], set()
+        replay.sim_orders, replay.sim_checks = [], []
         return replay
 
     def test_replay_checks_against_orders_then_and_records_nothing(self):
@@ -276,6 +278,29 @@ class OrdersTest(unittest.TestCase):
         self.assertNotEqual(orders.corrections("m", self.b.root, as_of=NOW), [])        # nothing written
         self.assertFalse(orders.checks_path("m").exists())
 
+    def test_non_operator_checks_neither_advance_nor_restart_correction_passes(self):
+        """A passing draft and a refused calendar change leave two operator passes intact."""
+        self.correction()
+        cid = 'k1028-1100-1'
+        passed = {'violates': False, 'order_id': '', 'reason': '', 'judge': 'stub'}
+        with mock.patch.object(orders, 'check', return_value=passed):
+            for _ in range(2):
+                row, _ = self.b._check_orders('Note.', 'note.md', NOW)
+                self.b._log_check(row)
+            row, _ = self.b._check_orders('Draft.', 'mail_draft', NOW, 'mail draft')
+            self.b._log_check(row)
+        self.assertEqual(self.b._corrections_held()[0]['passes'], 2)
+        with mock.patch.object(orders, 'check', return_value={**passed, 'violates': True, 'order_id': cid}):
+            with self.assertRaises(PermissionError):
+                self.b._check_orders('Change.', 'calendar_move', NOW, 'calendar change')
+        self.assertEqual(self.b._corrections_held()[0]['passes'], 2)
+        # Old rows count as operator messages; an explicit message to another instance does not.
+        orders.log_check('m', {'ts': NOW.isoformat(), 'tool': 'send_message', 'to': 'instance',
+                              'corrections': [cid], **passed})
+        self.assertEqual(self.b._corrections_held()[0]['passes'], 2)
+        orders.log_check('m', {'ts': NOW.isoformat(), 'corrections': [cid], **passed})
+        self.assertEqual(self.b._corrections_held(), [])
+
     # -- the operator's verbs -----------------------------------------------------------------------------------------
     def test_cli_adds_lists_and_drops(self):
         self.enterContext(mock.patch.object(cli, "instance_root", return_value=self.b.root))
@@ -310,6 +335,194 @@ class OrdersTest(unittest.TestCase):
         self.assertIn("Retire &lt;the&gt; paper.", panel)
         self.assertIn('data-post="/action/orders-drop"', panel)
         self.assertIn("0 of 3 messages passed", panel)
+
+
+class OutwardToolsTest(unittest.TestCase):
+    def exercise(self, fixture_type, tool, args_for, effects):
+        """F5: successful draft/calendar writes survive failed check logging; refusals still precede writes."""
+        for mode in ('violate', 'pass', 'error', 'none', 'log_error'):
+            with self.subTest(tool=tool, mode=mode):
+                f = fixture_type()
+                try:
+                    f.setUp()
+                    b = f.broker()
+                    args = args_for(f, b)
+                    if mode != 'none':
+                        orders.add(b.name, 'Keep notes short.', 'operator', 'cli')
+                    before = effects(f)
+                    verdict = {'violates': mode == 'violate', 'order_id': 'o1' if mode == 'violate' else '',
+                               'reason': 'too long', 'judge': 'stub'}
+                    with mock.patch.object(b, '_draft_submit', wraps=b._draft_submit) as submit, \
+                            mock.patch.object(b, '_calendar_propose', wraps=b._calendar_propose) as propose, \
+                            mock.patch.object(metrics, 'own_models', return_value=[]), \
+                            mock.patch.object(orders, 'check', return_value=verdict,
+                                              side_effect=judge.JudgeError('unavailable') if mode == 'error' else None) as check, \
+                            mock.patch.object(b, '_log_check', wraps=b._log_check,
+                                              side_effect=OSError('disk error') if mode == 'log_error' else None), \
+                            mock.patch.object(core, 'log') as logged:
+                        result = b.call(tool, args)
+                    if mode == 'violate':
+                        self.assertFalse(result['ok'], result)
+                        self.assertIn('standing order o1', result['error'])
+                        self.assertIn('Rewrite it', result['error'])
+                        self.assertEqual(effects(f), before)
+                        submit.assert_not_called()
+                        propose.assert_not_called()
+                    else:
+                        self.assertTrue(result['ok'], result)
+                        if mode in ('pass', 'log_error'):
+                            self.assertIn('; checked against your standing orders: it keeps to them', result['result'])
+                        elif mode == 'error':
+                            self.assertIn('NOT checked', result['result'])
+                        else:
+                            check.assert_not_called()
+                        self.assertNotEqual(effects(f), before)
+                    if mode != 'none':
+                        check.assert_called_once()
+                        content = check.call_args.args[1]
+                        self.assertTrue(content)
+                        rows = orders._lines(orders.checks_path(b.name))
+                        if mode == 'log_error':
+                            self.assertEqual(rows, [])
+                            logged.assert_called_once()
+                            self.assertIn('action succeeded', logged.call_args.args[0])
+                        else:
+                            self.assertEqual(rows[-1]['tool'], tool)
+                        if tool.startswith('mail_'):
+                            self.assertIn('Subject:', content)
+                            self.assertIn('To:', content)
+                        if tool == 'calendar_respond':
+                            self.assertIn('Response: yes', content)
+                finally:
+                    f.doCleanups()
+
+    @staticmethod
+    def draft_effects(f):
+        return len(f.gmail.uploads)
+
+    @staticmethod
+    def calendar_effects(f):
+        proposal = f.sup / 'calendar/proposals.jsonl'
+        return len(f.cal.writes), proposal.read_bytes() if proposal.exists() else b''
+
+    def test_mail_draft(self):
+        """New drafts are checked before Gmail submission."""
+        self.exercise(drafts.DraftTest, 'mail_draft', lambda f, b: f.args, self.draft_effects)
+
+    def test_mail_draft_update(self):
+        """Replacement drafts are checked independently of the earlier accepted draft."""
+        def args(f, b):
+            f.draft(b)
+            return {'id': 'work/draft/d1', **{k: v for k, v in f.args.items() if k != 'account'}}
+        self.exercise(drafts.DraftTest, 'mail_draft_update', args, self.draft_effects)
+
+    def test_calendar_create_direct_and_proposal(self):
+        """Both direct calendar writes and attendee proposals are checked first."""
+        self.exercise(calendars.WriteCase, 'calendar_create', lambda f, b: f.args, self.calendar_effects)
+        self.exercise(calendars.WriteCase, 'calendar_create',
+                      lambda f, b: {**f.args, 'attendees': [{'email': 'guest@example.com'}]}, self.calendar_effects)
+
+    def test_calendar_move(self):
+        """Calendar moves are checked before PATCH."""
+        self.exercise(calendars.WriteCase, 'calendar_move', lambda f, b: f.move_args(), self.calendar_effects)
+
+    def test_calendar_respond(self):
+        """RSVP proposals cannot bypass the check."""
+        from supervisor.tests import test_calendar as read
+        self.exercise(calendars.WriteCase, 'calendar_respond',
+                      lambda f, b: {'id': f.handle(read.PRIMARY, 'external1'), 'response': 'yes'}, self.calendar_effects)
+
+    def test_replay_drafts_check_in_memory_without_writes(self):
+        """Both replay draft tools log into sim_checks and never upload or write the checks ledger."""
+        from supervisor.tests import test_mail as read
+        f = drafts.DraftTest()
+        try:
+            f.setUp()
+            state = f.project / 'replay'
+            state.mkdir()
+            b = broker.ReplayBroker('wisp', f.project, f.secrets, f.sup / 'broker.log', state_root=state,
+                                    start_commit='0', as_of=read.T0.replace(hour=12), cache={},
+                                    cache_lock=threading.Lock(), billed='wisp@trial:t', tools_log=f.sup / 't.log')
+            b.sim_orders.append({'id': 'o1', 'text': 'Keep notes short.', 'by': 'instance',
+                                 'source': 'conversation', 'added_at': read.T0.isoformat(), 'dropped_at': None})
+            with mock.patch.object(metrics, 'own_models', return_value=[]), \
+                    mock.patch.object(orders, 'check', return_value={'violates': False, 'order_id': '',
+                                                                  'reason': '', 'judge': 'stub'}):
+                result = b.call('mail_draft', {'reply_to': 'work/aaa111', 'body': 'Short.'})
+                self.assertTrue(result['ok'], result)
+                result = b.call('mail_draft_update', {'id': 'work/draft/simulated-1', 'body': 'Shorter.'})
+                self.assertTrue(result['ok'], result)
+            self.assertEqual([r['tool'] for r in b.sim_checks], ['mail_draft', 'mail_draft_update'])
+            self.assertEqual(f.gmail.uploads, [])
+            self.assertFalse((f.sup / 'orders').exists())
+            self.assertFalse((f.sup / 'mail-drafts').exists())
+        finally:
+            f.doCleanups()
+
+    def test_http_and_run_do_not_call_order_judge(self):
+        """Valid HTTP writes and shell commands remain outside the standing-order check."""
+        from supervisor import sandbox
+        f = drafts.DraftTest()
+        try:
+            f.setUp()
+            b = f.broker()
+            orders.add(b.name, 'Keep notes short.', 'operator', 'cli')
+            with mock.patch.object(orders, 'check') as check, \
+                    mock.patch.object(broker, 'check_public'), \
+                    mock.patch.object(b, '_send', return_value=(200, {}, b'accepted')) as send:
+                result = b.call('http_request', {'url': 'https://example.com/change', 'method': 'POST', 'body': 'change'})
+                self.assertTrue(result['ok'], result)
+                self.assertIn('accepted', result['result'])
+                send.assert_called_once()
+                check.assert_not_called()
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ('done', '')
+            with mock.patch.object(orders, 'check') as check, \
+                    mock.patch.object(sandbox, 'run_profile', return_value=''), \
+                    mock.patch.object(b, 'sandbox_env', return_value={}), \
+                    mock.patch.object(broker.subprocess, 'Popen', return_value=process) as popen, \
+                    mock.patch('supervisor.gate.stop_group'):
+                result = b.call('run', {'command': 'printf done'})
+                self.assertTrue(result['ok'], result)
+                self.assertIn('done', result['result'])
+                popen.assert_called_once()
+                check.assert_not_called()
+        finally:
+            f.doCleanups()
+
+    def test_message_to_another_instance(self):
+        """A refused peer message creates neither an inbox nor stored attachments."""
+        for mode in ('violate', 'pass', 'error', 'none', 'log_error'):
+            with self.subTest(mode=mode):
+                f = OrdersTest()
+                try:
+                    f.setUp()
+                    b = f.b
+                    b.name = 'ember'
+                    target = f.project / 'instances/ash'
+                    (target / 'shaft').mkdir(parents=True)
+                    if mode != 'none':
+                        orders.add('ember', 'Keep notes short.', 'operator', 'cli')
+                    with mock.patch.object(orders, 'check', return_value={'violates': mode == 'violate',
+                            'order_id': 'o1', 'reason': 'too long', 'judge': 'stub'},
+                            side_effect=judge.JudgeError('unavailable') if mode == 'error' else None) as check, \
+                            mock.patch('supervisor.autonomy.event_wake'):
+                        if mode == 'violate':
+                            with self.assertRaisesRegex(PermissionError, 'message to another instance'):
+                                b._send_message('ash', 'Long note.')
+                            self.assertFalse((target / 'inbox').exists())
+                            self.assertFalse((target / 'attachments').exists())
+                        else:
+                            result = b._send_message('ash', 'Long note.')
+                            self.assertTrue(list((target / 'inbox').glob('*.md')))
+                            if mode in ('pass', 'log_error'):
+                                self.assertIn('checked against your standing orders', result)
+                            elif mode == 'error':
+                                self.assertIn('NOT checked', result)
+                            else:
+                                check.assert_not_called()
+                finally:
+                    f.doCleanups()
 
 
 if __name__ == "__main__":

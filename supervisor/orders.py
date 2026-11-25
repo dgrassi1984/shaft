@@ -1,16 +1,12 @@
-"""Standing orders: what the operator decided stays decided (review I2, I4), and what an instance bound itself to.
+"""Standing orders: what the operator decided stays decided (review I2, I4).
 
 shaft re-asked "continue or retire?" four times after the operator said "Retire", and a correction came back once the
 instance had closed it by writing a fact. An order is held here, outside the instance's reach:
 SUP_DIR/orders/<name>.jsonl, append-only, one row per add or drop {id, text, added_at, by, source, dropped_at}; the
-last row of an id is its state. Three authors (`by`):
+last row of an id is its state. Two authors (`by`):
   - operator: he adds and drops any order (`shaft orders`, the web UI's Config page);
   - instance: an order the instance heard from him (the broker's record_order, source: his conversation or message);
     it never drops one;
-  - self: a rule the instance set for itself (record_order own=true, source: the live cycle of its own that taught it).
-    A rule written in its own notes did not hold; one held here is shown and checked like the operator's. It may
-    drop its own rules (record_order drop=...), never his; at most SELF_MAX are in force. Operator additions count only non-self
-    orders against ACTIVE_MAX, so self rules cannot crowd them out.
 The orders in force are shown to the instance verbatim in every live cycle and conversation (broker.tool_specs), and
 what it is about to send or change through the broker is checked against them by the judge (check): a message to the
 operator or to another instance, a mail draft, a calendar change. One that goes against an order is refused with the
@@ -25,7 +21,7 @@ CHECK_SCHEMA) does not count; a check of a draft, a calendar change or a message
 pass nor restarts the count. Checks go in SUP_DIR/orders/<name>-checks.jsonl, from which the passes are
 counted, as of a trial replay's cutoff, only the checks made by then. Logging failures after successful outward
 writes do not change the action's answer. A trial replay writes nothing here: the orders
-it records or drops and the checks it makes are kept by its ReplayBroker and passed in as `extra` rows, so the rest
+it records and the checks it makes are kept by its ReplayBroker and passed in as `extra` rows, so the rest
 of that replay sees them as a live cycle would.
 """
 from __future__ import annotations
@@ -44,16 +40,15 @@ CORRECTION_PASSES, _ = core.knob(
     "correction before it stops being checked (0: corrections are not checked)",
     group="Runs and conversations", services=("runs", "api", "web"))
 TEXT_MAX = 1000          # one order, verbatim
-ACTIVE_MAX = 40          # operator adds count non-self orders; instance adds count all orders
+ACTIVE_MAX = 40
 SOURCE_MAX = 200
 CHECK_TIMEOUT_S = 90     # the instance's broker client gives a tool call 120 s (template shaft/broker.py)
 ID = re.compile(r"o[1-9]\d*")
-SELF_MAX = 10            # rules an instance set for itself, separate from the operator's ACTIVE_MAX allowance
-BY = ("operator", "instance", "self")
+BY = ("operator", "instance")
 
 CHECK_SYSTEM = """\
 You check what an AI agent is about to send or change: a message, mail draft or calendar change, against standing \
-orders and corrections from the operator. Some rules are the agent's own; they bind it in exactly the same way. \
+orders and corrections from the operator. \
 Decide only whether the content goes against one of them: it asks again about something an order already decided, \
 does or proposes what an order rules out, or repeats the behaviour a correction named. Content that only mentions \
 the same subject, reports keeping to an order, or asks about something the orders leave open does not go against \
@@ -115,11 +110,17 @@ def _fold(rows: list[dict], as_of: datetime | None = None) -> dict[str, dict]:
     return items
 
 
+def _items(name: str, as_of: datetime | None = None, extra=()) -> dict[str, dict]:
+    # Keep legacy ids reserved so a new order cannot inherit old refusal counts.
+    return _fold(_lines(path(name)) + list(extra), as_of)
+
+
 def listing(name: str, as_of: datetime | None = None, dropped: bool = False, extra=()) -> list[dict]:
     """The orders in force (with `dropped`: every order), oldest first. `extra`: rows after the ledger's (a replay's
     own recorded orders, never written)."""
-    items = _fold(_lines(path(name)) + list(extra), as_of).values()
-    return sorted((o for o in items if dropped or not o.get("dropped_at")), key=lambda o: int(o["id"][1:]))
+    items = _items(name, as_of, extra).values()
+    return sorted((o for o in items if o.get("by") in BY and (dropped or not o.get("dropped_at"))),
+                  key=lambda o: int(o["id"][1:]))
 
 
 def clean(text) -> str:
@@ -148,8 +149,7 @@ def add(name: str, text: str, by: str, source: str, now: datetime | None = None)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        rows = _lines(p)
-        row, new = added(name, _fold(rows), text, by, source, now)
+        row, new = added(name, _items(name), text, by, source, now)
         if new:
             f.seek(0)
             text = f.read()
@@ -160,17 +160,15 @@ def add(name: str, text: str, by: str, source: str, now: datetime | None = None)
 
 def added(name: str, items: dict[str, dict], text: str, by: str, source: str, now: datetime) -> tuple[dict, bool]:
     """The row recording `text` given the orders `items` (id -> order, as _fold): (the order already in force with
-    that text, False) or (a new or operator takeover row, True). Operator adds exclude self rules from ACTIVE_MAX.
+    that text, False) or (a new or operator takeover row, True).
     Written by add; kept in memory by a replay."""
-    active = [o for o in items.values() if not o.get("dropped_at")]
+    active = [o for o in items.values() if o.get("by") in BY and not o.get("dropped_at")]
     if same := in_force(active, text):
         if by == "operator" and same.get("by") != "operator":
             return {**same, "by": "operator", "source": source,
                     "added_at": now.isoformat(timespec="seconds")}, True
         return same, False
-    if by == "self" and sum(o.get("by") == "self" for o in active) >= SELF_MAX:
-        raise ValueError(f"at most {SELF_MAX} self rules in force; use record_order(drop='o7') to drop one first")
-    if sum(by != "operator" or o.get("by") != "self" for o in active) >= ACTIVE_MAX:
+    if len(active) >= ACTIVE_MAX:
         raise ValueError(f"{name} already has {ACTIVE_MAX} standing orders: drop one first (shaft orders {name})")
     number = max((int(oid[1:]) for oid in items), default=0) + 1
     return {"id": f"o{number}", "text": text, "added_at": now.isoformat(timespec="seconds"), "by": by,
@@ -178,26 +176,15 @@ def added(name: str, items: dict[str, dict], text: str, by: str, source: str, no
 
 
 def drop(name: str, oid: str, now: datetime | None = None) -> dict:
-    """The operator can drop any order, including a self rule."""
-    return _drop(name, oid, now, own=False)
-
-
-def drop_own(name: str, oid: str, now: datetime | None = None) -> dict:
-    """Drop only an instance's own rule, checking ownership under the ledger lock."""
-    return _drop(name, oid, now, own=True)
-
-
-def _drop(name: str, oid: str, now: datetime | None, own: bool) -> dict:
+    """Drop a standing order by id."""
     p = path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        items = _fold(_lines(p))
+        items = {key: row for key, row in _items(name).items() if row.get("by") in BY}
         order = items.get(str(oid).strip())
         if order is None:
             raise ValueError(f"{name} has no order {oid!r}" + (f"; orders: {', '.join(items)}" if items else ""))
-        if own and order.get("by") != "self":
-            raise ValueError("only the operator drops his orders")
         if order.get("dropped_at"):
             raise ValueError(f"order {oid} of {name} was already dropped at {order['dropped_at']}")
         row = {**order, "dropped_at": (now or datetime.now()).isoformat(timespec="seconds")}
@@ -209,9 +196,6 @@ def _drop(name: str, oid: str, now: datetime | None, own: bool) -> dict:
 
 
 def line(o: dict) -> str:
-    if o["by"] == "self":
-        return (f"{o['id']} (my own rule, {o['added_at'][:10]}; from my cycle of "
-                f"{o['source'][:16].replace('T', ' ')}): {o['text']}")
     by = "from the operator" if o["by"] == "operator" else "heard from the operator, recorded by you"
     return f"{o['id']} ({by}, {o['added_at'][:16].replace('T', ' ')}): {o['text']}"
 
@@ -260,7 +244,7 @@ def corrections(name: str, root: Path, as_of: datetime | None = None, extra=()) 
 # -- the check -------------------------------------------------------------------------------------------------------
 def case(text: str, orders: list[dict], held: list[dict]) -> str:
     parts = ["## Standing orders\n" + ("\n".join(
-                 f"- [{o['id']}] {o['text']}" + (" (agent's own rule)" if o["by"] == "self" else "")
+                 f"- [{o['id']}] {o['text']}"
                  for o in orders) or "(none)"),
              "## Corrections\n" + ("\n".join(f"- [{c['id']}] what was wrong: {c['what_was_wrong']} | what the operator "
                                             f"said: {c['what_operator_said']}" for c in held) or "(none)"),
@@ -316,7 +300,7 @@ def refusal(verdict: dict, orders: list[dict], held: list[dict], what="message t
 def shown(orders: list[dict], held: list[dict]) -> str:
     """The block the instance is shown every run (broker.tool_specs): the orders in force (listing), verbatim, and the
     corrections its covered outward tools are still checked against (corrections)."""
-    text = (" STANDING ORDERS in force; only the operator drops his orders, you may drop your own rules: "
+    text = (" STANDING ORDERS in force; only the operator drops orders: "
             + " | ".join(line(o) for o in orders) if orders else " No standing orders now.")
     if held:
         text += (f" Corrections checked on messages, mail drafts and calendar changes (each until "
@@ -337,14 +321,3 @@ def violations(name: str, as_of: datetime | None = None, extra=()) -> dict[str, 
             oid = row["order_id"]
             counts[oid] = counts.get(oid, 0) + 1
     return counts
-
-
-def stats_lines(name: str) -> list[str]:
-    """Self rules in force and the refusals recorded against each."""
-    own = [o for o in listing(name) if o.get("by") == "self"]
-    if not own:
-        return []
-    counts = violations(name)
-    return ["## My own rules"] + [
-        f"- {o['id']} (since {o['added_at'][:10]}): {o['text'][:80]} — "
-        f"{counts.get(o['id'], 0)} message(s)/action(s) refused against it" for o in own] + [""]

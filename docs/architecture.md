@@ -153,9 +153,6 @@ The `record` tool also exposes the following kinds through `supervisor/broker.py
 | Kind | Contents |
 |---|---|
 | `families` | Chains of goals linked by the judge's `resembles` field, over judged cycles only. |
-| `habits` | Repeated calls, sequences and failure classes. `supervisor/habits.py`, `signature`, names calls by the script run or file touched; `MIN_CYCLES=3` is the repetition floor. |
-| `usage` | Per-plugin calls and per-skill-file reads from live cycles' tool logs, with cycle counts and judged value. Scheduled job runs are not cycle calls (`supervisor/usage.py`). |
-| `facts` | Current facts with sources checked by `provenance`, and later live-cycle restatements. `offset` pages the results (`supervisor/factledger.py`, `record_text`). |
 | `predictions` | Supervisor-stamped predictions, reports, scores and reasons. |
 | `unrecorded_orders` | Checks of future orders in ended, written-up conversations against recorded commitments and standing orders. |
 
@@ -262,7 +259,7 @@ interfaces, and notification setup, and `supervisor/apns.py` for native push del
 
 ## Measuring improvement and autonomy
 
-### Stats head and gauges
+### Stats head
 
 `supervisor/metrics.py`, `stats_text`, inserts `supervisor/stats_head.py`, `head`, after the `self/stats.md` title.
 The full body follows unchanged below `BODY_MARK`, a notice pointing to `read_file self/stats.md`.
@@ -270,7 +267,7 @@ The template keeps the head of this page: `shaft/prompts.py`, `SECTIONS["stats"]
 and `cut` can shorten it further under the overall context budget. The head uses `HEAD_CHARS=2500` and
 `LINE_CHARS=240`; when it exceeds the cap, the last notes are removed first.
 
-The head puts chosen gauges first, then claim-lint findings, due predictions and summary notes.
+The head puts due predictions before the summary notes.
 `since_sleep` counts cycles, verdicts and kept code changes since the last finished sleep.
 `model_change` marks the latest model transition in judged cycles for `MODEL_NOTE_DAYS=7` days.
 `verdicts` reports the paired base-rate comparison and random curiosity-coin comparison.
@@ -280,52 +277,13 @@ curiosity raises one when both arms have `COIN_ALERT_N=50` judged cycles and the
 Battery self-knowledge misses expose only topics from `battery.SELF_TOPICS` through `self_miss_topics`, never items,
 questions, reference answers or grader reasoning.
 
-`supervisor/gauges.py`, `MENU`, offers these readings:
-
-| Key | Reads |
-|---|---|
-| `promises` | Open and overdue promises to the operator. |
-| `unasked_used` | Self-chosen cycles the judge found anticipated a need. |
-| `claims` | Judged cycles with claims unsupported by the tool log. |
-| `corrections` | The operator's corrections still open. |
-| `value` | Judged value and delivery in recent cycles. |
-| `recurrence` | Kinds of failed result that recurred. |
-| `battery` | Fixed-task capability against the empty-mind control, or full score for self and recall without a control. |
-| `unrecorded_orders` | Future orders in conversations that were not recorded. |
-| `plan` | Open projects past their dates, or time since the last project opened or closed. |
-
-Each reading has a gap expressed as a share of its own total when measurable. `head_lines` sorts largest gaps first,
-with unmeasurable readings last. Recent judged rates use `WINDOW_DAYS=14`; value uses `LAST_VALUED=20` cycles.
-No gauge appears in the stats head until chosen; `MAX_CHOSEN=4`. The instance cannot set a reading: each is
-recomputed at every build. `promises` and `corrections` read ledgers the instance keeps in its folder through the
-supervisor's own add-only copy of their rows (`supervisor/ledger_mirror.py`, synced at every mind commit and
-backfilled once from the mind store): a row the instance later alters or removes is still counted, and the reading
-names the change. A promise's source is judged when it is copied, and a replay reads the copy as it stood then. `plan` is the instance's own account, read as it stands and labelled so; the others read the
-supervisor's own record. In a trial replay the readings are computed as of the replayed cycle's start.
-The broker's `gauges` tool lists readings or accepts `choose=[...]`; an empty list clears the choice.
-`shaft gauges <name> [list|set a,b,c|clear]` lets the operator choose too.
-`SUP_DIR/gauges/<name>.jsonl` keeps every choice with `by` set to `instance` or `operator`; the last row is in force.
-Gauges are readings only. No instruction, refusal or gate follows from a gauge.
-The tool is unavailable in battery exams and scheduled jobs.
-
-### Claim lint and fact sources
-
-`supervisor/claimlint.py`, `lint`, makes two model-free checks: a claimed delivery channel must have a successful
-candidate call in the cycle's tool log, and a commitment settled as kept must have valid logged evidence.
-These conservative checks flag only what the recorded calls provably lack; candidate calls do not prove delivery.
-`metrics.after_cycle` runs lint on live cycles before writing stats, independently of sampled judging.
-`SUP_DIR/claimlint/<name>.jsonl` keeps the findings. The head shows findings since the last sleep,
-or from the last 24 hours if there is no sleep. Lint never changes a grade.
-
-A judgment's `unsupported_claim` quotes a claim only when `claim_supported=false`.
-`metrics.judge_pending` uses `factledger.match_claim` to attach `unsourced_fact` when the quote shares text with a
-current fact without a checked source. This is a text match, not proof that the fact caused the claim.
 `battery.recall_by_age` separates recall scores by entry age at the exam, using `RECALL_OLD_DAYS=14` days.
 
 ### Goal families and kept changes
 
 The judge's `resembles` field names an earlier judged goal or is empty (`metrics.LINK_PROPS`). Only the main
 judge is asked for the link fields (`MAIN_SCHEMA`); the second judge, controls and baselines use `JUDGE_SCHEMA`.
+A judgment's `unsupported_claim` quotes the claim when `claim_supported=false`.
 `_prior_keys` supplies at most `PRIOR_GOALS=30` earlier goals; `_links` discards links outside that list.
 `supervisor/families.py`, `families`, joins these links into chains over judged cycles only.
 Each family has cycle counts and dates, mean value, delivery count, last delivery and last novelty of at least 3.
@@ -340,8 +298,7 @@ or no delivery and known mean value below 2 for other work. Nothing is removed f
 `change_outcomes` reports `on probation`, `passed`, `kept, not judged`, `reverted`, `not on probation` or `unknown`.
 Its `tested` field records whether a finished trial of the same change preceded it, or is null when unknown.
 The supervisor log supplies what the history file lacks (changes kept before it existed, and the start of a
-probation already open when it began); the two are merged by commit and outcome. `usage.kept_changes_line` summarizes the last 14 days' kept changes,
-trials and probation outcomes in stats.
+probation already open when it began). `change_outcomes` merges both records by commit and outcome.
 
 ### Ending an idle cycle
 
@@ -353,7 +310,7 @@ is the run's start time as the supervisor stamped it (`SHAFT_RUN_STARTED`, which
 `run`, `http_request` and file tools before it do not prevent it. Other run kinds or a prior such call return a
 not-counted answer.
 
-After the exit, any supervisor tool call outside `idle.QUIET` (`nothing_to_do`, `record`, `gauges`) withdraws it:
+After the exit, any supervisor tool call outside `idle.QUIET` (`nothing_to_do`, `record`) withdraws it:
 `Broker._idle_withdrawn` appends a `revoked` row and `autonomy.record("idle_revoke")` clears the schedule mark.
 The later call itself is not refused. `idle.exits` matches a standing exit to the earliest episode carrying its run
 id, ended at or after the exit was recorded, with no code change kept in that run.
@@ -386,7 +343,7 @@ Write-ups more than `FIRST_RUN_HOURS=24` hours before that marker are skipped.
 `TRANSCRIPT_CHARS=24000` bounds the transcript tail; returned quotes must occur in visible operator turns.
 Words found only in a turn's quote-reply lines (`> …`, the app quoting the instance's own message back) are the
 instance's suggestion, not an order: they are counted as `own_quotes` on the row and dropped.
-Results stay in `SUP_DIR/unrecorded_orders/<name>.jsonl`, exposed by the gauge and `record(kind="unrecorded_orders")`.
+Results stay in `SUP_DIR/unrecorded_orders/<name>.jsonl`, available through `record(kind="unrecorded_orders")`.
 A row with an unrecorded order also reaches the instance at its next cycle: one inbox note per conversation,
 `inbox/<stamp>-from-supervisor-orders.md`, quoting the operator's words and naming the conversation, written before
 the row (`told`). A note that could not be written leaves no row: the conversation stays pending and is told at a later
@@ -683,20 +640,17 @@ The default is 6, and 0 disables the alert. A missing, unreadable or malformed l
 ### Standing orders
 
 Standing orders ([orders.py](../supervisor/orders.py)) remain in force until dropped. The supervisor holds
-append-only rows `{id, text, added_at, by: operator|instance|self, source, dropped_at}` in
+append-only rows `{id, text, added_at, by: operator|instance, source, dropped_at}` in
 `.supervisor/orders/<name>.jsonl`. The last row of an id is its state. The operator adds, lists and drops orders
 with `shaft orders <name> [list|add TEXT|drop ID]` or the web Config page. An instance uses `record_order` to
-record an order heard from the operator, citing the message file or conversation id. With `own=true`, it sets
-its own rule and must cite an exact past live-cycle timestamp or a unique minute prefix.
-At most 10 self rules may be in force. Operator additions count only non-self orders against the limit of 40;
-instance additions count every order. The instance can drop only its own rules with `record_order(drop=ID)`.
-The operator can drop any order. The CLI lists authors and refusal counts. `orders.stats_lines` reports self rules.
+record an order heard from the operator, citing the message file or conversation ID. Up to 40 orders can be in force.
+Only the operator can drop an order. The CLI lists authors and refusal counts.
 
 Orders are shown verbatim every run and conversation in the `record_order` tool description, or in
 `send_message` when `record_order` is disabled. A judge from the rotation, excluding the instance's own model,
 checks `send_message` to the operator or another instance, `mail_draft`, `mail_draft_update`, `calendar_create`,
-`calendar_move` and `calendar_respond` against all orders and held corrections. Self rules bind the instance
-in the same way as operator orders. `http_request` and `run` are not checked: they have no single text to check
+`calendar_move` and `calendar_respond` against all orders and held corrections.
+`http_request` and `run` are not checked: they have no single text to check
 and no bound on their number (`supervisor/orders.py`). A violation is refused before
 message delivery, draft submission, calendar writing or proposal creation, quoting the rule and reason.
 The instance may rewrite and retry. A judge error lets the call proceed with an explicit NOT checked note.
@@ -739,9 +693,9 @@ episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). 
 so a cited supervisor-tool step counts only if the broker served that call in the run that was going on when the
 episode ended, by the supervisor's own record of the instance's runs (never the episode's times), and the step's
 result matches the fingerprint (length and sha256, never the text) the broker kept at the call
-(`supervisor/served.py`); every supervisor-tool step a citation covers must match. Prediction outcomes and claim lint
-cite steps the same way, and the promises section and claim lint read the supervisor's copy of the ledger. Built-in
-and plugin calls never reach the broker and cannot be checked this way: evidence made only of them is counted as
+(`supervisor/served.py`); every supervisor-tool step a citation covers must match. Prediction outcomes cite steps
+the same way. The promises section reads the supervisor's copy of the ledger. Built-in and plugin calls never
+reach the broker and cannot be checked this way: evidence made only of them is counted as
 verified but not checkable. The ledger accepts promises only
 to the operator (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. A promise to the operator needs a source the model does not

@@ -193,11 +193,8 @@ The broker reads branch and mind-store metadata on the supervisor side. Sandbox 
 limit direct access; the profile does not prohibit executing the git binary itself. With `save_as`, it restores one file as it was after a commit, written whole to a new path in its
 folder (never over an existing file), so it can bring back a record a bad write damaged without the operator. **`record`**: the supervisor's own record about it; the judge's verdicts with reasoning, its
 runs, its tool calls, its kept code changes, its internet connections; so it can check its claims about
-itself. `broker.LEDGER_KINDS` also exposes `families` for judged goal chains, `habits` for repeated specific calls
-and sequences (`habits.MIN_CYCLES=3`), `usage` for per-plugin calls and per-skill-file reads from live tool logs,
-`facts` for current facts with checked sources and later restatements, `predictions` for reports and scores,
-and `unrecorded_orders` for future orders found in ended conversations. Scheduled job runs are not cycle calls.
-`facts` uses `offset` paging. These records are readings, not instructions or gates.
+itself. `broker.LEDGER_KINDS` also exposes `families` for judged goal chains, `predictions` for reports and scores,
+and `unrecorded_orders` for future orders found in ended conversations.
 
 ### Decision model
 
@@ -256,11 +253,8 @@ calendar writing or proposal creation, quoting the rule and the judge's reason. 
 and retry. A judge error lets the call proceed with a NOT checked note. No rules or held corrections
 means no judge call (`supervisor/broker.py`, `Broker._check_orders`).
 
-An instance may record an order heard from the operator or set its own rule with `record_order(own=true)`,
-citing an exact past live-cycle timestamp or a unique minute prefix. Self rules bind it in the same way.
-At most 10 self rules may be in force. Operator additions count only non-self orders against the limit of 40;
-instance additions count every order. The instance drops only its own rules with
-`record_order(drop=ID)`. Only the operator drops his orders; he can also drop self rules.
+An instance can record an order heard from the operator with `record_order`. It cites the message file or
+conversation ID. Up to 40 orders can be in force. Only the operator can drop an order.
 Refusals are counted per rule. Only passing messages to the operator advance a held correction's pass
 count, and only a refused operator message restarts it. Drafts, calendar changes and other messages do neither.
 
@@ -461,9 +455,9 @@ trials: `.supervisor/trials/<name>/<id>/`.
 
 ### Replay records
 
-`ReplayBroker` in `supervisor/broker.py` validates and answers `gauges(choose=...)`, `predict`, `record_order`
-and own-rule drops as live calls. Gauge choices, prediction events, recorded rules, drops and outgoing-check
-results remain in that replay; later calls see them. Nothing is written to their live supervisor ledgers.
+`ReplayBroker` in `supervisor/broker.py` validates and answers `predict` and `record_order` as live calls.
+Prediction events, recorded orders and outgoing-check results stay in the replay and are visible to later calls
+in that replay.
 Prediction events use the replay clock and are not scored. A replayed `nothing_to_do` answers as a live call
 but keeps no idle-exit row and makes no schedule change. Its simulated call remains in the replay trace.
 

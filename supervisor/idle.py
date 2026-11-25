@@ -30,7 +30,7 @@ from .core import jsonl_lines
 REASON_MAX = 300
 OUTWARD = ("send_message", "mail_draft", "mail_draft_update", "calendar_create", "calendar_move", "calendar_respond")
 PRIOR = OUTWARD + ("delegate_coding", "set_config", "secret_set", "secret_delete", "trial", "record_order", "predict")
-QUIET = ("nothing_to_do", "record", "gauges")   # what may still be called after the exit without withdrawing it
+QUIET = ("nothing_to_do", "record")   # what may still be called after the exit without withdrawing it
 WINDOW_DAYS = 14
 MAX_RUN = timedelta(hours=6)   # far longer than any cycle; a match further apart is not that run
 

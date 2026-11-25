@@ -231,8 +231,7 @@ def recorded(name: str, as_of: datetime | None = None) -> tuple[list[dict], dict
 
 
 def ledger(name: str, now: datetime | None = None, rows: list[dict] | None = None) -> dict[str, dict]:
-    """The instance's commitments folded and source-checked; `rows`: the events to fold instead of its file's (the
-    `promises` gauge folds the supervisor's own copy with them: ledger_mirror.py)."""
+    """The instance's commitments folded and source-checked; `rows`: the events to fold instead of its file's."""
     if not NAME.fullmatch(name):
         return {}
     if rows is None:

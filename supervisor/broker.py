@@ -270,8 +270,7 @@ def _spec(name, description, properties, required=None):
 
 
 S = {"type": "string"}
-LEDGER_KINDS = {"families": "families", "habits": "habits", "usage": "usage", "facts": "factledger",
-                "predictions": "predictions", "unrecorded_orders": "unrecorded"}   # record kind -> module
+LEDGER_KINDS = {"families": "families", "predictions": "predictions", "unrecorded_orders": "unrecorded"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -318,34 +317,15 @@ SPECS = {
     "record_order": _spec("record_order", "Record a standing order: a decision that stays decided. The supervisor "
                           "holds it, not your memory: you are shown it in every run and conversation, and what you send "
                           "or change through the supervisor (a message to the operator or to another instance, a mail "
-                          "draft, a calendar change) is checked against it and refused when it goes against it. Two "
-                          "kinds. (1) An order the operator gave you ('Retire it', 'Drop the X', 'the paper body has "
-                          "no process blocks'): text in his own words, source = the file of his message or the "
-                          "conversation id (leave source empty in a conversation with him). Only he can drop it. "
-                          "(2) A rule of your own, to bind yourself: own=true, text = the rule, source = the time of "
-                          "the episode of yours that taught it (its exact ts, or YYYY-MM-DD HH:MM). It is shown and "
-                          "checked exactly like his, and refusals against it are counted. You can drop your own rule "
-                          "with drop=<its id> (he can too); you can never drop his. At most 10 rules of your own and "
-                          "40 orders in all are in force.",
-                          {"text": {"type": "string", "description": "the order, verbatim in his words; or your own rule"},
-                           "source": {"type": "string", "description": "his order: the file of his message it came in "
+                          "draft, a calendar change) is checked against it and refused when it goes against it. "
+                          "Use the operator's own words and cite the message file or conversation id. "
+                          "Only the operator can drop an order. Up to 40 orders can be in force.",
+                          {"text": {"type": "string", "description": "the operator's order, verbatim"},
+                           "source": {"type": "string", "description": "the file of the operator's message "
                                       "(e.g. inbox/20261101-091500-123456-from-operator.md), or empty in a conversation "
-                                      "with him; on refusal the answer lists recent message files, and "
-                                      "record(kind='runs') shows conversation ids in start talk/api lines. Your own "
-                                      "rule: the time of your episode that taught it"},
-                           "own": {"type": "boolean", "description": "true: a rule of your own"},
-                           "drop": {"type": "string", "description": "the id of a rule of your own to drop (o7); pass "
-                                                                     "nothing else"}},
+                                      "with the operator. On refusal the answer lists recent message files. "
+                                      "record(kind='runs') shows conversation ids in start talk/api lines."}},
                           []),
-    "gauges": _spec("gauges", "Your gauges: a few readings the supervisor computes from its own record of you "
-                    "(promises open, claims the tool log did not support, failures that came back, value, capability "
-                    "against a control...). Called with no argument it lists the menu with each reading now and what is "
-                    "chosen. choose=[...] picks up to 4 by name: they become the first lines of self/stats.md, which "
-                    "you see in every run, largest gap first. Readings only: nothing is asked of you and nothing is "
-                    "refused; you cannot change a reading, and you can change the choice whenever you like (the "
-                    "operator can too). choose=[] shows none.",
-                    {"choose": {"type": "array", "items": {"type": "string"},
-                                "description": "gauge names from the menu; omit it to see the menu"}}, []),
     "predict": _spec("predict", "Record a prediction and have the supervisor score it. It stamps the prediction with "
                      "a time you cannot change. Predict anything your work turns on: what someone will answer, your next score "
                      "on a task, what a source will say. To make one: text, due, how_to_check (how the outcome "
@@ -376,7 +356,7 @@ SPECS = {
                            "result wakes you as usual, and your next cycle of any other kind puts the wait back. It "
                            "counts only in an autonomous cycle that has sent, drafted, delegated or changed nothing "
                            "(looking around is fine), and only if it is the last thing you do: after it, finish the "
-                           "cycle; any further supervisor tool call other than record or gauges makes the cycle an "
+                           "cycle; any further supervisor tool call other than record makes the cycle an "
                            "ordinary one again, as does keeping a code change.",
                            {"reason": {"type": "string", "description": "one sentence: what you checked and found "
                                                                         "nothing in"}}, ["reason"]),
@@ -437,12 +417,9 @@ SPECS = {
         "baseline was red), 'commitment_source' (cycle: an operator message filename; "
         "confirms it exists and was addressed by you to the operator), 'families' (your goals grouped into the "
         "chains the judge said resemble each other: cycles, value, deliveries, the last time something new came of "
-        "each; work on your own capability is read by what survived probation instead), 'habits' (the same script or "
-        "file you ran or touched in many cycles, sequences you repeated, kinds of failed call that came back), "
-        "'usage' (each of your plugins and skill files: when built, how often called or read in your cycles, when "
-        "last), 'facts' (each fact in memory/facts.md: whether the log or page it cites shows it, and how many "
-        "later cycles restated it; `before` is not used, page with `offset`), 'predictions' (the predictions you made "
-        "with predict: due time, status, and the judge's result and reason for the scored ones), 'unrecorded_orders' (per ended "
+        "each. Capability work is measured by the changes that survived probation), 'predictions' (the predictions "
+        "you made with predict: due time, status, and the judge's result and reason for the scored ones), "
+        "'unrecorded_orders' (per ended "
         "conversation: what the operator ordered for later that you did not record as a commitment or standing "
         "order, in his quoted words). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
@@ -450,9 +427,8 @@ SPECS = {
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar", "gate", "families", "habits",
-                                                    "usage", "facts", "predictions", "unrecorded_orders"]},
-         "offset": {"type": "integer", "description": "facts: how many to skip (to page), default 0"},
+                                                    "consults", "calendar", "gate", "families", "predictions",
+                                                    "unrecorded_orders"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -2000,36 +1976,14 @@ class Broker:
         except (OSError, ValueError) as e:     # said, not hidden: it knows it is not seeing them
             return f" Your standing orders could not be read ({type(e).__name__}: {e}); they still apply."
 
-    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
-        """Record an operator order or an episode-backed self rule, or drop only a self rule."""
+    def _record_order(self, text: str = "", source: str = "") -> str:
+        """Record an order from the operator."""
         from . import orders
-        if type(own) is not bool:
-            raise ValueError("own must be a boolean")
-        if drop:
-            if text or source or own:
-                raise ValueError("use drop alone with the id of your own rule")
-            orders.drop_own(self.name, drop)
-            return f"dropped own rule {drop}"
-        source = self._order_source(source, own=own)
-        order, new = orders.add(self.name, text, "self" if own else "instance", source)
+        source = self._order_source(source)
+        order, new = orders.add(self.name, text, "instance", source)
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
             ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
-            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
-
-    def _gauges(self, choose=None) -> str:
-        """The gauge menu with its readings, or the instance's choice of gauges recorded (gauges.py). The readings
-        are the supervisor's; only the choice is the instance's."""
-        from . import gauges
-        if choose is None:
-            return gauges.menu_text(self.name, as_of=self.as_of, extra=self._sim_gauges())
-        row = self._gauges_chosen(gauges.checked(choose))
-        if not row["chosen"]:
-            return "no gauge is chosen now: self/stats.md shows none from your next cycle"
-        return (f"chosen: {', '.join(row['chosen'])}. They are the first lines of self/stats.md from your next cycle, "
-                "largest gap first; gauges() shows the readings now")
-
-    def _sim_gauges(self) -> list[dict]:
-        return []
+            "only the operator drops it")
 
     def _predict(self, text: str = "", due: str = "", how_to_check: str = "", subject: str = "", confidence=None,
                  id: str = "", outcome: str = "", evidence: str = "") -> str:   # noqa: A002
@@ -2074,7 +2028,7 @@ class Broker:
         return ("recorded: this cycle counts as nothing worth a cycle. It is not judged and is not a failure. Your "
                 f"next idle wake waits {IDLE_WAKE_MIN * IDLE_BACKOFF} min instead of {IDLE_WAKE_MIN}; a message, a due "
                 "commitment or a job result still wakes you at once. Finish the cycle now: any further supervisor "
-                "tool call other than record or gauges makes this an ordinary cycle again")
+                "tool call other than record makes this an ordinary cycle again")
 
     def _idle_exit(self, reason: str) -> None:
         from . import autonomy, idle
@@ -2096,36 +2050,14 @@ class Broker:
         autonomy.record("idle_revoke", self.name)
         log(f"{self.name}: nothing-worth-a-cycle exit withdrawn: it called {tool} afterwards")
 
-    def _gauges_chosen(self, names: list[str]) -> dict:
-        from . import gauges
-        from .core import log
-        row = gauges.choose(self.name, names, "instance")
-        log(f"{self.name}: gauges chosen by the instance: {', '.join(names) or '(none)'}")
-        return row
-
     def _withdraw_held(self, id: str, reason: str) -> str:   # noqa: A002
         from . import gate_held
         return gate_held.withdraw(self.name, id, reason)
 
-    def _order_source(self, source, own: bool = False) -> str:
-        """Validate the operator's conversation/message source, or an own rule's past live cycle source.
-        Episode logs are read from this broker's root, including a replay's reconstructed state."""
+    def _order_source(self, source) -> str:
+        """Validate the operator's conversation or message source."""
         from . import pushes
         source = str(source or "").strip()
-        if own:
-            from . import metrics, orders
-            records = metrics._parsed_episodes(self.root)
-            cut = self.as_of or datetime.now()
-            eligible = {r['ts'] for r in records if r.get('kind') == 'live'
-                        and (at := orders._at(r.get('ts'))) is not None and at <= cut}
-            if source in eligible:
-                return source
-            hits = [ts for ts in eligible if len(source) == 16
-                    and ts[:16].replace('T', ' ') == source.replace('T', ' ')]
-            if len(hits) == 1:
-                return hits[0]
-            raise ValueError("own=true requires source: pass the exact ts of one of your past live cycles, "
-                             "or its unique YYYY-MM-DD HH:MM prefix (T accepted)")
         talk = self.talk_id
         if talk and source in ("", "conversation", talk):
             return talk
@@ -2500,7 +2432,7 @@ class Broker:
         return datetime.now()
 
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
-                format: str = "text", offset: int = 0) -> str:
+                format: str = "text") -> str:
         from .core import SUP_DIR
         if kind == "commitment_source":   # review I10: did I deliver this message to the operator?
             from . import commitments
@@ -2606,14 +2538,10 @@ class Broker:
             # its cycle began
             text = gate_held.describe(self.name, limit, as_of=self.as_of)
         elif kind in LEDGER_KINDS:
-            # Ledgers computed from the supervisor's record of the instance (its judged cycles, its tool logs as
-            # committed, its kept changes): what repeats, what was built and whether it is used, what its facts rest
-            # on. Readings only. A replay sees them as they stood when its cycle began.
+            # A replay sees these ledgers as they stood when its cycle began.
             import importlib
             module = importlib.import_module(f".{LEDGER_KINDS[kind]}", __package__)
-            more = {"offset": max(0, int(offset))} if kind == "facts" else {}
-            if kind == "predictions":
-                more = {"extra": self._sim_predictions()}
+            more = {"extra": self._sim_predictions()} if kind == "predictions" else {}
             text = module.record_text(self.name, limit=limit, as_of=self.as_of, **more)
         else:
             raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults, calendar, "
@@ -3991,11 +3919,9 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._started = datetime.now()
-        self.sim_dropped: set[str] = set()
         self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
         self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self.sim_withdrawn: set[str] = set()
-        self.sim_gauges: list[dict] = []     # a choice of gauges made in this replay: seen by it, never written
         self.sim_predictions: list[dict] = []   # predictions made or reported in this replay: likewise
         self._tags = threading.local()
 
@@ -4386,8 +4312,7 @@ class ReplayBroker(Broker):
 
     def _orders_in_force(self) -> list[dict]:
         from . import orders
-        return [o for o in orders.listing(self.name, self.as_of, extra=self.sim_orders)
-                if o['id'] not in self.sim_dropped]
+        return orders.listing(self.name, self.as_of, extra=self.sim_orders)
 
     def _corrections_held(self) -> list[dict]:
         from . import orders
@@ -4416,9 +4341,6 @@ class ReplayBroker(Broker):
         self._tag("simulated: not withdrawn")
         return answer
 
-    def _sim_gauges(self) -> list[dict]:
-        return self.sim_gauges
-
     def _idle_exit(self, reason: str) -> None:
         self._tag("simulated: not recorded")   # answered as in a live cycle; no row, no change to the schedule
 
@@ -4435,39 +4357,18 @@ class ReplayBroker(Broker):
         self._tag("simulated: not recorded")
         return event
 
-    def _gauges_chosen(self, names: list[str]) -> dict:
-        from . import gauges   # answered as the real call, kept for the rest of this replay, nothing written
-        row = gauges.row(names, "instance", self.as_of)
-        self.sim_gauges.append(row)
-        self._tag("simulated: not recorded")
-        return row
-
-    def _record_order(self, text: str = "", source: str = "", own: bool = False, drop: str = "") -> str:
+    def _record_order(self, text: str = "", source: str = "") -> str:
         from . import orders  # same validation as live; all state changes remain in this replay
-        if type(own) is not bool:
-            raise ValueError("own must be a boolean")
-        if drop:
-            if text or source or own:
-                raise ValueError("use drop alone with the id of your own rule")
-            order = next((o for o in self._orders_in_force() if o['id'] == drop), None)
-            if order is None:
-                raise ValueError(f"no own rule in force with id {drop!r}")
-            if order['by'] != 'self':
-                raise ValueError("only the operator drops his orders")
-            self.sim_dropped.add(drop)
-            self._tag("simulated: not recorded")
-            return f"dropped own rule {drop}"
         text = orders.clean(text)
-        source = str(self._order_source(source, own=own))[:orders.SOURCE_MAX]
-        every = {o["id"]: {**o, "dropped_at": self.as_of.isoformat()} if o['id'] in self.sim_dropped else o
-                 for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
-        order, new = orders.added(self.name, every, text, "self" if own else "instance", source, self.as_of)
+        source = str(self._order_source(source))[:orders.SOURCE_MAX]
+        every = orders._items(self.name, self.as_of, self.sim_orders)
+        order, new = orders.added(self.name, every, text, "instance", source, self.as_of)
         if new:
             self.sim_orders.append(order)
         self._tag("simulated: not recorded")
         return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
             ": shown every run and conversation; messages, mail drafts and calendar changes are checked against it; "
-            + ("you or the operator may drop your own rule" if order['by'] == 'self' else "only the operator drops it"))
+            "only the operator drops it")
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE
