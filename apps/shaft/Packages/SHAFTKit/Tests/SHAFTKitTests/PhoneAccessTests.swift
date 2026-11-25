@@ -17,6 +17,13 @@ struct PhoneAccessTests {
         PhoneAccess(run: { try await shaft.run($0, nil) }, reachable: reachable, hasTailscale: { installed }, sleep: sleep)
     }
 
+    @Test func issue39FindsTailscaleInHomeApplications() {
+        let systemApp = URL(fileURLWithPath: "/Applications/Tailscale.app")
+        let homeApp = URL(fileURLWithPath: "/Users/example/Applications/Tailscale.app")
+        let found = PhoneAccess.resolveTailscaleApp(systemApp: systemApp, homeApp: homeApp) { $0 == homeApp }
+        #expect(found == homeApp)
+    }
+
     @Test func withoutTheTailscaleAppItSaysSoAndRunsNothing() async {
         let shaft = ScriptedShaft([])
         let phone = access(shaft, installed: false)

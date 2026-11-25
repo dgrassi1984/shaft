@@ -959,7 +959,12 @@ HTTPS_PORT, _ = knob(
 def _tailscale(*args: str) -> "subprocess.CompletedProcess":
     import shutil
     import subprocess
-    exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    from .codexcli import APP_FOLDERS
+
+    exe = shutil.which("tailscale")
+    if exe is None:
+        candidates = [folder / "Tailscale.app/Contents/MacOS/Tailscale" for folder in APP_FOLDERS]
+        exe = str(next((p for p in candidates if p.is_file() and os.access(p, os.X_OK)), candidates[0]))
     try:
         return subprocess.run([exe, *args], capture_output=True, text=True)
     except FileNotFoundError:              # a local-only Mac (`--local`) may have no Tailscale: a failed call, no crash

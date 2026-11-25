@@ -6,7 +6,7 @@ import Observation
 /// over the tailnet, and makes the link the phone pairs with. Three steps, each a local `shaft` process of the installed
 /// server run through `Installer.shaft` (never the API: the web service restarts under the second one, and a launchd
 /// job could not reach Tailscale's CLI):
-///   1. Tailscale's app is in /Applications, else the row says where to get it;
+///   1. Look for Tailscale in /Applications and ~/Applications. If it is missing, the row says where to get it.
 ///   2. `api on --json`, then `web on --json` (tailnet mode): they add the tailnet login next to the Mac's own and keep
 ///      the Mac's loopback pairing as it is. A refusal shows the server's real message (Tailscale signed out…);
 ///      (the web service restarts under the app: it waits, "Reconnecting…", until the service answers again);
@@ -30,7 +30,19 @@ public final class PhoneAccess {
     /// After the tailnet is set up: the session reads the server again (its services).
     @ObservationIgnored public var onConnected: (@MainActor () async -> Void)?
 
-    public static let tailscaleApp = URL(fileURLWithPath: "/Applications/Tailscale.app")
+    public static var tailscaleApp: URL {
+        let files = FileManager.default
+        return resolveTailscaleApp(
+            systemApp: URL(fileURLWithPath: "/Applications/Tailscale.app"),
+            homeApp: files.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Tailscale.app"),
+            fileExists: { files.fileExists(atPath: $0.path) }
+        )
+    }
+
+    static func resolveTailscaleApp(systemApp: URL, homeApp: URL, fileExists: (URL) -> Bool) -> URL {
+        [systemApp, homeApp].first(where: fileExists) ?? systemApp
+    }
+
     public static let tailscaleDownload = URL(string: "https://tailscale.com/download")!
     /// What the phone is called in `shaft web status`.
     public static let deviceName = "iphone"
