@@ -28,7 +28,6 @@ stays dependency-free. Keys come from the project .env (secrets_env) and never l
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import urllib.error
@@ -88,11 +87,11 @@ def available(model: str, secrets: dict | None = None) -> str | None:
         return None if keys.get("SHAFT_CUSTOM_API_KEY") else "no SHAFT_CUSTOM_API_KEY in the supervisor's .env"
     if model.startswith("codex/"):
         from . import codexcli
+        if error := codexcli.bin_error(codexcli.find_bin()):
+            return error
         if not (Path(codexcli.HOME).expanduser() / "auth.json").is_file():
             return core.say("Codex login missing: run shaft codex login",
                             "Codex is not signed in: sign in with ChatGPT on the Model step")
-        if not os.access(codexcli.BIN, os.X_OK):
-            return f"no Codex CLI at {codexcli.BIN} (SHAFT_CODEX_BIN)"
         listed = codexcli.models()
         if (codexcli.MODELS and model not in codexcli.MODELS) or (listed and model not in listed):
             return f"{model} is not listed by Codex with SHAFT_CODEX_MODELS ({', '.join(listed)})"

@@ -38,7 +38,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/claudecli.py` | `Channel` | `serves`, `models`, `home`, `child_env`, `login_status`, `efforts` |
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `custom_price`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `custom_stream`, `as_sse`, `efforts` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
-| `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
+| `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `find_bin`, `bin_source`, `bin_error`, `login_env`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
 | `supervisor/commitments.py` | — | `operator_inbox`, `recorded`, `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report`, `broken_notice`, `tell_broken` |
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `worst_price`, `envelope`, `complete` |
@@ -164,7 +164,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_claudecli.py` | `DummyBridge`, `ChannelTest`, `MappingTest`, `WiringTest` | `body` |
 | `supervisor/tests/test_coder_providers.py` | `Loopback`, `Case`, `OpenAIToolsTest`, `CodexTest`, `CredentialTest` | `openai_reply` |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
-| `supervisor/tests/test_codexcli.py` | `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
+| `supervisor/tests/test_codexcli.py` | `CodexDiscoveryTest`, `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `QueuedUpdateTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |

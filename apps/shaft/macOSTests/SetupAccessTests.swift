@@ -397,6 +397,18 @@ struct SetupAccessTests {
         #expect(!f.setup.steps.signedIn)
     }
 
+    @Test func missingCodexShowsTheServersErrorWithoutADeviceCode() async throws {
+        let message = "Codex is not installed on this Mac: install ChatGPT for Mac (Codex comes with it) or the Codex CLI "
+            + "(`brew install codex` or `npm i -g @openai/codex`), or set SHAFT_CODEX_BIN."
+        let runner = LoginRunner(lines: [#"{"ok": false, "error": "\#(message)"}"#], status: 1)
+        let f = try Fixture(step: .model, runner: runner)
+        f.setup.steps.signInToCodex(installer: try runner.installer(home: f.home))
+        await until { f.setup.steps.signingIn.failure != nil }
+        #expect(f.setup.steps.signingIn == .failed(message))
+        #expect(f.setup.steps.loginCode == nil)
+        #expect(f.opened.all.isEmpty)
+    }
+
     @Test func cancellingTheSignInEndsTheCommand() async throws {
         let runner = LoginRunner(lines: [Self.url, Self.code], status: nil)
         let f = try Fixture(step: .model, runner: runner)

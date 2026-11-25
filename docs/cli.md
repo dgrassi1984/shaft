@@ -103,7 +103,7 @@ shaft web on [--local|--json] [--force]|restart [--json] [--force]|off|status|pa
 shaft claude login|status
 shaft antigravity login|status
 shaft grok login|status
-shaft codex login [--json]|status
+shaft codex login [--json]|status|where [--json]
 shaft model on|off|status
 shaft api on [--local] [--json] [--force]|restart [--json] [--force]|off|status|key|inbox-key
 shaft telegram token <name>|pair [--json]|unpair|on [--force]|restart [--force]|off|status
@@ -164,6 +164,8 @@ page to open) and `{"code"}` (the one-time code to enter there) as soon as Codex
 the login is saved, or `{"ok": false, "error"}` with Codex's own words. It opens no browser. Codex stops when the
 command gets SIGTERM, when its parent exits, or after 10 minutes without the code entered. When Codex refuses a
 device-code sign-in, `shaft codex login` in a terminal (the browser sign-in) still works.
+`shaft codex where` prints the executable path. With `--json` it includes the source: `setting`,
+`chatgpt-app`, `path` or `login-shell`. It exits 1 if the executable is missing.
 
 ### Service entry points
 

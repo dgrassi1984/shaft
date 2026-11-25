@@ -57,7 +57,7 @@ Assistant stay manual (below).
 | Terminal client, Bonsai, and fine-tuning environments | `.venv-ui`, `.venv-bonsai`, `.venv-ft` | **recreate** |
 | Local model packs | `.models/` | copy, or download again |
 | Grok CLI | `~/.grok/bin/grok` (`SHAFT_GROK_BIN`) | **install** the CLI if any instance uses a `grok/*` model; its login in `.supervisor/grok-home/` (`SHAFT_GROK_HOME`) is copied with the folder |
-| Codex CLI | `/Applications/ChatGPT.app` (`SHAFT_CODEX_BIN`) | **install** ChatGPT if any instance uses a `codex/*` model; its login in `.supervisor/codex-home/` is copied with the folder |
+| Codex | ChatGPT for Mac or the Codex CLI | **install** either if any instance uses a `codex/*` model; its login in `.supervisor/codex-home/` is copied with the folder |
 | Shared Chromium | `.browsers/` | **reinstall** with `bin/shaft browser install` |
 | Folders shared with an instance | your own folders, referenced by absolute path | **copy separately**, to the same path |
 | Development worktrees | `.claude/worktrees/`, `../shaft-*` | push their branches first |
@@ -93,8 +93,9 @@ so do that instead.
   `.env` lists the tailnet logins allowed to use the API and web UI, so those
   logins must keep working. Install it at `/Applications/Tailscale.app`, or
   put `tailscale` on the same launchd PATH above.
-- If any instance uses a `codex/*` model, install ChatGPT in `/Applications`.
-  The Codex CLI lives inside it. `SHAFT_CODEX_BIN` overrides this location.
+- If any instance uses a `codex/*` model, the migration check looks for ChatGPT in `/Applications` and
+  `~/Applications` or for `codex` on the new Mac's login shell. See the
+  [runtime search order and `SHAFT_CODEX_BIN` override](local-model.md#codex-plan-routing).
 - If any instance uses a `grok/*` model, install the Grok CLI. SHAFT expects
   `~/.grok/bin/grok`; `SHAFT_GROK_BIN` overrides the executable path.
 - Local models need Apple Silicon (MLX). The model server's defaults assume

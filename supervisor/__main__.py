@@ -1493,17 +1493,31 @@ def cmd_feedback(name: str | None, days: int | None) -> int:
 
 def cmd_codex(action: str, as_json: bool = False) -> int:
     from . import codexcli, planchannel
-    home = Path(codexcli.HOME).expanduser().resolve()
-    if as_json and action != "login":
+    if as_json and action not in ("login", "where"):
         print(f"shaft codex {action} has no --json", file=sys.stderr)
         return 2
+    if action == "where":
+        binary = codexcli.find_bin()
+        if error := codexcli.bin_error(binary):
+            if as_json:
+                print(json.dumps({"path": None, "error": error}))
+            else:
+                print(error, file=sys.stderr)
+            return 1
+        print(json.dumps({"path": binary, "source": codexcli.bin_source()}) if as_json else binary)
+        return 0
+    home = Path(codexcli.HOME).expanduser().resolve()
     if action == "login":
         if as_json:
             return _codex_login_json(home)
+        binary = codexcli.find_bin()
+        if error := codexcli.bin_error(binary):
+            print(error, file=sys.stderr)
+            return 1
         try:
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
             home.chmod(0o700)
-            return subprocess.run([codexcli.BIN, "login"], env={**os.environ, "CODEX_HOME": str(home)}).returncode
+            return subprocess.run([os.path.abspath(binary), "login"], env=codexcli.login_env(binary, home)).returncode
         except OSError as e:
             print(f"Codex login failed: {e}", file=sys.stderr)
             return 1
@@ -1527,9 +1541,13 @@ def _codex_login_json(home: Path) -> int:
     def emit(row: dict) -> None:
         print(json.dumps(row), flush=True)
     try:
-        home.mkdir(parents=True, exist_ok=True, mode=0o700)
-        home.chmod(0o700)
-        ok, error = codexcli.device_login(home, emit)
+        error = codexcli.bin_error(codexcli.find_bin())
+        if error:
+            ok = False
+        else:
+            home.mkdir(parents=True, exist_ok=True, mode=0o700)
+            home.chmod(0o700)
+            ok, error = codexcli.device_login(home, emit)
     except OSError as e:
         ok, error = False, f"Codex login failed: {e}"
     except codexcli.LoginStopped as e:
@@ -1715,10 +1733,10 @@ def main(argv: list[str]) -> int:
                    help="on, restart: even while an instance is replying (the reply is cut off)")
     p = sub.add_parser("grok", help="Grok plan login and status")
     p.add_argument("action", choices=["login", "status"])
-    p = sub.add_parser("codex", help="Codex plan login and status")
-    p.add_argument("action", choices=["login", "status"])
+    p = sub.add_parser("codex", help="Codex plan login, status and executable location")
+    p.add_argument("action", choices=["login", "status", "where"])
     p.add_argument("--json", action="store_true",
-                   help="login without a terminal: the page to open and the code to enter there, as JSON lines")
+                   help="login: device sign-in as JSON lines; where: executable path and source")
     p = sub.add_parser("claude", help="Claude plan (claude -p on your own subscription) login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("antigravity", help="Antigravity plan (Gemini through agy on your own subscription) login and status")

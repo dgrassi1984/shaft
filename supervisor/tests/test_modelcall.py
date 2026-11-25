@@ -35,7 +35,8 @@ class FakeCodex:
         self.binary.write_text("#!" + sys.executable + "\n" + FAKE)
         self.binary.chmod(0o700)
         self.binary.with_suffix(".json").write_text("{}")
-        for p in (mock.patch.object(codexcli, "HOME", self.home), mock.patch.object(codexcli, "BIN", str(self.binary)),
+        for p in (mock.patch.object(codexcli, "HOME", self.home),
+                  mock.patch.object(codexcli, "find_bin", return_value=str(self.binary)),
                   mock.patch.object(codexcli, "TIMEOUT_S", 5), mock.patch.object(planchannel, "SUP_DIR", root),
                   mock.patch.object(codexcli.STATE, "rate", None),
                   mock.patch.object(codexcli, "_seatbelt", side_effect=lambda argv, *args: argv)):
