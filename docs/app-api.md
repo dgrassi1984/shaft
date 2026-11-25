@@ -383,7 +383,8 @@ does), and the app shows "Chat with <n>".
 ### 4.4 Items
 
 Each item has `key` and `type`; items are in time order (by `ts`, ties in the order turns, sent messages, the ended
-line, as the HTML sorts them).
+line, as the HTML sorts them). The conversation's own turns always keep the order they were written in, even when the
+Mac's clock was set back between them; the other items go among them by time.
 
 **`user`**: a message from the operator (key `u<k>`).
 

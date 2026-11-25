@@ -519,7 +519,8 @@ def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | No
     text = turn.get("retry_text") or (
         asked.get("shown", asked.get("content", "")) if asked and asked.get("role") == "user"
         and not asked.get("interjected") else "")
-    text = "" if archived else text
+    # one longer than a message can be is refused when sent (_send): no Retry button that always fails
+    text = "" if archived or len(text) > MAX_TEXT else text
     links = [{"label": "Activity", "url": f"/i/{name}/activity"}, {"label": "Services", "url": "/services"}]
     if safe and text:
         action, retry, links = "No external actions ran: Retry sends it again.", {
@@ -681,10 +682,11 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
     model["last_count"] = last_count(chat, sent)
     first = 0 if whole or not chat else max(0, len(chat["turns"]) - CHAT_WINDOW)
     if first:
-        since = chat["turns"][first]["ts"]
+        # from the window's first turn on, in the feed's order (in_time): by time, a clock set back kept a message
+        # placed among turns the window dropped
+        start = next((j for j, i in enumerate(items) if i.get("k", -1) >= first), len(items))
         model["earlier"] = first
-        model["items"] = [i for i in items if (i["k"] >= first if "k" in i else
-                                               i["type"] == "ended" or i["ts"] >= since)]
+        model["items"] = [i for j, i in enumerate(items) if j >= start or i["type"] == "ended"]
     return model
 
 
@@ -1255,7 +1257,8 @@ def _retry_request(turns: list[dict], reply: dict | None, upto: int) -> tuple[st
     asked = [turns[i] for i in idx]
     if len(asked) <= 1:
         t = asked[0] if asked else original
-        return t.get("shown", t.get("content", "")), original, idx
+        request = t.get("shown", t.get("content", ""))     # a queued batch is one turn, and may pass MAX_TEXT
+        return request if len(request) <= MAX_TEXT else "", original, idx
     shown = [t.get("shown", t.get("content", "")).strip() for t in asked]
     request = "\n\n".join(shown)
     if not all(shown) or any(t.get("attachments") for t in asked) or len(request) > MAX_TEXT:
@@ -1650,8 +1653,9 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
             if folded:                            # the message was not sent: what Retry folded stays in the thread
                 with _lock(c["id"]):
                     c = load(c["id"])
-                    mark_retried(c, int(retry_of), text, undo=True)
-                    save(c)
+                    if c.get("state") != "replying":  # else the send was saved before what raised: it stands
+                        mark_retried(c, int(retry_of), text, undo=True)
+                        save(c)
             raise
     # a question it quotes is answered, as a Telegram reply answers it
     if quoted and (answered := messages.answer_quoted(name, text)):

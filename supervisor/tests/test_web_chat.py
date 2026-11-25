@@ -397,6 +397,42 @@ class RelayTest(ChatTest):
                 say("late", retry_of="3", cid=c["id"])
         self.assertFalse(any(t.get("retried") for t in web_chat.load(c["id"])["turns"]))
 
+    def test_issue_16_a_queued_batch_too_long_for_one_message_gets_no_retry_that_always_fails(self):
+        """Second review: a queued batch is one turn (_flush_queue) and can pass MAX_TEXT; Retry would be refused."""
+        long = {"role": "user", "content": "x" * (web_chat.MAX_TEXT + 2), "shown": "x" * (web_chat.MAX_TEXT + 2)}
+        self.assertEqual(web_chat._retry_request([long], {"asked": [0]}, 1)[0], "")
+        self.assertIsNone(web_chat.failure("wisp", {"role": "assistant", "note": "error: x", "note_kind": "connection",
+                                                    "note_retry": True, "retry_text": long["shown"]}, False, 1, long)["retry"])
+
+    def test_issue_16_a_send_saved_before_it_raised_keeps_its_fold(self):
+        """Second review: what raised after the Retry's turn was saved (and the reply marked running) did not refuse it."""
+        c = self.failed_follow_up({"shown": "late"})
+
+        def saved_then_raised(*a, **kw):
+            with web_chat._lock(c["id"]):
+                d = web_chat.load(c["id"])
+                d["state"] = "replying"
+                web_chat.save(d)
+            raise OSError("feedback log")
+        with mock.patch.object(web_chat, "_send", side_effect=saved_then_raised), self.assertRaises(OSError):
+            say("late", retry_of="3", cid=c["id"])
+        self.assertTrue(web_chat.load(c["id"])["turns"][3]["retried"])
+
+    def test_issue_16_the_feed_window_starts_at_its_first_turn_in_the_order_shown(self):
+        """Second review: with a clock set back, the window kept a message by time that sat among the dropped turns."""
+        n = web_chat.CHAT_WINDOW + 2
+        chat = topic()
+        chat["turns"] = [{"role": "user" if k % 2 == 0 else "assistant", "content": f"t{k}", "shown": f"t{k}",
+                          "ts": "2026-11-25T10:00:00" if k < 2 else "2026-11-25T09:00:00"} for k in range(n)]
+        web_chat.save(chat)
+        sent = [{"file": "m1", "ts": "2026-11-25T09:30:00", "from": "wisp", "to": "operator", "text": "from a cycle"}]
+        with mock.patch.object(web_chat, "message_item", lambda name, m, r, p=frozenset(): {
+                "key": m["file"], "type": "sent", "ts": m["ts"]}):
+            whole = web_chat.build("wisp", chat, sent, whole=True)["items"]
+            window = web_chat.build("wisp", chat, sent)["items"]
+        self.assertEqual([i.get("k", i["key"]) for i in whole][:3], ["m1", 0, 1])    # before the turns stamped after it
+        self.assertEqual([i.get("k") for i in window], list(range(2, n)))           # so not in a window without them
+
     def test_issue_16_a_restart_offers_every_message_the_reply_answered(self):
         chat = topic()
         chat.update(state="replying", reply={"interjections": 0, "asked": [2, 3], "turn_start": 4}, turns=[
