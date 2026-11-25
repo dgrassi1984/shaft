@@ -264,9 +264,12 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
                              n=q(name), id=q(thread["id"]), title=web_chat.title(thread), state=status,
                              current=Html(' aria-current="page"') if chat and chat["id"] == thread["id"] else "",
                              unread=h('<span class="switch-unread"> unread</span>') if unread.get(thread["id"]) else Html("")))
-    close = (button("chat-end", "Close thread", f"close this thread with {name}? Its messages stay in Earlier chats. "
+    # An empty thread closes unasked; the server refuses it then if something came in since (if_empty).
+    blank = bool(chat) and not from_feed and web_chat.empty(name, chat)
+    close = (button("chat-end", "Close thread", "" if blank else
+                    f"close this thread with {name}? Its messages stay in Earlier chats. "
                     "Your next message starts a new conversation. A journal write-up is requested.",
-                    {"cid": chat["id"]}, after="thread-ended")
+                    {"cid": chat["id"], **({"if_empty": "1"} if blank else {})}, after="thread-ended")
              if chat and not from_feed and not read_only else Html(""))
     switcher = join(switch_rows) + h('<hr><button type="button" data-switch-new>New thread</button>{rename}{close}',
                                    close=close, rename=h('<button type="button" data-switch-rename{disabled}>Rename…</button>',

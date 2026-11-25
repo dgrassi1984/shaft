@@ -210,6 +210,15 @@ class RecoveryTest(unittest.TestCase):
         self.assertIn("Your next message starts a new conversation.", header)
         self.assertNotIn("chat-end", str(web_views.chat_feed("wisp", chat, [])))
 
+    def test_closing_an_empty_thread_asks_nothing(self):
+        """Bug 2026-11-25: Close thread on a thread with nothing in it asked first and promised a journal write-up."""
+        empty = web_chat.new_thread("wisp", "operator")
+        header = str(web_views.chat_header("wisp", {}, empty, []))
+        self.assertRegex(header, r'<form class="act" data-post="/action/chat-end" data-after="thread-ended"')
+        self.assertIn('name="if_empty" value="1"', header)     # the server refuses it if something came in since
+        self.assertNotIn("A journal write-up is requested.", header)
+        self.assertIn("A journal write-up is requested.", str(web_views.chat_header("wisp", {}, self.chat(), [])))
+
 
 class ApiFailureTest(unittest.TestCase):
     def test_issue_9_api_stream_preserves_failure_with_partial_content_and_tool_evidence(self):

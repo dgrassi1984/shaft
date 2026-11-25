@@ -200,6 +200,19 @@ def is_from(chat: dict | None) -> bool:
     return bool(chat) and chat.get("kind") == FROM
 
 
+def empty(name: str, chat: dict | None, model: dict | None = None) -> bool:
+    """Nothing in it yet: no turn, nothing queued and nothing routed into it (a Next-cycle note, an instance's message).
+    Closing it then ends no conversation and requests no write-up, so nothing asks first (the apps and the web closed
+    an empty thread behind "It writes up its journal", 2026-11-25). `model`: its feed (build), when already made."""
+    if not chat or chat.get("turns") or chat.get("queued"):
+        return False
+    return not (model["items"] if model is not None else sent_during(name, chat))
+
+
+class NotEmpty(Refused):
+    """A close sent as "only if it is still empty" found something in the thread: the client asks first, then."""
+
+
 def public_id(name: str, cid: str | None) -> str | None:
     """How pages, apps, pushes and seen marks name a conversation: "from" for the From conversation (by its id too),
     else its id."""
@@ -1838,20 +1851,24 @@ def stop(cid: str) -> str:
     return "stopping the reply"
 
 
-def end(cid: str) -> str:
+def end(cid: str, if_empty: bool = False) -> str:
+    """`if_empty`: close it only while it is still empty (NotEmpty otherwise): a client that skipped its confirmation
+    because the thread looked empty never ends a conversation that began since it looked."""
     chat = load(cid)
     if not chat:
         raise Refused("this chat is already over")
     if is_from(chat):            # From is not a topic that closes: its talks are written up when idle, as any
         raise Refused("From never ends")
     with _inst_lock(chat["instance"]):
-        return _end(cid)
+        return _end(cid, if_empty)
 
 
-def _end(cid: str) -> str:
+def _end(cid: str, if_empty: bool = False) -> str:
     chat = load(cid)                                # again, under the lock: a message may have come meanwhile
     if not chat or chat.get("state") == "ended":
         raise Refused("this chat is already over")
+    if if_empty and not empty(chat["instance"], chat):
+        raise NotEmpty("this thread has messages now: close it again to confirm")
     if replying(cid) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
     status, body = _post(chat, "end", {"model": chat["instance"]})

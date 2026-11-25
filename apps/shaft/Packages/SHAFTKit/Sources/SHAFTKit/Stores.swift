@@ -831,6 +831,27 @@ public final class ChatStore {
         owner?.threadsMoved(instance)
     }
 
+    /// Close this thread unasked because it looked empty. False when the server found something in it since
+    /// (`409 not_empty`): nothing was ended, and the caller asks first. Any other failure reports as `end` does.
+    public func endIfEmpty() async -> Bool {
+        guard let cid = chatID, let client else { return true }
+        let name = instance
+        do {
+            said = try await client.end(name, cid: cid, ifEmpty: true).said
+            actionError = nil
+        } catch {
+            guard let error = APIError.from(error) else { return true }
+            if error.code == "not_empty" {
+                owner?.threadsMoved(instance)
+                return false
+            }
+            actionError = error
+            owner?.report(error)
+        }
+        owner?.threadsMoved(instance)
+        return true
+    }
+
     /// New chat (§7.4): a server before threads ends the open chat and starts another. With threads it is
     /// `InstancesStore.newThread`, which ends nothing.
     public func clear() async {

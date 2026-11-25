@@ -800,8 +800,20 @@ struct InstancesList: View {
         Task { await store.newThread(name) { selection = ChatSelection(name, $0) } }
     }
 
+    /// An empty thread closes at once: there is no conversation to end and no journal to write up, so nothing to confirm.
+    /// The server closes it only while it is still empty; if something came in since the list was read, this asks.
+    /// The thread on screen hands the screen to the instance's Main first: its row went from under an open swipe
+    /// action otherwise, and the list crashed (UICollectionView "invalid number of items", 2026-11-25).
     private func closeThread(_ name: String, _ id: String) {
-        closing = ChatSelection(name, .thread(id))
+        let tag = ChatSelection(name, .thread(id))
+        guard store.threads(name)?.threads.first(where: { $0.id == id })?.closeNeedsConfirmation == false else {
+            closing = tag
+            return
+        }
+        if selection == tag { selection = ChatSelection(name, store.defaultRef(name)) }
+        Task {
+            if await !store.chat(name, .thread(id)).endIfEmpty() { closing = tag }
+        }
     }
 
     private func moveThread(_ name: String, _ id: String, offset: Int?) {

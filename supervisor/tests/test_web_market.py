@@ -40,7 +40,7 @@ class StreamingTest(unittest.TestCase):
 
 class HeaderTest(unittest.TestCase):
     def header(self, **live) -> str:
-        return str(web_views.chat_header("wisp", {**LIVE, **live}, {"id": "c1", "state": "idle"}, []))
+        return str(web_views.chat_header("wisp", {**LIVE, **live}, {"id": "c1", "state": "idle", "created": "2026-10-27T10:00:00"}, []))
 
     def test_i10_no_emoji_as_controls(self):
         """Review I10: ☰ 🕘 📄 ⏸ read as disabled and were blobs in dark mode; one SVG set, in the text's colour."""
