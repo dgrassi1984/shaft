@@ -123,7 +123,7 @@ def domain(ep: dict) -> str:
         elif tool in ("send_message", "list_instances"):
             family = "social"
         elif tool in ("remember", "rewrite_facts", "write_digest", "update_self_model", "update_personality",
-                      "record", "history", "search_memory", "read_file", "list_files"):
+                      "record", "history", "search_memory", "search_corrections", "read_file", "list_files"):
             family = "upkeep"
         elif tool in ("write_file", "append_file"):
             path = metrics._arg(call.get("args") or "", "path")

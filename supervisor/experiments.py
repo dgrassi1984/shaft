@@ -873,7 +873,7 @@ def verification_calls(tools: list[dict]) -> list[dict]:
     Return the counted entries so the surprises endpoint can inspect their arguments too.
     """
     seen, written, counted = set(), set(), []
-    reads = {"read_file", "fetch_page", "search_memory", "web_search", "record", "history"}
+    reads = {"read_file", "fetch_page", "search_memory", "search_corrections", "web_search", "record", "history"}
     for entry in tools:
         tool, raw = entry.get("tool", ""), entry.get("args", "{}")
         try:

@@ -42,12 +42,16 @@ def _fold(text: str) -> dict[str, dict]:
                     or not timedelta(0) <= _at(rec["when"]) - _at(items[previous]["when"]) <= timedelta(days=7)):
                 continue
             items[cid] = {"id": cid, **{k: rec[k] for k in FIELDS}, "reopens": previous,
-                          "status": "open", "closed_by": None, "evidence": None}
+                          "status": "open", "closed_by": None, "evidence": None, "what_failed": None}
         elif rec.get("event") == "closed":
             evidence = rec.get("evidence")
             if (cid in items and items[cid]["status"] == "open" and rec.get("closed_by") in CLOSED_BY
                     and isinstance(evidence, str) and evidence.strip()):
-                items[cid].update(status="closed", closed_by=rec["closed_by"], evidence=evidence)
+                failed = rec.get("what_failed")   # what in the fix it reopened did not hold (#11)
+                items[cid].update(status="closed", closed_by=rec["closed_by"], evidence=evidence,
+                                  what_failed=failed if isinstance(failed, str) and failed.strip() else None)
+    for it in items.values():   # the later corrections that reopened this one
+        it["reopened_by"] = [later["id"] for later in items.values() if later["reopens"] == it["id"]]
     return items
 
 
