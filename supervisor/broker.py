@@ -2468,6 +2468,10 @@ class Broker:
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
+                # nor a grade on use from after it (#15): seven days on, it would tell whether the work got used
+                if isinstance(r.get("use"), dict) and not known(str(r["use"].get("regraded_at", "")).replace("T", " ")):
+                    r["value"] = r.pop("value_provisional", r.get("value"))
+                    del r["use"]
             if since:
                 rows = [r for r in rows if since < _reviewed_at(r) < settled]
             # Returned whole, never cut like the other kinds below: the sleep reads it through broker.call, and a

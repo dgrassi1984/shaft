@@ -26,9 +26,10 @@ class JudgeLinksTest(IsolatedCase):
             self.assertIn(key, metrics.MAIN_SCHEMA["required"])
             self.assertIn(key, metrics.LINK_PROPS)
         self.assertEqual(metrics.MAIN_SCHEMA["properties"],
-                         {**metrics.JUDGE_SCHEMA["properties"], **metrics.LINK_PROPS})
+                         {**metrics.JUDGE_SCHEMA["properties"], **metrics.LINK_PROPS, **metrics.CAP_PROPS})
         self.assertEqual(set(metrics.MAIN_SCHEMA["required"]),
-                         set(metrics.JUDGE_SCHEMA["required"]) | set(metrics.LINK_PROPS))
+                         set(metrics.JUDGE_SCHEMA["required"]) | set(metrics.LINK_PROPS) | set(metrics.CAP_PROPS))
+        self.assertNotIn("value_uncapped", metrics.JUDGE_SCHEMA["properties"])   # second judge, controls: unchanged
         old = {"episode_ts": NOW.isoformat(), "goal": "Check report"}
         self.write(self.sup / "judgments/ember.jsonl", [old])
         self.assertEqual(metrics.judgments("ember"), [old])
