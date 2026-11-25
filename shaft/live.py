@@ -23,8 +23,8 @@ import os
 import re
 import shutil
 
-from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, projects,
-               prompts, recovery, slate, surprises, workspace, x_probes)
+from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, improvements, loopguard, memory,
+               pausing, projects, prompts, recovery, slate, surprises, workspace, x_probes)
 from .agent import Control
 from .llm import Client, LLMError
 from .state import State
@@ -484,6 +484,7 @@ def run(cfg, state: State, client: Client) -> str:
             ["what_happened", "criterion_met", "learned", "delivered_via"]), finish, stops=True),
     }
     controls.update(projects.controls(state.root, clock.now))
+    controls.update(improvements.controls(state.root, clock.now, "cycle"))   # my improvement list (#15)
     if cfg.COMMITMENTS == "on":
         controls["settle_commitment"] = Control(commitments.SETTLE, settle)
     if mode == "clauses":

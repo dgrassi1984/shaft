@@ -6,8 +6,8 @@ import re
 import sys
 from datetime import datetime
 
-from . import (agent, broker, clock, commitments, corrections, drive_proposals, loopguard, memory, projects, prompts,
-               recovery, staleness, surprises)
+from . import (agent, broker, clock, commitments, corrections, drive_proposals, improvements, loopguard, memory,
+               projects, prompts, recovery, staleness, surprises)
 from .llm import Client, LLMError
 from .state import State
 from .tools import FACT_LINE, SOURCE, Toolbox, _spec, for_log
@@ -123,7 +123,8 @@ def surprises_text(items: list[dict]) -> str:
 
 
 # The writes a sleep must not make from an open conversation, and the file each one changes ("": all new text).
-GUARDED = {"retire_fact": "", "remember": "", "write_digest": "", "rewrite_facts": "memory/facts.md",
+GUARDED = {"retire_fact": "", "remember": "", "write_digest": "", "plan_improvement": "", "close_improvement": "",
+           "rewrite_facts": "memory/facts.md",
            "update_personality": "self/personality.md", "update_self_model": "self/self.md"}
 
 
@@ -176,7 +177,9 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     promises = cfg.COMMITMENTS == "on"
-    toolbox.extra = [projects.OPEN, projects.CLOSE, drive_proposals.PROPOSE, CLOSE_SURPRISE, corrections.CLOSE, RETIRE_FACT]
+    toolbox.extra = [projects.OPEN, projects.CLOSE, drive_proposals.PROPOSE, CLOSE_SURPRISE, corrections.CLOSE, RETIRE_FACT,
+                     improvements.PLAN, improvements.CLOSE]
+    plans = improvements.Limited(state.root, clock.now, "sleep")
     toolbox.extra += [commitments.SETTLE] if promises else []
     real_run = toolbox.run
     closed: list[dict] = []
@@ -260,6 +263,10 @@ def run(cfg, state: State, client: Client) -> str:
         if refusal:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
+        if name in ("plan_improvement", "close_improvement"):   # after the guard: evidence is text kept for good
+            result = (plans.plan if name == "plan_improvement" else plans.close)(args)
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         if name == "retire_fact":
             try:
                 result = toolbox._t_retire_fact(**args)
@@ -287,12 +294,13 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file,
                                                          settle=prompts.SETTLE if promises else "",
-                                                         goals_budget=goals_budget)
+                                                         goals_budget=goals_budget, per_sleep=improvements.PER_RUN)
          + "\n\n## My projects (step 12)\n\n" + projects.block(state.root, clock.now(),
              verdicts=fetched["verdicts"] if fetched else [])
          + "\n\n## Stale context review (step 10)\n\n" + stale
          + "\n\n## Possible fact conflicts (step 11; candidates, not proof)\n\n" + fact_candidates(state.root)
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
+         + "\n\n## My open improvement items (step 14)\n\n" + improvements.block(state.root)
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))
          + ("\n\n## My overdue commitments (step 8)\n\n" + _overdue(state) if promises else "")
@@ -303,6 +311,26 @@ def run(cfg, state: State, client: Client) -> str:
                         max_steps=cfg.MAX_STEPS_SLEEP, keep_turns=cfg.RESULTS_KEEP_TURNS,
                         wrap_up="Do not call any more tools: write your sleep journal entry now, "
                                 "including what you did not get to.")
+    guard_record = toolbox.loop_guard.record()
+    entry, check = (outcome.reply.content or "").strip() if outcome.ended_by == "answer" else "", None
+    if outcome.ended_by == "answer" and (problems := entry_problems(state, entry, toolbox.log)):
+        # #13: sent back once with what is missing; what it writes then is added to the entry, checked again, and kept
+        # whatever it says — a second refusal would only cost another night
+        messages.append({"role": "user", "content": "[supervisor] Your sleep entry is not finished: "
+                         + " ".join(problems) + " Use your tools if you need to, then write only what was missing: "
+                         "it is added to the end of your entry."})
+        added, ended = "", ""
+        try:   # a failed send-back never costs the entry already written: it is kept, with why
+            again = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="sleep",
+                              max_steps=SEND_BACK_STEPS, keep_turns=cfg.RESULTS_KEEP_TURNS,
+                              wrap_up="Do not call any more tools: write what was missing from your entry now.")
+            ended = again.ended_by
+            added = (again.reply.content or "").strip() if again.ended_by == "answer" and again.reply else ""
+        except LLMError as e:
+            ended = f"llm_error: {' '.join(str(e).split())[:200]}"
+        check = {"sent_back": problems, "ended_by": ended, "after": entry_problems(state, entry, toolbox.log, added)}
+        entry = entry + ("\n\n" + added if added else "")
+        guard_record = _merged(guard_record, toolbox.loop_guard.record())
     changes = [_action(e) for e in toolbox.log if not e["result"].startswith("ERROR")]
     if outcome.ended_by != "answer":
         why = ("I got stuck repeating the same tool call" if outcome.ended_by == "repeating"
@@ -311,7 +339,7 @@ def run(cfg, state: State, client: Client) -> str:
                    f"Tools that succeeded: {'; '.join(changes) or 'none'}.")
         state.append_journal("Sleep (unfinished)", summary)
         state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log, "closed": closed,
-                              **toolbox.loop_guard.record()})
+                              **guard_record})
         raise LLMError(summary)
     # Before the journal entry: a finished sleep without a marker would otherwise be the next one's starting point,
     # skipping what it did not read. A failed read keeps where it started, so the next sleep asks again.
@@ -329,12 +357,72 @@ def run(cfg, state: State, client: Client) -> str:
                     known.add(key)
     (state.root / VERDICTS_REVIEWED).write_text(
         (fetched["next_since"] if fetched and fetched["next_since"] is not None else since) + "\n")
-    entry = outcome.reply.content.strip()
+    content = entry
+    if check and check["after"]:
+        entry += "\n\n*Sleep check:* still missing after it was sent back once: " + " ".join(check["after"])
     entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
     state.append_journal("Sleep", entry)
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
-                          "content": outcome.reply.content, "closed": closed, **toolbox.loop_guard.record()})
+                          "content": content, "closed": closed, **({"check": check} if check else {}), **guard_record})
     return entry
+
+
+SEND_BACK_STEPS = 4   # model turns to fix what the entry was sent back for: one or two tool calls, then the text
+SELF_MODEL_LINE = re.compile(r"^[ \t>*_`-]*self[- ]model[*_`]*[ \t]*:[*_`]*[ \t]*(changed|unchanged)\b[*_`]*[ \t]*"
+                             r"[—–:,-]*[ \t]*(.*)$", re.I | re.M)
+HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]", re.M)
+EVIDENCE_WORDS = 5    # "unchanged — nothing contradicted it" is a bare verdict; the line names what was checked
+
+
+def _improve_block(entry: str) -> str:
+    """The entry's "How I will improve" parts: each from its heading to the next heading, the self-model line or the
+    end (a part under another heading, such as an archive of old plans, is not one)."""
+    parts = []
+    for m in prompts.IMPROVE.finditer(entry):
+        rest = entry[m.end():]
+        ends = [x.start() for x in (HEADING.search(rest), SELF_MODEL_LINE.search(rest)) if x]
+        parts.append(rest[:min(ends)] if ends else rest)
+    return "\n".join(parts)
+
+
+def entry_problems(state: State, entry: str, log: list[dict], added: str = "") -> list[str]:
+    """What my sleep entry leaves out (#13), model-free: the self-model line and the improvement ids. Empty when it is
+    complete. A line saying "changed" needs an update_self_model that succeeded in this sleep, and one that succeeded
+    needs a line saying so. `added`: what I wrote when it was sent back — an answer to what was missing, so an id
+    anywhere in it counts, and its self-model line is the last word."""
+    problems = []
+    lines = SELF_MODEL_LINE.findall(entry + "\n\n" + added)
+    updated = any(e.get("tool") == "update_self_model" and not str(e.get("result", "")).startswith("ERROR")
+                  for e in log)
+    if not lines:
+        problems.append('It has no self-model line: end with "Self-model: changed — <what>, because <evidence>" or '
+                        '"Self-model: unchanged — <the evidence you checked> did not contradict it".')
+    else:
+        verdict, why = lines[-1][0].lower(), lines[-1][1]
+        if len(re.findall(r"\w+", why)) < EVIDENCE_WORDS:
+            problems.append("Its self-model line gives no evidence: say what you changed and why, or what you "
+                            "checked that did not contradict it.")
+        elif verdict == "changed" and not updated:
+            problems.append("Its self-model line says changed, but no update_self_model succeeded in this sleep.")
+        elif verdict == "unchanged" and updated:
+            problems.append("Its self-model line says unchanged, but update_self_model succeeded in this sleep.")
+    try:
+        known = improvements.fold(state.root)
+    except Exception:   # a list I cannot read: every id is unknown, and the entry is still kept
+        known = {}
+    block = _improve_block(entry) + "\n" + added
+    named = [i for i in improvements.ID.findall(block) if known.get(i, {}).get("status") == "open"]
+    if not block.strip() and not prompts.IMPROVE.search(entry):
+        problems.append('It has no "How I will improve" part.')
+    elif not named:
+        problems.append('Its "How I will improve" part names no item of my improvement list: add one with '
+                        "plan_improvement (or name an open one by its id, iMMDD-HHMM-n) for what you will do.")
+    return problems
+
+
+def _merged(first: dict, second: dict) -> dict:
+    events = (first.get("loop_shadow") or []) + (second.get("loop_shadow") or [])
+    return {"loop_shadow": events} if events else {}
 
 
 def _overdue(state: State) -> str:
