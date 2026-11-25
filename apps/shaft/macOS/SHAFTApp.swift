@@ -21,6 +21,14 @@ struct SHAFTApp: App {
         .commands {
             MacCommands(state: delegate.state, menu: delegate.state.menu)
             CommandGroup(after: .appInfo) { CheckForUpdatesCommand(updates: delegate.updates) }
+            CommandMenu("Meeting") { MeetingMenuItems(recorder: delegate.meetings) }
+        }
+
+        // Meeting recording from the menu bar, also with the window closed (docs/meetings.md).
+        MenuBarExtra {
+            MeetingMenuItems(recorder: delegate.meetings)
+        } label: {
+            MeetingMenuLabel(recorder: delegate.meetings)
         }
 
         Settings {
@@ -38,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let setup = MacSetup()
     /// Self-update, in the Developer ID download only (`AppUpdates`, `UpdateFeed`).
     let updates = AppUpdates()
+    /// Meeting recording: the capture, and sending each recording to the paired server.
+    lazy var meetings = MeetingRecorder { [weak self] in self?.model.session?.store?.client }
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 
@@ -46,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A recording whose upload did not finish (the app quit, no server) goes out once the session has opened.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            await self?.meetings.sendPending()
+        }
         #if DEBUG
         FrameMeter.startIfAsked()
         #endif
