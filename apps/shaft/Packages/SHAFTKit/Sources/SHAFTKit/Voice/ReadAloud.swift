@@ -34,7 +34,8 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
     private var onProgress: (@MainActor () -> Void)?
     private var onFinish: (@MainActor () -> Void)?
     #if os(iOS)
-    private var sessionActive = false
+    private var ownsSession = false
+    private var teardown: UUID?
     /// The audio session is switched on and off here, never on the main thread: `setActive` can block for a while
     /// (the system logs it as a hang risk). One serial queue keeps the order: a reading's switch-off always lands
     /// before the next reading's switch-on, so a late switch-off can't cut the next reading short.
@@ -52,13 +53,15 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
         #endif
     }
 
-    deinit {
-        #if os(iOS)
+    #if os(iOS)
+    isolated deinit {
         NotificationCenter.default.removeObserver(self)
-        #endif
+        if ownsSession {
+            synthesizer.stopSpeaking(at: .immediate)
+            Self.deactivateSession { IOSAudioUse.shared.release(.readAloud) }
+        }
     }
 
-    #if os(iOS)
     @objc private nonisolated func interrupted(_ notification: Notification) {
         guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
@@ -83,6 +86,9 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
         }
         pending = batch
         #if os(iOS)
+        guard ownsSession || IOSAudioUse.shared.claim(.readAloud) else { finish(); return }
+        ownsSession = true
+        teardown = nil
         let reading = UUID()
         starting = reading
         Self.sessionQueue.async {
@@ -95,7 +101,7 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
             } catch {
                 ready = false
             }
-            Task { @MainActor [weak self] in self?.sessionReady(ready, for: reading) }
+            Task { @MainActor in self.sessionReady(ready, for: reading) }
         }
         #else
         for utterance in batch { synthesizer.speak(utterance) }
@@ -104,21 +110,28 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
 
     #if os(iOS)
     private func sessionReady(_ ready: Bool, for reading: UUID) {
-        guard starting == reading else {
-            // Stopped while the session was switching on: switch it off again, in order — unless a newer reading is
-            // starting or speaking, which uses this same session (its switch-on was queued after this one).
-            if ready, starting == nil, !sessionActive { Self.deactivateSession() }
-            return
-        }
+        guard starting == reading else { return }
         starting = nil
         guard ready else { finish(); return }
-        sessionActive = true
         for utterance in pending { synthesizer.speak(utterance) }
     }
 
-    private static func deactivateSession() {
+    private func deactivateSession() {
+        guard ownsSession, teardown == nil else { return }
+        let token = UUID()
+        teardown = token
+        Self.deactivateSession {
+            guard self.teardown == token else { return }
+            self.teardown = nil
+            self.ownsSession = false
+            IOSAudioUse.shared.release(.readAloud)
+        }
+    }
+
+    private static func deactivateSession(then complete: @escaping @MainActor @Sendable () -> Void) {
         sessionQueue.async {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            Task { @MainActor in complete() }
         }
     }
     #endif
@@ -170,10 +183,7 @@ public final class SystemReadAloudSynth: NSObject, ReadAloudSynth, AVSpeechSynth
         onProgress = nil
         #if os(iOS)
         starting = nil
-        if sessionActive {
-            Self.deactivateSession()
-            sessionActive = false
-        }
+        deactivateSession()
         #endif
         let completion = onFinish
         onFinish = nil

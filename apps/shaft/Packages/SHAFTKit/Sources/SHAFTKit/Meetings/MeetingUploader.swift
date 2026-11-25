@@ -23,21 +23,24 @@ public final class MeetingUploader {
     private static var activeRecordings: Set<URL> = []
 
     private struct UploadRecord: Codable {
-        let meetingId: String
+        var clientId: UUID?
+        var meetingId: String?
         let size: Int
         let sha256: String
-        let chunkSize: Int
+        var chunkSize: Int?
         var finishedAt: Date? = nil
     }
 
     private enum LocalError: LocalizedError {
         case audioChanged
         case invalidChunkSize
+        case invalidRecord
 
         var errorDescription: String? {
             switch self {
             case .audioChanged: "The audio file changed since the upload started."
             case .invalidChunkSize: "The server reported an invalid or different meeting chunk size."
+            case .invalidRecord: "The saved meeting upload record is incomplete."
             }
         }
     }
@@ -73,37 +76,50 @@ public final class MeetingUploader {
         totalBytes = sizeAndDigest.size
 
         var record: UploadRecord
-        var received: [Int]
         if let saved = try Self.loadRecord(at: recordURL) {
             guard saved.size == totalBytes, saved.sha256 == sizeAndDigest.sha256 else {
                 throw LocalError.audioChanged
             }
-            if saved.finishedAt != nil {
-                bytesSent = totalBytes
-                state = .done(saved.meetingId)
-                return
-            }
             record = saved
-            received = try await receivedChunks(for: saved)
         } else {
+            record = UploadRecord(clientId: UUID(), size: totalBytes, sha256: sizeAndDigest.sha256)
+            try Self.save(record, at: recordURL)
+        }
+
+        if let id = record.meetingId, record.finishedAt != nil {
+            bytesSent = totalBytes
+            state = .done(id)
+            return
+        }
+
+        let received: [Int]
+        if record.meetingId == nil {
+            guard let clientId = record.clientId else { throw LocalError.invalidRecord }
             var request = create
+            request.clientId = clientId
             if let sidecarJSON {
                 request.sidecar = try JSONDecoder().decode([String: MeetingJSONValue].self, from: sidecarJSON)
             }
             let created = try await retry { try await client.createMeeting(request) }
             guard created.chunkSize > 0 else { throw LocalError.invalidChunkSize }
-            record = UploadRecord(meetingId: created.id, size: totalBytes, sha256: sizeAndDigest.sha256,
-                                  chunkSize: created.chunkSize)
+            record.meetingId = created.id
+            record.chunkSize = created.chunkSize
             try Self.save(record, at: recordURL)
             received = created.received
+        } else {
+            guard let id = record.meetingId, let chunkSize = record.chunkSize else { throw LocalError.invalidRecord }
+            received = try await receivedChunks(id, chunkSize: chunkSize)
         }
 
-        let chunkCount = record.size / record.chunkSize + (record.size % record.chunkSize == 0 ? 0 : 1)
+        guard let id = record.meetingId, let chunkSize = record.chunkSize, chunkSize > 0 else {
+            throw LocalError.invalidRecord
+        }
+        let chunkCount = record.size / chunkSize + (record.size % chunkSize == 0 ? 0 : 1)
         let finish = FinishRequest(size: record.size, sha256: record.sha256, chunks: chunkCount)
-        let id = record.meetingId
+        var pendingReceipt = received
         var recoveryDelay = 1
         while true {
-            try await sendChunks(id, chunkSize: record.chunkSize, count: chunkCount, received: Set(received))
+            try await sendChunks(id, chunkSize: chunkSize, count: chunkCount, received: Set(pendingReceipt))
             state = .finishing
             do {
                 _ = try await retry { try await client.finishMeeting(id, finish) }
@@ -118,20 +134,20 @@ public final class MeetingUploader {
                     throw error
                 }
                 try await Self.backoff(&recoveryDelay)
-                received = try await receivedChunks(for: record)
+                pendingReceipt = try await receivedChunks(id, chunkSize: chunkSize)
                 if mismatch {
                     let current = try await Self.fingerprint(audioURL)
                     guard current == sizeAndDigest else { throw LocalError.audioChanged }
                     // Indices alone cannot identify a corrupt chunk.
-                    received = []
+                    pendingReceipt = []
                 }
             }
         }
     }
 
-    private func receivedChunks(for record: UploadRecord) async throws -> [Int] {
-        let status = try await retry { try await client.meetingUploadStatus(record.meetingId) }
-        guard status.chunkSize > 0, status.chunkSize == record.chunkSize else {
+    private func receivedChunks(_ id: String, chunkSize: Int) async throws -> [Int] {
+        let status = try await retry { try await client.meetingUploadStatus(id) }
+        guard status.chunkSize > 0, status.chunkSize == chunkSize else {
             throw LocalError.invalidChunkSize
         }
         return status.received
@@ -180,6 +196,10 @@ public final class MeetingUploader {
     }
 
     nonisolated private static func fingerprint(_ url: URL) async throws -> (size: Int, sha256: String) {
+        try digest(of: url)
+    }
+
+    nonisolated private static func digest(of url: URL) throws -> (size: Int, sha256: String) {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         var hash = SHA256()
@@ -215,15 +235,13 @@ public final class MeetingUploader {
             where url.pathExtension == recordExtension {
             guard let record = try loadRecord(at: url),
                   let finishedAt = record.finishedAt, finishedAt < cutoff else { continue }
-            // Only the file the record describes: another recording at the same path is not sent yet, keep it
-            // (review 2026-11-25).
-            let audio = url.deletingPathExtension()
-            if let size = (try? files.attributesOfItem(atPath: audio.path)[.size]) as? Int, size != record.size {
-                continue
-            }
+            let audio = url.deletingPathExtension().standardizedFileURL
+            guard !activeRecordings.contains(audio) else { continue }
             do {
-                try files.removeItem(at: url.deletingPathExtension())
-            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                let current = try digest(of: audio)
+                guard current.size == record.size, current.sha256 == record.sha256 else { continue }
+                try files.removeItem(at: audio)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
                 // A previous prune may already have removed the audio.
             }
             try files.removeItem(at: url)

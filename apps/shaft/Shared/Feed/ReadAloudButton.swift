@@ -28,6 +28,9 @@ final class ReadAloudRequests {
     }
 
     func toggle(id: String, source: String, screen: ChatScreenModel, client: APIClient) {
+        #if os(iOS)
+        guard IOSAudioUse.shared.owner != .meeting else { return }
+        #endif
         let stopping = isActive(id)
         stop()
         guard !stopping, !screen.showVoice, voiceOwners.isEmpty else { return }
