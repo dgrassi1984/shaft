@@ -40,15 +40,62 @@ public extension APIClient {
     }
 
     func deleteMeeting(_ id: String) async throws -> MeetingDeleted {
+        try await deleteMeeting(id, forgetVoices: false)
+    }
+
+    func deleteMeeting(_ id: String, forgetVoices: Bool) async throws -> MeetingDeleted {
         let path = "/app/v1/meetings/\(id)"
-        let (body, _) = try await send(makeRequest("DELETE", path), path: path)
+        let query = forgetVoices ? [URLQueryItem(name: "forget_voices", value: "1")] : []
+        let (body, _) = try await send(makeRequest("DELETE", path, query: query), path: path)
         return try Self.decode(body, path: path)
+    }
+
+    func speakers() async throws -> [SpeakerPerson] {
+        let result: SpeakersResponse = try await get("/app/v1/speakers")
+        return result.people
+    }
+
+    func renameSpeaker(_ id: String, name: String) async throws -> SpeakerPerson {
+        try await post("/app/v1/speakers/\(id)/rename", json: ["name": name])
+    }
+
+    func forgetSpeaker(_ id: String, anonymise: Bool = false) async throws -> SpeakerDeleted {
+        let path = "/app/v1/speakers/\(id)"
+        let query = anonymise ? [URLQueryItem(name: "anonymise", value: "1")] : []
+        let (body, _) = try await send(makeRequest("DELETE", path, query: query), path: path)
+        return try Self.decode(body, path: path)
+    }
+
+    func nameMeetingSpeaker(_ id: String, label: String, name: String) async throws -> MeetingSpeakerUpdate {
+        try await post("/app/v1/meetings/\(id)/speakers", json: ["label": label, "name": name])
+    }
+
+    func mergeMeetingSpeakers(_ id: String, label: String, into target: String) async throws -> MeetingSpeakerUpdate {
+        try await post("/app/v1/meetings/\(id)/speakers", json: ["label": label, "merge_into": target])
+    }
+
+    func meetingClip(_ id: String, speaker: String, n: Int = 0) async throws -> Data {
+        let path = "/app/v1/meetings/\(id)/clip"
+        let query = [URLQueryItem(name: "speaker", value: speaker), URLQueryItem(name: "n", value: String(n))]
+        var request = makeRequest("GET", path, query: query)
+        request.setValue("audio/wav", forHTTPHeaderField: "Accept")
+        let (data, _) = try await send(request, path: path)
+        return data
     }
 }
 
 public struct MeetingDeleted: Decodable, Sendable, Equatable {
     public let id: String
     public let deleted: Bool
+}
+
+public struct SpeakerDeleted: Decodable, Sendable, Equatable {
+    public let id: String
+    public let deleted: Bool
+}
+
+private struct SpeakersResponse: Decodable {
+    let people: [SpeakerPerson]
 }
 
 private struct MeetingChunkReceipt: Decodable {
