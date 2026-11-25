@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import core, factledger, metrics, provenance
+from supervisor import core, metrics, provenance
 
 LOG_TEXT = "The northern orchard survey counted fourteen healthy apple trees near the stone wall."
 WEB_TEXT = "The harbour tide gauge recorded a peak water level of three metres at dawn."
@@ -49,7 +49,6 @@ class ProvenanceIndexTest(unittest.TestCase):
         kept_pairs = provenance.checked("bird")
         kept_section = provenance.section("bird")
         kept_report = provenance.report(["bird"])
-        kept_ledger = factledger.record_text("bird")
         expected_pairs = self.in_memory_statuses()
         self.assertEqual(kept_pairs, expected_pairs)
         for row, expected in expected_pairs:
@@ -58,7 +57,6 @@ class ProvenanceIndexTest(unittest.TestCase):
         self.assertEqual(provenance.checked("bird"), expected_pairs)
         self.assertEqual(provenance.section("bird"), kept_section)
         self.assertEqual(provenance.report(["bird"]), kept_report)
-        self.assertEqual(factledger.record_text("bird"), kept_ledger)
         return kept_pairs
 
     def test_kept_index_matches_in_memory_across_all_statuses_short_facts_and_malformed_episodes(self):

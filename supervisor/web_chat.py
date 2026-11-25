@@ -519,7 +519,8 @@ def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | No
     text = turn.get("retry_text") or (
         asked.get("shown", asked.get("content", "")) if asked and asked.get("role") == "user"
         and not asked.get("interjected") else "")
-    text = "" if archived else text
+    # one longer than a message can be is refused when sent (_send): no Retry button that always fails
+    text = "" if archived or len(text) > MAX_TEXT else text
     links = [{"label": "Activity", "url": f"/i/{name}/activity"}, {"label": "Services", "url": "/services"}]
     if safe and text:
         action, retry, links = "No external actions ran: Retry sends it again.", {
@@ -626,6 +627,22 @@ def sent_mids(chat: dict | None, sent: list[dict]) -> list[str]:
                               + [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))
 
 
+def in_time(own: list, others: list, at) -> list:
+    """A thread's own turns (`own`) in the order they were written, never their clock's, and `others` (what came from
+    outside its replies) placed among them by time (`at`): each goes before the first turn stamped after it, a turn
+    first at the same second. With a clock that only goes forward this is a sort by time; with one set back, a sort by
+    time put an earlier exchange after the newest answer — a follow-up then ended with an assistant turn and the API
+    refused it, and the feed showed the turns out of order (#16)."""
+    others = sorted(others, key=at)
+    out, j = [], 0
+    for item in own:
+        while j < len(others) and at(others[j]) < at(item):
+            out.append(others[j])
+            j += 1
+        out.append(item)
+    return out + others[j:]
+
+
 def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> dict:
     """What a chat shows (docs/app-api.md §4.2, before app_api.to_json stamps its times and turns each file's `path`
     into a URL): its turns, its talk messages (`sent`: sent_during), the reply running now, what is queued, the
@@ -641,10 +658,10 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
     items = [message_item(name, m, ratings, ids) for m in sent]
     reply = reply_of(chat)
     if chat:
-        items = _turn_items(name, chat, archived, ratings, ids) + items
         if chat["state"] == "ended":         # in time order: what it sent you after the chat ended shows below the line
             items.append({"key": "ended", "type": "ended", "ts": chat.get("ended", "")})
-        items.sort(key=lambda i: i["ts"])
+        turns = _turn_items(name, chat, archived, ratings, ids)
+        items = in_time(turns, items, lambda i: i["ts"])
     model = {"instance": name, "partial": False, "version": "", "live": "", "reply": reply,
              "chat": {"id": chat["id"], "title": title(chat), "state": chat["state"], "created": chat.get("created", ""),
                       "ended": chat.get("ended") or None} if chat else None,
@@ -665,10 +682,11 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
     model["last_count"] = last_count(chat, sent)
     first = 0 if whole or not chat else max(0, len(chat["turns"]) - CHAT_WINDOW)
     if first:
-        since = chat["turns"][first]["ts"]
+        # from the window's first turn on, in the feed's order (in_time): by time, a clock set back kept a message
+        # placed among turns the window dropped
+        start = next((j for j, i in enumerate(items) if i.get("k", -1) >= first), len(items))
         model["earlier"] = first
-        model["items"] = [i for i in items if (i["k"] >= first if "k" in i else
-                                               i["type"] == "ended" or i["ts"] >= since)]
+        model["items"] = [i for j, i in enumerate(items) if j >= start or i["type"] == "ended"]
     return model
 
 
@@ -806,17 +824,18 @@ def reap() -> None:
         if c.get("state") == "replying":
             r = c.get("reply") or {}
             # The request may have reached the API and run tools, so this is not a safe retry: Retry asks first.
-            asked = next((t for t in reversed(c["turns"]) if t["role"] == "user"), {})
+            request, _, asked = _retry_request(c["turns"], r, len(c["turns"]))
             c["turns"].append({"role": "assistant", "content": r.get("answer") or "", "ts": _now(),
                                "activity": r.get("activity", []),
                                "note": "interrupted: the web service restarted while it replied",
                                "note_kind": "service", "note_retry": False,
-                               "retry_text": "" if r.get("interjections") else asked.get("shown", asked.get("content", ""))})
+                               "retry_text": "" if r.get("interjections") else request,
+                               **({"asked": asked} if asked else {})})
             c["state"], c["reply"] = "idle", None
             if _flush_queue(c):                     # #70: what was queued for after that reply goes now
                 c["state"], c["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
                                                       "interjections": 0, "docs_before": _docs_now(c["instance"]),
-                                                      "turn_start": len(c["turns"])}
+                                                      "asked": [len(c["turns"]) - 1], "turn_start": len(c["turns"])}
                 save(c)
                 _start(c["id"])
                 continue
@@ -957,7 +976,7 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
     wrote it."""
     name = chat["instance"]
     turns = chat.get("turns") or []
-    items = []
+    own = []
     for k, t in enumerate(turns):
         if t.get("retried") or not (t.get("content") or t["role"] == "user"):
             continue
@@ -967,7 +986,9 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
         after = t.get("after")
         at, pos = ((turns[after].get("ts", ""), after + .5) if isinstance(after, int) and k < after < len(turns)
                    else (t.get("ts", ""), k))
-        items.append((at, 0, pos, t.get("ts", ""), t["role"], t["content"], False, _turn_sender(name, t)))
+        own.append((at, pos, t.get("ts", ""), t["role"], t["content"], False, _turn_sender(name, t)))
+    own.sort(key=lambda x: x[1])                       # in the order written, never the clock's (in_time, #16)
+    items = []
     for m in routed(name, chat["id"], history):
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
             role, who = "assistant", _sender(INSTANCE, name)
@@ -979,8 +1000,8 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
         else:
             role, who = "user", _sender(OPERATOR)
             text = f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n{m['text']}"
-        items.append((m["ts"], 1, 0, m["ts"], role, text, True, who))
-    return [(ts, role, text, rt, who) for *_, ts, role, text, rt, who in sorted(items, key=lambda x: x[:3])]
+        items.append((m["ts"], 0, m["ts"], role, text, True, who))
+    return [tuple(it[2:]) for it in in_time(own, items, lambda x: x[0])]
 
 
 def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str]:
@@ -991,18 +1012,31 @@ def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str
     return len(said), max(said, default="")
 
 
-def mark_retried(chat: dict, k: int, text: str) -> bool:
+def mark_retried(chat: dict, k: int, text: str, undo: bool = False) -> bool:
     """Retry in place (iPad review P9): the failed reply `k` and the question it answered are kept, marked retried —
     the feed folds them into one line, the API no longer sees them. Only a failure that offered Retry (note_retry: no
-    tools ran), the question being the text sent again. False: nothing marked, the message is sent as any other."""
+    tools ran), the question being the text sent again. The question is every turn the failed reply answered (its
+    `asked`, _finish): a follow-up's late message sits after the answer it missed, not before the failure (#16: folding
+    only the turn before it sent the late message twice). A failure saved without `asked` answered the turn before it.
+    False: nothing marked, the message is sent as any other. `undo`: the send it was folded for was refused — the
+    folded turns are unmarked, so nothing the operator wrote leaves the thread."""
     turns = chat.get("turns") or []
     if not 0 < k < len(turns):
         return False
-    failed, asked = turns[k], turns[k - 1]
+    failed = turns[k]
+    idx = failed.get("asked") or [k - 1]
+    asked = [turns[i] for i in idx if isinstance(i, int) and 0 <= i < k]
+    if undo:
+        for t in [failed, *asked]:
+            t.pop("retried", None)
+        return True
     if (failed.get("role") != "assistant" or not failed.get("note_retry") or failed.get("retried")
-            or asked.get("role") != "user" or (failed.get("retry_text") or "").strip() != text.strip()):
+            or len(asked) != len(idx) or any(t.get("role") != "user" or t.get("retried") for t in asked)
+            or (failed.get("retry_text") or "").strip() != text.strip()):
         return False
-    failed["retried"] = asked["retried"] = True
+    failed["retried"] = True
+    for t in asked:
+        t["retried"] = True
     return True
 
 
@@ -1044,6 +1078,7 @@ class Relay:
         self.changed = threading.Condition()
         self.ended: float | None = None                # time.monotonic() when `end` went in
         self.answered_operator = False                 # it ended well, answering something the operator wrote (_finish)
+        self.upto: int | None = None                   # how many turns its request was built from (_run)
 
     def emit(self, kind: str, **fields) -> None:
         """Buffer one event and wake every stream holding this reply. Nothing goes in after `end`."""
@@ -1115,6 +1150,7 @@ def _run(relay: Relay) -> None:
     with _lock(cid):
         chat = load(cid)
         sent = chat["reply"].get("interjections", 0)
+        relay.upto = len(chat["turns"])             # the turns its request carries (_finish)
     try:
         relay.conn = conn = _api_conn(3600)
         body = {"model": chat["instance"], "messages": _api_messages(chat), "stream": True}
@@ -1209,6 +1245,27 @@ def _run(relay: Relay) -> None:
         _first_reply(chat["instance"])
 
 
+def _retry_request(turns: list[dict], reply: dict | None, upto: int) -> tuple[str, dict, list[int]]:
+    """What Retry sends again for a reply that failed, of turns[:upto]: (its text, the last user turn, `asked`). What
+    the reply answered is the turns that started it (`asked`: _send, or a follow-up's late messages) — not merely the
+    last user turn, which a follow-up's first answer may sit between (#16: Retry sent a late message twice). A reply
+    without the record (the opening, or one started before it) answered the last one, whose text goes back as it was.
+    Several go back as one message, only when one can carry them: each has text and none a file (Retry sends text
+    only), and together they fit in a message (MAX_TEXT) — else "", and nothing is folded (mark_retried)."""
+    idx = [i for i in (reply or {}).get("asked") or [] if isinstance(i, int) and 0 <= i < upto]
+    original = next((t for t in reversed(turns[:upto]) if t["role"] == "user"), {})
+    asked = [turns[i] for i in idx]
+    if len(asked) <= 1:
+        t = asked[0] if asked else original
+        request = t.get("shown", t.get("content", ""))     # a queued batch is one turn, and may pass MAX_TEXT
+        return request if len(request) <= MAX_TEXT else "", original, idx
+    shown = [t.get("shown", t.get("content", "")).strip() for t in asked]
+    request = "\n\n".join(shown)
+    if not all(shown) or any(t.get("attachments") for t in asked) or len(request) > MAX_TEXT:
+        request = ""
+    return request, original, idx
+
+
 def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard: int | None, *,
             status: int | None = None, posted: bool = True, exc: BaseException | None = None,
             tools: bool | None = None) -> list[str]:
@@ -1221,9 +1278,16 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             return docs_to_sync
         reply = chat["reply"]
         sent = reply.get("interjections", 0)
-        interjected = [t for t in chat["turns"][reply.get("turn_start", len(chat["turns"])):]
-                       if t["role"] == "user" and t.get("interjected")]
-        heard_ids = reply.get("comment_ids", []) + _comment_ids(interjected[:max(0, heard or 0)])
+        # A refused one sent before the relay read the chat for its request (relay.upto) is in that request: its
+        # answer covers it, though the API refused it as an interjection (409, the reply not registered yet; Codex
+        # review of #16). An accepted one is the API's heard count's, wherever it sits.
+        interjected = [t for k, t in enumerate(chat["turns"]) if k >= reply.get("turn_start", len(chat["turns"]))
+                       and t["role"] == "user" and t.get("interjected")
+                       and not (t.get("refused") and k < (relay.upto or 0))]
+        # The API's heard count covers only the interjections it accepted, in the order sent: one it refused (409) is
+        # never heard, whatever came after it (#16: a 409 then a 202 heard took the refused one as heard)
+        accepted = [t for t in interjected if not t.get("refused")]
+        heard_ids = reply.get("comment_ids", []) + _comment_ids(accepted[:max(0, heard or 0)])
         started_by = None if sent else reply.get("started_by")
         assistant_index = len(chat["turns"])
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
@@ -1232,12 +1296,12 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             kind, retry = classify_reply(stopped=relay.stopped, status=status if status and status != 200 else None,
                                          exc=exc, text=error or "", posted=posted, tools=tools)
             # Interjections and attachment-only requests cannot be faithfully retried by prefilling one message.
-            original = next((t for t in reversed(chat["turns"]) if t["role"] == "user"), {})
-            request = original.get("shown", original.get("content", ""))
+            request, original, asked = _retry_request(chat["turns"], reply, assistant_index)
             # retry_text: what Retry sends again; note_retry: that it is safe to (no tools ran), else Retry asks first.
             # The opening (hidden) has no text of the operator's to send again: Retry asks for it again (_reopen).
             cause = {"note_kind": kind, "note_retry": retry and not sent and bool(request or original.get("hidden")),
-                     "retry_text": request if not sent else ""}
+                     "retry_text": request if not sent else "",
+                     **({"asked": asked} if asked else {})}
         from . import docs
         made = [] if reply.get("waiting") else docs.changed(reply.get("docs_before") or {}, _docs_now(chat["instance"]))
         # What this reply answered: the user turns since the previous answer. Only one the operator wrote counts as
@@ -1250,15 +1314,21 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
                               **({"docs": made} if made else {})})
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
-        unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
-        for t in interjected[len(interjected) - unheard:] if unheard else []:
+        # A refused one is unheard even then: the API never passed it on.
+        ended_well = not relay.stopped and not error
+        missed = accepted[max(0, heard):] if heard is not None and ended_well else []
+        late = [t for t in interjected if (ended_well and t.get("refused")) or any(t is m for m in missed)]
+        unheard = len(late)
+        for t in late:
             t["after"] = assistant_index          # read after this answer, by the reply that answers it (_dialogue)
         queued = _flush_queue(chat)
         if unheard or queued:                     # sent too late for this reply: answered by one of their own
+            asked = ([i for i, t in enumerate(chat["turns"]) if any(t is x for x in late)]
+                     + ([len(chat["turns"]) - 1] if queued else []))
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
                                                         "interjections": 0, "followup": unheard,
                                                         "docs_before": _docs_now(chat["instance"]),
-                                                        **_reply_comments(interjected[-unheard:] if unheard else []),
+                                                        **_reply_comments(late), "asked": asked,
                                                         "turn_start": len(chat["turns"])}
         save(chat)
     relay.close_stream(answer.strip(), note or None)   # after the save: a client that reads the feed on `end` sees it
@@ -1566,20 +1636,29 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
         c = target(name, cid, login)
         if messages.sent_mid(name, mid):          # the same message, sent for its next cycle before its answer was lost
             return c or {}, f"already sent to {name} for its next cycle"
-        reopened = False
+        reopened = folded = False
         if retry_of.isdigit() and c and c.get("state") != "replying" and not files:
             with _lock(c["id"]):
                 c = load(c["id"])
                 if reopened := _reopen(c, int(retry_of), text, mid):
                     save(c)
-                elif mark_retried(c, int(retry_of), text):
+                elif folded := mark_retried(c, int(retry_of), text):
                     save(c)
         if reopened:                              # the welcome asked for again: no message of the operator's
             _start(c["id"])
             log(f"web: {login or 'operator'} asked {name} for its welcome again")
             return c, f"sent to {name}"
-        chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid,
-                           voice=voice, cid=cid)
+        try:
+            chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid,
+                               voice=voice, cid=cid)
+        except BaseException:
+            if folded:                            # the message was not sent: what Retry folded stays in the thread
+                with _lock(c["id"]):
+                    c = load(c["id"])
+                    if c.get("state") != "replying":  # else the send was saved before what raised: it stands
+                        mark_retried(c, int(retry_of), text, undo=True)
+                        save(c)
+            raise
     # a question it quotes is answered, as a Telegram reply answers it
     if quoted and (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
@@ -1735,9 +1814,13 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
                 if status not in (202, 409):
                     raise Refused(body.get("error", {}).get("message") or f"API HTTP {status}")
                 turn["interjected"] = True
+                if status == 409:
+                    # Refused (the reply was ending, or the API had not registered it yet): the reply never hears it, and
+                    # the API's heard count never covers it — _finish keeps it apart from the accepted ones (#16)
+                    turn["refused"] = True
                 chat["turns"].append(turn)
-                # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused (409:
-                # the reply was ending), is answered by a reply of its own when this one ends.
+                # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused, is
+                # answered by a reply of its own when this one ends.
                 chat["reply"]["interjections"] = chat["reply"].get("interjections", 0) + 1
                 save(chat)
                 return chat, (f"{name} reads it at its next step" if status == 202 else
@@ -1745,11 +1828,13 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
             _take_feedback(chat, turn)
             chat["turns"].append(turn)
             last_answer = max((i for i, t in enumerate(chat["turns"]) if t["role"] == "assistant"), default=-1)
-            starting = [t for t in chat["turns"][last_answer + 1:]
-                        if t["role"] == "user" and not t.get("interjected")]
+            asked = [k for k in range(last_answer + 1, len(chat["turns"]))
+                     if chat["turns"][k]["role"] == "user" and not chat["turns"][k].get("interjected")
+                     and not chat["turns"][k].get("retried")]
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
                                                         "docs_before": _docs_now(name),
-                                                        **_reply_comments(starting),
+                                                        **_reply_comments([chat["turns"][k] for k in asked]),
+                                                        "asked": asked,     # what Retry sends again if it fails (#16)
                                                         "turn_start": len(chat["turns"])}
             save(chat)
         _start(cid)

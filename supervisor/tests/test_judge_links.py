@@ -2,7 +2,7 @@
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import factledger, families, judge, metrics
+from supervisor import families, judge, metrics
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -81,17 +81,18 @@ class JudgeLinksTest(IsolatedCase):
         family, = families.families("ember")
         self.assertEqual(family["members"], [NOW.isoformat(), row["episode_ts"]])
 
-    def test_unsupported_claim_names_unsourced_fact(self):
-        with mock.patch.object(factledger, "match_claim", return_value={"date": "2026-11-10", "text": "Report exists"}) as match:
-            row = self.judge_one(verdict(claim_supported=False, unsupported_claim="Report exists"))
-        match.assert_called_once_with("ember", "Report exists")
-        self.assertEqual(row["unsourced_fact"], "[2026-11-10] Report exists")
-
-    def test_fact_match_failure_does_not_discard_judgment(self):
-        with mock.patch.object(factledger, "match_claim", side_effect=ValueError("broken facts")):
-            row = self.judge_one(verdict(claim_supported=False, unsupported_claim="Report exists"))
+    def test_judge_persists_unsupported_claim(self):
+        path = self.sup / "judgments/ember.jsonl"
+        self.write(path, [{"episode_ts": NOW.isoformat(), "claim_supported": False,
+                           "unsupported_claim": "Earlier claim", "unsourced_fact": "Old match"}])
+        row = self.judge_one(verdict(claim_supported=False, unsupported_claim="Report exists"))
+        self.assertFalse(row["claim_supported"])
         self.assertEqual(row["unsupported_claim"], "Report exists")
         self.assertEqual(row["judge"], "example-judge")
+        earlier = metrics.judgments("ember")[0]
+        self.assertEqual(earlier["unsupported_claim"], "Earlier claim")
+        self.assertNotIn("unsourced_fact", earlier)
+        self.assertNotIn("unsourced_fact", path.read_text().splitlines()[-1])
 
     def test_missing_link_fields_are_defaulted_without_discarding_verdict(self):
         """Older judge responses without links must still produce a stored judgment."""

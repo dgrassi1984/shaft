@@ -245,16 +245,6 @@ def missing(name, days=14, now=None, as_of=None) -> list[dict]:
             if item.get("recorded") is False]
 
 
-def reading(name, now=None) -> tuple[str, float | None]:
-    """Measure the share of future orders left unrecorded, rather than the number of conversations."""
-    items = [item for row in _recent(name, 14, now) for item in row.get("orders", [])]
-    label = "Orders the operator gave me for later that I did not record"
-    if not items:
-        return f"{label}: no conversation checked yet", None
-    n = sum(item.get("recorded") is False for item in items)
-    return f"{label}: {n} of {len(items)} (last 14 days' conversations)", n / len(items)
-
-
 def record_text(name, limit=20, as_of=None) -> str:
     """Show what the judge counted and quote only unrecorded orders, leaving recording to the instance."""
     checked = sorted((row for row in rows(name, as_of) if "skipped" not in row),

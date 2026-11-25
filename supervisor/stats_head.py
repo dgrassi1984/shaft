@@ -1,10 +1,8 @@
 """The head of self/stats.md: the few lines an instance reads on every run.
 
-The page is 12-18 KB and the instance's prompt keeps about its first 5,500 characters, so what stands first is all that
-reaches a choice in time. The head holds, in order: the gauges the instance chose (gauges.py), what the claim lint
-found since its last sleep (claimlint.py), what changed since that sleep, a dated line after a model change, the
-verdict of each test the supervisor already runs on one of the instance's mechanisms, and the topics its battery
-self-description got wrong (never the items). The tables follow, unchanged, as the body.
+The instance's prompt keeps about the first 5,500 characters of the page. The head shows due predictions, what
+changed since the last sleep, recent model changes, the supervisor's test verdicts, and the topics the instance
+missed on the battery's self-description questions. The full tables follow.
 
 Everything here is a reading. Nothing instructs, refuses or gates. The head is held under HEAD_CHARS, each line
 bounded, so it fits whole even when the prompt's budget for the page is cut.
@@ -146,15 +144,10 @@ def _part(name: str, label: str, build) -> list[str]:
 
 def head(name: str, now: datetime | None = None, save: bool = False) -> list[str]:
     """The head's lines ([] when there is nothing to say). `save`: keep the verdicts for the panel's alerts."""
-    from . import battery, claimlint, gauges, predictions
+    from . import battery, predictions
     now = now or datetime.now()
-    lines = _part(name, "gauges", lambda: gauges.head_lines(name, now))
-    lint = _part(name, "claim lint", lambda: claimlint.head_lines(name, since=_last_sleep(name)))
-    if lint:
-        lines += ["## Claims my tool log did not show (checked on every cycle, since my last sleep)"] + lint + [""]
     due = _part(name, "predictions due", lambda: predictions.due_lines(name, now))
-    if due:
-        lines += ["## Predictions of mine that are due"] + due + [""]
+    lines = ["## Predictions of mine that are due"] + due + [""] if due else []
     found = _part(name, "verdicts", lambda: verdicts(name))
     if save:
         try:
@@ -168,7 +161,7 @@ def head(name: str, now: datetime | None = None, save: bool = False) -> list[str
         lines += ["## Where I stand now"] + notes + [""]
     lines = [l if len(l) <= LINE_CHARS else l[:LINE_CHARS - 1] + "…" for l in lines]
     tail = [BODY_MARK, ""]
-    while lines and len("\n".join(lines + tail)) > HEAD_CHARS:   # the last notes go first: the chosen gauges are kept
+    while lines and len("\n".join(lines + tail)) > HEAD_CHARS:   # trim the last notes first
         while lines and not lines[-1].startswith("- "):          # the blank line and any heading left bare
             lines.pop()
         if lines:

@@ -201,8 +201,7 @@ def orders_panel(name: str) -> Html:
     from . import core, orders
     from .web_actions import button
     rows = [h('<li><b>{i}</b> {t} <span class="dim">· {by}, {at}{src}</span> {drop}</li>', i=o["id"], t=o["text"],
-              by=("yours" if o["by"] == "operator" else f"{name}'s own rule" if o["by"] == "self"
-                  else f"recorded by {name} from what you said"),
+              by="yours" if o["by"] == "operator" else f"recorded by {name} from what you said",
               at=o["added_at"][:16].replace("T", " "), src=f" · {o['source']}" if o.get("source") else "",
               drop=button("orders-drop", "Drop", f"drop {name}'s standing order {o['id']}? It stops being shown to it "
                           "and its messages stop being checked against it.", {"name": name, "id": o["id"]},

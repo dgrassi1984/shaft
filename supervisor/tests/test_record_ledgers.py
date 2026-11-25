@@ -7,18 +7,18 @@ from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
 class RecordLedgersTest(IsolatedCase):
-    def test_each_ledger_dispatches_limit_as_of_and_facts_offset(self):
-        self.assertEqual(set(broker.LEDGER_KINDS), {"families", "habits", "usage", "facts", "predictions", "unrecorded_orders"})
+    def test_each_ledger_dispatches_limit_and_as_of(self):
+        self.assertEqual(set(broker.LEDGER_KINDS), {"families", "predictions", "unrecorded_orders"})
         for replay in (False, True):
             b = self.box(replay=replay)
             for kind, module_name in broker.LEDGER_KINDS.items():
                 with self.subTest(kind=kind, replay=replay):
                     module = importlib.import_module("supervisor." + module_name)
                     with mock.patch.object(module, "record_text", return_value="example record") as record:
-                        result = b.call("record", {"kind": kind, "limit": 7, "offset": 3})
+                        result = b.call("record", {"kind": kind, "limit": 7})
                     self.assertTrue(result["ok"], result)
                     self.assertEqual(result["result"], "example record")
-                    more = {"offset": 3} if kind == "facts" else {"extra": []} if kind == "predictions" else {}
+                    more = {"extra": []} if kind == "predictions" else {}
                     record.assert_called_once_with("ember", limit=7, as_of=NOW if replay else None, **more)
 
     def test_unknown_kind_error_names_all_declared_kinds(self):
@@ -49,7 +49,24 @@ class RecordLedgersTest(IsolatedCase):
                     self.assertNotIn("kind must be", result.get("error", ""))
                     self.assertTrue(result["ok"], result)
 
-    def test_gauges_idle_exit_and_predict_are_off_in_exams_and_jobs(self):
-        for tool in ("gauges", "nothing_to_do", "predict"):
+    def test_idle_exit_and_predict_are_off_in_exams_and_jobs(self):
+        for tool in ("nothing_to_do", "predict"):
             self.assertIn(tool, battery.EXAM_OFF)
             self.assertIn(tool, jobs.OFF_IN_JOBS)
+
+    def test_removed_tools_and_ledger_kinds_are_unavailable(self):
+        for replay in (False, True):
+            with self.subTest(replay=replay):
+                b = self.box(replay=replay)
+                specs = {spec["function"]["name"]: spec["function"] for spec in b.tool_specs()}
+                self.assertNotIn("gauges", specs)
+                self.assertIn("predict", specs)
+                self.assertIn("run", specs)
+                record = specs["record"]["parameters"]["properties"]
+                self.assertNotIn("offset", record)
+                self.assertIn("families", record["kind"]["enum"])
+                self.assertEqual(set(specs["record_order"]["parameters"]["properties"]), {"text", "source"})
+                self.assertFalse(b.call("gauges", {})["ok"])
+                for kind in ("habits", "usage", "facts", "claims", "gauges"):
+                    self.assertNotIn(kind, record["kind"]["enum"])
+                    self.assertIn("kind must be", b.call("record", {"kind": kind})["error"])

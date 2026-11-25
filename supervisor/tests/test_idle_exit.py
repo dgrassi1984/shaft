@@ -243,12 +243,10 @@ class IdleExitTest(IsolatedCase):
                 self.assertEqual(metrics.judgments("ember")[0]["episode_ts"], ep["ts"])
 
     def test_quiet_reads_after_exit_do_not_withdraw(self):
-        """Reading record or gauges after an exit must preserve the scheduler backoff."""
+        """Reading record after an exit must preserve the scheduler backoff."""
         b = self.box()
         b.call("nothing_to_do", {"reason": "empty"})
-        for tool in ("record", "gauges"):
-            with mock.patch.object(b, "_" + tool, return_value="read"):
-                self.assertTrue(b.call(tool, {})["ok"])
+        self.assertTrue(b.call("record", {"kind": "runs"})["ok"])
         self.assertTrue(b.idle_declared)
         self.assertEqual(len(idle.rows("ember")), 1)
         self.assertIn("ember", json.loads(autonomy.STATE.read_text())["idle_exits"])

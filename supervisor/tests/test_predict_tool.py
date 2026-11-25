@@ -2,7 +2,7 @@
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import claimlint, gauges, judge_probe, metrics, predictions, stats_head, unrecorded
+from supervisor import judge_probe, metrics, predictions, stats_head, unrecorded
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -69,7 +69,7 @@ class PredictToolTest(IsolatedCase):
 
     def test_after_cycle_scores_and_scoring_failure_still_writes_stats(self):
         for module, name in [(metrics, "judge_pending"), (judge_probe, "run"),
-                             (claimlint, "run"), (unrecorded, "run"), (metrics, "check_probation")]:
+                             (unrecorded, "run"), (metrics, "check_probation")]:
             self.enterContext(mock.patch.object(module, name, return_value=0))
         for error in (None, ValueError("broken prediction")):
             with self.subTest(error=error), mock.patch.object(predictions, "score", side_effect=error) as score, \
@@ -81,11 +81,9 @@ class PredictToolTest(IsolatedCase):
     def test_stats_head_shows_due_unreported_prediction_then_removes_reported(self):
         with self.clock(NOW):
             self.assertTrue(self.make(self.box())["ok"])
-        for module, name, value in [(claimlint, "head_lines", []),
-                                    (stats_head, "_last_sleep", None), (stats_head, "verdicts", []),
+        for module, name, value in [(stats_head, "verdicts", []),
                                     (stats_head, "since_sleep", []), (stats_head, "model_change", [])]:
             self.enterContext(mock.patch.object(module, name, return_value=value))
-        self.enterContext(mock.patch.object(gauges, "head_lines", side_effect=lambda *a: []))
         self.enterContext(mock.patch("supervisor.battery.self_miss_lines", return_value=[]))
         due = NOW + timedelta(hours=2)
         self.assertIn("Prediction p1 was due", "\n".join(stats_head.head("ember", due)))
