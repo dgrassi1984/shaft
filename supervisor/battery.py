@@ -483,35 +483,42 @@ def recall_candidates(name: str, now: datetime | None = None) -> list[tuple[str,
 
 RECALL_OLD_DAYS = 14   # where "old" starts when recall is read by the age of what was asked about
 RECALL_REFRESH_DAYS = 28   # the operator, 2026-11-23 (#9): a recall set is redrawn at the latest once this old
+PERIOD = ("model", "judge", "version")   # the era's parts whose change redraws the recall set (#9)
 
 
 def recall_refresh_why(name: str, now: datetime | None = None) -> str:
     """Why this instance's recall questions are drawn anew tonight, or '' to keep them. A new set starts a new
     comparison period (its checksum is in the era), so it is drawn only when a period changes anyway: the instance's
-    model, the judge rotation or the item version differs from its previous run's (and the set predates that run's
-    change), or the set is RECALL_REFRESH_DAYS old. Otherwise every question would soon be over RECALL_OLD_DAYS old
-    and recall by age would compare nothing (#9)."""
+    model, the judge rotation or the item version differs from the period the set was drawn for, or the set is
+    RECALL_REFRESH_DAYS old. Otherwise every question would soon be over RECALL_OLD_DAYS old and recall by age would
+    compare nothing (#9). The period is the one written in the set (`for`); a set drawn before sets recorded it is
+    compared with the instance's previous run instead. A refresh that could not be drawn (too few entries) stays due:
+    rows run under the new period never mask it."""
     path = items_dir() / f"recall-{name}.json"
     if not path.is_file():
         return "no recall questions yet"
     now = now or datetime.now()
-    made = datetime.fromisoformat(json.loads(path.read_text())["generated"])
+    data = json.loads(path.read_text())
+    made = datetime.fromisoformat(data["generated"])
     if now - made >= timedelta(days=RECALL_REFRESH_DAYS):
         return f"the set is {(now - made).days} days old (redrawn at {RECALL_REFRESH_DAYS})"
-    previous = [r for r in results(name) if r.get("arm") == "instance"]
-    if not previous or datetime.fromisoformat(previous[-1]["at"]) < made:
-        return ""   # nothing ran since this set was drawn: it was drawn for the present period
+    drawn_for = data.get("for")
+    if drawn_for is None:      # drawn before sets recorded their period: the previous run's stands for it
+        previous = [r for r in results(name) if r.get("arm") == "instance"]
+        if not previous or datetime.fromisoformat(previous[-1]["at"]) <= made:
+            return ""
+        drawn_for = previous[-1]
     e = era(name)
-    changed = [k for k in ("model", "judge", "version") if previous[-1].get(k) != e[k]]
-    return f"the {', '.join(changed)} changed since the previous run" if changed else ""
+    changed = [k for k in PERIOD if drawn_for.get(k) != e[k]]
+    return f"the {', '.join(changed)} changed since the set was drawn" if changed else ""
 
 
 def pick_recall(cands: list[tuple[str, str]], now: datetime) -> list[tuple[str, str]]:
     """RECALL_ITEMS entries from both sides of RECALL_OLD_DAYS while both exist (half each, the rest from the
     other side when one runs short), each side spread over its span, oldest first."""
     old_at = now - timedelta(days=RECALL_OLD_DAYS)
-    sides = [[c for c in cands if datetime.strptime(c[0], "%Y-%m-%d %H:%M") >= old_at],
-             [c for c in cands if datetime.strptime(c[0], "%Y-%m-%d %H:%M") < old_at]]
+    sides = [[c for c in cands if datetime.strptime(c[0], "%Y-%m-%d %H:%M") > old_at],     # as recall_by_age:
+             [c for c in cands if datetime.strptime(c[0], "%Y-%m-%d %H:%M") <= old_at]]    # 14 days is old
     want = [RECALL_ITEMS // 2, RECALL_ITEMS - RECALL_ITEMS // 2]
     for i in (0, 1):
         short = want[i] - len(sides[i])
@@ -551,14 +558,20 @@ def make_recall(name: str, force: bool = False, now: datetime | None = None) -> 
     qs = out["questions"]
     if len(qs) != RECALL_ITEMS:
         raise judge.JudgeError(f"expected {RECALL_ITEMS} recall questions, got {len(qs)}")
-    data = {"generated": now.isoformat(timespec="seconds"), "judge": by, **judge.independence(by, own),
+    asked = {stamp for stamp, _ in picked}
+    if {q["entry"] for q in qs} != asked:   # each question keeps its own entry's date: by-age reads it (#9)
+        raise judge.JudgeError(f"recall questions name entries {sorted(q['entry'] for q in qs)}, "
+                               f"not the {sorted(asked)} drawn")
+    e = era(name)
+    data = {"generated": now.isoformat(timespec="seconds"), "for": {k: e[k] for k in PERIOD},
+            "judge": by, **judge.independence(by, own),
             "questions": [{"id": f"{name}-{i + 1}", "prompt": q["question"], "answer": q["answer"],
                            "entry": q["entry"], "max_steps": 8} for i, q in enumerate(qs)]}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=1, ensure_ascii=False))
     old_at = (now - timedelta(days=RECALL_OLD_DAYS)).strftime("%Y-%m-%d %H:%M")
     log(f"{name}: battery recall questions written because {why} ({RECALL_ITEMS}, entries {picked[0][0]} … "
-        f"{picked[-1][0]}; {sum(stamp < old_at for stamp, _ in picked)} of them {RECALL_OLD_DAYS} days or older)")
+        f"{picked[-1][0]}; {sum(stamp <= old_at for stamp, _ in picked)} of them {RECALL_OLD_DAYS} days or older)")
     return path
 
 
@@ -625,15 +638,6 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
         return 0
     signal.signal(signal.SIGTERM, _on_term)
     root = instance_root(name)
-    e = era(name)
-    make_recall(name)                                  # drawn anew only when a period changes anyway (#9)
-    e = era(name)                                      # the checksum includes recall questions once written
-    items = [it for it in load_items(name) if (not only or it["category"] in only)
-             and (not control_only or it["category"] in CONTROLLED)]
-    if not items:
-        log(f"{name}: battery: no items in {items_dir()}")
-        return 0
-    items = order(name, items, e)[:limit]
     held = _Held(name, "battery")
     try:
         if not control_only:
@@ -641,6 +645,19 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     except Busy:
         log(f"{name}: battery skipped — the instance is busy")
         return 0
+    if not control_only:   # under the instance's lock: a control check or a busy run never redraws the set
+        try:
+            make_recall(name)                          # drawn anew only when a period changes anyway (#9)
+        except Exception as err:   # the kept set runs tonight; the refresh stays due for the next run
+            log(f"{name}: battery recall questions not redrawn ({type(err).__name__}: {err}); the kept set runs")
+    e = era(name)                                      # the checksum includes the recall questions as now written
+    items = [it for it in load_items(name) if (not only or it["category"] in only)
+             and (not control_only or it["category"] in CONTROLLED)]
+    if not items:
+        held.release()
+        log(f"{name}: battery: no items in {items_dir()}")
+        return 0
+    items = order(name, items, e)[:limit]
     started = datetime.now().isoformat(timespec="seconds")
     summary = {"name": name, "started": started, **e, "items": []}
     scored = 0
@@ -926,7 +943,7 @@ def recall_by_age(name: str, rows: list[dict]) -> str:
     if not groups["under"] and not groups["over"]:
         return ""
     part = lambda key, label: (f"{label} {sum(groups[key]) / len(groups[key]):.1f} (n={len(groups[key])})"   # noqa: E731
-                               if groups[key] else f"{label}: no question (n=0)")
+                               if groups[key] else f"{label}: no scored question (n=0)")
     return (f"recall by the age of what was asked: {part('under', f'under {RECALL_OLD_DAYS} days old')}; "
             f"{part('over', f'{RECALL_OLD_DAYS} days or older')}")
 
