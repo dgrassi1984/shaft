@@ -224,7 +224,8 @@ class IncrementalMemoryTest(InstanceFixture, unittest.TestCase):
              mock.patch.object(memory, "_chunks", side_effect=AssertionError("unchanged file chunked")), \
              mock.patch.object(memory.base64, "b64decode", side_effect=AssertionError("unchanged vector decoded")):
             self.assertEqual(memory.search(self.root, "orchard"), expected)
-        self.assertEqual([c.kwargs["query"] for c in self.embed.call_args_list], [True, False, True])
+        # the query is embedded once: the same query again reuses its vector (memory._query_vector, #11)
+        self.assertEqual([c.kwargs["query"] for c in self.embed.call_args_list], [True, False])
 
     def test_row_25_only_changed_file_is_parsed_and_embedded_and_deletions_disappear(self):
         memory.search(self.root, "orchard")
