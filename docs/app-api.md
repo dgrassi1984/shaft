@@ -252,6 +252,7 @@ order. Open threads missing from storage go first, newest creation first. Each r
 | `waiting` | str or null | The running reply's waiting text |
 | `failed` | bool | The last assistant turn has a failure note, excluding stopped and retried replies |
 | `unread` | bool | The operator has unseen instance items in this feed |
+| `empty` | bool | Nothing is in it yet: closing it ends no conversation, so the apps close it without asking |
 
 The `from` object represents Main and uses the same preview, unread, and failed rules. Lifecycle `state` remains unchanged. Unknown instances return `404 not_found`.
 
@@ -859,7 +860,9 @@ The operator feeds keep the cancelled note; instance dialogue excludes it. Attac
 ### 7.3 `POST /app/v1/chat/<n>/end`
 
 `{"cid": str}`: end the conversation now (journal write-up requested). `{"said": "ended: journal write-up requested"}`.
-Refused while it replies, or when it is already over.
+Refused while it replies, or when it is already over. `{"cid": str, "if_empty": true}` closes it only while it is
+still empty (the thread row's `empty`, checked again under the lock): `409 not_empty` otherwise, and nothing ends.
+The apps send it when they close an empty thread without asking, and ask first on `not_empty`.
 
 ### 7.4 `POST /app/v1/chat/<n>/clear`
 

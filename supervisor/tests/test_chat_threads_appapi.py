@@ -36,15 +36,47 @@ class ThreadsAppTest(AppTest):
         self.assertEqual(got, {"threads": [
             {"id": "web-b", "title": "Topic B", "created": app_api.stamp(self.b["created"]),
              "last": app_api.stamp("2026-11-03T14:01:00"), "line": "Answer B", "state": "replying",
-             "waiting": "waiting for Topic A", "unread": True, "failed": False},
+             "waiting": "waiting for Topic A", "unread": True, "failed": False, "empty": False},
             {"id": "web-a", "title": "Topic A", "created": app_api.stamp(self.a["created"]),
              "last": app_api.stamp("2026-11-03T14:00:00"), "line": "Answer A", "state": "idle",
-             "waiting": None, "unread": True, "failed": False}],
+             "waiting": None, "unread": True, "failed": False, "empty": False}],
             # From's state is its conversation's: idle before its first message (2026-11-11)
             "from": {"line": "From a cycle", "last": app_api.stamp("2026-11-03T14:02:00"), "unread": True,
                      "state": "idle", "waiting": None, "failed": False}})
         rail = self.get("/app/v1/instances")
         self.assertEqual((rail["instances"][0]["threads"], rail["instances"][0]["replying"], rail["badge"]), (2, True, 1))
+
+    def test_a_thread_with_nothing_in_it_is_empty(self):
+        # Bug 2026-11-25: the apps asked "End the conversation…? It writes up its journal" on closing a thread with
+        # nothing in it. The row says it is empty, so they close it unasked; a thread with anything in it is not.
+        self.chat([], cid="web-new", title="New thread", created="2026-11-03T14:03:00")
+        rows = {c["id"]: c for c in self.get("/app/v1/threads/wisp")["threads"]}
+        self.assertIs(rows["web-new"]["empty"], True)
+        self.assertEqual((rows["web-a"]["empty"], rows["web-b"]["empty"]), (False, False))
+        self.assertNotIn("empty", self.get("/app/v1/threads/wisp")["from"])   # Main never closes
+
+    def test_an_instance_message_routed_into_a_thread_makes_it_not_empty(self):
+        """Review of the fix: a thread with no turn but a message routed into it shows that message, so it asks."""
+        chat = self.chat([], cid="web-routed", title="Routed", created="2026-11-03T14:03:00")
+        with mock.patch.object(web_chat, "sent_during", return_value=[{
+                "from": "wisp", "to": "operator", "file": "r.md", "text": "Into the thread", "ts": "2026-11-03T14:04:00"}]):
+            row = next(c for c in self.get("/app/v1/threads/wisp")["threads"] if c["id"] == "web-routed")
+            self.assertIs(row["empty"], False)
+            self.assertFalse(web_chat.empty("wisp", chat))
+
+    def test_closing_as_empty_is_refused_once_the_thread_has_a_turn(self):
+        """A stale "empty" never ends a conversation unasked: the server checks it again under the lock."""
+        self.chat([], cid="web-new", title="New thread", created="2026-11-03T14:03:00")
+        with mock.patch.object(web_chat, "_post", return_value=(404, {"error": {"type": "not_found"}})):
+            got = self.get("/app/v1/chat/wisp/end", method="POST", data={"cid": "web-new", "if_empty": True})
+        self.assertEqual(got, {"said": "ended"})
+        filled = self.chat([turn("user", "2026-11-03T14:05:00", "hello")], cid="web-full", title="Full")
+        with mock.patch.object(web_chat, "_post", return_value=(202, {})) as post:
+            self.error(self.api("/app/v1/chat/wisp/end", "POST", {"cid": "web-full", "if_empty": True}),
+                       409, "not_empty")
+        post.assert_not_called()
+        self.assertNotEqual(web_chat.load("web-full")["state"], "ended")
+        self.assertEqual(filled["state"], "idle")
 
     def test_from_uses_the_feed_serializer_and_marks_only_from_watching(self):
         got = self.get("/app/v1/from/wisp")

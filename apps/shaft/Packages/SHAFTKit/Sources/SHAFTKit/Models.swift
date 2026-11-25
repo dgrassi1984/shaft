@@ -96,6 +96,8 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
     public var waiting: String?
     public var unread: Bool
     public var failed: Bool? = nil
+    /// Nothing said in it yet: closing it ends no conversation and writes nothing up. nil from a server before it.
+    public var empty: Bool? = nil
 
     public init(id: String, title: String, created: Date, last: Date?, line: String, state: String, waiting: String?,
                 unread: Bool) {
@@ -111,7 +113,13 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
 
     public var replying: Bool { state == "replying" }
 
-    private enum CodingKeys: String, CodingKey { case id, title, created, last, line, state, waiting, unread, failed }
+    /// Closing it asks first only when it holds a conversation (its journal is written up); an empty thread just closes.
+    /// A server that does not say asks, as before.
+    public var closeNeedsConfirmation: Bool { empty != true }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, created, last, line, state, waiting, unread, failed, empty
+    }
 
     /// `last` and `waiting` are null-able; a server that leaves them out means null too.
     public init(from decoder: any Decoder) throws {
@@ -125,6 +133,7 @@ public struct ThreadRow: Codable, Sendable, Equatable, Identifiable {
         waiting = try container.decodeIfPresent(String.self, forKey: .waiting)
         unread = try container.decode(Bool.self, forKey: .unread)
         failed = try container.decodeIfPresent(Bool.self, forKey: .failed)
+        empty = try container.decodeIfPresent(Bool.self, forKey: .empty)
     }
 }
 

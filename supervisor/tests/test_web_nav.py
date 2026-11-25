@@ -112,7 +112,7 @@ class NavigationTest(test_web_chat.ChatRoutesCase):
                                 headers={'sec-fetch-site': 'same-origin', 'x-csrf-token': self.csrf(self.cookie),
                                          'content-type': 'application/x-www-form-urlencoded'}, body=f'cid={chat["id"]}'.encode())
         self.assertEqual(response.status, 200)
-        end.assert_called_once_with(chat['id'])
+        end.assert_called_once_with(chat['id'], if_empty=False)
 
     def test_pending_notes_are_instance_wide_and_route_ended_topics_to_main(self):
         """The notes collection does not inherit the feed window, read rows, or ended destinations."""
@@ -178,7 +178,9 @@ class HeaderPolishTest(test_web_chat.ChatRoutesCase):
 
     def test_thread_subline_links_main_and_switcher_preserves_server_order(self):
         """The title switches conversations, while line two identifies the parent Main destination."""
-        first, second = self.chat_with([]), self.chat_with([])
+        # first holds a turn: Close asks only for a thread with something in it (an empty one closes unasked)
+        first = self.chat_with([{"role": "user", "content": "hi", "ts": "2026-11-10T10:00:00"}])
+        second = self.chat_with([])
         first['title'], second['title'] = 'First <topic>', 'Second topic'
         web_chat.save(first)
         web_chat.save(second)

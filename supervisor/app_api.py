@@ -467,7 +467,8 @@ def _threads(req: Request, n: str) -> Response:
     return _json(200, {"threads_rev": _threads_rev(n, chats), "threads": [
         {"id": c["id"], "title": web_chat.title(c), "created": stamp(c.get("created")),
          "state": c["state"], "waiting": (c.get("reply") or {}).get("waiting") or None,
-         **preview(c["id"]), "failed": web_chat.failed(c)} for c in chats],
+         **preview(c["id"]), "failed": web_chat.failed(c),
+         "empty": web_chat.empty(n, c, feeds[c["id"]])} for c in chats],
         "from": {**preview("from"), "failed": web_chat.failed(web_chat.from_chat(n)), "state": (web_chat.from_chat(n) or {}).get("state") or "idle",
                  "waiting": ((web_chat.from_chat(n) or {}).get("reply") or {}).get("waiting") or None}})
 
@@ -664,8 +665,10 @@ def _action(req: Request, n: str, act: str) -> Response:
         if act == "stop":                 # its relay is under the chat's id: "from" names the From conversation's
             return _said(web_chat.stop(chat["id"]))
         if act == "end":
-            return _said(web_chat.end(chat["id"]))
+            return _said(web_chat.end(chat["id"], if_empty=data.get("if_empty") is True))
         return _said(web_chat.clear(n, cid))
+    except web_chat.NotEmpty as e:
+        raise Refusal(409, "not_empty", str(e)) from None
     except web_chat.Refused as e:
         raise Refusal(409, "refused", str(e)) from None
 

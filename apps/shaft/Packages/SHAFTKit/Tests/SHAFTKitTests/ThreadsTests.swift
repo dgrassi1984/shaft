@@ -76,6 +76,25 @@ struct ThreadsTests {
         #expect(decoded.from.last == nil)
     }
 
+    /// Bug 2026-11-25: closing a thread with nothing in it asked "End the conversation…? It writes up its journal".
+    /// The server marks it empty and the sidebar closes it unasked; a server that does not say still asks.
+    @Test func onlyAThreadWithAConversationAsksBeforeClosing() throws {
+        let rows = """
+        {"threads": [{"id": "web-e", "title": "New thread", "created": "2026-11-25T12:00:00+01:00", "last": null,
+                      "line": "", "state": "idle", "waiting": null, "unread": false, "empty": true},
+                     {"id": "web-f", "title": "Ledger fix", "created": "2026-11-25T11:00:00+01:00",
+                      "last": "2026-11-25T11:30:00+01:00", "line": "x", "state": "idle", "unread": false,
+                      "empty": false},
+                     {"id": "web-g", "title": "Older server", "created": "2026-11-25T10:00:00+01:00",
+                      "last": null, "line": "", "state": "idle", "unread": false}],
+         "from": {"line": "", "last": null, "unread": false}}
+        """
+        let decoded = try SHAFTJSON.decoder().decode(ThreadsResponse.self, from: Data(rows.utf8))
+        #expect(decoded.threads.map(\.closeNeedsConfirmation) == [false, true, true])
+        let json = try JSONSerialization.jsonObject(with: Data(rows.utf8))
+        #expect(try FixtureShape.check(json, name: "threads-empty") == 1)
+    }
+
     @Test func theNewFieldsAreOptionalForAServerBeforeThreads() throws {
         let old = #"{"id": "web-1", "state": "idle", "created": "2026-11-03T13:58:40+01:00", "ended": null}"#
         #expect(try SHAFTJSON.decoder().decode(ChatInfo.self, from: Data(old.utf8)).title == nil)
@@ -506,6 +525,37 @@ struct ThreadsTests {
         await store.refreshThreads("wisp")
         #expect(try store.drafts.load("wisp", cid: Self.threadB).text == "half-written")
         #expect(try store.drafts.load("wisp").text == "another")
+    }
+
+    /// A close that skipped its confirmation because the thread looked empty asks the server to close it only while
+    /// it is still empty: `409 not_empty` ends nothing and is no error to show (the sidebar asks first then).
+    @Test func closingAnEmptyThreadIsConditionalOnTheServer() async throws {
+        let folder = try temporaryFolder("thread-end-if-empty")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try threadsServer()
+        server.setAnswer { request in
+            switch request.path {
+            case "/app/v1/instances": return .json(200, fixtureText(try DecodingTests.fixture("instances")))
+            case "/app/v1/threads/wisp": return .json(200, Self.threadsJSON)
+            case "/app/v1/chat/wisp/end":
+                return request.json?["cid"] as? String == Self.threadA
+                    ? .json(200, #"{"said": "ended"}"#)
+                    : .json(409, #"{"error": {"code": "not_empty", "message": "this thread has messages now"}}"#)
+            default: return .json(200, #"{"said": "ok"}"#)
+            }
+        }
+        let store = try makeStore(server, folder: folder)
+        await store.refresh()
+        let a = store.chat("wisp", .thread(Self.threadA))
+        #expect(await a.endIfEmpty())
+        let sent = try #require(server.requests.last { $0.path == "/app/v1/chat/wisp/end" })
+        #expect(sent.json?["if_empty"] as? Bool == true)
+        let b = store.chat("wisp", .thread(Self.threadB))
+        #expect(await b.endIfEmpty() == false)
+        #expect(b.actionError == nil)
+        // The confirmed close never sends the condition.
+        await b.end()
+        #expect(server.requests.last { $0.path == "/app/v1/chat/wisp/end" }?.json?["if_empty"] == nil)
     }
 
     @Test func newThreadAndRenameReadTheListAgain() async throws {

@@ -274,8 +274,13 @@ public final class APIClient: Sendable {
         try await post("/app/v1/chat/\(instance)/stop", json: ["cid": cid])
     }
 
-    public func end(_ instance: String, cid: String) async throws -> SaidResponse {
-        try await post("/app/v1/chat/\(instance)/end", json: ["cid": cid])
+    /// `ifEmpty`: close it only while nothing is in it (`409 not_empty` otherwise), for a close that did not ask first.
+    public func end(_ instance: String, cid: String, ifEmpty: Bool = false) async throws -> SaidResponse {
+        struct Body: Encodable {
+            let cid: String
+            let if_empty: Bool?
+        }
+        return try await post("/app/v1/chat/\(instance)/end", json: Body(cid: cid, if_empty: ifEmpty ? true : nil))
     }
 
     public func clear(_ instance: String, cid: String) async throws -> SaidResponse {

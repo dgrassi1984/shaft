@@ -41,7 +41,7 @@ class BusyStateHeaderTest(unittest.TestCase):
         for state, name, words in expected:
             with self.subTest(state=state):
                 body = str(web_views.chat_header("example", {"name": "example", "model": "m", "state": state},
-                                                 {"id": "c1", "state": "idle", "title": "Topic"}, []))
+                                                 {"id": "c1", "state": "idle", "title": "Topic", "created": "2026-10-27T10:00:00"}, []))
                 self.assertNotIn('<p class="warn">', body)
                 # M2b puts the conversation title on line one and links Main on line two.
                 self.assertIn('title="Switch conversation"><span>Topic</span>' + str(svg("back", 12)) + '</button></h1>', body)
@@ -57,7 +57,7 @@ class BusyStateHeaderTest(unittest.TestCase):
                 self.assertLess(body.index('data-key="busy-state"'), facts_start)
                 self.assertLess(body.index('data-key="busy-state"'), body.index("</header>"))
 
-        for state, chat in (("idle", None), ("?", None), ("in a cycle", {"id": "c1", "state": "replying"})):
+        for state, chat in (("idle", None), ("?", None), ("in a cycle", {"id": "c1", "state": "replying", "created": "2026-10-27T10:00:00"})):
             with self.subTest(state=state, chat=chat):
                 body = str(web_views.chat_header("example", {"name": "example", "model": "m", "state": state}, chat, []))
                 self.assertNotIn('data-key="busy-state"', body)

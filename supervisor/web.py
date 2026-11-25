@@ -792,7 +792,8 @@ def _post(req: Request, dev: str) -> Response:
         from . import web_chat
         cid = req.form().get("cid", "")
         try:
-            said = (web_chat.stop if req.path.endswith("stop") else web_chat.end)(cid)
+            said = (web_chat.stop(cid) if req.path.endswith("stop")
+                    else web_chat.end(cid, if_empty=req.form().get("if_empty") == "1"))
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
