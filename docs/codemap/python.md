@@ -178,6 +178,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_consultstats.py` | `ConsultStatsTest` | `row`, `episode` |
 | `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelRestartsOnNewCode`, `PanelKeys`, `PanelViews` | — |
 | `supervisor/tests/test_conversations.py` | `OpenConversationTest`, `WriteUpTest`, `SpeakerTest`, `JournalHeadingTest` | — |
+| `supervisor/tests/test_corrections_first_template.py` | `CorrectionsFirstTest` | — |
 | `supervisor/tests/test_curiosity_outward.py` | `OutwardTest`, `OutwardCycleTest` | `item` |
 | `supervisor/tests/test_custom_route.py` | `Stub`, `Case`, `CallTest`, `StreamTest`, `BugRegressionTest`, `BrokerRouteTest`, `KnobTest`, `SecretTest`, `WholeJSONStreamTest` | `chat` |
 | `supervisor/tests/test_cycles.py` | `NoteLinesTest`, `CyclesDaysTest` | — |
