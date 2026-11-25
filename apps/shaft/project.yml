@@ -271,7 +271,6 @@ targets:
     platform: iOS
     sources:
       - path: iOSTests
-      - path: iOS/Meetings/IOSAudioUse.swift
       - path: iOS/Meetings/IOSMeetingAudio.swift
       - path: iOS/Meetings/IOSMeetingRecorder.swift
       - path: Packages/SHAFTKit/Tests/SHAFTKitTests/StubServer.swift

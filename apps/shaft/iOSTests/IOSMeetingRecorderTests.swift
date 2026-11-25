@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 import SHAFTKit
@@ -7,6 +8,7 @@ struct IOSMeetingRecorderTests {
     private final class Audio: IOSMeetingAudio {
         var onEvent: ((IOSMeetingAudioEvent) -> Void)?
         var canResume = true
+        var currentTime: TimeInterval = 0
         private var file: URL?
         private var paused = false
 
@@ -39,8 +41,11 @@ struct IOSMeetingRecorderTests {
         let audio = Audio()
         let audioUse = IOSAudioUse()
         var time = Date(timeIntervalSince1970: 0)
+        var interruptionLimit: Duration = .seconds(30)
+        var retryInterval: Duration = .seconds(1)
         lazy var recorder = IOSMeetingRecorder(audio: audio, audioUse: audioUse, folder: folder,
-                                               now: { [unowned self] in self.time }, device: { "Example device" })
+                                               now: { [unowned self] in self.time }, device: { "Example device" },
+                                               interruptionLimit: interruptionLimit, retryInterval: retryInterval)
 
         deinit { try? FileManager.default.removeItem(at: folder) }
 
@@ -62,12 +67,14 @@ struct IOSMeetingRecorderTests {
         let recorder = fixture.recorder
         await recorder.start()
         fixture.time.addTimeInterval(5)
+        fixture.audio.currentTime = 3
         fixture.audio.onEvent?(.interrupted)
         #expect(recorder.interrupted)
         fixture.time.addTimeInterval(10)
         fixture.audio.onEvent?(.interruptionEnded(shouldResume: true))
         #expect(!recorder.interrupted)
         fixture.time.addTimeInterval(4)
+        fixture.audio.currentTime = 6
         fixture.audio.onEvent?(.interrupted)
         fixture.time.addTimeInterval(2)
         fixture.audio.onEvent?(.interruptionEnded(shouldResume: true))
@@ -81,27 +88,148 @@ struct IOSMeetingRecorderTests {
         #expect(sidecar["mode"] as? String == "inperson")
         #expect(sidecar["input_device"] as? String == "Example microphone")
         let gaps = try #require(sidecar["gaps"] as? [[String: Any]])
-        #expect(gaps.compactMap { $0["start"] as? Double } == [5, 9])
-        #expect(gaps.compactMap { $0["end"] as? Double } == [15, 11])
+        #expect(gaps.compactMap { $0["start"] as? Double } == [3, 6])
+        #expect(gaps.compactMap { $0["end"] as? Double } == [3, 6])
         #expect(gaps.compactMap { $0["reason"] as? String } == Array(repeating: "Audio session interruption", count: 2))
     }
 
-    @Test(arguments: [true, false])
-    func aFailedResumeKeepsThePartialFileAndReportsTheProblem(shouldResume: Bool) async throws {
+    @Test func foregroundResumesEvenWithoutAnInterruptionEndedEvent() async throws {
         let fixture = Fixture()
+        let recorder = fixture.recorder
+        await recorder.start()
+        fixture.audio.onEvent?(.interrupted)
+        recorder.updateUploadContext(foreground: true, client: nil)
+
+        #expect(!recorder.interrupted)
+        recorder.stop()
+        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "beforeafter")
+    }
+
+    @Test func timerFinalisesAnInterruptionThatCannotResume() async throws {
+        let fixture = Fixture()
+        fixture.interruptionLimit = .milliseconds(20)
+        fixture.retryInterval = .milliseconds(5)
         let recorder = fixture.recorder
         fixture.audio.canResume = false
         await recorder.start()
-        fixture.time.addTimeInterval(5)
         fixture.audio.onEvent?(.interrupted)
-        fixture.time.addTimeInterval(10)
-        fixture.audio.onEvent?(.interruptionEnded(shouldResume: shouldResume))
+        try await Task.sleep(for: .milliseconds(150))
 
-        let reason = shouldResume ? "The microphone could not resume recording." : "iOS did not allow the recording to resume."
+        let reason = "The microphone could not resume recording after an audio interruption."
+        #expect(recorder.started == nil)
         #expect(recorder.problem == "Recording stopped early. \(reason)")
         #expect(try fixture.sidecar()["problems"] as? [String] == [reason])
         #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "before")
         #expect(fixture.audioUse.claim(.voice))
+    }
+
+    @Test(arguments: [true, false])
+    func inputLossKeepsRecordingOnlyWhenTheMicrophoneIsStillRecording(stillRecording: Bool) async throws {
+        let fixture = Fixture()
+        let recorder = fixture.recorder
+        await recorder.start()
+        fixture.audio.currentTime = 4
+        fixture.audio.onEvent?(.routeChanged(input: "Built-in Microphone", recording: stillRecording))
+
+        #expect((recorder.started != nil) == stillRecording)
+        if stillRecording { recorder.stop() }
+        let sidecar = try fixture.sidecar()
+        #expect(sidecar["input_device"] as? String == "Built-in Microphone")
+        let problems = try #require(sidecar["problems"] as? [String])
+        #expect(problems.first == "Audio input disconnected. Current input: Built-in Microphone.")
+        if !stillRecording { #expect(problems.last == "The microphone stopped recording after the input changed.") }
+        let gaps = try #require(sidecar["gaps"] as? [[String: Any]])
+        #expect(gaps.first?["start"] as? Double == 4)
+        #expect(gaps.first?["end"] as? Double == 4)
+    }
+
+    @Test func anUnexpectedStopFinalisesAndRecordsTheProblem() async throws {
+        let fixture = Fixture()
+        let recorder = fixture.recorder
+        await recorder.start()
+        fixture.audio.onEvent?(.failed("The microphone stopped recording unexpectedly."))
+
+        #expect(recorder.started == nil)
+        #expect(try fixture.sidecar()["problems"] as? [String] == ["The microphone stopped recording unexpectedly."])
+        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "before")
+    }
+
+    @Test func readAloudAndMeetingTakeTurnsOwningAudio() async {
+        let fixture = Fixture()
+        let recorder = fixture.recorder
+        #expect(fixture.audioUse.claim(.readAloud))
+        await recorder.start()
+        #expect(recorder.problem == "Read-aloud is still stopping. Tap Record again in a moment.")
+        #expect(recorder.started == nil)
+        fixture.audioUse.release(.readAloud)
+        await recorder.start()
+        #expect(recorder.started == Date(timeIntervalSince1970: 0))
+        #expect(!fixture.audioUse.claim(.readAloud))
+        recorder.stop()
+        #expect(fixture.audioUse.claim(.readAloud))
+    }
+
+    @Test func stoppingTheSynthKeepsItsClaimUntilTheSessionQueueDrains() async throws {
+        let synth = SystemReadAloudSynth()
+        let audioUse = IOSAudioUse.shared
+        let meetingClaimed = audioUse.claim(.meeting)
+        try #require(meetingClaimed)
+        var refused = false
+        synth.speak(["Example"], voice: nil, onProgress: {}, onFinish: { refused = true })
+        #expect(refused)
+        audioUse.release(.meeting)
+
+        synth.speak(["Example"], voice: nil, onProgress: {}, onFinish: {})
+        synth.stop()
+        #expect(audioUse.owner == .readAloud)
+        #expect(!audioUse.claim(.meeting))
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while audioUse.owner == .readAloud, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(audioUse.claim(.meeting))
+        audioUse.release(.meeting)
+    }
+
+    @Test func launchSendsPlayableOrphansAndKeepsDamagedAudio() async throws {
+        let fixture = Fixture()
+        let recorder = fixture.recorder
+        try FileManager.default.createDirectory(at: fixture.folder, withIntermediateDirectories: true)
+        let damaged = fixture.folder.appending(path: "damaged.m4a")
+        let playable = fixture.folder.appending(path: "playable.m4a")
+        try Data("broken".utf8).write(to: damaged)
+        do {
+            let audio = try AVAudioFile(forWriting: playable, settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 1
+            ])
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 12_000))
+            buffer.frameLength = 12_000
+            buffer.floatChannelData?[0].update(repeating: 0, count: 12_000)
+            try audio.write(from: buffer)
+        }
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("POST", "/app/v1/meetings"):
+                return .json(201, #"{"id":"m-example","chunk_size":1048576,"received":[]}"#)
+            case ("PUT", "/app/v1/meetings/m-example/chunk/0"):
+                return .json(200, #"{"received":[0]}"#)
+            default:
+                return Self.answer(request, retry: true)
+            }
+        }
+        recorder.updateUploadContext(foreground: true, client: server.client)
+        await recorder.uploadTask?.value
+
+        #expect(recorder.damagedRecordings.map(\.lastPathComponent) == ["damaged.m4a"])
+        #expect(try Data(contentsOf: damaged) == Data("broken".utf8))
+        let creates = server.requests.filter { $0.method == "POST" && $0.path == "/app/v1/meetings" }
+        #expect(creates.count == 1)
+        let create = try #require(creates.first)
+        let sidecar = try #require(create.json?["sidecar"] as? [String: Any])
+        #expect(sidecar["problems"] as? [String] == ["The app stopped before the recording ended."])
+        #expect((sidecar["duration"] as? Double ?? 0) > 0)
+        #expect(recorder.lastSent == "m-example")
     }
 
     @Test func voiceAndMeetingTakeTurnsOwningAudio() async {

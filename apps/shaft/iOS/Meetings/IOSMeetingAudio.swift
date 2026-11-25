@@ -4,12 +4,14 @@ import UIKit
 enum IOSMeetingAudioEvent: Sendable {
     case interrupted
     case interruptionEnded(shouldResume: Bool)
+    case routeChanged(input: String, recording: Bool)
     case failed(String)
 }
 
 @MainActor
 protocol IOSMeetingAudio: AnyObject {
     var onEvent: ((IOSMeetingAudioEvent) -> Void)? { get set }
+    var currentTime: TimeInterval { get }
     func requestPermission() async -> Bool
     func start(at url: URL) throws -> String
     func pause()
@@ -22,6 +24,8 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
     var onEvent: ((IOSMeetingAudioEvent) -> Void)?
     private let session = AVAudioSession.sharedInstance()
     private var recorder: AVAudioRecorder?
+    var currentTime: TimeInterval { recorder?.currentTime ?? 0 }
+    private var inputName: String { session.currentRoute.inputs.first?.portName ?? "Microphone" }
     private var previousCategory: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
 
     override init() {
@@ -30,6 +34,8 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
                                                name: AVAudioSession.interruptionNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mediaServicesReset(_:)),
                                                name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(routeChanged(_:)),
+                                               name: AVAudioSession.routeChangeNotification, object: nil)
     }
 
     func requestPermission() async -> Bool {
@@ -52,7 +58,7 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
         audio.delegate = self
         recorder = audio
         guard audio.record() else { throw CaptureError.startFailed }
-        return session.currentRoute.inputs.first?.portName ?? "Microphone"
+        return inputName
     }
 
     func pause() { recorder?.pause() }
@@ -87,12 +93,22 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
         Task { @MainActor [weak self] in self?.onEvent?(event) }
     }
 
+    @objc private nonisolated func routeChanged(_ notification: Notification) {
+        guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let recorder else { return }
+            onEvent?(.routeChanged(input: inputName, recording: recorder.isRecording))
+        }
+    }
+
     @objc private nonisolated func mediaServicesReset(_: Notification) {
         Task { @MainActor [weak self] in self?.onEvent?(.failed("The audio service restarted.")) }
     }
 
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        if !flag { reportFailure(recorder, "The microphone stopped recording.") }
+        reportFailure(recorder, flag ? "The microphone stopped recording unexpectedly."
+                                    : "The microphone could not finish recording.")
     }
 
     nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) {

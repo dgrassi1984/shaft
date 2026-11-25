@@ -14,10 +14,6 @@ final class ReadAloudRequests {
     private(set) var requested: String?
     @ObservationIgnored private var voiceOwners: Set<ObjectIdentifier> = []
 
-    #if os(iOS)
-    var isReading: Bool { requested != nil || ReadAloudPlayer.shared.playing != nil }
-    #endif
-
     func isActive(_ id: String) -> Bool {
         ReadAloudPlayer.shared.playing == id || requested == id
     }

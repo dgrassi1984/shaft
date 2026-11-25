@@ -9,11 +9,29 @@ import SwiftUI
 struct IOSRoot: View {
     let model: AppModel
     let recorder: IOSMeetingRecorder
+    @State private var meetings = false
 
     var body: some View {
         SessionRoot(model: model) { session, store in
-            ChatsLayout(session: session, store: store, recorder: recorder)
+            ChatsLayout(session: session, store: store, meetings: $meetings)
                 .task { await VoiceReporter.atLaunch(client: store.client) }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if recorder.started != nil, !meetings {
+                Button {
+                    meetings = true
+                } label: {
+                    Label(recorder.interrupted ? "Recording paused" : "Recording meeting", systemImage: "mic.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Design.Space.s8)
+                }
+                .foregroundStyle(Color.danger)
+                .background(.regularMaterial)
+                .accessibilityHint("Opens Meetings")
+            }
+        }
+        .fullScreenCover(isPresented: $meetings) {
+            IOSMeetingsScreen(client: model.session?.store?.client, recorder: recorder)
         }
     }
 }
@@ -21,14 +39,13 @@ struct IOSRoot: View {
 struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
-    let recorder: IOSMeetingRecorder
+    @Binding var meetings: Bool
     @Environment(AppModel.self) private var model
     @AppStorage("chat.last") private var last = ""
     @State private var selection: ChatSelection?
     @State private var path: [ArchivedRoute] = []
     @State private var switching = false
     @State private var settings = false
-    @State private var meetings = false
     @State private var meetingsAfterSwitcher = false
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var compactColumn = NavigationSplitViewColumn.detail
@@ -52,9 +69,6 @@ struct ChatsLayout: View {
         .environment(shell)
         .environment(\.chatCovered, switching || settings || meetings)
         .sheet(isPresented: $settings) { SettingsView(session: session) }
-        .fullScreenCover(isPresented: $meetings) {
-            IOSMeetingsScreen(client: store.client, recorder: recorder)
-        }
         .onAppear(perform: restore)
         .onDisappear { inspectorRestore?.cancel() }
         .onChange(of: shell.screen.map(ObjectIdentifier.init)) {

@@ -93,6 +93,29 @@ struct MeetingUploaderTests {
         #expect(finish["chunks"] as? Int == 3)
     }
 
+    @Test func aLostCreateResponseReusesTheSavedClientID() async throws {
+        let recording = try Recording()
+        defer { recording.cleanUp() }
+        let server = StubServer { _ in
+            .json(400, #"{"error":{"code":"bad_request","message":"Create response unavailable."}}"#)
+        }
+        let first = MeetingUploader(client: server.client, audioURL: recording.audio)
+        await first.upload(create)
+        #expect(first.state == .failed("Create response unavailable."))
+        let saved = try Data(contentsOf: recording.audio.appendingPathExtension("shaft-upload"))
+        let record = try #require(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        let id = try #require(record["clientId"] as? String)
+        #expect(UUID(uuidString: id) != nil)
+        #expect(record["meetingId"] == nil)
+
+        server.setAnswer { Self.answer($0) }
+        let resumed = MeetingUploader(client: server.client, audioURL: recording.audio)
+        await resumed.upload(create)
+        #expect(resumed.state == .done(Self.id))
+        let creates = server.requests.filter { $0.method == "POST" && $0.path == Self.base }
+        #expect(creates.compactMap { $0.json?["client_id"] as? String } == [id, id])
+    }
+
     @Test func newUploaderResumesWithOnlyTheMissingChunk() async throws {
         let recording = try Recording()
         defer { recording.cleanUp() }
@@ -213,9 +236,9 @@ struct MeetingUploaderTests {
         let uploader = MeetingUploader(client: server.client, audioURL: recording.audio)
         await uploader.upload(create)
         #expect(uploader.state == .done(Self.id))
-        try Data(repeating: 7, count: 12_345).write(to: recording.audio)
+        try Data("abcdefghik".utf8).write(to: recording.audio)
         try MeetingUploader.pruneUploaded(in: recording.directory, olderThan: .distantFuture)
-        #expect(FileManager.default.fileExists(atPath: recording.audio.path))
+        #expect(try Data(contentsOf: recording.audio) == Data("abcdefghik".utf8))
     }
 
     @Test func meetingRoutesDecodeMetadataAndTranscriptAsReturnedByServer() async throws {

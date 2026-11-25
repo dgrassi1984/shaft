@@ -137,7 +137,11 @@ final class VoiceScreenModel {
         #if os(iOS)
         let audioUse = IOSAudioUse.shared
         guard audioUse.claim(.voice) else {
-            let message = audioUse.owner == .meeting ? IOSAudioUse.meetingInProgress : "Voice mode is already in use."
+            let message = switch audioUse.owner {
+            case .meeting: IOSAudioUse.meetingInProgress
+            case .readAloud: "Read-aloud is still stopping. Try voice mode again in a moment."
+            default: "Voice mode is already in use."
+            }
             phase = .problem(VoiceStartProblem(message: message, fix: nil))
             return
         }
