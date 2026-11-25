@@ -3,7 +3,9 @@ the reply is relayed and saved by the web server, so it keeps going when the bro
 interjections, Stop and End go to the API; files go in as Telegram's do."""
 from __future__ import annotations
 
+import http.client
 import json
+import socket
 import shutil
 import tempfile
 import threading
@@ -244,6 +246,218 @@ class RelayTest(ChatTest):
         c = self.wait_idle(chat["id"], 15)
         self.assertEqual(c["turns"][-1]["role"], "assistant")
         self.assertIn({"role": "user", "content": "late"}, self.api.chats()[-1][2]["messages"])
+
+    # -- issue #16: three edge cases of the unheard-message follow-up ---------------------------------------------------
+    def clock(self, at: str) -> None:
+        """web_chat's wall clock, set by the test: every turn written from now on is stamped `at`."""
+        self._clock = at
+        if not getattr(self, "_clocked", False):
+            self._clocked = True
+            p = mock.patch.object(web_chat, "_now", lambda: self._clock)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def interject_late(self, start: str, late: str) -> dict:
+        """`start` begins a held reply; `late` is sent during it (202) and heard by none of it (heard 0)."""
+        self.api.hold.set()
+        chat, _ = say(start, [])
+        time.sleep(0.3)
+        say(late, [])
+        return chat
+
+    def test_issue_16_a_clock_rolled_back_mid_thread_keeps_the_follow_up_in_order(self):
+        """#16 case 1. The wall clock went back an hour between the first answer and the next message: sorted by time,
+        the thread's turns put the first exchange last, so the follow-up ended with an assistant turn and the API
+        refused it ("messages must end with a user message"). The thread's own turns keep the order they were
+        written in; time only places what was routed in among them. Reverting _dialogue's merge fails this."""
+        self.clock("2026-11-23T01:50:00")
+        chat, _ = say("first", [])
+        self.wait_idle(chat["id"])
+        self.clock("2026-11-23T00:59:00")                    # rolled back
+        self.interject_late("second", "late")
+        self.clock("2026-11-23T00:59:40")
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note"], "", "the follow-up failed")
+        followup = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([(m["role"], m["content"].split("\n")[0]) for m in followup],
+                         [("user", "first"), ("assistant", "Answer 1."), ("user", "second"),
+                          ("assistant", c["turns"][4]["content"]), ("user", "late")])
+        # the page shows them as written too: sorted by time, it drew "second" and its answers above "first" (live check)
+        self.assertEqual([i["k"] for i in web_chat.feed("wisp", chat["id"])["items"]], [0, 1, 2, 3, 4, 5])
+
+    def test_issue_16_a_clock_rolled_back_during_the_reply_still_puts_the_late_message_last(self):
+        """#16 case 1, the other side: the clock went back while the reply ran, so its answer is stamped before every
+        earlier turn. The late message still follows the answer it missed, and the follow-up ends with it."""
+        self.clock("2026-11-23T01:50:00")
+        chat, _ = say("first", [])
+        self.wait_idle(chat["id"])
+        self.clock("2026-11-23T01:58:30")
+        self.interject_late("second", "late")
+        self.clock("2026-11-23T01:00:00")                    # rolled back before the answer
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        followup = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([m["content"].split("\n")[0] for m in followup],
+                         ["first", "Answer 1.", "second", c["turns"][4]["content"], "late"])
+        self.assertEqual(c["turns"][-1]["note"], "")
+
+    def test_issue_16_retry_after_a_failed_follow_up_sends_the_late_message_once(self):
+        """#16 case 2. The follow-up that answers an unheard message failed before it was posted (connection refused):
+        Retry offered the late message, but mark_retried only folded the turn before the failure (the first answer),
+        so the late message went out twice. A failed reply remembers the turns it answered and Retry folds those."""
+        refused = socket.socket()
+        refused.bind(("127.0.0.1", 0))
+        dead = refused.getsockname()[1]
+        refused.close()                                       # nothing listens there: ConnectionRefusedError
+        real, calls = web_chat._api_conn, []
+
+        def conn(timeout):
+            calls.append(timeout)
+            if len(calls) == 3:                               # the reply, the interjection, then the follow-up
+                return http.client.HTTPConnection("127.0.0.1", dead, timeout=timeout)
+            return real(timeout)
+
+        with mock.patch.object(web_chat, "_api_conn", conn):
+            chat = self.interject_late("start", "late")
+            self.api.hold.clear()
+            c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note_kind"], "connection")
+        retry = web_chat.feed("wisp", chat["id"])["items"][-1]["failure"]["retry"]
+        self.assertEqual((retry["text"], retry["confirm"]), ("late", None))
+        say(retry["text"], retry_of=str(retry["retry_of"]), cid=chat["id"])
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note"], "")
+        sent = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([m["content"] for m in sent].count("late"), 1, sent)
+        self.assertEqual(sent[-1], {"role": "user", "content": "late"})
+
+    def test_issue_16_a_refused_interjection_then_a_heard_one_answers_the_refused_one_next(self):
+        """#16 case 3. One interjection was refused (409: the API had not registered the reply yet), the next taken and
+        heard (heard 1). Both were counted alike, so the heard one was taken as unheard and the refused one as heard:
+        the follow-up answered the wrong message. Only accepted interjections take the heard count."""
+        self.api.hold.set()
+        self.api.heard = 1
+        chat, _ = say("start", [])
+        time.sleep(0.3)
+        self.api.interject_status = 409
+        _, said = say("refused one", [])
+        self.assertEqual(said, "wisp was just finishing: it answers this next")
+        self.api.interject_status = 202
+        say("heard one", [])
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(len(self.api.chats()), 2)
+        followup = [m["content"] for m in self.api.chats()[1][2]["messages"]]
+        self.assertEqual(followup[-1], "refused one")
+        self.assertLess(followup.index("heard one"), followup.index(c["turns"][3]["content"]))
+        self.assertEqual(c["turns"][-1]["note"], "")
+
+    # Codex review of #16: what the fix had to get right around it
+    def failed_follow_up(self, *late: dict) -> dict:
+        """A thread whose follow-up for `late` (user turns sent during the first reply) failed before it was posted."""
+        chat = topic()
+        turns = [{"role": "user", "content": "start", "shown": "start", "ts": "2026-11-25T10:00:00"},
+                 *[{"role": "user", "content": t["shown"], "interjected": True, "after": len(late) + 1,
+                    "ts": "2026-11-25T10:00:05", **t} for t in late],
+                 {"role": "assistant", "content": "Answer.", "ts": "2026-11-25T10:00:09"}]
+        chat.update(turns=turns, state="replying", reply={"interjections": 0, "followup": len(late),
+                                                           "asked": list(range(1, len(late) + 1)),
+                                                           "turn_start": len(turns)})
+        web_chat.save(chat)
+        relay = web_chat.Relay(chat["id"])
+        web_chat._finish(relay, "", [], "ConnectionRefusedError: refused", None, posted=False,
+                         exc=ConnectionRefusedError("refused"))
+        return web_chat.load(chat["id"])
+
+    def test_issue_16_a_follow_up_for_two_messages_retries_them_as_one_and_folds_both(self):
+        c = self.failed_follow_up({"shown": "a"}, {"shown": "b"})
+        self.assertEqual((c["turns"][-1]["retry_text"], c["turns"][-1]["asked"]), ("a\n\nb", [1, 2]))
+        say("a\n\nb", retry_of="4", cid=c["id"])
+        c = self.wait_idle(c["id"])
+        self.assertEqual([m["content"] for m in self.api.chats()[-1][2]["messages"]], ["start", "Answer.", "a\n\nb"])
+
+    def test_issue_16_a_retry_too_long_or_with_files_is_not_offered_in_one_tap(self):
+        """Joined, two long messages passed MAX_TEXT: the fold was saved, the send refused, and both left the thread.
+        Files: Retry sends text only, so the folded file would have been lost."""
+        half = "x" * (web_chat.MAX_TEXT // 2)
+        for late in (({"shown": half}, {"shown": half}),
+                     ({"shown": "read this", "attachments": [{"name": "a.md", "path": "p", "bytes": 1}]}, {"shown": "b"})):
+            with self.subTest(late=late[0]["shown"][:9]):
+                c = self.failed_follow_up(*late)
+                self.assertEqual(c["turns"][-1]["retry_text"], "")
+                self.assertFalse(c["turns"][-1]["note_retry"])
+                self.assertFalse(web_chat.mark_retried(c, 4, late[0]["shown"]))
+                web_chat.clear("wisp", c["id"])
+
+    def test_issue_16_a_refused_send_after_retry_unfolds_what_it_folded(self):
+        c = self.failed_follow_up({"shown": "late"})
+        with mock.patch.object(web_chat, "_send", side_effect=web_chat.Refused("no")):
+            with self.assertRaises(web_chat.Refused):
+                say("late", retry_of="3", cid=c["id"])
+        self.assertFalse(any(t.get("retried") for t in web_chat.load(c["id"])["turns"]))
+
+    def test_issue_16_a_queued_batch_too_long_for_one_message_gets_no_retry_that_always_fails(self):
+        """Second review: a queued batch is one turn (_flush_queue) and can pass MAX_TEXT; Retry would be refused."""
+        long = {"role": "user", "content": "x" * (web_chat.MAX_TEXT + 2), "shown": "x" * (web_chat.MAX_TEXT + 2)}
+        self.assertEqual(web_chat._retry_request([long], {"asked": [0]}, 1)[0], "")
+        self.assertIsNone(web_chat.failure("wisp", {"role": "assistant", "note": "error: x", "note_kind": "connection",
+                                                    "note_retry": True, "retry_text": long["shown"]}, False, 1, long)["retry"])
+
+    def test_issue_16_a_send_saved_before_it_raised_keeps_its_fold(self):
+        """Second review: what raised after the Retry's turn was saved (and the reply marked running) did not refuse it."""
+        c = self.failed_follow_up({"shown": "late"})
+
+        def saved_then_raised(*a, **kw):
+            with web_chat._lock(c["id"]):
+                d = web_chat.load(c["id"])
+                d["state"] = "replying"
+                web_chat.save(d)
+            raise OSError("feedback log")
+        with mock.patch.object(web_chat, "_send", side_effect=saved_then_raised), self.assertRaises(OSError):
+            say("late", retry_of="3", cid=c["id"])
+        self.assertTrue(web_chat.load(c["id"])["turns"][3]["retried"])
+
+    def test_issue_16_the_feed_window_starts_at_its_first_turn_in_the_order_shown(self):
+        """Second review: with a clock set back, the window kept a message by time that sat among the dropped turns."""
+        n = web_chat.CHAT_WINDOW + 2
+        chat = topic()
+        chat["turns"] = [{"role": "user" if k % 2 == 0 else "assistant", "content": f"t{k}", "shown": f"t{k}",
+                          "ts": "2026-11-25T10:00:00" if k < 2 else "2026-11-25T09:00:00"} for k in range(n)]
+        web_chat.save(chat)
+        sent = [{"file": "m1", "ts": "2026-11-25T09:30:00", "from": "wisp", "to": "operator", "text": "from a cycle"}]
+        with mock.patch.object(web_chat, "message_item", lambda name, m, r, p=frozenset(): {
+                "key": m["file"], "type": "sent", "ts": m["ts"]}):
+            whole = web_chat.build("wisp", chat, sent, whole=True)["items"]
+            window = web_chat.build("wisp", chat, sent)["items"]
+        self.assertEqual([i.get("k", i["key"]) for i in whole][:3], ["m1", 0, 1])    # before the turns stamped after it
+        self.assertEqual([i.get("k") for i in window], list(range(2, n)))           # so not in a window without them
+
+    def test_issue_16_a_restart_offers_every_message_the_reply_answered(self):
+        chat = topic()
+        chat.update(state="replying", reply={"interjections": 0, "asked": [2, 3], "turn_start": 4}, turns=[
+            {"role": "user", "content": "start", "shown": "start", "ts": "2026-11-25T10:00:00"},
+            {"role": "assistant", "content": "Answer.", "ts": "2026-11-25T10:00:09"},
+            {"role": "user", "content": "a", "shown": "a", "ts": "2026-11-25T10:00:05", "after": 1},
+            {"role": "user", "content": "b", "shown": "b", "ts": "2026-11-25T10:00:06", "after": 1}])
+        web_chat.save(chat)
+        web_chat.reap()
+        self.assertEqual(web_chat.load(chat["id"])["turns"][-1]["retry_text"], "a\n\nb")
+
+    def test_issue_16_a_refused_message_already_in_the_request_is_not_answered_again(self):
+        """A send that reached the chat before the relay read it for its request was refused (409: the reply was not
+        registered yet) but went out in that request: it is answered, not sent again in a follow-up."""
+        chat = topic()
+        chat.update(state="replying", reply={"interjections": 1, "turn_start": 1}, turns=[
+            {"role": "user", "content": "start", "shown": "start", "ts": "2026-11-25T10:00:00"},
+            {"role": "user", "content": "early", "shown": "early", "interjected": True, "refused": True,
+             "ts": "2026-11-25T10:00:00"}])
+        web_chat.save(chat)
+        relay = web_chat.Relay(chat["id"])
+        relay.upto = 2
+        web_chat._finish(relay, "Answer.", [], None, None)
+        c = web_chat.load(chat["id"])
+        self.assertEqual((c["state"], "after" in c["turns"][1]), ("idle", False))
 
     def test_stop_ends_the_reply_and_the_api_sees_its_client_go(self):
         self.api.hold.set()
