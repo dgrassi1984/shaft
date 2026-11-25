@@ -196,7 +196,7 @@ struct SettingsView: View {
                     }
                     .listRowBackground(Color.elevated)
                     #if os(macOS)
-                    if let serverKeys {
+                    if let serverKeys, serverKeys.reach == .here {
                         ServerKeysSection(keys: serverKeys).id(ObjectIdentifier(serverKeys))
                     }
                     #endif
@@ -272,6 +272,8 @@ struct SettingsView: View {
             #else
             // The Mac's Settings window (⌘,) closes as any window does.
             .formStyle(.grouped)
+            // Server keys over a tailnet pairing: shown once this Mac is found to run that server (ServerKeys.resolve).
+            .task(id: serverKeys.map(ObjectIdentifier.init)) { await serverKeys?.resolve() }
             #endif
             .task {
                 guard session.isPaired, !session.isDemo else { return }

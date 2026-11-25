@@ -52,7 +52,7 @@ final class MacSetup {
     @ObservationIgnored private var shared: (session: ObjectIdentifier, installer: Installer)?
     @ObservationIgnored private var sharedUpdater: (session: ObjectIdentifier, updater: ServerUpdater)?
     @ObservationIgnored private var sharedPhoneAccess: (session: ObjectIdentifier, access: PhoneAccess)?
-    @ObservationIgnored private var sharedServerKeys: (session: ObjectIdentifier, keys: ServerKeys)?
+    @ObservationIgnored private var sharedServerKeys: (session: ObjectIdentifier, credential: ServerCredential, keys: ServerKeys)?
     @ObservationIgnored private let configure: () throws -> Installer.Configuration
     @ObservationIgnored private let runner: any ProcessRunning
 
@@ -187,24 +187,58 @@ final class MacSetup {
         return access
     }
 
-    /// Settings → Server keys for this session: offered under the same conditions as the updater, since
-    /// `/setup/secret(s)` answer only the Mac app on loopback. Kept per session.
+    /// Settings → Server keys for this session. Its routes answer only loopback, so it needs this Mac's server, not
+    /// `~/SHAFT`: a loopback pairing has it at once; a pairing over the tailnet has it when `/version` names a loopback
+    /// port that answers the same `local_id` (that server is this Mac's: bug 2026-11-25, a Mac paired over the tailnet
+    /// with its own server never showed the section). Kept per session and credential.
     func serverKeys(for session: SHAFTSession) -> ServerKeys? {
-        guard let configuration, let credential = session.credential, PairingLoss.isLoopback(credential.baseURL),
-              !SetupGate.setupNeeded(home: configuration.home) else {
+        guard configuration != nil, let credential = session.credential else {
             sharedServerKeys = nil
             return nil
         }
         let id = ObjectIdentifier(session)
-        if let sharedServerKeys, sharedServerKeys.session == id { return sharedServerKeys.keys }
-        let keys = ServerKeys { [weak session] in
-            guard let credential = session?.credential, PairingLoss.isLoopback(credential.baseURL),
-                  let client = session?.store?.client else { throw APIError.notPaired }
-            return client
+        if let sharedServerKeys, sharedServerKeys.session == id, sharedServerKeys.credential == credential {
+            return sharedServerKeys.keys
         }
-        sharedServerKeys = (id, keys)
+        let keys = PairingLoss.isLoopback(credential.baseURL)
+            ? ServerKeys { [weak session] in
+                guard let credential = session?.credential, PairingLoss.isLoopback(credential.baseURL),
+                      let client = session?.store?.client else { throw APIError.notPaired }
+                return client
+            }
+            : ServerKeys(locate: Self.loopback(of: session))
+        sharedServerKeys = (id, credential, keys)
         return keys
     }
+
+    /// A client for the session's server at its loopback port, with the session's bearer: only when the server names
+    /// that port and its id (`local_port`, `local_id`: SHAFT_WEB_LOCAL on) and `<port>/app/v1/local`, asked without a
+    /// bearer, answers that same id. The bearer goes to the port only after that, so whatever else listens there (the
+    /// server being on another Mac) never receives it; a server with the loopback path off gives nil.
+    static func loopback(of session: SHAFTSession) -> @MainActor () async -> APIClient? {
+        { [weak session] in
+            guard let credential = session?.credential, let client = session?.store?.client else { return nil }
+            return await loopback(credential: credential, client: client)
+        }
+    }
+
+    /// `loopback(of:)`'s probe; `host` and `transport` are the tests' stand-ins for 127.0.0.1 and the network.
+    static func loopback(credential: ServerCredential, client: APIClient, host: String = "127.0.0.1",
+                         transport: URLSession = .shared) async -> APIClient? {
+        guard let said = try? await client.version(), let port = said.localPort, (1...65535).contains(port),
+              let id = said.localId, !id.isEmpty,
+              let url = URL(string: "http://\(host):\(port)") else { return nil }
+        var request = URLRequest(url: url.appending(path: "app/v1/local"))     // no Authorization header
+        request.timeoutInterval = 5
+        guard let (data, response) = try? await transport.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              (try? SHAFTJSON.decoder().decode(LocalIdentity.self, from: data))?.localId == id else { return nil }
+        var local = credential
+        local.baseURL = url
+        return APIClient(credential: local, session: transport)
+    }
+
+    private struct LocalIdentity: Decodable { let localId: String }
 
     // MARK: - Local pairing
 

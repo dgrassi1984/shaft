@@ -606,6 +606,9 @@ final class SetupStub: @unchecked Sendable {
         let method: String
         let path: String
         let body: Data
+        /// The Authorization header and the port asked, for the tests that check where a bearer goes.
+        var authorization: String? = nil
+        var port: Int? = nil
         var json: [String: Any]? { (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] }
     }
 
@@ -688,7 +691,9 @@ final class SetupStubProtocol: URLProtocol, @unchecked Sendable {
             }
             stream.close()
         }
-        let answer = server.handle(.init(method: request.httpMethod ?? "GET", path: url.path, body: body))
+        let answer = server.handle(.init(method: request.httpMethod ?? "GET", path: url.path, body: body,
+                                         authorization: request.value(forHTTPHeaderField: "Authorization"),
+                                         port: url.port))
         nonisolated(unsafe) let stub = self
         Task {
             await answer.hold?()
