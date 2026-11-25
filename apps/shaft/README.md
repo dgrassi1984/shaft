@@ -450,6 +450,7 @@ prints the submission id and `notarytool log`.
 The script refuses to sign when the keychain key's public half differs from the app's `SUPublicEDKey`. It checks
 the exported app's update settings and the Developer ID signatures of Sparkle's helpers. After stapling, it
 EdDSA-signs the DMG and writes `build/release/appcast.xml`, a single-item feed; both are signed and verified.
+The Mac app's update window shows the release tag's notes inline and links to the GitHub release.
 On success it prints the DMG's path and SHA-256, and the feed's path.
 
 Per release:
