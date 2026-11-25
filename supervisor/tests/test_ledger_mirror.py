@@ -378,3 +378,67 @@ class WithinARunTest(IsolatedCase):
         with mock.patch.object(ledger_mirror, "observe", side_effect=OSError("disk full")), \
                 mock.patch.object(broker.Broker, "_log", autospec=True, side_effect=OSError("disk full")):
             box._observe_ledger()          # neither the copy nor its log line raises
+
+    def test_the_conversation_a_pause_made_room_for_does_not_judge_the_cycles_promises(self):
+        """Regression (#21 review): the conversation's own commit, while the cycle waited, judged the cycle's promises
+        before its episode existed."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        made = self.made()
+        self.write(self.root / commitments.FILE, [made])
+        ledger_mirror.observe("ember", self.root)
+        ledger_mirror.hold("ember", True)
+        try:
+            ledger_mirror.sync("ember", self.root)                     # the conversation ends: its commit
+            self.assertNotIn("checked", ledger_mirror.records("ember", "commitments")[0])
+        finally:
+            ledger_mirror.hold("ember", False)
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)                         # the cycle ends
+        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
+
+    def test_a_hold_whose_runner_is_gone_holds_nothing(self):
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        self.write(self.root / commitments.FILE, [self.made()])
+        ledger_mirror.observe("ember", self.root)
+        mark = ledger_mirror.path("ember", "commitments").with_name("held")
+        mark.write_text("999999\n")                                   # no such process
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)
+        self.assertIn("checked", ledger_mirror.records("ember", "commitments")[0])
+        self.assertFalse(mark.exists())
+
+    def test_a_row_no_source_check_can_read_costs_only_itself(self):
+        """Regression (#21 review): a waiting row whose time overflowed the clock raised in every judging sync, so no
+        later promise was ever judged, and the copy kept it forever."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        bad = {**self.made(1), "source": "cycle", "at": "0001-01-01T00:00:00+23:59"}
+        del bad["talk_id"]
+        good = self.made(2)
+        self.write(self.root / commitments.FILE, [bad, good])
+        ledger_mirror.observe("ember", self.root)
+        self.write(self.root / commitments.FILE, [])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual(recs[good["id"]]["checked"]["made_to"], "operator")
+        self.assertTrue(recs[bad["id"]].get("unjudged"))
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual(set(items), {good["id"]})
+
+    def test_a_first_backfill_by_the_broker_keeps_history_verdicts_at_their_seen(self):
+        """Regression (#21 review): a history row backfilled by observe got its verdict stamped at the judging, so a
+        replay of a moment between the two read it against the current episodes."""
+        from supervisor import ledger_mirror
+        made = self.made()
+        committed = (NOW - timedelta(days=2)).isoformat(timespec="seconds")
+        text = json.dumps(made) + "\n"
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        with mock.patch.object(ledger_mirror, "_history", return_value=[(text, committed)]):
+            ledger_mirror.observe("ember", self.root, now=NOW)
+        ledger_mirror.sync("ember", self.root, now=NOW)
+        rec = ledger_mirror.records("ember", "commitments", as_of=NOW - timedelta(days=1))[0]
+        self.assertEqual(rec["checked"]["made_to"], "operator")
+

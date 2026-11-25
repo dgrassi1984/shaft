@@ -19,12 +19,16 @@ record of the same row, and a reader folds the two.
 
 <supervisor dir>/ledger_mirror/<name>/commitments.jsonl: {seen, row[, checked][, judge, strict][, judged]}, row being the
 ledger's line as it was parsed and checked the promise as its source was judged. A promise copied without judging has
-judge true (and strict: judged as a row made after the source rule); its verdict record has judge false and judged, when.
+judge true (and strict: judged as a row made after the source rule; history: from a first backfill, its verdict
+counting from its `seen` as a backfill's always did); its verdict record has judge false and judged, when, or unjudged
+true for a row the source check could not read (left out of every reading). A cycle paused for a conversation holds
+the copy (`held`, its runner's pid): no commit judges until the cycle ends.
 """
 from __future__ import annotations
 
 import fcntl
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -86,7 +90,7 @@ def records(name: str, kind: str, project: Path | None = None, as_of: datetime |
             continue
         if as_of is not None and ((judged := _at(rec.get("judged"))) is None or judged > as_of):
             continue
-        for field in ("checked", "judge"):
+        for field in ("checked", "judge", "unjudged"):
             if field in rec:
                 out[k][field] = rec[field]
     return list(out.values())
@@ -114,7 +118,7 @@ def _history(name: str, rel: str, project: Path | None) -> list[tuple[str, str |
     return out
 
 
-def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict[int, dict]:
+def _checked_batch(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict[int, dict]:
     """The source verdict of each new promise row, judged now (index in `new` -> the row as checked). A row in
     `strict` (one that first appeared after the backfill, so after the source rule) is checked as a sourced promise
     whatever it says: an operator promise without `sourced` would otherwise be kept as made, as rows older than the
@@ -129,6 +133,47 @@ def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict
                                        lambda file: bool(commitments.operator_message(name, file)), name,
                                        commitments._received(name))
     return dict(zip(made, checked))
+
+
+def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> tuple[dict[int, dict], set[int]]:
+    """_checked_batch, and the promises that could not be judged at all (a row whose fields break the source check,
+    such as a time no clock can hold): those cost only themselves, never the verdicts of the rest."""
+    try:
+        return _checked_batch(name, new, strict), set()
+    except Exception:
+        pass
+    verdicts, failed = {}, set()
+    for i, row in enumerate(new):
+        try:
+            verdicts.update({i: v for v in _checked_batch(name, [row], {0} if i in strict else set()).values()})
+        except Exception:
+            failed.add(i)
+    return verdicts, failed
+
+
+def _held(name: str, project: Path | None) -> bool:
+    """A cycle of this instance is paused for a conversation (hold): its episode, the source of what it promised, is
+    not written yet, so no commit judges until it ends. A hold whose runner is gone holds nothing."""
+    mark = _dir(name, project) / "held"
+    try:
+        pid = int(mark.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        mark.unlink(missing_ok=True)
+        return False
+    except (OSError, ValueError):
+        return False
+
+
+def hold(name: str, held: bool, project: Path | None = None) -> None:
+    """Mark (held=True, by this process) or clear the pause of a cycle of `name` (runner._pause)."""
+    mark = _dir(name, project) / "held"
+    if held:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(f"{os.getpid()}\n")
+    else:
+        mark.unlink(missing_ok=True)
 
 
 def sync(name: str, root: Path, project: Path | None = None, now: datetime | None = None, judge: bool = True) -> int:
@@ -150,28 +195,35 @@ def sync(name: str, root: Path, project: Path | None = None, now: datetime | Non
         recs = records(name, "commitments", project)
         seen = {_key(rec["row"]) for rec in recs}
         texts = (_history(name, FILE, project) if first else []) + [(current, None)]
-        new, strict = [], set()
+        new, strict, history = [], set(), set()
         stamps = []
         for n, (text, committed) in enumerate(texts):
             for row in parse(text)[0]:
                 if (k := _key(row)) not in seen:
                     seen.add(k)
-                    if not first and n == len(texts) - 1:
+                    if n < len(texts) - 1:
+                        history.add(len(new))       # a first sync's backfill
+                    elif not first:
                         strict.add(len(new))
                     new.append(row)
                     stamps.append(min(committed, stamp) if committed else stamp)
+        if judge and _held(name, project):
+            judge = False      # a paused cycle's promises wait for the commit that ends it
         if judge:
-            checked = _checked(name, new, strict)
-            out = [{"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {})}
-                   for i, row in enumerate(new)]
+            checked, failed = _checked(name, new, strict)
+            out = [{"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {}),
+                    **({"judge": False, "unjudged": True} if i in failed else {})} for i, row in enumerate(new)]
             waiting = [rec for rec in recs if rec.get("judge") is True and "checked" not in rec]
-            verdicts = _checked(name, [rec["row"] for rec in waiting],
-                                {i for i, rec in enumerate(waiting) if rec.get("strict", True)})
+            verdicts, failed = _checked(name, [rec["row"] for rec in waiting],
+                                        {i for i, rec in enumerate(waiting) if rec.get("strict", True)})
+            # A history row's verdict counts from its `seen`, as a first sync's backfill always recorded it.
             out += [{"seen": rec["seen"], "row": rec["row"], **({"checked": verdicts[i]} if i in verdicts else {}),
-                     "judge": False, "judged": stamp} for i, rec in enumerate(waiting)]
+                     **({"unjudged": True} if i in failed else {}), "judge": False,
+                     "judged": rec["seen"] if rec.get("history") else stamp} for i, rec in enumerate(waiting)]
         else:
             out = [{"seen": stamps[i], "row": row,
-                    **({"judge": True, "strict": i in strict} if row.get("event") == "made" else {})}
+                    **({"judge": True, "strict": i in strict, **({"history": True} if i in history else {})}
+                       if row.get("event") == "made" else {})}
                    for i, row in enumerate(new)]
         jsonl.append(f, [json.dumps(rec) + "\n" for rec in out])   # ASCII: a lone surrogate cannot stop the copy
         if first:
@@ -210,7 +262,7 @@ def merged(name: str, kind: str, current: list[dict], project: Path | None = Non
         every = [rec for rec in every if _key(rec["row"]) not in later]
         # Not yet known then: a row copied after the moment, or stamped after it.
         current = [r for r in current if _key(r) not in later and ((at := _at(r.get("at"))) is None or at <= as_of)]
-    kept = every
+    kept = [rec for rec in every if not rec.get("unjudged")]   # a row no source check could read: no reader can either
     known = {_key(rec["row"]) for rec in kept}
     now = {_key(r) for r in current}
     ids_now = {r.get("id") for r in current if isinstance(r.get("id"), str)}
