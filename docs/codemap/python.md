@@ -38,7 +38,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/claudecli.py` | `Channel` | `serves`, `models`, `home`, `child_env`, `login_status`, `efforts` |
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `custom_price`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `custom_stream`, `as_sse`, `efforts` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
-| `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
+| `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `find_bin`, `bin_source`, `bin_error`, `login_env`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
 | `supervisor/commitments.py` | — | `operator_inbox`, `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report`, `broken_notice`, `tell_broken` |
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `worst_price`, `envelope`, `complete` |
@@ -162,7 +162,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_claudecli.py` | `DummyBridge`, `ChannelTest`, `MappingTest`, `WiringTest` | `body` |
 | `supervisor/tests/test_coder_providers.py` | `Loopback`, `Case`, `OpenAIToolsTest`, `CodexTest`, `CredentialTest` | `openai_reply` |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
-| `supervisor/tests/test_codexcli.py` | `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
+| `supervisor/tests/test_codexcli.py` | `CodexDiscoveryTest`, `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `QueuedUpdateTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |
@@ -203,6 +203,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_gate_budget.py` | `BudgetTest` | — |
 | `supervisor/tests/test_gate_held.py` | `ClassifyTest`, `HeldCase`, `WithdrawTest`, `HoldTest`, `RegateTest`, `RecheckTest`, `RecordTest`, `SchedulerTest` | — |
 | `supervisor/tests/test_gate_shared_limit.py` | `SharedLimitTest`, `WaitsTest`, `HoldOnCodeCase`, `HoldOnCodeTest`, `TemplateMergeTest`, `ChannelRetryTest`, `BudgetReportTest` | — |
+| `supervisor/tests/test_gate_stop_group.py` | `StopGroupTest` | — |
 | `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run`, `Workers` | `plain`, `count` |
 | `supervisor/tests/test_gate_timeout.py` | `GateTimeoutTest` | — |
 | `supervisor/tests/test_gauges.py` | `GaugesTest` | — |
@@ -225,6 +226,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_judge_rotation.py` | `FakeClaude`, `PickTest`, `ProviderPoolTest`, `RoutingTest`, `CycleVerdictTest`, `IndependenceWritersTest` | — |
 | `supervisor/tests/test_keys_and_http.py` | `FakeAPI`, `KeysAndHttpTest`, `TailnetGrantTest`, `KeyStoreDurabilityTest`, `ThroughTheInstancesClientTest`, `KeysOutOfReachTest`, `InstanceSideTest`, `OperatorCommandTest` | — |
 | `supervisor/tests/test_kill_delete.py` | `TargetsTest`, `ProcessesTest`, `KillTest`, `TrialsOfAPausedOrDeletedInstance`, `NothingWritesIntoADeletedInstance`, `DeleteTest` | `git` |
+| `supervisor/tests/test_kill_stuck_process.py` | `StuckProcessTest` | — |
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
