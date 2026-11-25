@@ -390,19 +390,24 @@ STOP_GRACE_S = 2   # how long a timed-out stage has to exit on SIGTERM before it
 
 
 def _end_group(p: subprocess.Popen) -> None:
-    """Kill everything left in the stage's process group and return once it is empty. subprocess.run's timeout
-    killed only the direct child (sandbox-exec, exec'd into python): a worker a test had started went on writing the
-    instance's code after the gate had failed and runner._settle had reverted the change (found 2026-10-16)."""
+    """Kill everything left in the process group. Give up after 10 seconds if the group persists.
+
+    subprocess.run's timeout killed only the direct child (sandbox-exec, exec'd into python). A worker a test had
+    started went on writing the instance's code after the gate failed and runner._settle reverted the change
+    (found 2026-10-16)."""
     import signal
     import time
+    from .core import log
     deadline = time.monotonic() + 10
     while True:   # SIGKILL again until none is left: a member may have forked while the first one was delivered
         try:
             os.killpg(p.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):   # empty, or only a member no signal of ours can reach
             return
-        p.wait()                                         # the leader, reaped, so it no longer counts as a member
-        if time.monotonic() > deadline:
+        reaped = p.poll() is not None                     # a zombie leader still counts as a group member
+        if time.monotonic() >= deadline:
+            if not reaped:
+                log(f"process group {p.pid}: leader could not be reaped after SIGKILL")
             return
         time.sleep(0.02)
 
@@ -410,11 +415,10 @@ def _end_group(p: subprocess.Popen) -> None:
 def stop_group(p: subprocess.Popen, grace_s: float = STOP_GRACE_S) -> None:
     """End the process group `p` leads, on any way out of a run or a command — finished, failed, timed out,
     interrupted: SIGTERM to all of it (and SIGCONT, so a stopped member gets it too), up to `grace_s` for it to empty,
-    then SIGKILL until nothing is left (_end_group). Only the direct child was killed, and only on a timeout, so a
+    then SIGKILL for up to 10 seconds (_end_group). Only the direct child was killed, and only on a timeout, so a
     process the agent or a `run` command had started in the background went on writing the instance's code after the
-    gate had judged it (B9, review of 2026-10-24). Returns once the group is empty (or only holds a member no signal
-    of ours can reach); `p` is reaped. A process that starts its own session (setsid) leaves the group and is not
-    reached."""
+    gate had judged it (B9, review of 2026-10-24). Reaps the leader if it exits and logs if it is still alive when
+    the SIGKILL deadline expires. A process that starts its own session (setsid) leaves the group."""
     import signal
     import time
     try:
