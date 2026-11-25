@@ -111,9 +111,9 @@ SETTING_KEY = re.compile(r"^SHAFT_[A-Z0-9_]{1,60}$")
 # Where a knob is read, for the operator: a long-running service holds the value it read at its start until it
 # restarts; "runs" — cycles, sleeps, trials, batteries, write-ups, CLI commands — are fresh processes that read it
 # when they start.
-SERVICE_NAMES = ("api", "scheduler", "telegram", "web", "model", "embed")
+SERVICE_NAMES = ("api", "scheduler", "telegram", "web", "model", "embed", "listen")
 KNOB_GROUPS = ("Judging", "Models and spend", "Codex", "Grok", "Claude", "Antigravity", "Trials", "Runs and conversations", "Inbox and benchmarks",
-               "Local model", "Ports and paths")
+               "Local model", "Meetings", "Ports and paths")
 
 
 @dataclasses.dataclass(frozen=True)

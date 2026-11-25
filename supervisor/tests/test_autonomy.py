@@ -17,12 +17,14 @@ H2 = timedelta(hours=2)
 
 
 class ServicePriorityTest(unittest.TestCase):
-    def test_only_web_and_api_plists_use_interactive_process_type(self):
+    def test_service_plist_process_types(self):
         for name in autonomy.SERVICES:
             with self.subTest(service=name):
                 plist = autonomy._plist(name)
                 if name in ("web", "api"):
                     self.assertEqual(plist["ProcessType"], "Interactive")
+                elif name == "listen":
+                    self.assertEqual(plist["ProcessType"], "Background")
                 else:
                     self.assertNotIn("ProcessType", plist)
 

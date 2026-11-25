@@ -8,7 +8,7 @@ SHAFT runs from the primary checkout (the clone you installed from, on `main`) a
 - every wake, sleep, job and replay is a fresh `python -m supervisor` started by the scheduler in that checkout,
   so the deployed release reaches the instances at their next wake;
 - the long-running launchd services (`com.shaft.scheduler`, `com.shaft.web`, `com.shaft.api`, `com.shaft.telegram`,
-  `com.shaft.model`, `com.shaft.embed`)
+  `com.shaft.model`, `com.shaft.embed`, `com.shaft.listen`)
   keep the code they started with until restarted;
 - template fixes reach an instance only through `shaft update`, under its run lock.
 
@@ -20,7 +20,7 @@ by `shaft deploy`, which refuses it. `shaft deploy vX.Y.Z --json` does steps 1 t
 `--json`), and the app's Update server runs it; by hand, resolve the template commit with `git rev-parse
 template-vX.Y.Z^{commit}`. The command stops where these steps say to stop, never forces a service, and restarts api,
 web and telegram only when no conversation is open: otherwise its services step says who it waits for, and `shaft deploy
-TAG --json --services-only` does that part later. `model` and `embed` stay manual (step 3). From its look at the open
+TAG --json --services-only` does that part later. `model`, `embed`, and `listen` stay manual (step 3). From its look at the open
 conversations until the old processes are gone it holds `.supervisor/restarting.lock`: a conversation that tries to open
 meanwhile (API, web, Telegram or a terminal talk) is refused with "the server is restarting, try again in a moment", so
 the restart never cuts one. `shaft api on`, `shaft api restart` and `shaft web on` (also run by the Mac app) restart a
@@ -116,6 +116,8 @@ template worktree to it, so a release pushed without it is not installable until
      change. Use `bin/shaft model on` and `bin/shaft embed on`; do not force a busy service.
      `supervisor/version.py` maps model code to `supervisor/bonsai_server.py` and `supervisor/bonsai_lora.py`,
      and embedding code to `supervisor/embed_server.py`. `supervisor/actions.py` guards CLI service changes; `supervisor/autonomy.py` restarts the service.
+   - `listen` runs meeting transcription. When its code changes, wait for processing to finish and run
+     `bin/shaft listen on`.
 
    Restart only loaded services (`launchctl list | grep com.shaft`).
 

@@ -1790,6 +1790,7 @@ See [meeting storage and CLI](meetings.md).
 | POST | `/meetings/<id>/finish` | `{size, sha256, chunks}` | 200, meeting metadata (§20.3) |
 | GET | `/meetings` | | 200, `{meetings: [metadata]}`, newest first (§20.4) |
 | GET | `/meetings/<id>` | | 200, meeting metadata (§20.4) |
+| POST | `/meetings/<id>/reprocess` | | 200, queued meeting metadata (§20.4) |
 | DELETE | `/meetings/<id>` | | 200, `{id, deleted: true}` (§20.4) |
 
 ### 20.1 Create
@@ -1826,6 +1827,18 @@ Metadata contains `id`, `title`, `created`, `started`, `ended`, `mode`, `device`
 Timestamps follow §1.6. `channels` comes from `sidecar.channels` when present. `size` and `sha256` start as `null`.
 `error` and `processed_with` start as `null` and can be set by the processing worker.
 The state is one of `uploading`, `queued`, `processing`, `ready`, or `failed`.
+Recovered meetings also have a `worker_crashes` count.
+
+When the state is `ready`, `GET /meetings/<id>` also includes `transcript` with `meeting`, `segments`,
+`gaps`, `speakers`, `processed_with`, `page`, and `total_segments`. A segment has `start`, `end`,
+`channel`, `speaker`, `lang`, `text`, and `words`. Each word has `w`, `start`, and `end`. Times are
+seconds from the start of the recording. Channel 1 is the microphone and channel 2 is system audio.
+
+Use `?page=N` to fetch up to 200 segments at a time. The default is page 1. A page past the end has an
+empty `segments` array. An invalid page number returns `400 bad_request`.
+
+`POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
+Other states return `409 refused`.
 
 Delete removes the meeting, including its audio or any saved chunks. Routes for an unknown meeting return
 `404 not_found`.

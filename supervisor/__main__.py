@@ -1653,12 +1653,12 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["set", "unset", "list"])
     p.add_argument("name", nargs="?")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
-    p = sub.add_parser("meetings", help="list, show, delete, or import meeting recordings")
+    p = sub.add_parser("meetings", help="list, show, delete, import, or reprocess meeting recordings")
     msub = p.add_subparsers(dest="action", required=True)
-    for action in ("list", "show", "delete", "import"):
+    for action in ("list", "show", "delete", "import", "reprocess"):
         q = msub.add_parser(action)
         q.add_argument("--json", action="store_true", help="one JSON object on stdout")
-        if action in ("show", "delete"):
+        if action in ("show", "delete", "reprocess"):
             q.add_argument("id")
         if action == "import":
             q.add_argument("file")
@@ -1763,6 +1763,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p = sub.add_parser("listen", help="SHAFT's meeting transcription worker (launchd service)")
+    p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--force", action="store_true", help="on/off even if a meeting is processing")
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status; "
                                         "restart: once its runs end, cutting none (a deploy)")
     p.add_argument("action", choices=["on", "off", "status", "serve", "restart"])
@@ -2217,8 +2220,8 @@ def _dispatch(args, parser) -> int:
         return telegram.command(args.action, args.name, args.json, force=args.force)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
-    if args.cmd == "embed":
-        return autonomy.service("embed", args.action)
+    if args.cmd in ("embed", "listen"):
+        return autonomy.service(args.cmd, args.action)
     if args.cmd == "top":
         ui_python = PROJECT / ".venv-ui" / "bin" / "python"
         extra = ["--once"] if args.once else []

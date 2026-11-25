@@ -23,7 +23,9 @@ ID = r"m-[0-9]{8}-[0-9]{4}-[0-9a-f]{4}"
 CHUNK_ROUTE = rf"/meetings/(?P<meeting_id>{ID})/chunk/(?P<index>[0-9]+)"
 EXTENSIONS = ("m4a", "caf", "wav")
 MODES = ("online", "inperson")
-WORKER_TRANSITIONS = {"queued": ("processing",), "processing": ("ready", "failed"), "ready": (), "failed": ()}
+WORKER_TRANSITIONS = {"queued": ("processing",), "processing": ("queued", "ready", "failed"),
+                      "ready": ("queued",), "failed": ("queued",)}
+TRANSCRIPT_PAGE_SIZE = 200
 
 
 class Error(Exception):
@@ -281,6 +283,50 @@ def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> N
         _save(folder, metadata)
 
 
+def reprocess(meeting_id: str) -> dict:
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata["state"] not in ("ready", "failed"):
+            raise Conflict("Only ready or failed meetings can be reprocessed.")
+        metadata.pop("worker_crashes", None)
+        metadata.update(state="queued", error=None, processed_with=None)
+        _save(folder, metadata)
+        return metadata
+
+
+def recover_processing(meeting_id: str) -> None:
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata["state"] == "processing":
+            crashes = metadata.get("worker_crashes", 0) + 1
+            retry = crashes < 2
+            metadata.update(worker_crashes=crashes, state="queued" if retry else "failed",
+                            error=None if retry else "worker stopped while processing")
+            _save(folder, metadata)
+
+
+def complete_processing(meeting_id: str, transcript: dict, markdown: str) -> None:
+    content = _json_bytes(transcript)
+    rendered = markdown.encode()
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata["state"] != "processing":
+            raise Conflict("This meeting is no longer processing.")
+        with _atomic_output(folder / "transcript.json") as out, _atomic_output(folder / "transcript.md") as md:
+            out.write(content)
+            md.write(rendered)
+        metadata.update(state="ready", error=None, processed_with=transcript["processed_with"])
+        _save(folder, metadata)
+
+
+def detail(meeting_id: str, page: int) -> dict:
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata["state"] == "ready":
+            transcript = json.loads((folder / "transcript.json").read_bytes())
+            segments = transcript["segments"]
+            first = (page - 1) * TRANSCRIPT_PAGE_SIZE
+            metadata["transcript"] = {**transcript, "segments": segments[first:first + TRANSCRIPT_PAGE_SIZE],
+                                      "page": page, "total_segments": len(segments)}
+        return metadata
+
+
 def import_audio(source: Path, *, title: str | None, mode: str) -> dict:
     if not source.is_file():
         raise Invalid("Choose a local audio file.")
@@ -308,6 +354,7 @@ def command(args) -> int:
             line = f"Deleted {args.id}."
         else:
             result = (get(args.id) if args.action == "show"
+                      else reprocess(args.id) if args.action == "reprocess"
                       else import_audio(Path(args.file), title=args.title, mode=args.mode))
             line = json.dumps(result, indent=2) if args.action == "show" else f"Queued {result['id']}."
     except (Error, OSError) as e:

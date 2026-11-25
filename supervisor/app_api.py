@@ -1669,7 +1669,18 @@ def _list_meetings(req: Request) -> Response:
 
 
 def _show_meeting(req: Request, meeting_id: str) -> Response:
-    return _json(200, _meeting_metadata(_meeting_call(meetings.get, meeting_id)))
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    try:
+        page = int(query.get("page", ["1"])[0])
+        if page < 1:
+            raise ValueError
+    except ValueError:
+        raise Refusal(400, "bad_request", "page must be a positive integer.") from None
+    return _json(200, _meeting_metadata(_meeting_call(meetings.detail, meeting_id, page)))
+
+
+def _reprocess_meeting(req: Request, meeting_id: str) -> Response:
+    return _json(200, _meeting_metadata(_meeting_call(meetings.reprocess, meeting_id)))
 
 
 def _delete_meeting(req: Request, meeting_id: str) -> Response:
@@ -1683,6 +1694,7 @@ ROUTES: list[tuple[str, dict]] = [
     (meetings.CHUNK_ROUTE, {"PUT": _meeting_chunk}),
     (rf"/meetings/{MEETING_ID}/upload", {"GET": _meeting_upload}),
     (rf"/meetings/{MEETING_ID}/finish", {"POST": _finish_meeting}),
+    (rf"/meetings/{MEETING_ID}/reprocess", {"POST": _reprocess_meeting}),
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
     (r"/instances/move", {"POST": _move}),
