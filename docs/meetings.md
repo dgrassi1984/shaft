@@ -87,11 +87,20 @@ per run, including continuation pages. Unknown, malformed, failed, and ungranted
 | `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
 
 Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a granted meeting first becomes ready.
-Use `wake` to also request a cycle. The default is `off`. Filing, reprocessing, and relabelling generate no new
-note for a meeting that has already reached ready.
+Use `wake` to also request a cycle. The default is `off`. Filing or refiling a ready meeting sends the note to
+watching instances with a grant for the new account that have yet to receive it.
 
 Run `shaft meetings proposals` to list pending speaker names. The paired-device API accepts confirmation or
 rejection. [Meeting API](app-api.md#206-speaker-proposals)
+
+## Point an instance at a meeting
+
+1. In the Mac app, open **Meetings** and select the recording. If it is unfiled, choose an **Account** and click **Save**.
+2. Open the instance's settings. Under **Access**, turn on **Meetings** for the same account.
+3. In **Meetings**, click **Copy Reference** and paste the line into the instance's chat.
+
+The instance uses `meeting_read` with the ID in the reference to read the transcript once the meeting is ready.
+The recorder files new meetings automatically when there is exactly one configured Google account.
 
 ## CLI
 

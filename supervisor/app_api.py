@@ -1637,7 +1637,7 @@ def _meeting_call(operation, *args, **kwargs):
 
 
 def _meeting_metadata(row: dict) -> dict:
-    public = {key: value for key, value in row.items() if key not in ("notified", "ready_revision")}
+    public = {key: value for key, value in row.items() if key not in ("notified", "notification_owed", "ready_revision")}
     return {**public, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
 
 

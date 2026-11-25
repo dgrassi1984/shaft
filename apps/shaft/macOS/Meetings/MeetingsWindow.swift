@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import SHAFTKit
 import SwiftUI
@@ -6,10 +7,14 @@ struct MeetingsWindow: View {
     static let windowID = "meetings"
 
     let recorder: MeetingRecorder
+    let client: APIClient
     @State private var store: MeetingsStore
     @State private var selection: String?
+    @State private var aliases: [String]?
+    @State private var accountError: String?
 
     init(client: APIClient, recorder: MeetingRecorder) {
+        self.client = client
         self.recorder = recorder
         _store = State(initialValue: MeetingsStore(client: client))
     }
@@ -22,6 +27,7 @@ struct MeetingsWindow: View {
                 List(selection: $selection) {
                     ForEach(store.meetings) { meeting in
                         meetingRow(meeting).tag(meeting.id)
+                            .contextMenu { CopyMeetingReference(meeting: meeting) }
                     }
                 }
                 .listStyle(.sidebar)
@@ -43,6 +49,7 @@ struct MeetingsWindow: View {
                         if let selection, store.meetings.contains(where: { $0.id == selection }) {
                             await store.load(selection)
                         }
+                        await loadAccounts()
                     }
                 } label: {
                     Label("Refresh Meetings", systemImage: "arrow.clockwise")
@@ -51,7 +58,7 @@ struct MeetingsWindow: View {
             }
         } detail: {
             if let meeting = store.meetings.first(where: { $0.id == selection }) {
-                MeetingDetail(meeting: meeting, store: store)
+                MeetingDetail(meeting: meeting, store: store, aliases: aliases, accountError: accountError)
                     .id(meeting.id)
             } else {
                 ContentUnavailableView("Select a meeting", systemImage: "waveform")
@@ -60,10 +67,20 @@ struct MeetingsWindow: View {
         .frame(minWidth: 700, minHeight: 460)
         .background(Color.canvas)
         .tint(Color.brand)
+        .task { await loadAccounts() }
         .task(id: recorder.phase) { await store.refresh() }
         .task(id: store.needsPolling) { await store.poll() }
         .onChange(of: store.meetings.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = nil }
+        }
+    }
+
+    private func loadAccounts() async {
+        do {
+            aliases = try await client.meetingAccountAliases()
+            accountError = nil
+        } catch {
+            accountError = APIError.from(error)?.message
         }
     }
 
@@ -110,6 +127,10 @@ struct MeetingsWindow: View {
 private struct MeetingDetail: View {
     let meeting: Meeting
     let store: MeetingsStore
+    let aliases: [String]?
+    let accountError: String?
+    @State private var draftTitle: String?
+    @State private var draftAccount: String?
     @State private var confirmDelete = false
     @State private var forgetVoices = false
     @State private var clipLabel: String?
@@ -147,6 +168,8 @@ private struct MeetingDetail: View {
         }
         .onDisappear { stopClip() }
         .onChange(of: meeting.state) { stopClip() }
+        .onChange(of: meeting.title) { if draftTitle == meeting.title { draftTitle = nil } }
+        .onChange(of: meeting.account) { if draftAccount == (meeting.account ?? "") { draftAccount = nil } }
         .sheet(isPresented: $confirmDelete) { deleteSheet }
     }
 
@@ -155,6 +178,7 @@ private struct MeetingDetail: View {
             Text(meeting.displayTitle).font(.title.bold())
             Text(meeting.started.formatted(date: .long, time: .shortened))
                 .foregroundStyle(Color.textSecondary)
+            filingFields
             if let transcript {
                 let names = Set(transcript.speakers.values.compactMap(\.name)).sorted()
                 Label(names.isEmpty ? "No named speakers" : names.formatted(.list(type: .and)),
@@ -162,6 +186,7 @@ private struct MeetingDetail: View {
                     .foregroundStyle(Color.textSecondary)
             }
             HStack {
+                CopyMeetingReference(meeting: meeting)
                 Button("Reprocess") { Task { await store.reprocess(meeting.id) } }
                     .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
                 Button("Delete…", role: .destructive) {
@@ -171,6 +196,42 @@ private struct MeetingDetail: View {
                 .disabled(store.mutating)
             }
         }
+    }
+
+    private var filingFields: some View {
+        let title = draftTitle ?? meeting.title
+        let savedAccount = meeting.account ?? ""
+        let account = draftAccount ?? savedAccount
+        return VStack(alignment: .leading, spacing: Design.Space.s8) {
+            LabeledContent("Title") {
+                TextField("Title", text: Binding(get: { title }, set: { draftTitle = $0 }))
+                    .labelsHidden()
+            }
+            Picker("Account", selection: Binding(get: { account }, set: { draftAccount = $0 })) {
+                Text("Unfiled").tag("")
+                if let current = meeting.account, aliases?.contains(current) != true {
+                    Text(current).tag(current)
+                }
+                ForEach(aliases ?? [], id: \.self) { alias in Text(alias).tag(alias) }
+            }
+            .disabled(aliases == nil)
+            if let accountError {
+                Text(accountError).font(.callout).foregroundStyle(Color.danger)
+            }
+            if meeting.account == nil {
+                Text("Unfiled: choose an account so instances can read it.")
+                    .font(.callout)
+                    .foregroundStyle(Color.textSecondary)
+            }
+            Button("Save") {
+                Task {
+                    await store.file(meeting.id, account: account.isEmpty ? nil : account,
+                                     title: title == meeting.title ? nil : title)
+                }
+            }
+            .disabled(title == meeting.title && account == savedAccount)
+        }
+        .disabled(store.mutating)
     }
 
     private func speakers(_ transcript: MeetingTranscript) -> some View {
@@ -318,6 +379,21 @@ private struct MeetingSpeakerRow: View {
                 }
             }
         }
+    }
+}
+
+private struct CopyMeetingReference: View {
+    let meeting: Meeting
+
+    var body: some View {
+        let reference = meeting.chatReference()
+        Button("Copy Reference") {
+            guard let reference else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(reference, forType: .string)
+        }
+        .disabled(reference == nil)
+        .help(reference == nil ? "File the meeting under an account first." : "Copy a reference to paste into chat.")
     }
 }
 

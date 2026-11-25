@@ -20,6 +20,16 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     public let processedWith: MeetingTranscript.Processing?
     public let workerCrashes: Int?
     public let transcript: MeetingTranscript?
+
+    public func chatReference(timeZone: TimeZone = .current) -> String? {
+        guard account != nil else { return nil }
+        let date = DateFormatter()
+        date.locale = Locale(identifier: "en_US_POSIX")
+        date.timeZone = timeZone
+        date.dateFormat = "d MMM yyyy HH:mm"
+        let name = String(reflecting: title.isEmpty ? "Untitled meeting" : title)
+        return "Meeting \(name) (\(id)), \(date.string(from: started)) — read it with meeting_read(\"\(id)\")"
+    }
 }
 
 public struct MeetingCreate: Encodable, Sendable, Equatable {

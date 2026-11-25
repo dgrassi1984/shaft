@@ -89,6 +89,9 @@ struct InstanceSettingsView: View {
             }
             .listRowBackground(Color.elevated)
             VoiceSettingsSection(store: store, client: instances.client, settings: settings)
+            #if os(macOS)
+            MeetingAccessSection(client: instances.client, instance: store.instance)
+            #endif
             Section {
                 HStack {
                     Toggle("Paused", isOn: Binding(
@@ -160,6 +163,71 @@ struct InstanceSettingsView: View {
             hint + " Runs every \(settings.wakeInterval.effective) minutes because of the floor."
     }
 }
+
+#if os(macOS)
+private struct MeetingAccessSection: View {
+    let client: APIClient
+    let instance: String
+    @State private var access: AccessResponse?
+    @State private var error: String?
+    @State private var saving = false
+
+    var body: some View {
+        Section {
+            if let access {
+                ForEach(access.googleAccounts, id: \.alias) { account in
+                    Toggle("Meetings (\(account.alias))", isOn: Binding(
+                        get: { self.access?.meetings?.contains { $0.account == account.alias } == true },
+                        set: { setGrant(account.alias, enabled: $0) }
+                    ))
+                    .disabled(saving)
+                }
+                if access.googleAccounts.isEmpty {
+                    Text("No Google accounts configured.").foregroundStyle(Color.textSecondary)
+                }
+            } else if error == nil {
+                ProgressView("Loading access…")
+            }
+            if let error {
+                Text(error).foregroundStyle(Color.warning)
+                if access == nil {
+                    Button("Try again") { Task { await load() } }
+                }
+            }
+        } header: {
+            Text("Access")
+        } footer: {
+            Text("A Meetings grant lets the instance read all ready transcripts filed under that account.")
+                .foregroundStyle(Color.textSecondary)
+        }
+        .listRowBackground(Color.elevated)
+        .task { await load() }
+    }
+
+    private func load() async {
+        error = nil
+        do {
+            access = try await client.access(instance)
+        } catch {
+            self.error = APIError.from(error)?.message
+        }
+    }
+
+    private func setGrant(_ alias: String, enabled: Bool) {
+        guard !saving else { return }
+        saving = true
+        error = nil
+        Task {
+            defer { saving = false }
+            do {
+                access = try await client.grantAccess(instance, .meetings(alias: alias, action: enabled ? "grant" : "revoke"))
+            } catch {
+                self.error = APIError.from(error)?.message
+            }
+        }
+    }
+}
+#endif
 
 /// Keep unfinished edits until the server accepts them.
 private struct SettingTextRow: View {
