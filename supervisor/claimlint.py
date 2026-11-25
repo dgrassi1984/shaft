@@ -61,12 +61,13 @@ def lint(name: str, ep: dict) -> list[dict]:
         if in_cycle:
             settled.add(row["id"])
     if settled:
-        items, episodes = commitments.ledger(name), commitments._episodes(name)
+        from . import served
+        items, episodes, record = commitments.ledger(name), commitments._episodes(name), served.Record(name)
         for cid in sorted(settled):
             item = items.get(cid)
             if item is None or item["status"] != "kept":
                 continue
-            reason, _ = commitments._evidence(episodes, item, item["evidence"])
+            reason, _ = commitments._evidence(episodes, item, item["evidence"], record)
             if reason:
                 add("kept_commitment", f"said commitment {cid} was kept; {reason}", cid)
     return findings

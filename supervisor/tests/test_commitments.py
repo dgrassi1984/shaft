@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
 from shaft import commitments as agent
-from supervisor import commitments as supervisor, metrics
+from supervisor import commitments as supervisor, core, metrics
 
 NOW = datetime(2026, 10, 26, 14, 12)
 PROMISE = {"promise": "Send the checked report", "due": "tomorrow", "criterion": "The operator has the report",
@@ -57,6 +57,7 @@ class CommitmentsTest(unittest.TestCase):
         (self.sup / "operator-inbox" / MSG).write_text(
             "From: x\nTo: operator\nKind: note\nDate: 2026-10-26 14:00\n\nI will send the checked report.\n")
         self.enterContext(mock.patch.object(supervisor, "SUP_DIR", self.sup))
+        self.enterContext(mock.patch.object(core, "SUP_DIR", self.sup))   # served.py's record of the calls
         for module in (supervisor, metrics):
             patch = mock.patch.object(module, "INSTANCES", self.root.parent)
             patch.start()
@@ -600,7 +601,8 @@ class CommitmentsTest(unittest.TestCase):
         self.assertEqual(lines[0], "## Promises I made and kept")
         self.assertIn("made 1; kept (verified) 1; kept (not verified) 0", lines[2])
         self.assertIn("made 1; kept (verified) 0", lines[3])
-        self.assertEqual(lines[-1], "- Mean judged difficulty of cited cycles: 3.00/5 (n=1).")
+        self.assertEqual(lines[-2], "- Mean judged difficulty of cited cycles: 3.00/5 (n=1).")
+        self.assertIn("built-in and plugin calls never reach the supervisor", lines[-1])
         text = supervisor.report(["x"])
         self.assertIn(f"{CID}: kept; verified; to operator", text)
         self.assertIn("to self (no longer kept): 1", text)

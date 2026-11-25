@@ -8,9 +8,10 @@ page, largest gap first. They are readings only: nothing here instructs, refuses
 choice is made.
 
 No gauge can be set by the instance: each is recomputed whenever the page is built. Most read the supervisor's own
-record (judgments, tool logs, battery, checks). Three read a ledger the instance keeps in its folder, as the
-supervisor folds and re-checks it (promises: commitments.py; corrections; plan: projects.py): those are as true as
-that ledger, and the menu says which they are.
+record (judgments, tool logs, battery, checks). Promises and corrections read ledgers the instance keeps in its
+folder, but through the supervisor's own add-only copy of their rows (ledger_mirror.py, #7): a row the instance later
+alters or removes is still counted, and the reading names the change. The plan (projects.py) is the instance's own
+account, read as it stands, and labelled so.
 The choice is a row of SUP_DIR/gauges/<name>.jsonl, append-only {ts, by, chosen}; the last row is the choice in force
 and the earlier rows are the history of how it changed. A trial replay writes nothing here: its ReplayBroker keeps the
 choice it made and passes it in as `extra`.
@@ -52,8 +53,12 @@ def _days(since: datetime, now: datetime) -> str:
 
 # -- the readings: each from records the supervisor already keeps -------------------------------------------------
 def _promises(name: str, now: datetime) -> Reading:
-    from . import commitments
-    items = [it for it in commitments.ledger(name, now).values() if it["made_to"] == "operator"]
+    """Folded from the supervisor's own copy of the ledger with the rows not copied yet (ledger_mirror.py): a promise
+    the instance later altered or removed in its file is still counted, and the reading says so."""
+    from . import commitments, ledger_mirror
+    current = commitments._rows(core.safe_read(core.INSTANCES / name, commitments.FILE, "", errors="replace"))
+    rows, changes = ledger_mirror.merged(name, "commitments", current)
+    items = [it for it in commitments.ledger(name, now, rows).values() if it["made_to"] == "operator"]
     if not items:
         return Reading("Promises to the operator: none recorded")
     pending = [it for it in items if it["status"] in ("open", "overdue")]
@@ -63,6 +68,7 @@ def _promises(name: str, now: datetime) -> Reading:
     text = f"Promised to the operator and still open: {len(pending)} (overdue {overdue})"
     if made:
         text += f", oldest made {_days(min(made), now)} ago"
+    text += ledger_mirror.changed_text(changes, [it["id"] for it in items], "promise")
     return Reading(text, _share(len(pending), len({it["id"] for it in pending + recent})))
 
 
@@ -91,8 +97,13 @@ def _claims(name: str, now: datetime) -> Reading:
 
 
 def _corrections(name: str, now: datetime) -> Reading:
-    from . import corrections
-    items = list(corrections._fold(core.safe_read(core.INSTANCES / name, corrections.FILE, "")).values())
+    """Folded from the supervisor's own copy of the ledger with the rows not copied yet (ledger_mirror.py), as
+    _promises is."""
+    from . import corrections, ledger_mirror
+    text = core.safe_read(core.INSTANCES / name, corrections.FILE, "")
+    corrections._fold(text)      # a ledger that cannot be read is said, as before
+    rows, changes = ledger_mirror.merged(name, "corrections", ledger_mirror.parse(text))
+    items = list(corrections._fold("\n".join(json.dumps(r) for r in rows)).values())
     if not items:
         return Reading("Corrections from the operator: none recorded")
     opened = [it for it in items if it["status"] == "open"]
@@ -100,6 +111,7 @@ def _corrections(name: str, now: datetime) -> Reading:
     text = f"Corrections from the operator still open: {len(opened)} of {len(items)}"
     if since:
         text += f", oldest {_days(min(since), now)} old"
+    text += ledger_mirror.changed_text(changes, [it["id"] for it in items], "correction")
     return Reading(text, _share(len(opened), len(items)))
 
 
@@ -160,18 +172,21 @@ def _unrecorded(name: str, now: datetime) -> Reading:
 
 def _plan(name: str, now: datetime) -> Reading:
     """How stale the instance's plan is: its open projects, or how long since it last opened or closed one. The plan
-    is the instance's own (memory/projects.jsonl); the supervisor only reads it."""
+    is the instance's own account (memory/projects.jsonl), read as it is: the supervisor keeps no copy of it, and the
+    reading says so."""
     from . import projects
     items = list(projects._fold(core.safe_read(core.INSTANCES / name, projects.FILE, "")).values())
     opened = [it for it in items if it["status"] == "open"]
     if opened:
         late = sum(1 for it in opened if (at := projects._at(it.get("deadline"))) and at <= projects._at(now.isoformat()))
-        return Reading(f"My plan: {len(opened)} open project(s), {late} past its date", _share(late, len(opened)))
+        return Reading(f"My plan (my own account): {len(opened)} open project(s), {late} past its date",
+                       _share(late, len(opened)))
     stamps = [at for it in items for key in ("closed_at", "at") if (at := projects._at(it.get(key)))]
     if not stamps:
-        return Reading("My plan: no open project; none ever opened", 1.0)
+        return Reading("My plan (my own account): no open project; none ever opened", 1.0)
     idle = now - max(stamps).replace(tzinfo=None)
-    return Reading(f"My plan: no open project; the last one was opened or closed {_days(now - idle, now)} ago",
+    return Reading(f"My plan (my own account): no open project; the last one was opened or closed "
+                   f"{_days(now - idle, now)} ago",
                    min(1.0, idle / timedelta(days=WINDOW_DAYS)))
 
 
@@ -184,7 +199,7 @@ MENU = {   # key: (what it reads, in the menu's words; its reading)
     "recurrence": ("kinds of failed result that came back", _recurrence),
     "battery": ("capability on fixed tasks against an empty-mind control", _battery),
     "unrecorded_orders": ("orders the operator gave for later that I did not record", _unrecorded),
-    "plan": ("how stale my plan is: open projects, or days since the last", _plan),
+    "plan": ("how stale my plan is (my own account): open projects, or days since the last", _plan),
 }
 
 
@@ -279,9 +294,10 @@ def menu_text(name: str, now: datetime | None = None, as_of: datetime | None = N
     lines = ["Gauges: readings the supervisor computes about you each time it writes self/stats.md. Choose up to "
              f"{MAX_CHOSEN} with gauges(choose=[...]) and they become the first lines of that page, largest gap "
              "first. They are readings only: nothing is asked of you and nothing is refused. You cannot set a "
-             "reading: each is recomputed from the record (promises, corrections and plan from your own ledgers as "
-             "the supervisor re-checks them, the others from the supervisor's own record). You can change the "
-             "choice at any time.", ""]
+             "reading: each is recomputed from the record (promises and corrections from the rows of your ledgers "
+             "as the supervisor copied them when it recorded them, so editing those files does not change the "
+             "reading; plan from your own account of it, as it stands; the others from the supervisor's own "
+             "record). You can change the choice at any time.", ""]
     for key, (what, _) in MENU.items():
         lines.append(f"- {key}{' [chosen]' if key in chosen else ''}: {reading(name, key, now).text}")
     lines += ["", (f"Chosen now: {', '.join(chosen)} (by {'you' if c['by'] == 'instance' else 'the operator'}, "

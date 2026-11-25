@@ -173,7 +173,10 @@ def _matches(ts, cited: str) -> bool:
     return isinstance(ts, str) and (ts == cited or len(cited) == 16 and ts[:16].replace("T", " ") == cited.replace("T", " "))
 
 
-def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dict | None]:
+def _evidence(episodes: list[dict], item: dict, evidence: str, record=None) -> tuple[str, dict | None]:
+    """Why the cited evidence does not count ("" when it does) and the cited episode. `record` (served.Record): a
+    supervisor-tool step counts only if the supervisor served it and its result matches the fingerprint kept then
+    (#8); built-in and plugin steps cannot be checked that way and are read as before."""
     citation = _citation(evidence)
     if citation is None:
         return "cite an episode ts, optionally #step", None
@@ -193,17 +196,27 @@ def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dic
         if step > len(calls):
             return "no such tool-log step", ep
         calls = [calls[step - 1]]
-    good = any(isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
-               and c["tool"] not in BOOKKEEPING
-               and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED) for c in calls)
-    return ("" if good else "cited evidence has no successful tool call"), ep
+    good = [c for c in calls if isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
+            and c["tool"] not in BOOKKEEPING
+            and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED)]
+    if not good:
+        return "cited evidence has no successful tool call", ep
+    if record is None:
+        return "", ep
+    reasons = [record.check(ep, c) for c in good]
+    if any(not r for r in reasons):      # None: not checkable (built-in, plugin, before the record); "": matched
+        return "", ep
+    return reasons[0], ep
 
 
-def ledger(name: str, now: datetime | None = None) -> dict[str, dict]:
+def ledger(name: str, now: datetime | None = None, rows: list[dict] | None = None) -> dict[str, dict]:
+    """The instance's commitments folded and source-checked; `rows`: the events to fold instead of its file's (the
+    `promises` gauge folds the supervisor's own copy with them: ledger_mirror.py)."""
     if not NAME.fullmatch(name):
         return {}
-    text = safe_read(INSTANCES / name, FILE, "", errors="replace")
-    rows = _source_rows(_rows(text), _episodes(name), lambda file: bool(operator_message(name, file)), name,
+    if rows is None:
+        rows = _rows(safe_read(INSTANCES / name, FILE, "", errors="replace"))
+    rows = _source_rows(rows, _episodes(name), lambda file: bool(operator_message(name, file)), name,
                         _received(name))
     return _fold(rows, now if now is not None else datetime.now())
 
@@ -272,13 +285,13 @@ def _episodes(name: str) -> list[dict]:
     return metrics.live_episodes(name) + metrics._episodes(name, "talk") + metrics._episodes(name, "sleep")
 
 
-def _verification(item: dict, episodes: list[dict], judgments: list[dict]) -> tuple[str, dict | None]:
+def _verification(item: dict, episodes: list[dict], judgments: list[dict], record=None) -> tuple[str, dict | None]:
     if item.get("status") != "kept":
         return "not kept", None
     evidence = item.get("evidence")
     if not isinstance(evidence, str):
         return "no episode citation", None
-    reason, ep = _evidence(episodes, item, evidence)
+    reason, ep = _evidence(episodes, item, evidence, record)
     if reason:
         return reason, ep
     if ep.get("kind") != "live":
@@ -294,11 +307,13 @@ def _verification(item: dict, episodes: list[dict], judgments: list[dict]) -> tu
 def verify(name: str, item: dict) -> str:
     if not NAME.fullmatch(name):
         return "invalid instance name"
-    return _verification(item, _episodes(name), metrics.judgments(name))[0]
+    from . import served
+    return _verification(item, _episodes(name), metrics.judgments(name), served.Record(name))[0]
 
 
-def _counts(items: list[dict], episodes: list[dict], judgments: list[dict]) -> str:
-    verified = sum(_verification(it, episodes, judgments)[0] == "verified" for it in items if it["status"] == "kept")
+def _counts(items: list[dict], episodes: list[dict], judgments: list[dict], record=None) -> str:
+    verified = sum(_verification(it, episodes, judgments, record)[0] == "verified" for it in items
+                   if it["status"] == "kept")
     counts = {s: sum(it["status"] == s for it in items) for s in (*STATUSES, "expired", "overdue", "open")}
     return (f"made {len(items)}; kept (verified) {verified}; kept (not verified) {counts['kept'] - verified}; "
             + "; ".join(f"{s} {counts[s]}" for s in ("broken", "superseded", "void", "expired", "overdue", "open")))
@@ -311,13 +326,14 @@ def section(name: str) -> list[str]:
     items = [it for it in items if it["made_to"] not in ("self", "own", name)]   # promises to self are no longer kept
     if not items:
         return []
-    episodes, judgments = _episodes(name), metrics.judgments(name)
+    from . import served
+    episodes, judgments, record = _episodes(name), metrics.judgments(name), served.Record(name)
     operator = [it for it in items if it["made_to"] == "operator"]
     others = [it for it in items if it["made_to"] != "operator"]
     cited = set()
     for it in items:
         if it["status"] == "kept":
-            _, ep = _verification(it, episodes, judgments)
+            _, ep = _verification(it, episodes, judgments, record)
             if ep and ep.get("kind") == "live":
                 cited.add(ep["ts"])
     # Count each cited cycle once even when it kept several promises.
@@ -325,9 +341,11 @@ def section(name: str) -> list[str]:
                     and isinstance(j.get("difficulty"), (int, float)) and not isinstance(j["difficulty"], bool)
                     and 1 <= j["difficulty"] <= 5}
     mean = f"{sum(difficulties.values()) / len(difficulties):.2f}/5 (n={len(difficulties)})" if difficulties else "not judged"
-    return ["## Promises I made and kept", "", f"- To the operator: {_counts(operator, episodes, judgments)}.",
-            f"- To other instances: {_counts(others, episodes, judgments)}.",
-            f"- Mean judged difficulty of cited cycles: {mean}."]
+    return ["## Promises I made and kept", "", f"- To the operator: {_counts(operator, episodes, judgments, record)}.",
+            f"- To other instances: {_counts(others, episodes, judgments, record)}.",
+            f"- Mean judged difficulty of cited cycles: {mean}.",
+            f"- A cited supervisor-tool step is verified only if the supervisor served it and its result matches the "
+            f"fingerprint kept at the call; {served.NOT_CHECKED}."]
 
 
 def report(names: list[str]) -> str:
@@ -338,7 +356,8 @@ def report(names: list[str]) -> str:
         if not items:
             lines.append("  (none)")
             continue
-        episodes, judgments = _episodes(name), metrics.judgments(name)
+        from . import served
+        episodes, judgments, record = _episodes(name), metrics.judgments(name), served.Record(name)
         self_count = sum(it["made_to"] in ("self", "own", name) for it in items.values())
         if self_count:
             expired = sum(it["status"] == "expired" and it["made_to"] in ("self", "own", name) for it in items.values())
@@ -346,11 +365,14 @@ def report(names: list[str]) -> str:
         for item in items.values():
             if item["made_to"] in ("self", "own", name):
                 continue
-            verification = f"; {_verification(item, episodes, judgments)[0]}" if item["status"] == "kept" else ""
+            verification = (f"; {_verification(item, episodes, judgments, record)[0]}" if item["status"] == "kept"
+                            else "")
             lines.append(f"  {item['id']}: {item['status']}{verification}; to {item['made_to']}; due {item['due']}; "
                          f"{item['promise']} — check: {item['criterion']}"
                          + (f"; evidence {item['evidence']}" if item["evidence"] else "")
                          + (f"; {item['note']}" if item.get("note") else ""))
+        if any(it["status"] == "kept" and it["made_to"] not in ("self", "own", name) for it in items.values()):
+            lines.append(f"  (kept evidence is checked against the calls the supervisor served; {served.NOT_CHECKED})")
     return "\n".join(lines)
 
 

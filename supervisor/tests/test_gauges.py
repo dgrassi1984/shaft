@@ -248,8 +248,68 @@ class GaugesTest(unittest.TestCase):
     def test_menu_discloses_which_readings_come_from_instance_ledgers(self):
         """The menu must not claim an instance's own files cannot affect any reading."""
         text = gauges.menu_text("ember", NOW)
-        self.assertIn("promises, corrections and plan from your own ledgers as the supervisor re-checks them", text)
+        self.assertIn("promises and corrections from the rows of your ledgers as the supervisor copied them", text)
+        self.assertIn("editing those files does not change the reading", text)
+        self.assertIn("plan from your own account of it", text)
+        self.assertIn("My plan (my own account)", text)
         self.assertNotIn("Neither you nor a file of yours can change a reading", text)
+
+    # -- #7: promises and corrections are counted from the supervisor's own copy of the ledgers ------------------
+    def ledgers(self):
+        made = [{"event": "made", "id": f"c1111-1200-{i}", "at": (NOW - timedelta(days=1)).isoformat(),
+                 "source": "cycle", "promise": f"Send report {i}", "criterion": "Report delivered",
+                 "made_to": "operator", "due": (NOW + timedelta(days=1)).isoformat()} for i in (1, 2)]
+        recorded = [{"event": "recorded", "id": f"k1111-1200-{i}", "what_was_wrong": f"Wrong fact {i}",
+                     "what_operator_said": "Use the source", "when": (NOW - timedelta(days=i)).isoformat(),
+                     "conversation": "example"} for i in (1, 2, 3)]
+        return made, recorded
+
+    def test_rows_removed_or_blanked_after_the_supervisor_copied_them_are_still_counted_and_named(self):
+        from supervisor import ledger_mirror
+        made, recorded = self.ledgers()
+        self.write(commitments.FILE, made)
+        self.write("memory/corrections.jsonl", recorded)
+        self.assertEqual(ledger_mirror.sync("ember", self.root), 5)
+        self.assertEqual(ledger_mirror.sync("ember", self.root), 0)        # add-only, never twice
+        before = (gauges._promises("ember", NOW), gauges._corrections("ember", NOW))
+        self.assertNotIn("ledger", before[0].text + before[1].text)
+        # The instance rewrites its files: one promise and one correction removed, another correction blanked.
+        self.write(commitments.FILE, made[1:])
+        self.write("memory/corrections.jsonl", [recorded[0], {**recorded[1], "what_was_wrong": ""}])
+        promises, corrections = gauges._promises("ember", NOW), gauges._corrections("ember", NOW)
+        self.assertEqual(promises.gap, before[0].gap)
+        self.assertTrue(promises.text.startswith("Promised to the operator and still open: 2 (overdue 0)"))
+        self.assertIn("; 1 promise removed from the ledger since it was recorded (still counted)", promises.text)
+        self.assertEqual(corrections.gap, before[1].gap)
+        self.assertTrue(corrections.text.startswith("Corrections from the operator still open: 3 of 3"))
+        self.assertIn("; 1 correction removed from the ledger since it was recorded; 1 correction altered in the "
+                      "ledger since it was recorded (still counted)", corrections.text)
+        # Emptying the ledger leaves the gauge reading what was recorded, not "none recorded".
+        self.write("memory/corrections.jsonl", [])
+        self.assertIn("3 corrections removed from the ledger since they were recorded",
+                      gauges._corrections("ember", NOW).text)
+        # A row the copy does not hold yet still counts, and closing a correction still closes it.
+        self.write("memory/corrections.jsonl", recorded + [
+            {"event": "closed", "id": "k1111-1200-1", "closed_by": "fact", "evidence": "Source checked"}])
+        self.assertEqual(gauges._corrections("ember", NOW).text,
+                         "Corrections from the operator still open: 2 of 3, oldest 3 days old")
+        self.assertEqual(len(ledger_mirror.rows("ember", "corrections")), 3)      # read, never written by a gauge
+
+    def test_first_copy_takes_the_mind_stores_history_and_commit_state_keeps_it(self):
+        from supervisor import ledger_mirror, mind
+        made, recorded = self.ledgers()
+        mind.init("ember")
+        self.write("memory/corrections.jsonl", recorded)
+        self.write(commitments.FILE, made)
+        self.assertTrue(mind.commit("ember", "ember: live", self.root))
+        self.write("memory/corrections.jsonl", recorded[2:])      # rewritten before the copy was ever made
+        self.write(commitments.FILE, [])
+        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+            self.assertTrue(core.commit_state("ember", "live", [], root=self.root))
+        self.assertEqual(len(ledger_mirror.rows("ember", "corrections")), 3)
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 2)
+        self.assertIn("2 corrections removed from the ledger", gauges._corrections("ember", NOW).text)
+        self.assertIn("2 promises removed from the ledger", gauges._promises("ember", NOW).text)
 
 
 if __name__ == "__main__":

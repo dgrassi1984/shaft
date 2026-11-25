@@ -297,9 +297,11 @@ questions, reference answers or grader reasoning.
 Each reading has a gap expressed as a share of its own total when measurable. `head_lines` sorts largest gaps first,
 with unmeasurable readings last. Recent judged rates use `WINDOW_DAYS=14`; value uses `LAST_VALUED=20` cycles.
 No gauge appears in the stats head until chosen; `MAX_CHOSEN=4`. The instance cannot set a reading: each is
-recomputed at every build. `promises`, `corrections` and `plan` read ledgers the instance keeps in its folder, as
-the supervisor folds and re-checks them; the others read the supervisor's own record. In a trial replay the
-readings are computed as of the replayed cycle's start.
+recomputed at every build. `promises` and `corrections` read ledgers the instance keeps in its folder through the
+supervisor's own add-only copy of their rows (`supervisor/ledger_mirror.py`, synced at every mind commit and
+backfilled once from the mind store): a row the instance later alters or removes is still counted, and the reading
+names the change. `plan` is the instance's own account, read as it stands and labelled so; the others read the
+supervisor's own record. In a trial replay the readings are computed as of the replayed cycle's start.
 The broker's `gauges` tool lists readings or accepts `choose=[...]`; an empty list clears the choice.
 `shaft gauges <name> [list|set a,b,c|clear]` lets the operator choose too.
 `SUP_DIR/gauges/<name>.jsonl` keeps every choice with `by` set to `instance` or `operator`; the last row is in force.
@@ -733,7 +735,11 @@ inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and 
 recorded with a due date and a checkable criterion. With `COMMITMENTS=off`, conversations queue the exact order marked
 ORDER and its criterion with `queue_for_next_cycle`. Blocked orders get a one-line reply. Conversation write-ups
 receive the tool results and list orders with neither a recorded commitment nor a result. Commitments are settled in live cycles or sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The episode is the instance's file,
+so a cited supervisor-tool step counts only if the broker served that call in the cycle's run window and the step's
+result matches the fingerprint (length and sha256, never the text) the broker kept at the call
+(`supervisor/served.py`); prediction outcomes and claim lint cite steps the same way. Built-in and plugin calls never
+reach the broker and cannot be checked this way. The ledger accepts promises only
 to the operator (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. A promise to the operator needs a source the model does not
 name. In a conversation it is the conversation open now (`talk_id`, set by `talk.run`/`talk.answer`; not when

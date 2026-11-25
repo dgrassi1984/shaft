@@ -1561,6 +1561,12 @@ class Broker:
         action = self._current_action
         classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
         self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
+        if result["ok"] and getattr(self, "as_of", None) is None and not isinstance(self, ReplayBroker):
+            from . import served   # a fingerprint of what was served, never the text (#8): what citations are checked on
+            try:
+                served.keep(self.name, tool, result["result"], base=self.log_path.parent)
+            except Exception as e:   # the record's bookkeeping never costs the call
+                self._log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
         return result
 
     def _action_route(self, tool, args, *, event=None, address=''):
