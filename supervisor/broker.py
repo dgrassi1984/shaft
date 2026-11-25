@@ -1456,6 +1456,7 @@ class Broker:
 
     def _call(self, tool: str, args: dict) -> dict:
         started = time.monotonic()
+        received = self._args_digest(tool, args)   # as the call arrived, before any step below reads or fills args
         failure = "refused"   # the error's class for a Chat call's log line; a refusal before dispatch has none
         self._current_action = None
         self.calls += 1
@@ -1566,10 +1567,22 @@ class Broker:
             try:
                 served.keep(self.name, tool, result["result"], run=getattr(self, "run_started", None),
                             base=self.log_path.parent, kind=getattr(self, "run_kind", None),
-                            talk=getattr(self, "talk_id", None))
+                            talk=getattr(self, "talk_id", None), args=received)
             except Exception as e:   # the record's bookkeeping never costs the call
                 self._quiet_log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
         return result
+
+    def _args_digest(self, tool: str, args: dict) -> str | None:
+        """The digest of a call's arguments for the served record (#22), never their text; None in a trial replay or
+        when it cannot be taken (the fingerprint is then checked on its result alone)."""
+        if not self._keeps_record():
+            return None
+        from . import served
+        try:
+            return served.args_digest(tool, args)
+        except Exception as e:
+            self._quiet_log(f"{self.name}: arguments of {tool} not fingerprinted: {type(e).__name__}: {e}")
+            return None
 
     def _keeps_record(self) -> bool:
         """The served record (served.py) is the instance's real runs only: never a trial replay's."""

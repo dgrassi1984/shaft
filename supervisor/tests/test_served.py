@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -61,7 +63,7 @@ class ServedTest(unittest.TestCase):
         self.assertNotIn("Reading", text)
         self.assertNotIn("aaaa", text)
         short, long = (json.loads(line) for line in text.splitlines())
-        self.assertEqual(set(short), {"ts", "tool", "run", "kind", "talk", "len", "sha256", "cut"})
+        self.assertEqual(set(short), {"ts", "tool", "run", "kind", "talk", "len", "sha256", "cut", "args"})
         self.assertTrue(served.matches(short, "Reading: 42"))
         self.assertFalse(served.matches(short, "Reading: 43"))
         self.assertTrue(served.matches(long, cut(LONG)))
@@ -356,3 +358,89 @@ class ServedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArgumentsTest(unittest.TestCase):
+    """#22: a fingerprint covered the result only, so a real Rome forecast could be cited as Milan's."""
+    setUp, add_run, keep, box = ServedTest.setUp, ServedTest.add_run, ServedTest.keep, ServedTest.box   # not its tests
+
+    def serve(self, args, result="Forecast: 18C, clear", tool="fetch_page"):
+        box = self.box()
+        box.run_started, box.run_kind = RUN, "live"
+        class During(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return START + timedelta(minutes=5)
+        with mock.patch.object(broker.Broker, f"_{tool}", create=True, return_value=result), \
+                mock.patch.object(served, "datetime", During):
+            self.assertTrue(box.call(tool, dict(args))["ok"])
+
+    def cite(self, logged, result="Forecast: 18C, clear", tool="fetch_page"):
+        ep = episode(tools=[{"tool": tool, "args": logged, "result": result}])
+        return served.Record("ember").check(ep, ep["tools"][0])
+
+    def test_a_real_result_cited_under_other_arguments_does_not_count(self):
+        self.serve({"url": "https://weather.example/rome"})
+        text = (self.sup / "served/ember.jsonl").read_text()
+        self.assertNotIn("rome", text)                                  # a digest, never the arguments
+        self.assertEqual(self.cite('{"url": "https://weather.example/rome"}'), "")
+        self.assertEqual(self.cite('{"url":"https://weather.example/rome"}'), "")   # spacing is not an argument
+        self.assertEqual(self.cite({"url": "https://weather.example/rome"}), "")    # an older log's dict
+        self.assertEqual(self.cite('{"url": "https://weather.example/milan"}'),
+                         "arguments differ from the call the supervisor served with that result")
+        self.assertEqual(self.cite('{"url": "https://weather.example/rome", "extra": 1}'),
+                         "arguments differ from the call the supervisor served with that result")
+
+    def test_arguments_typed_by_the_template_before_the_call_still_match(self):
+        """The template types string values by the tool's schema before calling the supervisor (coerce_args): the
+        log keeps what the model wrote, the broker gets the typed values."""
+        tool, key = next((t, k) for t, spec in broker.SPECS.items()
+                         for k, v in spec["function"]["parameters"].get("properties", {}).items()
+                         if v.get("type") == "integer")
+        self.serve({key: 3}, tool=tool)
+        self.assertEqual(self.cite(json.dumps({key: "3"}), tool=tool), "")
+        self.assertEqual(self.cite(json.dumps({key: " 3 "}), tool=tool), "")
+        self.assertNotEqual(self.cite(json.dumps({key: "4"}), tool=tool), "")
+
+    def test_a_secret_is_never_digested_and_its_withheld_log_matches(self):
+        self.serve({"name": "API_KEY", "value": "s3cr3t-value"}, result="secret API_KEY set", tool="secret_set")
+        row = json.loads((self.sup / "served/ember.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(row["args"], served._sha('{"name":"API_KEY","value":"[withheld]"}'))
+        self.assertEqual(self.cite('{"name": "API_KEY", "value": "[withheld]"}', result="secret API_KEY set",
+                                   tool="secret_set"), "")
+        self.assertNotEqual(self.cite('{"name": "OTHER", "value": "[withheld]"}', result="secret API_KEY set",
+                                      tool="secret_set"), "")
+
+    def test_arguments_cut_in_the_log_or_not_json_are_not_checked(self):
+        self.serve({"url": "https://weather.example/rome"})
+        self.assertEqual(self.cite('{"url": "https://weather.example/ro\n[... cut in the log, 9000 chars total]'),
+                         "the cited step's arguments were cut in the log and cannot be checked")
+        self.assertEqual(self.cite('{"url": '), "the cited step's arguments are not JSON")
+        self.assertEqual(self.cite('["https://weather.example/rome"]'),
+                         "the cited step's arguments are not a JSON object")
+        self.assertEqual(self.cite(None), "the cited step has no arguments to check")
+
+    def test_a_fingerprint_kept_before_arguments_were_is_checked_on_its_result(self):
+        self.keep(result="Forecast: 18C, clear")                       # no args: kept before #22
+        self.assertEqual(self.cite('{"url": "https://weather.example/milan"}'), "")
+
+    def test_coercion_is_the_templates(self):
+        """The supervisor's copy of the template's coerce_args types every value the same way, for every
+        supervisor tool's schema (run in a subprocess: the supervisor never imports agent code)."""
+        samples = ["3", " -7 ", "2.5", ".5", "1e3", "true", "False", "null", "None", "abc", "", "0x10", "+4"]
+        cases = [(tool, {k: v for k in spec["function"]["parameters"].get("properties", {})})
+                 for tool, spec in broker.SPECS.items() for v in samples]
+        script = ("import json, sys\nsys.path.insert(0, sys.argv[1])\nfrom shaft.tools import coerce_args\n"
+                  "cases, specs = json.load(sys.stdin)\n"
+                  "print(json.dumps([coerce_args(args, specs[tool]) for tool, args in cases]))")
+        out = subprocess.run([sys.executable, "-I", "-c", script, str(TEMPLATE_TOOLS.parents[1])],
+                             input=json.dumps([cases, broker.SPECS]), capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(out.stdout), [served._coerce(tool, args) for tool, args in cases])
+        # And the template's tool log withholds a secret exactly as the digest does.
+        script = ("import sys\nsys.path.insert(0, sys.argv[1])\nfrom shaft.tools import _loggable\n"
+                  "print(_loggable('secret_set', sys.stdin.read()))")
+        raw = '{"name": "API_KEY", "value": "s3cr3t"}'
+        out = subprocess.run([sys.executable, "-I", "-c", script, str(TEMPLATE_TOOLS.parents[1])],
+                             input=raw, capture_output=True, text=True, check=True)
+        self.assertEqual(served.episode_args("secret_set", out.stdout.strip())[0],
+                         served.args_digest("secret_set", json.loads(raw)))
