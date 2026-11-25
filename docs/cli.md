@@ -271,6 +271,8 @@ shaft battery run <name> --control-only
 shaft battery report|recall|backup [names…]
 shaft battery off|on <name>
 shaft battery perturbation <name> on|off
+shaft night-replay run [names…] [--until HH:MM] [--dry-run]
+shaft night-replay report [names…]
 shaft battery run <name> --only perturbation
 shaft drift [name]
 shaft distinct [name]

@@ -83,7 +83,7 @@ class DrainRestartTest(unittest.TestCase):
                 mock.patch.object(autonomy, "_awake", return_value=""),
                 mock.patch.object(autonomy, "_state", return_value={}),
                 mock.patch.object(autonomy, "sleep_due", return_value=False),
-                mock.patch.object(autonomy, "_batteries"),
+                mock.patch.object(autonomy, "_batteries"), mock.patch.object(autonomy, "_night_replays"),
                 mock.patch.object(autonomy, "commitment_wakes"),
                 mock.patch.object(autonomy, "gate_warm", lambda children, *a: setattr(self, "children", children)),
                 mock.patch("supervisor.jobs.tick"),

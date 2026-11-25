@@ -164,6 +164,16 @@ The `record` tool also exposes the following kinds through `supervisor/broker.py
 | `families` | Chains of goals linked by the judge's `resembles` field, over judged cycles only. |
 | `predictions` | Supervisor-stamped predictions, reports, scores and reasons. |
 | `unrecorded_orders` | Checks of future orders in ended, written-up conversations against recorded commitments and standing orders. |
+| `night_replays` | Each night's replays of the day's worst judged cycles with the judge's first error shown, and how each compared with its original (`supervisor/nightreplay.py`). |
+
+**Night replay** (`supervisor/nightreplay.py`, scheduled by `autonomy._night_replays`): in the battery's night window,
+never beside the same instance's battery, an instance on a cloud model gets up to three of the last 24 hours' judged
+cycles whose judge located a first error (`first_error_step` > 0) replayed from their start state on its configured
+model, with a supervisor note naming that error in the inbox copy. The judge that graded the original compares the two
+in both orders (`trial.judge_pair`, `trial.decide`), each from its own cycle record. Trial rules hold: nothing is
+settled, committed, delivered or sent. A night's spending cap is four times what the supervisor booked for the picked
+originals; rows in `SUP_DIR/night-replay/<name>.jsonl`. An instance on the local or a self-hosted model is not eligible,
+and its record says so.
 
 ## Wake sources and background work
 

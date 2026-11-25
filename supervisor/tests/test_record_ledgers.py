@@ -8,7 +8,7 @@ from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 class RecordLedgersTest(IsolatedCase):
     def test_each_ledger_dispatches_limit_and_as_of(self):
-        self.assertEqual(set(broker.LEDGER_KINDS), {"families", "predictions", "unrecorded_orders"})
+        self.assertEqual(set(broker.LEDGER_KINDS), {"families", "predictions", "unrecorded_orders", "night_replays"})
         for replay in (False, True):
             b = self.box(replay=replay)
             for kind, module_name in broker.LEDGER_KINDS.items():

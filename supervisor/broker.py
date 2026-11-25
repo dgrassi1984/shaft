@@ -270,7 +270,8 @@ def _spec(name, description, properties, required=None):
 
 
 S = {"type": "string"}
-LEDGER_KINDS = {"families": "families", "predictions": "predictions", "unrecorded_orders": "unrecorded"}   # record kind -> module
+LEDGER_KINDS = {"families": "families", "predictions": "predictions", "unrecorded_orders": "unrecorded",
+                "night_replays": "nightreplay"}   # record kind -> module
 SPECS = {
     "web_search": _spec("web_search", "Search the web (Google). Returns titles, URLs and snippets.",
                         {"query": S, "page": {"type": "integer", "description": "1-based, default 1"}}, ["query"]),
@@ -421,14 +422,16 @@ SPECS = {
         "you made with predict: due time, status, and the judge's result and reason for the scored ones), "
         "'unrecorded_orders' (per ended "
         "conversation: what the operator ordered for later that you did not record as a commitment or standing "
-        "order, in his quoted words). "
+        "order, in his quoted words), 'night_replays' (each night, up to three of the day's cycles whose first error "
+        "the judge located, replayed from the same start with that error shown to you, and how the replay compared "
+        "with the original: nothing of a replay was delivered, sent or kept). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
                                                     "consults", "calendar", "gate", "families", "predictions",
-                                                    "unrecorded_orders"]},
+                                                    "unrecorded_orders", "night_replays"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},

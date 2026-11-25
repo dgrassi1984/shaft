@@ -2079,6 +2079,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         from . import judge_probe, pushback, pushes
         out.append(f"  {judge_probe.line(name, now)}")
         out += [f"  {line}" for line in pushes.lines(name, js, now) + pushback.lines(name, js, now)]
+        from . import nightreplay
+        out += [f"  {line}" for line in nightreplay.stats_lines(name)]
         from . import consultstats
         if (consults := consultstats.review_line(name)):
             out.append(f"  consults: {consults}")

@@ -194,7 +194,7 @@ limit direct access; the profile does not prohibit executing the git binary itse
 folder (never over an existing file), so it can bring back a record a bad write damaged without the operator. **`record`**: the supervisor's own record about it; the judge's verdicts with reasoning, its
 runs, its tool calls, its kept code changes, its internet connections; so it can check its claims about
 itself. `broker.LEDGER_KINDS` also exposes `families` for judged goal chains, `predictions` for reports and scores,
-and `unrecorded_orders` for future orders found in ended conversations.
+`unrecorded_orders` for future orders found in ended conversations, and `night_replays` for its night replays.
 
 ### Decision model
 
