@@ -202,7 +202,17 @@ class MeetingsAccessTest(test_app_api.AppTest):
 
     def test_unfiled_then_filed_through_app_and_cli(self):
         self.grant()
+        for name, aliases in (("reader", ("work", "home")), ("other", ("home",))):
+            root = self.inst / name
+            (root / "shaft").mkdir(parents=True)
+            (root / ".git").mkdir()
+            (root / "config.env").write_text("WATCH_MEETINGS=inbox\n")
+            for alias in aliases:
+                self.cli("grant", name, alias)
+        (self.inst / INSTANCE / "config.env").write_text("WATCH_MEETINGS=inbox\n")
         mid = self.ready(None)
+        self.assertEqual(meetings.get(mid)["notified"], [])
+        self.assertEqual(list(self.inst.glob("*/inbox/*.md")), [])
         self.assertEqual(self.ids(), [])
         self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
         self.assertEqual(self.api(f"{APP}/{mid}", "POST", {"account": "unfiled"}).status, 400)
@@ -210,8 +220,16 @@ class MeetingsAccessTest(test_app_api.AppTest):
         update = self.get(f"{APP}/{mid}", method="POST", data={"account": "work", "title": "Filed"})
         self.assertEqual((update["account"], update["title"]), ("work", "Filed"))
         self.assertIn('"Filed"', self.result("meeting_search"))
+        self.assertCountEqual(meetings.get(mid)["notified"], [INSTANCE, "reader"])
+        self.get(f"{APP}/{mid}", method="POST", data={"account": "work", "title": "Renamed"})
         self.assertEqual(self.cli("file", mid, "home")["account"], "home")
         self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+        self.assertEqual(self.cli("file", mid, "work")["account"], "work")
+        self.assertCountEqual(meetings.get(mid)["notified"], [INSTANCE, "reader", "other"])
+        for name, alias in ((INSTANCE, "work"), ("reader", "work"), ("other", "home")):
+            notes = list((self.inst / name / "inbox").glob("*.md"))
+            self.assertEqual(len(notes), 1, name)
+            self.assertIn(f"Account: {alias}\n", notes[0].read_text())
 
     def test_access_endpoint_and_web_row_use_the_meetings_cli(self):
         path = f"/app/v1/access/{INSTANCE}"

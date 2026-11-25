@@ -1850,6 +1850,7 @@ empty `segments` array. An invalid page number returns `400 bad_request`.
 
 `POST /meetings/<id>` updates at least one of `account` and `title`. The other field keeps its current value.
 `account` must be a configured Google account alias or `null` to unfile the meeting. `title` must be a string.
+Changing the account on a ready meeting sends a watch note to eligible instances that have yet to receive it.
 
 `POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
 Other states return `409 refused`.

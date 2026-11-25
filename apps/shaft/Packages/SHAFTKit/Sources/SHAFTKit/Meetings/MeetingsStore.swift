@@ -142,6 +142,17 @@ public final class MeetingsStore {
         }
     }
 
+    public func file(_ id: String, account: String?, title: String?) async {
+        await mutate {
+            let updated = try await client.fileMeeting(id, account: account, title: title)
+            if let index = meetings.firstIndex(where: { $0.id == id }) {
+                invalidateListRefresh()
+                meetings[index] = updated
+            }
+            if requestedID == id { await load(id) }
+        }
+    }
+
     public func reprocess(_ id: String) async {
         await mutate {
             let updated = try await client.reprocessMeeting(id)

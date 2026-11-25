@@ -32,6 +32,65 @@ struct MeetingsStoreTests {
               : #"{"channel":2,"seconds":7.25,"clips":[[1.25,8.5]]}"#
     }
 
+    @Test func fileMeetingSendsAliasAndTitleOrExplicitNullAccount() async throws {
+        let server = StubServer { request in
+            guard request.method == "POST", request.path == Self.detail,
+                  let fields = request.json as? [String: Any] else { return Self.unexpected }
+            let metadata = Self.metadata("ready")
+            if fields as? [String: String] == ["account": "work", "title": "Weekly sync"] {
+                return .json(200, metadata
+                    .replacingOccurrences(of: #""account": null"#, with: #""account": "work""#)
+                    .replacingOccurrences(of: #""title": "Planning""#, with: #""title": "Weekly sync""#))
+            }
+            if fields.count == 1, fields["account"] is NSNull { return .json(200, metadata) }
+            return Self.unexpected
+        }
+        let filed = try await server.client.fileMeeting(Self.id, account: "work", title: "Weekly sync")
+        #expect(filed.account == "work")
+        #expect(filed.title == "Weekly sync")
+        let utc = try #require(TimeZone(secondsFromGMT: 0))
+        #expect(filed.chatReference(timeZone: utc) ==
+                "Meeting \"Weekly sync\" (\(Self.id)), 25 Nov 2026 12:21 — read it with meeting_read(\"\(Self.id)\")")
+        let unfiled = try await server.client.fileMeeting(Self.id, account: nil, title: nil)
+        #expect(unfiled.account == nil)
+        #expect(unfiled.chatReference(timeZone: utc) == nil)
+    }
+
+    @Test func meetingAccessDecodesOptionalGrantsAndSendsGrantChanges() async throws {
+        let without = """
+        {"instance":"example","browser":{"installed":null,"run":true},"web_search":false,"telegram":false,
+         "mail":[],"calendar":[],"drive":[],"chat":[],"google_accounts":[{"alias":"work","address":"","scopes":[]}]}
+        """
+        let with = without.dropLast() + #","meetings":[{"account":"work"}]}"#
+        let server = StubServer { request in
+            switch (request.method, request.path, request.json as? [String: String]) {
+            case ("GET", "/app/v1/instances", _):
+                return .json(200, #"{"instances":[],"paused":[{"name":"example","since":null}],"badge":0}"#)
+            case ("GET", "/app/v1/access/example", _):
+                return .json(200, without)
+            case ("POST", "/app/v1/access/example", let fields):
+                if fields == ["grant": "meetings", "action": "grant", "alias": "work"] {
+                    return .json(200, String(with))
+                }
+                if fields == ["grant": "meetings", "action": "revoke", "alias": "work"] {
+                    return .json(200, without)
+                }
+                return Self.unexpected
+            default:
+                return Self.unexpected
+            }
+        }
+        let client = server.client
+        let before = try await client.access("example")
+        #expect(before.meetings == nil)
+        let aliases = try await client.meetingAccountAliases()
+        #expect(aliases == ["work"])
+        let granted = try await client.grantAccess("example", .meetings(alias: "work"))
+        #expect(granted.meetings?.map(\.account) == ["work"])
+        let revoked = try await client.grantAccess("example", .meetings(alias: "work", action: "revoke"))
+        #expect(revoked.meetings == nil)
+    }
+
     nonisolated private static func transcript(
         named: Bool = false, page: Int = 1, segments: [String] = [segment], total: Int = 1
     ) -> String {

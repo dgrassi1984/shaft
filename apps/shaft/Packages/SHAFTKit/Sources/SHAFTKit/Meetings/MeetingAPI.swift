@@ -33,6 +33,19 @@ public extension APIClient {
         try await get("/app/v1/meetings/\(id)", query: [URLQueryItem(name: "page", value: String(page))])
     }
 
+    /// Pass nil for account to unfile the meeting, or nil for title to keep its current title.
+    func fileMeeting(_ id: String, account: String?, title: String?) async throws -> Meeting {
+        var fields: [String: String?] = ["account": account]
+        if let title { fields["title"] = title }
+        return try await post("/app/v1/meetings/\(id)", json: fields)
+    }
+
+    func meetingAccountAliases() async throws -> [String] {
+        guard case let .value(list, _) = try await instances(),
+              let instance = list.instances.first?.name ?? list.paused?.first?.name else { return [] }
+        return try await access(instance).googleAccounts.map(\.alias)
+    }
+
     func reprocessMeeting(_ id: String) async throws -> Meeting {
         let path = "/app/v1/meetings/\(id)/reprocess"
         let (body, _) = try await send(makeRequest("POST", path), path: path)

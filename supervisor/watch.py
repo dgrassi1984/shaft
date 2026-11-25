@@ -388,7 +388,7 @@ def _deliver(name: str, kind: str, rows: list[dict], how: str, now: datetime) ->
 
 
 def meeting_ready(metadata: dict, transcript: dict) -> list[str]:
-    """Deliver the first ready transcript from the Listen worker, without polling Google."""
+    """Deliver the first transcript page to eligible watchers who have not received it."""
     from . import jobs, meetings_access, messages
 
     try:
@@ -399,7 +399,10 @@ def meeting_ready(metadata: dict, transcript: dict) -> list[str]:
         return []
     now = datetime.now().astimezone()
     notified = []
+    prior_recipients = set(metadata.get("notified") or ())
     for name in core.instance_names():
+        if name in prior_recipients:
+            continue
         try:
             how = mode(name, "meetings")
             if how == "off":

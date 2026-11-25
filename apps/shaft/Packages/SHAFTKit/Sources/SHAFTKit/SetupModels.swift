@@ -106,6 +106,7 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     public var calendar: [CalendarGrant]
     public var drive: [DriveGrant]
     public var chat: [ChatGrant]
+    public var meetings: [MeetingGrant]?
     public var googleAccounts: [GoogleAccount]
 
     public struct Browser: Codable, Sendable, Equatable {
@@ -138,6 +139,10 @@ public struct AccessResponse: Codable, Sendable, Equatable {
         public var account: String
     }
 
+    public struct MeetingGrant: Codable, Sendable, Equatable {
+        public var account: String
+    }
+
     public struct GoogleAccount: Codable, Sendable, Equatable {
         public var alias: String
         public var address: String
@@ -145,7 +150,7 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     }
 }
 
-/// `POST /access/<n>`: one grant (`folder`, `browser`, `mail`, `calendar`, `drive`, `chat`) or its revocation. Only the
+/// `POST /access/<n>`: one grant or its revocation. Only the
 /// fields that grant takes are set; a nil one is not sent (the server refuses a field another grant takes).
 public struct AccessGrant: Codable, Sendable, Equatable {
     /// `browser install` (900 s on the server) and the request around it.
@@ -194,6 +199,11 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     /// `gchat <n> grant|revoke <alias>`.
     public static func chat(alias: String, action: String = "grant") -> AccessGrant {
         AccessGrant(grant: "chat", action: action, alias: alias)
+    }
+
+    /// `meetings grant|revoke <n> <alias>`.
+    public static func meetings(alias: String, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "meetings", action: action, alias: alias)
     }
 }
 
