@@ -1002,6 +1002,23 @@ def set_gchat_grants(name: str, grants: list[dict]) -> list[dict]:
     return result
 
 
+def meetings_grants(name: str) -> list[dict]:
+    from . import google
+    raw = _tool_settings(name).get("meetings")
+    return [{"account": g["account"]} for g in raw if isinstance(g, dict)
+            and isinstance(g.get("account"), str) and google.ALIAS_RE.fullmatch(g["account"])] if isinstance(raw, list) else []
+
+
+def set_meetings_grants(name: str, grants: list[dict]) -> list[dict]:
+    from . import google
+    aliases = [g["account"] for g in grants]
+    if any(not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias) for alias in aliases):
+        raise ValueError("a meetings grant needs a Google account alias")
+    result = [{"account": alias} for alias in dict.fromkeys(aliases)]
+    _update_tool_settings(name, meetings=result or None)
+    return result
+
+
 def remove_gchat_copies(name: str, alias: str = "") -> None:
     _remove_google_copies(name, "gchat", alias)
 

@@ -1655,11 +1655,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     p = sub.add_parser("meetings", help="manage meeting recordings and name speakers")
     msub = p.add_subparsers(dest="action", required=True)
-    for action in ("list", "show", "delete", "import", "reprocess", "name"):
+    for action in ("list", "show", "delete", "import", "reprocess", "name", "file", "grant", "revoke", "proposals"):
         q = msub.add_parser(action)
         q.add_argument("--json", action="store_true", help="one JSON object on stdout")
-        if action in ("show", "delete", "reprocess", "name"):
+        if action in ("show", "delete", "reprocess", "name", "file"):
             q.add_argument("id")
+        if action in ("grant", "revoke"):
+            q.add_argument("name")
+        if action in ("file", "grant", "revoke"):
+            q.add_argument("alias")
         if action == "name":
             q.add_argument("label")
             q.add_argument("name")

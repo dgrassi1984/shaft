@@ -196,6 +196,43 @@ def list_meetings() -> list[dict]:
     return sorted(rows, key=lambda row: (datetime.fromisoformat(row["created"]), row["id"]), reverse=True)
 
 
+def _account_alias(alias, *, configured=True) -> str:
+    from . import google
+
+    if not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias):
+        raise Invalid("account must be a Google account alias.")
+    if configured and not google.account(alias):
+        raise Invalid("Choose a configured Google account alias.")
+    return alias
+
+
+def update(meeting_id: str, changes: dict) -> dict:
+    if not changes or changes.keys() - {"account", "title"}:
+        raise Invalid("Supply account, title, or both.")
+    if "account" in changes and changes["account"] is not None:
+        _account_alias(changes["account"])
+    if "title" in changes and not isinstance(changes["title"], str):
+        raise Invalid("title must be a string.")
+    try:
+        _json_bytes(changes)
+    except UnicodeError:
+        raise Invalid("Meeting fields must contain valid Unicode.") from None
+    with _locked(meeting_id) as (folder, metadata):
+        metadata.update(changes)
+        _save(folder, metadata)
+        return metadata
+
+
+def change_grant(name: str, action: str, alias: str) -> list[dict]:
+    core.instance_root(name)
+    _account_alias(alias, configured=action == "grant")
+    with core._grant_lock(name, "meetings"):
+        grants = [g for g in core.meetings_grants(name) if g["account"] != alias]
+        if action == "grant":
+            grants.append({"account": alias})
+        return core.set_meetings_grants(name, grants)
+
+
 def delete(meeting_id: str) -> None:
     with _locked(meeting_id) as (folder, _):
         _delete_folder(folder)
@@ -291,6 +328,8 @@ def reprocess(meeting_id: str) -> dict:
     with _locked(meeting_id) as (folder, metadata):
         if metadata["state"] not in ("ready", "failed"):
             raise Conflict("Only ready or failed meetings can be reprocessed.")
+        if metadata["state"] == "ready":
+            metadata.setdefault("notified", [])  # Already ready before watches were introduced.
         metadata.pop("worker_crashes", None)
         metadata.update(state="queued", error=None, processed_with=None)
         _save(folder, metadata)
@@ -322,8 +361,16 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     if metadata["state"] != "processing":
         raise Conflict("This meeting is no longer processing.")
     _write_transcript(folder, transcript, markdown)
-    metadata.update(state="ready", error=None, processed_with=transcript["processed_with"])
+    first_ready = "notified" not in metadata
+    metadata.setdefault("notified", [])
+    metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
+                    ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
+    if first_ready and metadata["account"]:
+        from . import watch
+
+        metadata["notified"] = watch.meeting_ready(metadata, transcript)
+        _save(folder, metadata)
 
 
 def detail(meeting_id: str, page: int) -> dict:
@@ -358,7 +405,18 @@ def command(args) -> int:
                 for row in rows:
                     print(f"{row['id']}  {row['state']}  {row['title']}")
             return 0
-        if args.action == "delete":
+        if args.action in ("grant", "revoke"):
+            result = {"meetings": change_grant(args.name, args.action, args.alias)}
+            line = ", ".join(g["account"] for g in result["meetings"]) or "No meeting grants."
+        elif args.action == "file":
+            result = update(args.id, {"account": args.alias})
+            line = f"Filed {args.id} under {args.alias}."
+        elif args.action == "proposals":
+            from . import meeting_proposals
+
+            result = {"proposals": meeting_proposals.pending()}
+            line = json.dumps(result, indent=2)
+        elif args.action == "delete":
             delete(args.id)
             result = {"id": args.id, "deleted": True}
             line = f"Deleted {args.id}."

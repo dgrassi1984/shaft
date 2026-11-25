@@ -1515,8 +1515,9 @@ def _setup_hello(req: Request, n: str) -> Response:
 
 # -- access (§18.6) ---------------------------------------------------------------------------------------------------
 GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
-                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"}}
-GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat"}
+                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"},
+                "meetings": {"alias"}}
+GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat", "meetings": "meetings"}
 
 
 def _get_access(req: Request, n: str) -> Response:
@@ -1543,6 +1544,8 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
     if not google.ALIAS_RE.fullmatch(alias):
         raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")
     verb = GRANT_VERBS[grant]
+    if grant == "meetings":
+        return [[verb, action, n, alias]]
     if grant in ("drive", "chat"):
         return [[verb, n, action, alias] + (["--all"] if action == "grant" and data.get("all") else [])]
     op = action
@@ -1634,7 +1637,8 @@ def _meeting_call(operation, *args, **kwargs):
 
 
 def _meeting_metadata(row: dict) -> dict:
-    return {**row, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
+    public = {key: value for key, value in row.items() if key not in ("notified", "ready_revision")}
+    return {**public, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
 
 
 def _create_meeting(req: Request) -> Response:
@@ -1677,6 +1681,21 @@ def _show_meeting(req: Request, meeting_id: str) -> Response:
     except ValueError:
         raise Refusal(400, "bad_request", "page must be a positive integer.") from None
     return _json(200, _meeting_metadata(_meeting_call(meetings.detail, meeting_id, page)))
+
+
+def _update_meeting(req: Request, meeting_id: str) -> Response:
+    return _json(200, _meeting_metadata(_meeting_call(meetings.update, meeting_id, _body(req))))
+
+
+def _meeting_proposals(req: Request) -> Response:
+    from . import meeting_proposals
+    return _json(200, {"proposals": meeting_proposals.pending()})
+
+
+def _decide_meeting_proposal(req: Request) -> Response:
+    from . import meeting_proposals
+    data = _body(req)
+    return _json(200, _meeting_call(meeting_proposals.decide, data.get("id"), data.get("approve")))
 
 
 def _reprocess_meeting(req: Request, meeting_id: str) -> Response:
@@ -1738,7 +1757,8 @@ def _forget_speaker(req: Request, pid: str) -> Response:
 
 ROUTES: list[tuple[str, dict]] = [
     (r"/meetings", {"GET": _list_meetings, "POST": _create_meeting}),
-    (rf"/meetings/{MEETING_ID}", {"GET": _show_meeting, "DELETE": _delete_meeting}),
+    (r"/meetings/proposals", {"GET": _meeting_proposals, "POST": _decide_meeting_proposal}),
+    (rf"/meetings/{MEETING_ID}", {"GET": _show_meeting, "POST": _update_meeting, "DELETE": _delete_meeting}),
     (meetings.CHUNK_ROUTE, {"PUT": _meeting_chunk}),
     (rf"/meetings/{MEETING_ID}/upload", {"GET": _meeting_upload}),
     (rf"/meetings/{MEETING_ID}/finish", {"POST": _finish_meeting}),

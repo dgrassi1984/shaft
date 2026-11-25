@@ -1673,6 +1673,7 @@ yet: `409 refused`. An unknown instance: `404 not_found`.
 | `calendar` | [{`account`, `calendar`, `name`, `write`: bool}] | calendars by id, with their title when granted |
 | `drive` | [{`account`, `reach`}] | `reach` `own` or `all` |
 | `chat` | [{`account`}] | Google Chat accounts |
+| `meetings` | [{`account`}] (optional) | Accounts whose ready meeting transcripts the instance may read. Omitted when there are no meeting grants. |
 | `google_accounts` | [{`alias`, `address`, `scopes`: [str]}] | the operator's Google logins, with the scopes they granted (`gmail.readonly`, `calendar.readonly`, …) |
 
 `POST /access/<n>` takes `{"grant", "action": "grant"|"revoke", …}` and runs the verb, then answers the fresh access
@@ -1686,6 +1687,7 @@ object:
 | `calendar` | `alias`, `what` (`primary`, a title or an id), `writable` | `calendar <n> grant|revoke <alias> <what>`; a writable grant first resolves `what` to the calendar's id once (`calendar.grant_id`; unresolvable: `409 refused`, nothing granted), then runs `grant` and `grant-write` with that id, so a concurrent grant on the same account never receives this request's write; `writable` revoke: `revoke-write` |
 | `drive` | `alias`, `all` | `gdrive <n> grant <alias> [--all]` / `revoke <alias>` |
 | `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
+| `meetings` | `alias` | `meetings grant <n> <alias>` or `meetings revoke <n> <alias>` |
 
 `alias` is a Google account alias (`[a-z][a-z0-9-]{0,30}`); `all` and `writable` are booleans. A field another grant
 takes, or a missing one: `400 bad_request`. Web search and Telegram have no grant here: their key and token go
@@ -1790,6 +1792,9 @@ See [meeting storage and CLI](meetings.md).
 | POST | `/meetings/<id>/finish` | `{size, sha256, chunks}` | 200, meeting metadata (§20.3) |
 | GET | `/meetings` | | 200, `{meetings: [metadata]}`, newest first (§20.4) |
 | GET | `/meetings/<id>` | | 200, meeting metadata (§20.4) |
+| POST | `/meetings/<id>` | `{account?, title?}` | 200, updated meeting metadata (§20.4) |
+| GET | `/meetings/proposals` | | 200, `{proposals: [...]}` (§20.6) |
+| POST | `/meetings/proposals` | `{id, approve}` | 200, decided proposal (§20.6) |
 | POST | `/meetings/<id>/reprocess` | | 200, queued meeting metadata (§20.4) |
 | DELETE | `/meetings/<id>` | Optional `?forget_voices=1` | 200, `{id, deleted: true}` (§20.4) |
 | GET | `/meetings/<id>/clip` | `?speaker=<label>&n=0` | 200, `audio/wav` (§20.5) |
@@ -1842,6 +1847,9 @@ seconds from the start of the recording. Channel 1 is the microphone and channel
 Use `?page=N` to fetch up to 200 segments at a time. The default is page 1. A page past the end has an
 empty `segments` array. An invalid page number returns `400 bad_request`.
 
+`POST /meetings/<id>` updates at least one of `account` and `title`. The other field keeps its current value.
+`account` must be a configured Google account alias or `null` to unfile the meeting. `title` must be a string.
+
 `POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
 Other states return `409 refused`.
 
@@ -1867,6 +1875,15 @@ Person IDs have the form `p-<8 lowercase hex digits>`. `count` is the number of 
 updates the gallery and saved transcripts. Forget removes the person's gallery voiceprints and records a
 tombstone. With `anonymise=1`, it also replaces saved names with labels such as `Speaker S2`. The flag defaults
 to `0`.
+
+### 20.6 Speaker proposals
+
+`GET /meetings/proposals` lists pending proposals newest first. Each row includes `id`, `instance`, `meeting`,
+`speaker`, `name`, `why`, `created`, and `state`. The name and reason come from the proposing instance.
+
+`POST /meetings/proposals` takes the proposal's `id` and a boolean `approve`. Approval enrols the speaker
+voiceprint and returns state `confirmed`. Rejection returns state `rejected`. An unknown ID returns
+`404 not_found`. Confirming after reprocessing or reversing a decision returns `409 refused`.
 
 ## Appendix A. Implementation notes
 

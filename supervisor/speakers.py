@@ -193,8 +193,17 @@ def _ready_transcript(folder: Path, metadata: dict) -> dict:
 
 
 def name_label(meeting_id: str, label, name) -> dict:
+    return _name_label(meeting_id, label, name)
+
+
+_ANY_REVISION = object()
+
+
+def _name_label(meeting_id, label, name, *, expected_revision=_ANY_REVISION) -> dict:
     name = _name(name)
     with _gallery() as root, meetings._locked(meeting_id) as (folder, metadata):
+        if expected_revision is not _ANY_REVISION and metadata.get("ready_revision") != expected_revision:
+            raise meetings.Conflict("The meeting was reprocessed after this proposal.")
         transcript = _ready_transcript(folder, metadata)
         speaker = _speaker(transcript, label)
         vector = _read_vectors(folder / "speakers.npz").get(label)

@@ -65,6 +65,10 @@ All Google credentials stay with the supervisor; the broker checks the grant on 
   Colleagues' messages reach model providers and can carry injected instructions. Revoke deletes downloaded copies
   under `gchat/`, but memories remain. A Workspace admin can see and block the OAuth client. See the
   [four accepted risks](docs/integrations.md#the-chat-risks-you-accept).
+- **Meeting recordings and voiceprints:** The supervisor stores audio and voiceprints on its Mac. The paired
+  app can request an audio clip for speaker review. Instances receive only text under a meeting grant, and each
+  transcript page identifies the participants as its speakers. Transcript text can reach the instance's model.
+  Only the operator can confirm a speaker name and enrol a voiceprint. [Meeting access](docs/meetings.md#instance-access)
 - **Instance-owned Google accounts:** an account you create for the instance. Its Gmail access can read, send, label
   and trash mail; its Drive access covers the account's files and files shared with it, including sharing, trashing
   and permanent deletion. This is far broader than the operator grants. The broker refuses a key for an account

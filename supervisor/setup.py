@@ -14,8 +14,8 @@ from . import core
 
 
 def access(name: str) -> dict:
-    """{instance, folder, browser: {installed, run}, web_search, telegram, mail, calendar, drive, chat,
-    google_accounts}: every field present (§18.6)."""
+    """{instance, folder, browser: {installed, run}, web_search, telegram, mail, calendar, drive, chat, meetings,
+    google_accounts}: meetings is present when granted (§18.6)."""
     from . import browser, google, telegram, web_config
     a = web_config.access(name)
     env = core.secrets_env()
@@ -29,6 +29,7 @@ def access(name: str) -> dict:
                           "write": bool(g.get("write"))} for g in a["calendar"]],
             "drive": [{"account": g["account"], "reach": g["reach"]} for g in a["gdrive"]],
             "chat": [{"account": g["account"]} for g in a["gchat"]],
+            **({"meetings": a["meetings"]} if a["meetings"] else {}),
             "google_accounts": [{"alias": alias, "address": data.get("address") or "",
                                  "scopes": [google.SCOPE_NAMES[s] for s in google.SCOPES
                                             if s in google.scopes({"scope": data.get("scope")})]}

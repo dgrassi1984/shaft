@@ -69,6 +69,30 @@ the operator chooses `--anonymise`, which replaces them with labels such as `Spe
 anonymisation for those meeting labels on reprocessing. To delete a recording and its outputs, delete the
 meeting. The paired app can also remove gallery samples learned from that meeting when it deletes it.
 
+## Instance access
+
+File a meeting with `shaft meetings file <id> <alias>`. Grant an instance access with
+`shaft meetings grant <instance> <alias>` or from the web Access page. Use a configured Google account alias
+for both commands. An unfiled meeting is invisible to every instance. Revoking a grant takes effect on the next
+broker call. A transcript page already delivered to an inbox stays there.
+
+The broker offers three tools to granted instances. It checks the grant on each call and allows 30 meeting calls
+per run, including continuation pages. Unknown, malformed, failed, and ungranted meetings receive the same
+`NotVisible` response.
+
+| Tool | Result |
+|---|---|
+| `meeting_search(text="", person="", after="", before="")` | One row per matching ready meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
+| `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. Unknown labels appear as `Speaker S2 (unknown)`. |
+| `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
+
+Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a granted meeting first becomes ready.
+Use `wake` to also request a cycle. The default is `off`. Filing, reprocessing, and relabelling generate no new
+note for a meeting that has already reached ready.
+
+Run `shaft meetings proposals` to list pending speaker names. The paired-device API accepts confirmation or
+rejection. [Meeting API](app-api.md#206-speaker-proposals)
+
 ## CLI
 
 | Command | Result |
@@ -78,6 +102,10 @@ meeting. The paired app can also remove gallery samples learned from that meetin
 | `shaft meetings reprocess <id>` | Queues a ready or failed meeting again using its stored audio. |
 | `shaft meetings delete <id>` | Deletes the meeting folder and its contents. |
 | `shaft meetings import FILE [--title T] [--mode online\|inperson]` | Copies local audio into a new queued meeting. The file stem supplies the default title. The default mode is `inperson`. |
+| `shaft meetings file <id> <alias>` | Files a meeting under a configured Google account. |
+| `shaft meetings grant <instance> <alias>` | Grants access to ready transcripts filed under the account. |
+| `shaft meetings revoke <instance> <alias>` | Revokes access to the account's transcripts. |
+| `shaft meetings proposals` | Lists pending speaker name proposals. |
 | `shaft meetings name <id> <label> <name>` | Enrols the label's voiceprint under the name. |
 | `shaft speakers list` | Lists people and their gallery sample counts. |
 | `shaft speakers rename <pid> <name>` | Renames a person in the gallery and saved transcripts. |
