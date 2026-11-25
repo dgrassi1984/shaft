@@ -72,10 +72,39 @@ public struct MeetingTranscript: Decodable, Sendable, Equatable {
     public let meeting: String
     public let segments: [Segment]
     public let gaps: MeetingJSONValue?
+    public let recordingGaps: [Gap]
     public let speakers: [String: Speaker]
     public let processedWith: Processing?
     public let page: Int
     public let totalSegments: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case meeting, segments, gaps, speakers, processedWith, page, totalSegments
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        meeting = try values.decode(String.self, forKey: .meeting)
+        segments = try values.decode([Segment].self, forKey: .segments)
+        gaps = try values.decodeIfPresent(MeetingJSONValue.self, forKey: .gaps)
+        recordingGaps = try values.decodeIfPresent([Gap].self, forKey: .gaps) ?? []
+        speakers = try values.decode([String: Speaker].self, forKey: .speakers)
+        processedWith = try values.decodeIfPresent(Processing.self, forKey: .processedWith)
+        page = try values.decode(Int.self, forKey: .page)
+        totalSegments = try values.decode(Int.self, forKey: .totalSegments)
+    }
+
+    public struct Gap: Decodable, Sendable, Equatable {
+        public let start: Double
+        public let end: Double
+        public let reason: String
+
+        public init(start: Double, end: Double, reason: String) {
+            self.start = start
+            self.end = end
+            self.reason = reason
+        }
+    }
 
     public struct Segment: Decodable, Sendable, Equatable {
         public let start: Double
@@ -85,23 +114,70 @@ public struct MeetingTranscript: Decodable, Sendable, Equatable {
         public let lang: String?
         public let text: String
         public let words: [Word]?
+
+        public init(start: Double, end: Double, channel: Int, speaker: String, lang: String? = nil, text: String, words: [Word]? = nil) {
+            self.start = start
+            self.end = end
+            self.channel = channel
+            self.speaker = speaker
+            self.lang = lang
+            self.text = text
+            self.words = words
+        }
     }
 
     public struct Word: Decodable, Sendable, Equatable {
         public let w: String
         public let start: Double
         public let end: Double
+
+        public init(w: String, start: Double, end: Double) {
+            self.w = w
+            self.start = start
+            self.end = end
+        }
     }
 
     public struct Speaker: Decodable, Sendable, Equatable {
         public let channel: Int
         public let seconds: Double
+        public let person: String?
+        public let name: String?
+        public let clips: [[Double]]?
+
+        public init(channel: Int, seconds: Double, person: String? = nil, name: String? = nil, clips: [[Double]]? = nil) {
+            self.channel = channel
+            self.seconds = seconds
+            self.person = person
+            self.name = name
+            self.clips = clips
+        }
     }
 
     public struct Processing: Decodable, Sendable, Equatable {
         public let diarisation: String?
         public let asr: String?
         public let versions: [String: String]?
+    }
+}
+
+public struct SpeakerPerson: Decodable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    public let created: Date
+    /// Only the gallery list includes the voiceprint count.
+    public let count: Int?
+}
+
+public struct MeetingSpeakerUpdate: Decodable, Sendable, Equatable {
+    public let label: String
+    public let speaker: MeetingTranscript.Speaker
+
+    private enum CodingKeys: String, CodingKey { case label }
+
+    public init(from decoder: any Decoder) throws {
+        label = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .label)
+        speaker = try MeetingTranscript.Speaker(from: decoder)
     }
 }
 

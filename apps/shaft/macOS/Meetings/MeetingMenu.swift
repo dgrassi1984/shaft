@@ -1,3 +1,4 @@
+import AppKit
 import SHAFTKit
 import SwiftUI
 
@@ -6,8 +7,16 @@ import SwiftUI
 /// meeting is shown before every start.
 struct MeetingMenuItems: View {
     let recorder: MeetingRecorder
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Show Meetings") {
+            NSApp.activate()
+            openWindow(id: MeetingsWindow.windowID)
+        }
+        .keyboardShortcut("m", modifiers: [.option, .command])
+        Divider()
+
         switch recorder.phase {
         case .recording(let started, let online):
             Text(online ? "Recording the call" : "Recording in person")
