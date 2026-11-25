@@ -47,7 +47,8 @@ still running). `POST /v1/chat/end` requests that write-up now;
 its 202 response confirms the request, not a completed journal entry. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
-(`interjections_heard`), and 409 means no reply is running there.
+(`interjections_heard`, counting only those it accepted, in the order sent), and 409 means no reply is running
+there: that message was never passed on, and the web chat answers it with a reply of its own.
 A non-streamed chat request may carry `X-Shaft-Request-Id: <id>` (1-64 letters, digits, - or _): asked again with the
 same id, the API gives the answer it gave, without running the reply again (`.supervisor/api-answered.json`, the
 newest 500 kept). Telegram sends each message's update id, so a message answered just before the service restarted is

@@ -437,7 +437,7 @@ Native apps normalize this only for drawing; Copy and Reply keep the source.
 | `links` | list | `{label, url}` to check before retrying: `Activity` (`/i/<n>/activity`) and `Services` (`/services`), web UI paths (open them in the browser at the base URL); `[]` when stopped or when the retry is safe |
 
 **`retried`**: a try that failed and was sent again by Retry (key `a<k>`): "The first try failed and was sent again
-(14:03)." Fields: `k`, `ts`. The question it answered is not an item.
+(14:03)." Fields: `k`, `ts`. The messages it answered are not items: Retry sent them again as one.
 
 A new instance's Main opens with a request from setup that no feed shows (a hidden turn: no item, excerpt, title or
 `mids` entry), so its first item is the instance's welcome. When that reply fails, `retry.text` is

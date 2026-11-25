@@ -957,7 +957,7 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
     wrote it."""
     name = chat["instance"]
     turns = chat.get("turns") or []
-    items = []
+    own = []
     for k, t in enumerate(turns):
         if t.get("retried") or not (t.get("content") or t["role"] == "user"):
             continue
@@ -967,7 +967,12 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
         after = t.get("after")
         at, pos = ((turns[after].get("ts", ""), after + .5) if isinstance(after, int) and k < after < len(turns)
                    else (t.get("ts", ""), k))
-        items.append((at, 0, pos, t.get("ts", ""), t["role"], t["content"], False, _turn_sender(name, t)))
+        own.append((at, pos, t.get("ts", ""), t["role"], t["content"], False, _turn_sender(name, t)))
+    # The thread's own turns keep the order they were written in, never their clock's: a wall clock set back sorted
+    # an earlier exchange after the newest answer, and the follow-up ended with an assistant turn (#16). Time only
+    # places what was routed in among them: each goes before the first own turn stamped after it.
+    own.sort(key=lambda x: x[1])
+    items = []
     for m in routed(name, chat["id"], history):
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
             role, who = "assistant", _sender(INSTANCE, name)
@@ -979,8 +984,16 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
         else:
             role, who = "user", _sender(OPERATOR)
             text = f"[left for my next cycle at {m['ts'][11:16]}, not answered then]\n{m['text']}"
-        items.append((m["ts"], 1, 0, m["ts"], role, text, True, who))
-    return [(ts, role, text, rt, who) for *_, ts, role, text, rt, who in sorted(items, key=lambda x: x[:3])]
+        items.append((m["ts"], m["ts"], role, text, True, who))
+    items.sort(key=lambda x: x[0])
+    merged, j = [], 0
+    for at, _, *item in own:
+        while j < len(items) and items[j][0] < at:       # a routed message and a turn of the same second: the turn first
+            merged.append(items[j][1:])
+            j += 1
+        merged.append(item)
+    merged += [it[1:] for it in items[j:]]
+    return [tuple(it) for it in merged]
 
 
 def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str]:
@@ -994,15 +1007,23 @@ def thread_mark(chat: dict, history: list[dict] | None = None) -> tuple[int, str
 def mark_retried(chat: dict, k: int, text: str) -> bool:
     """Retry in place (iPad review P9): the failed reply `k` and the question it answered are kept, marked retried —
     the feed folds them into one line, the API no longer sees them. Only a failure that offered Retry (note_retry: no
-    tools ran), the question being the text sent again. False: nothing marked, the message is sent as any other."""
+    tools ran), the question being the text sent again. The question is every turn the failed reply answered (its
+    `asked`, _finish): a follow-up's late message sits after the answer it missed, not before the failure (#16: folding
+    only the turn before it sent the late message twice). A failure saved without `asked` answered the turn before it.
+    False: nothing marked, the message is sent as any other."""
     turns = chat.get("turns") or []
     if not 0 < k < len(turns):
         return False
-    failed, asked = turns[k], turns[k - 1]
+    failed = turns[k]
+    idx = failed.get("asked") or [k - 1]
+    asked = [turns[i] for i in idx if isinstance(i, int) and 0 <= i < k]
     if (failed.get("role") != "assistant" or not failed.get("note_retry") or failed.get("retried")
-            or asked.get("role") != "user" or (failed.get("retry_text") or "").strip() != text.strip()):
+            or len(asked) != len(idx) or any(t.get("role") != "user" or t.get("retried") for t in asked)
+            or (failed.get("retry_text") or "").strip() != text.strip()):
         return False
-    failed["retried"] = asked["retried"] = True
+    failed["retried"] = True
+    for t in asked:
+        t["retried"] = True
     return True
 
 
@@ -1223,7 +1244,10 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         sent = reply.get("interjections", 0)
         interjected = [t for t in chat["turns"][reply.get("turn_start", len(chat["turns"])):]
                        if t["role"] == "user" and t.get("interjected")]
-        heard_ids = reply.get("comment_ids", []) + _comment_ids(interjected[:max(0, heard or 0)])
+        # The API's heard count covers only the interjections it accepted, in the order sent: one it refused (409) is
+        # never heard, whatever came after it (#16: a 409 then a 202 heard took the refused one as heard)
+        accepted = [t for t in interjected if not t.get("refused")]
+        heard_ids = reply.get("comment_ids", []) + _comment_ids(accepted[:max(0, heard or 0)])
         started_by = None if sent else reply.get("started_by")
         assistant_index = len(chat["turns"])
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
@@ -1232,12 +1256,18 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             kind, retry = classify_reply(stopped=relay.stopped, status=status if status and status != 200 else None,
                                          exc=exc, text=error or "", posted=posted, tools=tools)
             # Interjections and attachment-only requests cannot be faithfully retried by prefilling one message.
+            # What the reply answered: the turns that started it (`asked`: _send, or the follow-up's late messages) —
+            # not merely the last user turn, which a follow-up's first answer may sit between (#16: Retry sent a late
+            # message twice). A reply without the record (the opening, or one started before it) has the last one.
+            asked = [chat["turns"][i] for i in reply.get("asked") or [] if i < assistant_index]
             original = next((t for t in reversed(chat["turns"]) if t["role"] == "user"), {})
-            request = original.get("shown", original.get("content", ""))
+            shown = [t.get("shown", t.get("content", "")).strip() for t in asked or [original]]
+            request = "\n\n".join(shown) if all(shown) else ""
             # retry_text: what Retry sends again; note_retry: that it is safe to (no tools ran), else Retry asks first.
             # The opening (hidden) has no text of the operator's to send again: Retry asks for it again (_reopen).
             cause = {"note_kind": kind, "note_retry": retry and not sent and bool(request or original.get("hidden")),
-                     "retry_text": request if not sent else ""}
+                     "retry_text": request if not sent else "",
+                     **({"asked": reply["asked"]} if asked else {})}
         from . import docs
         made = [] if reply.get("waiting") else docs.changed(reply.get("docs_before") or {}, _docs_now(chat["instance"]))
         # What this reply answered: the user turns since the previous answer. Only one the operator wrote counts as
@@ -1250,15 +1280,21 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
                               **({"docs": made} if made else {})})
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
-        unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
-        for t in interjected[len(interjected) - unheard:] if unheard else []:
+        # A refused one is unheard even then: the API never passed it on.
+        ended_well = not relay.stopped and not error
+        missed = accepted[max(0, heard):] if heard is not None and ended_well else []
+        late = [t for t in interjected if (ended_well and t.get("refused")) or any(t is m for m in missed)]
+        unheard = len(late)
+        for t in late:
             t["after"] = assistant_index          # read after this answer, by the reply that answers it (_dialogue)
         queued = _flush_queue(chat)
         if unheard or queued:                     # sent too late for this reply: answered by one of their own
+            asked = ([i for i, t in enumerate(chat["turns"]) if any(t is x for x in late)]
+                     + ([len(chat["turns"]) - 1] if queued else []))
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
                                                         "interjections": 0, "followup": unheard,
                                                         "docs_before": _docs_now(chat["instance"]),
-                                                        **_reply_comments(interjected[-unheard:] if unheard else []),
+                                                        **_reply_comments(late), "asked": asked,
                                                         "turn_start": len(chat["turns"])}
         save(chat)
     relay.close_stream(answer.strip(), note or None)   # after the save: a client that reads the feed on `end` sees it
@@ -1735,9 +1771,13 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
                 if status not in (202, 409):
                     raise Refused(body.get("error", {}).get("message") or f"API HTTP {status}")
                 turn["interjected"] = True
+                if status == 409:
+                    # Refused (the reply was ending, or the API had not registered it yet): the reply never hears it, and
+                    # the API's heard count never covers it — _finish keeps it apart from the accepted ones (#16)
+                    turn["refused"] = True
                 chat["turns"].append(turn)
-                # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused (409:
-                # the reply was ending), is answered by a reply of its own when this one ends.
+                # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused, is
+                # answered by a reply of its own when this one ends.
                 chat["reply"]["interjections"] = chat["reply"].get("interjections", 0) + 1
                 save(chat)
                 return chat, (f"{name} reads it at its next step" if status == 202 else
@@ -1745,11 +1785,13 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
             _take_feedback(chat, turn)
             chat["turns"].append(turn)
             last_answer = max((i for i, t in enumerate(chat["turns"]) if t["role"] == "assistant"), default=-1)
-            starting = [t for t in chat["turns"][last_answer + 1:]
-                        if t["role"] == "user" and not t.get("interjected")]
+            asked = [k for k in range(last_answer + 1, len(chat["turns"]))
+                     if chat["turns"][k]["role"] == "user" and not chat["turns"][k].get("interjected")
+                     and not chat["turns"][k].get("retried")]
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
                                                         "docs_before": _docs_now(name),
-                                                        **_reply_comments(starting),
+                                                        **_reply_comments([chat["turns"][k] for k in asked]),
+                                                        "asked": asked,     # what Retry sends again if it fails (#16)
                                                         "turn_start": len(chat["turns"])}
             save(chat)
         _start(cid)
