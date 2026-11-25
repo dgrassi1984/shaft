@@ -47,26 +47,32 @@ def lint(name: str, ep: dict) -> list[dict]:
             add("delivered_via",
                 f"said delivered via {channel}; no successful {detail} in this cycle's tool log", channel)
 
-    rows = commitments._rows(core.safe_read(core.INSTANCES / name, commitments.FILE, "", errors="replace"))
-    start, end = commitments._at(ep.get("run_started")), commitments._at(ep["ts"])
+    from . import served
+    rows = commitments.recorded(name)[0]   # the supervisor's copy too: a settle removed from the file still counts
+    record = served.Record(name)
+    end = commitments._at(ep["ts"])
+    # The cycle's start by the supervisor's record of its runs when it has one, else as the episode says it.
+    runs = record.runs_for(ep, end) if end is not None else []
+    start = record.runs[runs[0]]["start"] if runs else commitments._at(ep.get("run_started"))
     settled = set()
     for row in rows:
-        if row.get("event") != "settled" or row.get("status") != "kept":
+        if row.get("event") != "settled" or row.get("status") != "kept" or not isinstance(row.get("id"), str):
             continue
-        if "run_started" not in ep:
+        if start is None:
             in_cycle = any(c.get("tool") == "settle_commitment" and _arg(c, "id") == row.get("id") for c in calls)
         else:
             at = commitments._at(row.get("at"))
-            in_cycle = start is not None and end is not None and at is not None and start < at <= end
+            # Seconds, as the episode's end keeps them: a settle in the cycle's last second is the cycle's.
+            in_cycle = end is not None and at is not None and start < at.replace(microsecond=0) <= end
         if in_cycle:
             settled.add(row["id"])
     if settled:
-        items, episodes = commitments.ledger(name), commitments._episodes(name)
+        items, episodes = commitments.ledger(name, rows=rows), commitments._episodes(name)
         for cid in sorted(settled):
             item = items.get(cid)
             if item is None or item["status"] != "kept":
                 continue
-            reason, _ = commitments._evidence(episodes, item, item["evidence"])
+            reason, _ = commitments._evidence(episodes, item, item["evidence"], record)
             if reason:
                 add("kept_commitment", f"said commitment {cid} was kept; {reason}", cid)
     return findings

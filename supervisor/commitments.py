@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timedelta
 
 from . import metrics
+from .ledger_mirror import CHECKED
 from .core import jsonl_lines, INSTANCES, SUP_DIR, safe_read
 
 FILE = "memory/commitments.jsonl"
@@ -139,6 +140,9 @@ def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str, re
     out = []
     for row in rows:
         row = dict(row)
+        if row.pop(CHECKED, False):   # judged when the supervisor copied it (ledger_mirror.py): kept as judged then
+            out.append(row)
+            continue
         if row.get("event") == "made":
             if row.get("made_to") == "self" and row.get("note") == RELABELLED and row.get("sourced"):
                 row.update(made_to="operator")   # written as self by commit_to before #238: judged again below
@@ -173,37 +177,67 @@ def _matches(ts, cited: str) -> bool:
     return isinstance(ts, str) and (ts == cited or len(cited) == 16 and ts[:16].replace("T", " ") == cited.replace("T", " "))
 
 
-def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dict | None]:
+def _evidence(episodes: list[dict], item: dict, evidence: str, record=None) -> tuple[str, dict | None]:
+    """Why the cited evidence does not count ("" when it does) and the cited episode (_checked_evidence)."""
+    return _checked_evidence(episodes, item, evidence, record)[:2]
+
+
+def _checked_evidence(episodes: list[dict], item: dict, evidence: str, record=None) -> tuple[str, dict | None, bool]:
+    """Why the cited evidence does not count ("" when it does), the cited episode, and whether a supervisor-tool step
+    of it was checked against the supervisor's record. `record` (served.Record): every supervisor-tool step the
+    citation covers must have been served and match the fingerprint kept then (#8): a whole-episode citation is not
+    carried by its built-in steps past a supervisor-tool step that fails. Built-in and plugin steps cannot be checked
+    that way and are read as before; evidence made only of them counts, unchecked."""
     citation = _citation(evidence)
     if citation is None:
-        return "cite an episode ts, optionally #step", None
+        return "cite an episode ts, optionally #step", None, False
     ts, step = citation
     matches = [ep for ep in episodes if _matches(ep.get("ts"), ts)]
     if not matches:
-        return "no such episode", None
+        return "no such episode", None, False
     if len(matches) != 1:
-        return "episode citation is ambiguous; use the exact ts", None
+        return "episode citation is ambiguous; use the exact ts", None, False
     ep = matches[0]
     ended, made = _at(ep.get("ts")), _at(item.get("made_at"))
     if ended is None or made is None or ended <= made:
-        return "cited episode did not end after my commitment", ep
+        return "cited episode did not end after my commitment", ep, False
     calls = ep.get("tools")
     calls = calls if isinstance(calls, list) else []
     if step is not None:
         if step > len(calls):
-            return "no such tool-log step", ep
+            return "no such tool-log step", ep, False
         calls = [calls[step - 1]]
-    good = any(isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
-               and c["tool"] not in BOOKKEEPING
-               and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED) for c in calls)
-    return ("" if good else "cited evidence has no successful tool call"), ep
+    good = [c for c in calls if isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
+            and c["tool"] not in BOOKKEEPING
+            and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED)]
+    if not good:
+        return "cited evidence has no successful tool call", ep, False
+    if record is None:
+        return "", ep, False
+    reasons = [record.check(ep, c) for c in good]   # None: not checkable (built-in, plugin, before the record)
+    failed = [r for r in reasons if r]
+    if failed:
+        return failed[0], ep, False
+    return "", ep, any(r == "" for r in reasons)
 
 
-def ledger(name: str, now: datetime | None = None) -> dict[str, dict]:
+def recorded(name: str, as_of: datetime | None = None) -> tuple[list[dict], dict]:
+    """The rows to fold for what the instance promised as the record holds it: the supervisor's own copy of its
+    ledger and the rows not copied yet (ledger_mirror.merged), and which recorded ids its file no longer holds as
+    they were. A promise or settle removed from the file is still here."""
+    from . import ledger_mirror
+    current = _rows(safe_read(INSTANCES / name, FILE, "", errors="replace")) if NAME.fullmatch(name) else []
+    return ledger_mirror.merged(name, "commitments", current, as_of=as_of)
+
+
+def ledger(name: str, now: datetime | None = None, rows: list[dict] | None = None) -> dict[str, dict]:
+    """The instance's commitments folded and source-checked; `rows`: the events to fold instead of its file's (the
+    `promises` gauge folds the supervisor's own copy with them: ledger_mirror.py)."""
     if not NAME.fullmatch(name):
         return {}
-    text = safe_read(INSTANCES / name, FILE, "", errors="replace")
-    rows = _source_rows(_rows(text), _episodes(name), lambda file: bool(operator_message(name, file)), name,
+    if rows is None:
+        rows = _rows(safe_read(INSTANCES / name, FILE, "", errors="replace"))
+    rows = _source_rows(rows, _episodes(name), lambda file: bool(operator_message(name, file)), name,
                         _received(name))
     return _fold(rows, now if now is not None else datetime.now())
 
@@ -272,13 +306,18 @@ def _episodes(name: str) -> list[dict]:
     return metrics.live_episodes(name) + metrics._episodes(name, "talk") + metrics._episodes(name, "sleep")
 
 
-def _verification(item: dict, episodes: list[dict], judgments: list[dict]) -> tuple[str, dict | None]:
+UNCHECKED = "verified (its evidence is built-in or plugin calls, or older than the record: not checked)"
+
+
+def _verification(item: dict, episodes: list[dict], judgments: list[dict], record=None) -> tuple[str, dict | None]:
+    """"verified", UNCHECKED (verified, but no supervisor-tool step of the evidence could be checked against the
+    supervisor's record: served.py), or why it is not."""
     if item.get("status") != "kept":
         return "not kept", None
     evidence = item.get("evidence")
     if not isinstance(evidence, str):
         return "no episode citation", None
-    reason, ep = _evidence(episodes, item, evidence)
+    reason, ep, checked = _checked_evidence(episodes, item, evidence, record)
     if reason:
         return reason, ep
     if ep.get("kind") != "live":
@@ -288,36 +327,40 @@ def _verification(item: dict, episodes: list[dict], judgments: list[dict]) -> tu
         return "cited cycle not judged", ep   # unjudged evidence is a claim the record cannot check yet
     if verdict == "no":
         return "cited cycle judged no", ep
-    return "verified", ep
+    return "verified" if checked or record is None else UNCHECKED, ep
 
 
 def verify(name: str, item: dict) -> str:
     if not NAME.fullmatch(name):
         return "invalid instance name"
-    return _verification(item, _episodes(name), metrics.judgments(name))[0]
+    from . import served
+    return _verification(item, _episodes(name), metrics.judgments(name), served.Record(name))[0]
 
 
-def _counts(items: list[dict], episodes: list[dict], judgments: list[dict]) -> str:
-    verified = sum(_verification(it, episodes, judgments)[0] == "verified" for it in items if it["status"] == "kept")
+def _counts(items: list[dict], episodes: list[dict], judgments: list[dict], record=None) -> str:
+    verdicts = [_verification(it, episodes, judgments, record)[0] for it in items if it["status"] == "kept"]
+    verified, unchecked = verdicts.count("verified"), verdicts.count(UNCHECKED)
     counts = {s: sum(it["status"] == s for it in items) for s in (*STATUSES, "expired", "overdue", "open")}
-    return (f"made {len(items)}; kept (verified) {verified}; kept (not verified) {counts['kept'] - verified}; "
+    return (f"made {len(items)}; kept (verified) {verified}; kept (verified, evidence not checkable) {unchecked}; "
+            f"kept (not verified) {counts['kept'] - verified - unchecked}; "
             + "; ".join(f"{s} {counts[s]}" for s in ("broken", "superseded", "void", "expired", "overdue", "open")))
 
 
 def section(name: str) -> list[str]:
-    items = list(ledger(name).values())
+    items = list(ledger(name, rows=recorded(name)[0]).values())
     if not items:
         return []
     items = [it for it in items if it["made_to"] not in ("self", "own", name)]   # promises to self are no longer kept
     if not items:
         return []
-    episodes, judgments = _episodes(name), metrics.judgments(name)
+    from . import served
+    episodes, judgments, record = _episodes(name), metrics.judgments(name), served.Record(name)
     operator = [it for it in items if it["made_to"] == "operator"]
     others = [it for it in items if it["made_to"] != "operator"]
     cited = set()
     for it in items:
         if it["status"] == "kept":
-            _, ep = _verification(it, episodes, judgments)
+            _, ep = _verification(it, episodes, judgments, record)
             if ep and ep.get("kind") == "live":
                 cited.add(ep["ts"])
     # Count each cited cycle once even when it kept several promises.
@@ -325,20 +368,26 @@ def section(name: str) -> list[str]:
                     and isinstance(j.get("difficulty"), (int, float)) and not isinstance(j["difficulty"], bool)
                     and 1 <= j["difficulty"] <= 5}
     mean = f"{sum(difficulties.values()) / len(difficulties):.2f}/5 (n={len(difficulties)})" if difficulties else "not judged"
-    return ["## Promises I made and kept", "", f"- To the operator: {_counts(operator, episodes, judgments)}.",
-            f"- To other instances: {_counts(others, episodes, judgments)}.",
-            f"- Mean judged difficulty of cited cycles: {mean}."]
+    return ["## Promises I made and kept", "", f"- To the operator: {_counts(operator, episodes, judgments, record)}.",
+            f"- To other instances: {_counts(others, episodes, judgments, record)}.",
+            f"- Mean judged difficulty of cited cycles: {mean}.",
+            f"- A cited supervisor-tool step is verified only if the supervisor served it in that run and its result "
+            f"matches the fingerprint kept at the call; {served.NOT_CHECKED}.",
+            "- Counted from the supervisor's own copy of my ledger: a promise or settlement later removed from my file "
+            "is still counted."]
 
 
 def report(names: list[str]) -> str:
     lines = []
     for name in names:
-        items = ledger(name)
+        rows, changes = recorded(name)
+        items = ledger(name, rows=rows)
         lines.append(f"{name}: commitments")
         if not items:
             lines.append("  (none)")
             continue
-        episodes, judgments = _episodes(name), metrics.judgments(name)
+        from . import served
+        episodes, judgments, record = _episodes(name), metrics.judgments(name), served.Record(name)
         self_count = sum(it["made_to"] in ("self", "own", name) for it in items.values())
         if self_count:
             expired = sum(it["status"] == "expired" and it["made_to"] in ("self", "own", name) for it in items.values())
@@ -346,11 +395,16 @@ def report(names: list[str]) -> str:
         for item in items.values():
             if item["made_to"] in ("self", "own", name):
                 continue
-            verification = f"; {_verification(item, episodes, judgments)[0]}" if item["status"] == "kept" else ""
+            verification = (f"; {_verification(item, episodes, judgments, record)[0]}" if item["status"] == "kept"
+                            else "")
             lines.append(f"  {item['id']}: {item['status']}{verification}; to {item['made_to']}; due {item['due']}; "
                          f"{item['promise']} — check: {item['criterion']}"
                          + (f"; evidence {item['evidence']}" if item["evidence"] else "")
-                         + (f"; {item['note']}" if item.get("note") else ""))
+                         + (f"; {item['note']}" if item.get("note") else "")
+                         + ("; removed from its ledger since recorded" if item["id"] in changes["removed"]
+                            else "; altered in its ledger since recorded" if item["id"] in changes["altered"] else ""))
+        if any(it["status"] == "kept" and it["made_to"] not in ("self", "own", name) for it in items.values()):
+            lines.append(f"  (kept evidence is checked against the calls the supervisor served; {served.NOT_CHECKED})")
     return "\n".join(lines)
 
 

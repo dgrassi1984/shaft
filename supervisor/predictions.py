@@ -1,6 +1,7 @@
 """Supervisor-stamped predictions checked against cited external reads.
 
-The tool log comes from the instance's own episode file, as kept commitments' evidence does.
+The tool log comes from the instance's own episode file, as kept commitments' evidence does; a cited step counts only if
+the supervisor served that call and its result matches the fingerprint kept at the call (served.py).
 """
 from __future__ import annotations
 
@@ -193,7 +194,7 @@ def report(name, id, outcome, evidence, now=None) -> dict:
 def score(name, now=None) -> int:
     """Score resolvable reports and expired reporting windows once; judge outages leave reports pending."""
     now = commitments._local(now if now is not None else datetime.now())
-    count, episodes, pending = 0, None, []
+    count, episodes, record, pending = 0, None, None, []
     with _locked(name) as file:
         scored = {pid for pid, item in fold(name).items() if item["score"] is not None}
         for item in fold(name, as_of=now).values():
@@ -205,9 +206,10 @@ def score(name, now=None) -> int:
                 reason = "no outcome reported within 48 h of its due time"
             else:
                 if episodes is None:
-                    episodes = commitments._episodes(name)
+                    from . import served
+                    episodes, record = commitments._episodes(name), served.Record(name)
                 evidence = item["report"]["evidence"]
-                reason, ep = commitments._evidence(episodes, {"made_at": item["at"]}, evidence)
+                reason, ep = commitments._evidence(episodes, {"made_at": item["at"]}, evidence, record)
                 if not reason:
                     step = commitments._citation(evidence)[1]
                     call = ep["tools"][step - 1]

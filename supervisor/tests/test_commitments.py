@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
 from shaft import commitments as agent
-from supervisor import commitments as supervisor, metrics
+from supervisor import commitments as supervisor, core, metrics
 
 NOW = datetime(2026, 10, 26, 14, 12)
 PROMISE = {"promise": "Send the checked report", "due": "tomorrow", "criterion": "The operator has the report",
@@ -57,6 +57,7 @@ class CommitmentsTest(unittest.TestCase):
         (self.sup / "operator-inbox" / MSG).write_text(
             "From: x\nTo: operator\nKind: note\nDate: 2026-10-26 14:00\n\nI will send the checked report.\n")
         self.enterContext(mock.patch.object(supervisor, "SUP_DIR", self.sup))
+        self.enterContext(mock.patch.object(core, "SUP_DIR", self.sup))   # served.py's record of the calls
         for module in (supervisor, metrics):
             patch = mock.patch.object(module, "INSTANCES", self.root.parent)
             patch.start()
@@ -524,7 +525,8 @@ class CommitmentsTest(unittest.TestCase):
                 self.assertEqual(item["status"], "kept")
                 self.assertEqual(supervisor.verify("x", item), "cited cycle not judged")
                 self.judgments.return_value = [{"episode_ts": "2026-10-26T15:00:00", "criterion_met": "yes"}]
-                self.assertEqual(supervisor.verify("x", item), "verified")
+                # No served record (served.py) here: verified, and said to be unchecked against it.
+                self.assertEqual(supervisor.verify("x", item), supervisor.UNCHECKED)
                 self.judgments.return_value = []
 
     def test_the_promise_itself_is_no_evidence(self):
@@ -560,7 +562,8 @@ class CommitmentsTest(unittest.TestCase):
         self.write_episodes([episode()])
         agent.settle(self.root, {"id": CID, "status": "kept", "evidence": "2026-10-26T15:00:00#1"}, NOW + timedelta(hours=2))
         item = agent.fold(self.root, NOW)[CID]
-        for verdict, expected in (("no", "cited cycle judged no"), ("yes", "verified"), ("partial", "verified")):
+        for verdict, expected in (("no", "cited cycle judged no"), ("yes", supervisor.UNCHECKED),
+                                  ("partial", supervisor.UNCHECKED)):   # no served record here: unchecked
             self.judgments.return_value = [{"episode_ts": "2026-10-26T15:00:00", "criterion_met": verdict}]
             self.assertEqual(supervisor.verify("x", item), expected)
         for kind in ("talk", "sleep"):   # no judge grades these: kept, not verified
@@ -598,11 +601,14 @@ class CommitmentsTest(unittest.TestCase):
         lines = supervisor.section("x")
         self.assertLessEqual(len(lines), 8)
         self.assertEqual(lines[0], "## Promises I made and kept")
-        self.assertIn("made 1; kept (verified) 1; kept (not verified) 0", lines[2])
+        self.assertIn("made 1; kept (verified) 0; kept (verified, evidence not checkable) 1; kept (not verified) 0",
+                      lines[2])
         self.assertIn("made 1; kept (verified) 0", lines[3])
-        self.assertEqual(lines[-1], "- Mean judged difficulty of cited cycles: 3.00/5 (n=1).")
+        self.assertEqual(lines[-3], "- Mean judged difficulty of cited cycles: 3.00/5 (n=1).")
+        self.assertIn("built-in and plugin calls never reach the supervisor", lines[-2])
+        self.assertIn("supervisor's own copy of my ledger", lines[-1])
         text = supervisor.report(["x"])
-        self.assertIn(f"{CID}: kept; verified; to operator", text)
+        self.assertIn(f"{CID}: kept; {supervisor.UNCHECKED}; to operator", text)
         self.assertIn("to self (no longer kept): 1", text)
         self.assertNotIn("c1026-1412-3: overdue", text)
         self.judgments.return_value[0]["criterion_met"] = "no"

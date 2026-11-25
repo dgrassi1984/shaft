@@ -413,6 +413,25 @@ class DeleteTest(unittest.TestCase):
         with self.assertRaises(delete.Refused):      # and once it is gone, there is nothing to delete
             delete.delete("kdx")
 
+    def test_delete_removes_ledger_mirror_and_served_records(self):
+        """A recreated instance inherited the old ledger copy and fingerprints."""
+        mirror = self.sup / "ledger_mirror" / "kdx"
+        served = self.sup / "served"
+        removed = [mirror, served / "kdx.jsonl", served / "kdx.runs.jsonl"]
+        kept = [served / "since", served / "kdx-2.jsonl"]
+        self.mine.extend(removed)
+        self.theirs.extend(kept)
+        mirror.mkdir(parents=True)
+        (mirror / "commitments.jsonl").write_text("{}\n")
+        served.mkdir(exist_ok=True)
+        for p in removed[1:] + kept:
+            p.write_text("{}\n")
+
+        self.assertEqual(delete.delete("kdx", keep_archive=False, say=lambda s: None), 0)
+        self.assertEqual([p for p in removed if p.exists()], [])
+        for p in kept:
+            self.assertEqual(p.read_text(), "{}\n")
+
     def test_refused_while_a_run_holds_it(self):
         with run_lock("kdx", wait=False, kind="live"):
             with self.assertRaises(delete.Refused) as e:
