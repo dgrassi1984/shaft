@@ -11,7 +11,6 @@ struct ModelStepView: View {
     let session: SHAFTSession
     @Bindable var steps: SetupSteps
 
-    static let chatGPTApp = URL(fileURLWithPath: "/Applications/ChatGPT.app")
     static let chatGPTDownload = URL(string: "https://openai.com/chatgpt/desktop/")!
     static let openRouterKeys = URL(string: "https://openrouter.ai/settings/keys")!
 
@@ -46,7 +45,7 @@ struct ModelStepView: View {
                     }
                 }
                 .buttonStyle(ProminentAction())
-                .disabled(steps.busy || (steps.form.kind == .codex && !installed))
+                .disabled(steps.busy)
                 Button(action: test) {
                     HStack(spacing: Design.Space.s8) {
                         if steps.testing.running { ProgressView().controlSize(.small) }
@@ -83,7 +82,6 @@ struct ModelStepView: View {
     private var request: ProviderRequest? { try? steps.form.request().get() }
     /// What is saved is what the form says now: Test checks it.
     private var savedNow: Bool { steps.saved != nil && steps.saved == request }
-    private var installed: Bool { FileManager.default.fileExists(atPath: Self.chatGPTApp.path) }
 
     private func save() {
         steps.saveProvider(store: session.store, setup: setup, installer: setup.installer(for: session),
@@ -134,38 +132,30 @@ struct ModelStepView: View {
 
     @ViewBuilder
     private var codex: some View {
-        if installed {
-            Label("ChatGPT for Mac is installed.", systemImage: "checkmark.circle")
-                .foregroundStyle(Color.textSecondary)
-            HStack(spacing: Design.Space.s12) {
-                if steps.signingIn.running {
-                    ProgressView().controlSize(.small)
-                    Text("Waiting for you to sign in…").foregroundStyle(Color.textSecondary)
-                    Button("Cancel") { steps.cancelSignIn() }
-                } else {
-                    Button(steps.signedIn ? "Sign in again" : "Sign in") {
-                        steps.signInToCodex(installer: setup.installer(for: session))
-                    }
-                    .disabled(steps.busy)
+        HStack(spacing: Design.Space.s12) {
+            if steps.signingIn.running {
+                ProgressView().controlSize(.small)
+                Text("Waiting for you to sign in…").foregroundStyle(Color.textSecondary)
+                Button("Cancel") { steps.cancelSignIn() }
+            } else {
+                Button(steps.signedIn ? "Sign in again" : "Sign in") {
+                    steps.signInToCodex(installer: setup.installer(for: session))
                 }
-                if steps.signedIn {
-                    Label("Signed in", systemImage: "checkmark").foregroundStyle(Color.brand)
-                }
+                .disabled(steps.busy)
             }
-            Text("Signing in opens ChatGPT's sign-in page in your browser, where you enter a one-time code shown here. "
-                 + "Codex keeps its login inside SHAFT's own folder.")
-                .font(.caption).foregroundStyle(Color.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if steps.signingIn.running, steps.loginCode != nil || steps.loginURL != nil {
-                codexCode
+            if steps.signedIn {
+                Label("Signed in", systemImage: "checkmark").foregroundStyle(Color.brand)
             }
-            if let failure = steps.signingIn.failure {
-                SetupFailure(message: failure) { steps.signInToCodex(installer: setup.installer(for: session)) }
-            }
-        } else {
-            Text("ChatGPT for Mac is not in Applications: Codex comes with it. Install it, then come back to this step.")
-                .foregroundStyle(Color.warning)
-                .fixedSize(horizontal: false, vertical: true)
+        }
+        Text("Signing in opens ChatGPT's sign-in page in your browser, where you enter a one-time code shown here. "
+             + "Codex keeps its login inside SHAFT's own folder.")
+            .font(.caption).foregroundStyle(Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        if steps.signingIn.running, steps.loginCode != nil || steps.loginURL != nil {
+            codexCode
+        }
+        if let failure = steps.signingIn.failure {
+            SetupFailure(message: failure) { steps.signInToCodex(installer: setup.installer(for: session)) }
             Link("Get ChatGPT for Mac", destination: Self.chatGPTDownload).foregroundStyle(Color.brand)
         }
     }

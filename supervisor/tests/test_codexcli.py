@@ -16,6 +16,126 @@ from unittest import mock
 
 from supervisor import codexcli as codex, planchannel
 
+
+class CodexDiscoveryTest(unittest.TestCase):
+    def setUp(self):
+        tmp = self.enterContext(tempfile.TemporaryDirectory(prefix="test-codex-detect-"))
+        self.root = Path(tmp).resolve()
+        self.home = self.root / "home"
+        self.apps = (self.root / "Applications", self.home / "Applications")
+        self.brew = self.root / "opt/homebrew/bin"
+        self.shell = self.root / "login-shell"
+        self.enterContext(mock.patch.dict(os.environ, {"HOME": str(self.home), "PATH": str(self.root / "path"),
+                                                       "SHELL": str(self.shell)}))
+        self.enterContext(mock.patch.object(codex, "APP_FOLDERS", self.apps))
+        self.enterContext(mock.patch.object(codex, "SYSTEM_BIN_FOLDERS", (self.brew,)))
+        self.enterContext(mock.patch.object(codex, "BIN_SETTING", ""))
+        self.enterContext(mock.patch.object(codex, "_bin_cache", None))
+
+    def executable(self, path, script="#!/bin/sh\nexit 0\n"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(script)
+        path.chmod(0o700)
+        return path
+
+    def test_codex_cli_installed_from_terminal_is_found_without_chatgpt(self):
+        binary = self.executable(self.brew / "codex")
+        self.assertEqual(codex.find_bin(), str(binary))
+        self.assertEqual(codex.bin_source(), "path")
+        binary.unlink()
+        self.assertEqual(codex.find_bin(), str(binary))
+
+    def test_codex_installed_after_cached_miss_is_found_after_60_seconds(self):
+        with mock.patch.object(codex.time, "monotonic", return_value=100) as clock, \
+                mock.patch.object(codex.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "")) as probe:
+            self.assertIsNone(codex.find_bin())
+            binary = self.executable(self.brew / "codex")
+            clock.return_value = 159
+            self.assertIsNone(codex.find_bin())
+            self.assertIsNone(codex.bin_source())
+            probe.assert_called_once()
+            clock.return_value = 160
+            self.assertEqual(codex.find_bin(), str(binary))
+            self.assertEqual(codex.bin_source(), "path")
+            probe.assert_called_once()
+
+    def test_codex_discovery_order(self):
+        bundled = "ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+        path_bin = self.executable(self.root / "path/codex")
+        shell_bin = self.executable(self.root / "shell/codex")
+        self.executable(self.shell, f"#!/bin/sh\nprintf 'startup message\\n%s\\n\\n' '{shell_bin}'\n")
+        override = self.executable(self.root / "override")
+        candidates = (
+            (self.executable(self.apps[0] / bundled), "chatgpt-app"),
+            (self.executable(self.apps[1] / bundled), "chatgpt-app"),
+            (path_bin, "path"),
+            (self.executable(self.brew / "codex"), "path"),
+            (self.executable(self.home / ".nvm/versions/node/v22.10.0/bin/codex"), "path"),
+            (self.executable(self.home / ".nvm/versions/node/v22.9.0/bin/codex"), "path"),
+            (shell_bin, "login-shell"),
+        )
+        with mock.patch.object(codex, "BIN_SETTING", str(override)):
+            self.assertEqual(codex.find_bin(), str(override))
+            self.assertEqual(codex.bin_source(), "setting")
+        for binary, source in candidates:
+            with self.subTest(source=source, binary=binary), mock.patch.object(codex, "_bin_cache", None):
+                self.assertEqual(codex.find_bin(), str(binary))
+                self.assertEqual(codex.bin_source(), source)
+                binary.unlink()
+
+    def test_missing_explicit_setting_is_returned_without_falling_back(self):
+        self.executable(self.brew / "codex")
+        missing = str(self.root / "missing")
+        with mock.patch.object(codex, "BIN_SETTING", missing):
+            self.assertEqual(codex.find_bin(), missing)
+            self.assertEqual(codex.bin_error(codex.find_bin()), f"no Codex CLI at {missing} (SHAFT_CODEX_BIN)")
+
+    def test_hanging_login_shell_is_bounded(self):
+        self.executable(self.shell, "#!/bin/sh\nif read -r line; then exit 2; fi\nexec /bin/sleep 30\n")
+        start = time.monotonic()
+        self.assertEqual(codex.LOGIN_SHELL_TIMEOUT_S, 10)
+        with mock.patch.object(codex, "LOGIN_SHELL_TIMEOUT_S", 0.1):
+            self.assertIsNone(codex.find_bin())
+        self.assertLess(time.monotonic() - start, 2)
+
+    def test_seatbelt_allows_only_read_access_to_npm_package_and_node_version(self):
+        prefix = self.home / ".nvm/versions/node/v22.10.0"
+        package = prefix / "lib/node_modules/@openai/codex"
+        script = self.executable(package / "bin/codex.js", "#!/usr/bin/env node\n")
+        (package / "package.json").write_text("{}")
+        node = self.executable(prefix / "bin/node")
+        self.executable(self.root / "path/node")
+        wrapper = node.with_name("codex")
+        wrapper.symlink_to(script)
+        app = self.executable(self.apps[0] / "ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        folder = self.root / "run"
+        folder.mkdir()
+        home = self.home / "shaft-codex"
+        auth = home / "auth.json"
+        profile = folder / "seatbelt.sb"
+
+        with mock.patch.object(codex.sandbox, "user_folder", return_value=self.root / "cache"):
+            codex._seatbelt([str(app)], folder, home, auth)
+            app_rules = profile.read_text().splitlines()
+            self.assertFalse(any(line.startswith("(allow file-read* (") for line in app_rules))
+            codex._seatbelt([str(wrapper)], folder, home, auth, str(node))
+        self.assertEqual(profile.read_text().splitlines(), app_rules + [
+            f"(allow file-read* (subpath {json.dumps(str(package))}))",
+            f"(allow file-read* (subpath {json.dumps(str(prefix))}))",
+        ])
+        self.assertEqual(codex.login_env(str(wrapper), home)["PATH"].split(os.pathsep)[0], str(node.parent))
+
+    def test_seatbelt_does_not_allow_relative_executable(self):
+        folder = self.root / "run"
+        folder.mkdir()
+        home = self.root / "shaft-codex"
+        relative_bin = os.path.relpath(self.home / "install/codex")
+
+        with mock.patch.object(codex.sandbox, "user_folder", return_value=self.root / "cache"):
+            codex._seatbelt([relative_bin], folder, home, home / "auth.json")
+
+        self.assertNotIn("(allow file-read* (", (folder / "seatbelt.sb").read_text())
+
 # Actions and all expected history are supplied by the parent, never inferred from its implementation.
 FAKE = r'''
 import json, os, sys, time
@@ -261,7 +381,7 @@ class ChannelTest(unittest.TestCase):
         self.record = mock.Mock()
         self.logs = []
         for patch in (mock.patch.object(codex, "HOME", self.home),
-                      mock.patch.object(codex, "BIN", str(self.binary)),
+                      mock.patch.object(codex, "find_bin", return_value=str(self.binary)),
                       mock.patch.object(codex, "TIMEOUT_S", 3),
                       mock.patch.object(planchannel, "SUP_DIR", self.root),
                       mock.patch.object(codex.STATE, "rate", None),
@@ -858,13 +978,14 @@ class ChannelTest(unittest.TestCase):
 
     def test_seatbelt_closes_outside_home_and_limits_metadata_to_literal_ancestors(self):
         # Inspect the actual generator; sandbox-exec and the real Codex binary are not launched.
+        binary = "/opt/codex-test/bin/codex"
         personal_temp = self.root / "per-user-cache"
         with mock.patch.object(codex, "_seatbelt", new=self._real_seatbelt), \
                 mock.patch.object(codex.sandbox, "user_folder", return_value=personal_temp):
             folder = self.root / "profile"
             folder.mkdir()
             auth = self.root / "synthetic-auth"
-            argv = codex._seatbelt(["fake"], folder, self.home, auth)
+            argv = codex._seatbelt([binary], folder, self.home, auth)
         profile = (folder / "seatbelt.sb").read_text()
         lines = profile.splitlines()
         self.assertEqual(lines[:4], ["(version 1)", "(allow default)",
@@ -878,7 +999,7 @@ class ChannelTest(unittest.TestCase):
         ancestors = sorted(set(self.home.parents) | set(folder.parents) | set(auth.parents))
         self.assertEqual(lines[7:], ['(allow file-read-metadata ' +
             ' '.join('(literal ' + json.dumps(str(parent)) + ')' for parent in ancestors) + ')'])
-        self.assertEqual(argv, ["/usr/bin/sandbox-exec", "-f", str(folder / "seatbelt.sb"), "fake"])
+        self.assertEqual(argv, ["/usr/bin/sandbox-exec", "-f", str(folder / "seatbelt.sb"), binary])
 
     def test_close_during_rpc_wakes_waiter_immediately_as_codex_closed(self):
         self.use(hold_turn_start=True)

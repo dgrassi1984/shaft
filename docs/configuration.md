@@ -109,7 +109,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_PUSH_BUDGET` | `6` | operator pushes per instance per day before holding for a digest (0: unlimited, count hidden) | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images: claude-…, openrouter/…, a codex/… plan model, or a custom/ model only when SHAFT_CUSTOM_VISION lists it; or `none`: image description is off and no image is sent anywhere | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CODEX_HOME` | `.supervisor/codex-home` | private Codex login and configuration directory, mode 700 | [codexcli.py](../supervisor/codexcli.py) |
-| `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_BIN` | empty | Codex CLI executable override (empty: find automatically) | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_MODELS` | empty | Only these of the models Codex lists, comma separated; empty: every model Codex lists | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure (claude-…, openrouter/… or a priced custom/…), or `none`: the failure ends the run | [codexcli.py](../supervisor/codexcli.py) |
@@ -518,7 +518,8 @@ operator's explicit model names when no catalog exists. With neither, the menu i
 Source: [effortcatalog.py](../supervisor/effortcatalog.py), `listed` and `lookup`.
 
 Codex plan routing also uses `LLM_BASE_URL="broker"`, with `LLM_MODEL="codex/gpt-6-astra"`
-or another model Codex lists, restricted by nonempty `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft codex status`
+or another model Codex lists, restricted by nonempty `SHAFT_CODEX_MODELS`. See the
+[Codex executable search order](local-model.md#codex-plan-routing). Run `shaft codex login` first; `shaft codex status`
 shows whether login is present, the last observed weekly usage, offered models and any outage.
 The allowance is shared with other Codex use. Calls use no API dollars; after a failure,
 the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled

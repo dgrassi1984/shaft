@@ -395,6 +395,31 @@ class StartServicesTest(MigCase):
 
 
 class CodexTest(MigCase):
+    def test_preflight_accepts_chatgpt_or_codex_in_the_remote_login_shell(self):
+        checks = ("test -d /Applications/ChatGPT.app", 'test -d "$HOME/Applications/ChatGPT.app"',
+                  "\"$SHELL\" -lc 'command -v codex'")
+        self.runner.script = {"python3 --version": cp(0, "Python 3.12.4"),
+                              'printf %s "$HOME"': cp(0, "/Users/example"),
+                              "du -sk": cp(0, "1"), "/bin/df": cp(0, "header\n/dev/disk 10 1 9")}
+        with mock.patch.object(migrate, "_uses_codex", return_value=True), \
+                mock.patch.object(core, "instance_names", return_value=["example"]), \
+                mock.patch.object(core, "shared_folder", return_value=None), \
+                mock.patch.object(migrate, "_tailscale_json", return_value={"MagicDNSSuffix": "example.ts.net"}), \
+                mock.patch.object(migrate, "_require_remote_no_shaft"), \
+                mock.patch.object(migrate, "_check_target_folder"):
+            for available in (*checks, None):
+                with self.subTest(available=available), contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.runner.calls.clear()
+                    self.runner.script.update({check: cp(0 if check == available else 1) for check in checks})
+                    if available is None:
+                        with self.assertRaisesRegex(migrate.Stop, r"no Codex \(ChatGPT for Mac or the Codex CLI\) on new"):
+                            migrate._check_new_mac(self.mig(host="new"))
+                    else:
+                        migrate._check_new_mac(self.mig(host="new"))
+                        self.assertIn("ok   Codex present", out.getvalue())
+                    probed = [call[-1] for call in self.runner.calls if call[-1] in checks]
+                    self.assertEqual(probed, list(checks[:checks.index(available) + 1] if available else checks))
+
     def test_missing_runs_login(self):
         m = self.mig()
         self.runner.script = {"shaft codex status": cp(0, "Codex login: missing; run shaft codex login\n")}

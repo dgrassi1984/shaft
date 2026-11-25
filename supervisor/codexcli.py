@@ -13,6 +13,7 @@ import fcntl
 import sqlite3
 import subprocess
 import tempfile
+from threading import Lock
 import time
 from typing import Callable
 
@@ -40,8 +41,8 @@ def _percent(value: str) -> int:
 
 HOME, _ = knob("SHAFT_CODEX_HOME", str(SUP_DIR / "codex-home"), Path,
     "private Codex configuration and login directory", group="Codex", services=("runs", "api"))
-BIN, _ = knob("SHAFT_CODEX_BIN", "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", str,
-    "Codex CLI executable", group="Codex", services=("runs", "api"))
+BIN_SETTING, _ = knob("SHAFT_CODEX_BIN", "", str,
+    "Codex CLI executable override (empty: find automatically)", group="Codex", services=("runs", "api"))
 MODELS, _ = knob("SHAFT_CODEX_MODELS", "", _models,
     "only these of the models Codex lists, comma separated; empty: every model Codex lists", group="Codex", services=("runs", "api"))
 WEEKLY_PCT, _ = knob("SHAFT_CODEX_WEEKLY_PCT", "85", _percent,
@@ -62,6 +63,110 @@ LABEL = "Codex"
 VENDOR = "openai"
 SEES_IMAGES = True
 STATE = planchannel.ProviderState("codex", LABEL)
+APP_FOLDERS = (Path("/Applications"), Path.home() / "Applications")
+SYSTEM_BIN_FOLDERS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
+LOGIN_SHELL_TIMEOUT_S = 10
+BIN_MISS_TTL_S = 60
+BIN_NOT_FOUND = ("Codex is not installed on this Mac: install ChatGPT for Mac (Codex comes with it) or the Codex CLI "
+                 "(`brew install codex` or `npm i -g @openai/codex`), or set SHAFT_CODEX_BIN.")
+_bin_cache: tuple[tuple[str | None, str | None], float | None] | None = None
+_bin_lock = Lock()
+
+
+def _executable(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def _which(name: str, first: Path | None = None) -> str | None:
+    if first is not None and (path := shutil.which(name, path=str(first))):
+        return os.path.abspath(path)
+    if path := shutil.which(name):
+        return os.path.abspath(path)
+    home = Path.home()
+    nvm = []
+    for folder in (home / ".nvm/versions/node").glob("*/bin"):
+        match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(.*)", folder.parent.name)
+        version = (*map(int, match.groups()[:3]), not match[4]) if match else ()
+        nvm.append((version, folder))
+    folders = (*SYSTEM_BIN_FOLDERS, home / ".local/bin", home / ".npm-global/bin",
+               home / ".volta/bin", home / ".bun/bin", *(path for _, path in sorted(nvm, reverse=True)))
+    return shutil.which(name, path=os.pathsep.join(map(str, folders)))
+
+
+def _find_bin() -> tuple[str | None, str | None]:
+    global _bin_cache
+    with _bin_lock:
+        if _bin_cache is not None:
+            result, expires_at = _bin_cache
+            if expires_at is None or time.monotonic() < expires_at:
+                return result
+        result = _probe_bin()
+        expires_at = time.monotonic() + BIN_MISS_TTL_S if result[0] is None else None
+        _bin_cache = result, expires_at
+        return result
+
+
+def _probe_bin() -> tuple[str | None, str | None]:
+    if BIN_SETTING:
+        return BIN_SETTING, "setting"
+    for folder in APP_FOLDERS:
+        path = str(folder / "ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        if _executable(path):
+            return path, "chatgpt-app"
+    if path := _which("codex"):
+        return path, "path"
+    try:
+        probe = subprocess.run([os.environ.get("SHELL") or "/bin/zsh", "-lc", "command -v codex"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               encoding="utf-8", errors="replace", timeout=LOGIN_SHELL_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+    lines = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
+    if probe.returncode == 0 and lines and os.path.isabs(lines[-1]) and _executable(lines[-1]):
+        return lines[-1], "login-shell"
+    return None, None
+
+
+def find_bin() -> str | None:
+    return _find_bin()[0]
+
+
+def bin_source() -> str | None:
+    return _find_bin()[1]
+
+
+def bin_error(path: str | None) -> str | None:
+    if path is None:
+        return BIN_NOT_FOUND
+    if not _executable(path):
+        return f"no Codex CLI at {path} (SHAFT_CODEX_BIN)"
+    return None
+
+
+def _node_for(binary: str) -> str | None:
+    try:
+        with open(binary, "rb") as script:
+            words = script.readline(256).split() if script.read(2) == b"#!" else []
+    except OSError:
+        return None
+    if words[:2] == [b"/usr/bin/env", b"node"]:
+        return _which("node", Path(binary).absolute().parent)
+    if words and words[0].endswith(b"/node"):
+        path = os.fsdecode(words[0])
+        if os.path.isabs(path) and _executable(path):
+            return path
+    return None
+
+
+def login_env(binary: str, home: Path) -> dict[str, str]:
+    env = {**os.environ, "CODEX_HOME": str(home)}
+    if node := _node_for(binary):
+        env["PATH"] = _node_path(node)
+    return env
+
+
+def _node_path(node: str) -> str:
+    return str(Path(node).parent) + os.pathsep + (os.environ.get("PATH") or "/usr/bin:/bin")
 
 # Codex appends its own permissions/environment text that says the session is read-only, so instances skip writes without trying.
 PROMPT_CONTEXT_FLAGS = ("include_permissions_instructions=false",
@@ -175,16 +280,32 @@ def _limits(value: dict) -> bool:
     return False
 
 
-def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path) -> list[str]:
+def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path, node: str | None = None) -> list[str]:
     """Close the operator's home, shared disks and temp files to surviving native tools."""
     quote = json.dumps
+    operator_home = Path.home().resolve()
     profile = ["(version 1)", "(allow default)", *sandbox._operator_places_closed(),
-               f"(deny file-read* file-write* (subpath {quote(str(Path.home().resolve()))}))"]
+               f"(deny file-read* file-write* (subpath {quote(str(operator_home))}))"]
     for allowed in (home, folder):
         profile.append(f"(allow file-read* file-write* (subpath {quote(str(allowed))}))")
     profile.append(f"(allow file-read* file-write* (literal {quote(str(auth))}))")
     ancestors = sorted({p for allowed in (home, folder, auth) for p in allowed.parents})
     profile.append("(allow file-read-metadata " + " ".join(f"(literal {quote(str(p))})" for p in ancestors) + ")")
+    binary = Path(os.path.realpath(argv[0])) if os.path.isabs(argv[0]) else None
+    if binary is not None and operator_home in binary.parents:
+        package = next((p for p in binary.parents
+                        if p != operator_home and p.is_relative_to(operator_home) and (p / "package.json").is_file()),
+                       binary.parent)
+        # An executable placed directly in ~ gets a literal allow, never a subpath allow on ~.
+        scope, allowed = ("literal", binary) if package == operator_home else ("subpath", package)
+        profile.append(f"(allow file-read* ({scope} {quote(str(allowed))}))")
+    if node:
+        real_node = Path(os.path.realpath(node))
+        if operator_home in real_node.parents:
+            root = real_node.parent.parent if real_node.parent.name == "bin" else real_node.parent
+            scope, allowed = ("subpath", root) if root.is_relative_to(operator_home) and root != operator_home else (
+                "literal", real_node)
+            profile.append(f"(allow file-read* ({scope} {quote(str(allowed))}))")
     path = folder / "seatbelt.sb"
     path.write_text("\n".join(profile) + "\n")
     return sandbox.wrap(path, argv)
@@ -217,6 +338,9 @@ class Channel(planchannel.Channel):
 
     def _start_server(self):
         from .runner import RunRefused
+        binary = find_bin()
+        if error := bin_error(binary):
+            raise CodexFailure(error)
         home = Path(HOME).expanduser().resolve()
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
         home.chmod(0o700)
@@ -227,7 +351,7 @@ class Channel(planchannel.Channel):
                                         "Codex is not signed in: sign in with ChatGPT on the Model step"))
         _prune_logs(home)
         self._folder = Path(tempfile.mkdtemp(prefix="shaft-codex-")).resolve()
-        argv = [BIN]
+        argv = [os.path.abspath(binary)]
         for feature in FEATURES:
             argv += ["--disable", feature]
         for flag in PROMPT_CONTEXT_FLAGS:
@@ -235,8 +359,11 @@ class Channel(planchannel.Channel):
         argv += ["-c", 'web_search="disabled"', "-c", "agents.enabled=false", "-c", "mcp_servers={}", "app-server"]
         env = {"HOME": str(Path.home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                "TMPDIR": str(self._folder), "LANG": os.environ.get("LANG", "en_US.UTF-8"), "CODEX_HOME": str(home)}
+        node = _node_for(binary)
+        if node:
+            env["PATH"] = _node_path(node)
         try:
-            self._process = subprocess.Popen(_seatbelt(argv, self._folder, home, auth.resolve()),
+            self._process = subprocess.Popen(_seatbelt(argv, self._folder, home, auth.resolve(), node),
                 cwd=self._folder, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True)
         except (OSError, RunRefused) as exc:
@@ -434,6 +561,9 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
     soon as the CLI prints them (each once). (True, "") once it exits 0 with a login in `home` (what `shaft codex status`
     reads, auth.json); else (False, its real error). A timeout, SIGTERM/SIGHUP or the parent's exit (the app quit) stops
     the CLI first: nothing of this sign-in keeps running."""
+    binary = find_bin()
+    if error := bin_error(binary):
+        return False, error
     import queue
     import threading
     limit = LOGIN_TIMEOUT_S if timeout is None else timeout
@@ -448,8 +578,9 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
     proc = None
     readers: list = []
     try:
-        proc = subprocess.Popen([BIN, "login", "--device-auth"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env={**os.environ, "CODEX_HOME": str(home), "NO_COLOR": "1"},
+        proc = subprocess.Popen([os.path.abspath(binary), "login", "--device-auth"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env={**login_env(binary, home), "NO_COLOR": "1"},
                                 start_new_session=True)
 
         def read(name, stream):
@@ -522,7 +653,7 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
         return False, (" ".join(words) or f"codex login --device-auth exited with status {status}"
                        + ("" if status else f", leaving no login in {home}"))
     except OSError as e:
-        return False, f"could not run {BIN}: {e}"
+        return False, f"could not run {binary}: {e}"
     finally:
         if proc is not None:
             _stop_login(proc)

@@ -110,9 +110,12 @@ while building this hook. Source: [perturbation.py](../supervisor/perturbation.p
 
 ## Codex plan routing
 
-Install the Codex CLI first. The default executable is
-`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`; install the app
-there or set `SHAFT_CODEX_BIN` to your CLI executable.
+Install ChatGPT for Mac or the Codex CLI (`brew install codex` or `npm i -g @openai/codex`).
+SHAFT uses `SHAFT_CODEX_BIN` if set. Otherwise it looks for the Codex bundled with ChatGPT in
+`/Applications` and then `~/Applications`. Next it searches `PATH`, then `/opt/homebrew/bin`,
+`/usr/local/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/.volta/bin`, `~/.bun/bin` and
+`~/.nvm/versions/node/*/bin` (newest version first). It tries the operator's login shell last.
+Run `bin/shaft codex where` to see which executable SHAFT found.
 Run `bin/shaft codex login` to sign in using SHAFT's private Codex home, then
 `bin/shaft config <name> set LLM_MODEL=codex/gpt-6-astra`.
 The broker keeps one Codex session per run. It needs no local model server and accepts text and images;

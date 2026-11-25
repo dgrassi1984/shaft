@@ -86,7 +86,7 @@ enum ProviderKind: String, CaseIterable, Identifiable, Sendable {
     var subtitle: String {
         switch self {
         case .openrouter: "One key reaches many models: the instance, its judges and SHAFT's helpers."
-        case .codex: "Your ChatGPT plan through the Codex in ChatGPT for Mac. No key: you sign in."
+        case .codex: "Your ChatGPT plan through Codex (ChatGPT for Mac or the Codex CLI). No key: you sign in."
         case .custom: "Any OpenAI-compatible endpoint: its URL, a key and the models with their prices."
         }
     }
