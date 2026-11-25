@@ -96,6 +96,7 @@ class SleepFeedbackTest(InstanceFixture, unittest.TestCase):
             choice["message"]["tool_calls"] = [{"function": {"arguments": "{"}}]
         return io.BytesIO(json.dumps({"choices": [choice]}).encode())
 
+    @mock.patch.object(sleep, "entry_problems", new=lambda *a, **k: [], create=True)   # not about the #13 entry check
     def test_row_8_sleep_retries_length_and_never_parses_cut_tool_calls(self):
         for reason in ("finish_reason", "stop_reason"):
             with self.subTest(reason=reason):

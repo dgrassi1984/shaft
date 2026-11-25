@@ -99,6 +99,7 @@ class OpenTalkContextTest(InstanceFixture, unittest.TestCase):
         # Parent live.run only builds system_prompt; it never adds unwritten_context.
         self.check_context(live.run)
 
+    @mock.patch.object(sleep, "entry_problems", new=lambda *a, **k: [], create=True)   # not about the #13 entry check
     def test_sleep_sees_capped_open_transcript_without_writing_it_up(self):
         # Parent sleep.run likewise omits the open transcript from its system message.
         self.check_context(sleep.run)

@@ -27,6 +27,8 @@ class FactsTest(InstanceFixture, unittest.TestCase):
         self.path.write_text("# Facts I have learned\n\n" + OLD + "\n")
         self.box = Toolbox(self.root)
         self.enterContext(mock.patch.object(clock, "now", return_value=NOW))
+        # these sleeps are about facts, not the #13 entry check (self-model line, improvement ids)
+        self.enterContext(mock.patch.object(sleep, "entry_problems", return_value=[], create=True))
 
     def remember(self, supersedes):
         return self.box.run("remember", json.dumps({"fact": "Today is Wed 28 Oct", "source": "operator",

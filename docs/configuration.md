@@ -445,7 +445,9 @@ ledger's file writes are cut from their oldest end at 800 characters, each one l
 
 `GOAL_SLATE` (on, off) shows a live cycle, before `declare_intent`, up to six candidate goals from the instance's own
 records: inbox messages (the operator's first), overdue commitments, projects at risk or past a boundary, its last live
-cycle's `next_action`, and its top open surprise — one of each kind first, in that order, then the rest — each with the
+cycle's `next_action`, its top open surprise and its open improvement items (`memory/improvements.jsonl`) — one of each
+kind first, in that order, then the rest; in idle time (inbox empty, no commitment overdue) up to three improvement
+items lead, under a heading that says nothing for the operator is due — each with the
 judged value of the newest similar earlier goal (word overlap at least 0.2) that has one. In a trial replay whose
 monitor probe removes or replaces the open surprises (`x_probes`), the slate's surprise follows that arm. The model still chooses;
 how often similar goals were met is never shown, since declare_intent's base rate is what the confirm step measures.
