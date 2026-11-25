@@ -3,7 +3,9 @@ the reply is relayed and saved by the web server, so it keeps going when the bro
 interjections, Stop and End go to the API; files go in as Telegram's do."""
 from __future__ import annotations
 
+import http.client
 import json
+import socket
 import shutil
 import tempfile
 import threading
@@ -244,6 +246,110 @@ class RelayTest(ChatTest):
         c = self.wait_idle(chat["id"], 15)
         self.assertEqual(c["turns"][-1]["role"], "assistant")
         self.assertIn({"role": "user", "content": "late"}, self.api.chats()[-1][2]["messages"])
+
+    # -- issue #16: three edge cases of the unheard-message follow-up ---------------------------------------------------
+    def clock(self, at: str) -> None:
+        """web_chat's wall clock, set by the test: every turn written from now on is stamped `at`."""
+        self._clock = at
+        if not getattr(self, "_clocked", False):
+            self._clocked = True
+            p = mock.patch.object(web_chat, "_now", lambda: self._clock)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def interject_late(self, start: str, late: str) -> dict:
+        """`start` begins a held reply; `late` is sent during it (202) and heard by none of it (heard 0)."""
+        self.api.hold.set()
+        chat, _ = say(start, [])
+        time.sleep(0.3)
+        say(late, [])
+        return chat
+
+    def test_issue_16_a_clock_rolled_back_mid_thread_keeps_the_follow_up_in_order(self):
+        """#16 case 1. The wall clock went back an hour between the first answer and the next message: sorted by time,
+        the thread's turns put the first exchange last, so the follow-up ended with an assistant turn and the API
+        refused it ("messages must end with a user message"). The thread's own turns keep the order they were
+        written in; time only places what was routed in among them. Reverting _dialogue's merge fails this."""
+        self.clock("2026-11-23T01:50:00")
+        chat, _ = say("first", [])
+        self.wait_idle(chat["id"])
+        self.clock("2026-11-23T00:59:00")                    # rolled back
+        self.interject_late("second", "late")
+        self.clock("2026-11-23T00:59:40")
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note"], "", "the follow-up failed")
+        followup = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([(m["role"], m["content"].split("\n")[0]) for m in followup],
+                         [("user", "first"), ("assistant", "Answer 1."), ("user", "second"),
+                          ("assistant", c["turns"][4]["content"]), ("user", "late")])
+
+    def test_issue_16_a_clock_rolled_back_during_the_reply_still_puts_the_late_message_last(self):
+        """#16 case 1, the other side: the clock went back while the reply ran, so its answer is stamped before every
+        earlier turn. The late message still follows the answer it missed, and the follow-up ends with it."""
+        self.clock("2026-11-23T01:50:00")
+        chat, _ = say("first", [])
+        self.wait_idle(chat["id"])
+        self.clock("2026-11-23T01:58:30")
+        self.interject_late("second", "late")
+        self.clock("2026-11-23T01:00:00")                    # rolled back before the answer
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        followup = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([m["content"].split("\n")[0] for m in followup],
+                         ["first", "Answer 1.", "second", c["turns"][4]["content"], "late"])
+        self.assertEqual(c["turns"][-1]["note"], "")
+
+    def test_issue_16_retry_after_a_failed_follow_up_sends_the_late_message_once(self):
+        """#16 case 2. The follow-up that answers an unheard message failed before it was posted (connection refused):
+        Retry offered the late message, but mark_retried only folded the turn before the failure (the first answer),
+        so the late message went out twice. A failed reply remembers the turns it answered and Retry folds those."""
+        refused = socket.socket()
+        refused.bind(("127.0.0.1", 0))
+        dead = refused.getsockname()[1]
+        refused.close()                                       # nothing listens there: ConnectionRefusedError
+        real, calls = web_chat._api_conn, []
+
+        def conn(timeout):
+            calls.append(timeout)
+            if len(calls) == 3:                               # the reply, the interjection, then the follow-up
+                return http.client.HTTPConnection("127.0.0.1", dead, timeout=timeout)
+            return real(timeout)
+
+        with mock.patch.object(web_chat, "_api_conn", conn):
+            chat = self.interject_late("start", "late")
+            self.api.hold.clear()
+            c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note_kind"], "connection")
+        retry = web_chat.feed("wisp", chat["id"])["items"][-1]["failure"]["retry"]
+        self.assertEqual((retry["text"], retry["confirm"]), ("late", None))
+        say(retry["text"], retry_of=str(retry["retry_of"]), cid=chat["id"])
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(c["turns"][-1]["note"], "")
+        sent = self.api.chats()[-1][2]["messages"]
+        self.assertEqual([m["content"] for m in sent].count("late"), 1, sent)
+        self.assertEqual(sent[-1], {"role": "user", "content": "late"})
+
+    def test_issue_16_a_refused_interjection_then_a_heard_one_answers_the_refused_one_next(self):
+        """#16 case 3. One interjection was refused (409: the API had not registered the reply yet), the next taken and
+        heard (heard 1). Both were counted alike, so the heard one was taken as unheard and the refused one as heard:
+        the follow-up answered the wrong message. Only accepted interjections take the heard count."""
+        self.api.hold.set()
+        self.api.heard = 1
+        chat, _ = say("start", [])
+        time.sleep(0.3)
+        self.api.interject_status = 409
+        _, said = say("refused one", [])
+        self.assertEqual(said, "wisp was just finishing: it answers this next")
+        self.api.interject_status = 202
+        say("heard one", [])
+        self.api.hold.clear()
+        c = self.wait_idle(chat["id"], 15)
+        self.assertEqual(len(self.api.chats()), 2)
+        followup = [m["content"] for m in self.api.chats()[1][2]["messages"]]
+        self.assertEqual(followup[-1], "refused one")
+        self.assertLess(followup.index("heard one"), followup.index(c["turns"][3]["content"]))
+        self.assertEqual(c["turns"][-1]["note"], "")
 
     def test_stop_ends_the_reply_and_the_api_sees_its_client_go(self):
         self.api.hold.set()
