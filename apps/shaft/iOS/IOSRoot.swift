@@ -8,11 +8,30 @@ import SwiftUI
 /// sidebar alike.
 struct IOSRoot: View {
     let model: AppModel
+    let recorder: IOSMeetingRecorder
+    @State private var meetings = false
 
     var body: some View {
         SessionRoot(model: model) { session, store in
-            ChatsLayout(session: session, store: store)
+            ChatsLayout(session: session, store: store, meetings: $meetings)
                 .task { await VoiceReporter.atLaunch(client: store.client) }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if recorder.started != nil, !meetings {
+                Button {
+                    meetings = true
+                } label: {
+                    Label(recorder.interrupted ? "Recording paused" : "Recording meeting", systemImage: "mic.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Design.Space.s8)
+                }
+                .foregroundStyle(Color.danger)
+                .background(.regularMaterial)
+                .accessibilityHint("Opens Meetings")
+            }
+        }
+        .fullScreenCover(isPresented: $meetings) {
+            IOSMeetingsScreen(client: model.session?.store?.client, recorder: recorder)
         }
     }
 }
@@ -20,12 +39,14 @@ struct IOSRoot: View {
 struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
+    @Binding var meetings: Bool
     @Environment(AppModel.self) private var model
     @AppStorage("chat.last") private var last = ""
     @State private var selection: ChatSelection?
     @State private var path: [ArchivedRoute] = []
     @State private var switching = false
     @State private var settings = false
+    @State private var meetingsAfterSwitcher = false
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var compactColumn = NavigationSplitViewColumn.detail
     /// The documents, not the operator, put the sidebar away: closing them brings it back.
@@ -46,7 +67,7 @@ struct ChatsLayout: View {
             }
         }
         .environment(shell)
-        .environment(\.chatCovered, switching || settings)
+        .environment(\.chatCovered, switching || settings || meetings)
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onAppear(perform: restore)
         .onDisappear { inspectorRestore?.cancel() }
@@ -76,13 +97,21 @@ struct ChatsLayout: View {
                 }
         }
         .environment(\.openConversationSwitcher, { switching = true })
-        .sheet(isPresented: $switching) {
+        .sheet(isPresented: $switching, onDismiss: {
+            if meetingsAfterSwitcher {
+                meetingsAfterSwitcher = false
+                meetings = true
+            }
+        }) {
             NavigationStack {
                 InstancesList(switcher: true, selection: Binding(get: { selection }, set: { chosen in
                     if let chosen { open(chosen); switching = false }
                 }), settings: {
                     switching = false
                     settings = true
+                }, meetings: session.isDemo ? nil : {
+                    meetingsAfterSwitcher = true
+                    switching = false
                 })
                 .listStyle(.plain)
                 .navigationBarTitleDisplayMode(.inline)
@@ -99,7 +128,8 @@ struct ChatsLayout: View {
     private var pad: some View {
         NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $compactColumn) {
             InstancesList(selection: Binding(get: { selection }, set: { chosen in if let chosen { open(chosen) } }),
-                          settings: { settings = true })
+                          settings: { settings = true },
+                          meetings: session.isDemo ? nil : { meetings = true })
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
         } detail: {
             NavigationStack(path: $path) {
@@ -209,6 +239,8 @@ struct ChatsLayout: View {
         shell.screen?.dismissPresentations()
         switching = false
         settings = false
+        meetingsAfterSwitcher = false
+        meetings = false
         path.removeAll()
         open(ChatSelection(target.instance, target.ref))
     }

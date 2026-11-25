@@ -67,6 +67,22 @@ class MeetingTest(AppTest):
         self.assertEqual(self.finish(path, first + second, 2).status, 200)
         self.assert_error(self.chunk(path, 1, second), 409, "refused")
 
+    def test_repeat_create_recovers_the_same_meeting_and_chunk_receipt(self):
+        client_id = "8f5ab4c1-f51f-4f5e-bac7-5a732202c2b0"
+        path, folder = self.create(client_id=client_id, title="Original")
+        self.assertEqual(self.chunk(path, 0, b"audio").status, 200)
+        retry = self.api(MEETINGS, "POST", {
+            "mode": "online", "started": "2026-01-01T12:00:00Z", "device": "example recorder", "ext": "caf",
+            "client_id": client_id.upper(), "title": "Retry",
+        })
+        self.assertEqual(retry.status, 201, retry.body)
+        self.assertEqual(json.loads(retry.body), {
+            "id": folder.name, "chunk_size": meetings.CHUNK_SIZE, "received": [0],
+        })
+        self.assertEqual(json.loads((folder / "meeting.json").read_bytes())["client_id"], client_id)
+        self.assertEqual([(row["id"], row["title"]) for row in self.get(MEETINGS)["meetings"]],
+                         [(folder.name, "Original")])
+
     def test_finish_mismatch_leaves_upload_resumable(self):
         path, folder = self.create()
         self.assertEqual(self.chunk(path, 1, b"b").status, 200)

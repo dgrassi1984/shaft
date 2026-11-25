@@ -13,6 +13,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 from . import core
 
@@ -147,7 +148,25 @@ def create(data: dict) -> dict:
         _json_bytes(metadata)
     except UnicodeError:
         raise Invalid("Meeting fields must contain valid Unicode.") from None
-    return _publish(metadata, encoded)
+    client_id = data.get("client_id")
+    if client_id is None:
+        return _publish(metadata, encoded)
+    try:
+        metadata["client_id"] = str(UUID(client_id))
+    except (AttributeError, ValueError, TypeError):
+        raise Invalid("client_id must be a UUID.") from None
+    root = _root()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (root / ".create.lock").open("ab") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for folder in root.glob("m-*"):
+            try:
+                with _locked(folder.name) as (_, existing):
+                    if existing.get("client_id") == metadata["client_id"]:
+                        return existing
+            except Missing:
+                continue
+        return _publish(metadata, encoded)
 
 
 def _received(folder: Path) -> list[int]:

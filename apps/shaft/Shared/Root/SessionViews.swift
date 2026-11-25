@@ -564,6 +564,7 @@ struct InstancesList: View {
     var switcher = false
     @Binding var selection: ChatSelection?
     var settings: () -> Void
+    var meetings: (() -> Void)? = nil
     @Environment(InstancesStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(SidebarDisclosure.key) private var expanded = ""
@@ -575,6 +576,9 @@ struct InstancesList: View {
 
     var body: some View {
         List(selection: $selection) {
+            if let meetings {
+                Button(action: meetings) { Label("Meetings", systemImage: "mic") }
+            }
             if store.loaded, let error = store.error {
                 Label(error.message, systemImage: "exclamationmark.triangle")
                     .font(.footnote).foregroundStyle(Color.warning)

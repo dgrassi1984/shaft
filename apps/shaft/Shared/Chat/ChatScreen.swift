@@ -25,6 +25,7 @@ struct ChatScreen: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var recordingBlocksTalk = false
     #endif
     /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
     /// or on a phone, this screen presents them as a sheet.
@@ -175,6 +176,9 @@ struct ChatScreen: View {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
         #if os(iOS)
+        .alert(IOSAudioUse.meetingInProgress, isPresented: $recordingBlocksTalk) {
+            Button("OK", role: .cancel) {}
+        }
         .fullScreenCover(isPresented: $screen.showVoice) {
             VoiceScreen(client: store.client, instance: chat.instance, cid: chat.ref.seenID, style: .fullScreen) {
                 screen.showVoice = false
@@ -396,7 +400,15 @@ struct ChatScreen: View {
     @ViewBuilder
     private var headerButtons: some View {
         if showsTalk {
-            Button { screen.showVoice = true } label: { Image(systemName: "waveform") }
+            Button {
+                #if os(iOS)
+                if IOSAudioUse.shared.owner == .meeting {
+                    recordingBlocksTalk = true
+                    return
+                }
+                #endif
+                screen.showVoice = true
+            } label: { Image(systemName: "waveform") }
                 .disabled(!canTalk)
                 .accessibilityLabel("Talk")
                 .accessibilityHint("Talk with \(chat.instance) by voice")

@@ -41,6 +41,7 @@ public struct MeetingCreate: Encodable, Sendable, Equatable {
     public var ext: String
     public var sidecar: [String: MeetingJSONValue]?
     public var account: String?
+    var clientId: UUID?
 
     public init(title: String? = nil, mode: String, started: Date, ended: Date? = nil,
                 device: String, ext: String, sidecar: [String: MeetingJSONValue]? = nil, account: String? = nil) {
