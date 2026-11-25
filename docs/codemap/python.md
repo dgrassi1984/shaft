@@ -75,7 +75,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/judge_probe.py` | — | `records`, `plant`, `plant_missed`, `run`, `line` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
-| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `hold`, `sync`, `observe`, `merged` |
+| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `holding`, `sync`, `observe`, `merged` |
 | `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `merge_turns`, `speech_seconds`, `drop_bleed`, `longest_clips`, `transcribe_meeting`, `render_markdown` |
 | `supervisor/listen_worker.py` | `Engines` | `recover`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |

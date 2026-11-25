@@ -381,33 +381,43 @@ class WithinARunTest(IsolatedCase):
 
     def test_the_conversation_a_pause_made_room_for_does_not_judge_the_cycles_promises(self):
         """Regression (#21 review): the conversation's own commit, while the cycle waited, judged the cycle's promises
-        before its episode existed."""
+        before its episode existed; and holding every verdict let the resumed cycle relabel the conversation's own."""
         from supervisor import ledger_mirror
         ledger_mirror.sync("ember", self.root)
-        made = self.made()
-        self.write(self.root / commitments.FILE, [made])
+        cycles, talks = self.made(1, talk="later"), self.made(2)
+        self.write(self.root / commitments.FILE, [cycles, talks])
         ledger_mirror.observe("ember", self.root)
-        ledger_mirror.hold("ember", True)
-        try:
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])          # the conversation's episode
+        with ledger_mirror.holding("ember"):
             ledger_mirror.sync("ember", self.root)                     # the conversation ends: its commit
-            self.assertNotIn("checked", ledger_mirror.records("ember", "commitments")[0])
-        finally:
-            ledger_mirror.hold("ember", False)
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
-        ledger_mirror.sync("ember", self.root)                         # the cycle ends
-        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual(recs[talks["id"]]["checked"]["made_to"], "operator")      # its source is there: recorded
+        self.assertNotIn("checked", recs[cycles["id"]])                            # the cycle's waits
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("later")])  # the cycle ends, the talk's gone
+        ledger_mirror.sync("ember", self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual((recs[cycles["id"]]["checked"]["made_to"], recs[talks["id"]]["checked"]["made_to"]),
+                         ("operator", "operator"))
 
     def test_a_hold_whose_runner_is_gone_holds_nothing(self):
+        """The hold is a lock, not a pid: a runner that died (its pid reused or not) holds nothing."""
+        import subprocess
+        import sys
         from supervisor import ledger_mirror
         ledger_mirror.sync("ember", self.root)
-        self.write(self.root / commitments.FILE, [self.made()])
-        ledger_mirror.observe("ember", self.root)
-        mark = ledger_mirror.path("ember", "commitments").with_name("held")
-        mark.write_text("999999\n")                                   # no such process
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
-        ledger_mirror.sync("ember", self.root)
-        self.assertIn("checked", ledger_mirror.records("ember", "commitments")[0])
-        self.assertFalse(mark.exists())
+        mark = ledger_mirror._hold_path("ember", None)
+        script = ("import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+                  "fcntl.flock(fd, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)")
+        proc = subprocess.Popen([sys.executable, "-c", script, str(mark)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(proc.stdout.readline().strip(), "held")
+            self.assertTrue(ledger_mirror._held("ember", None))
+        finally:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        self.assertTrue(mark.exists())
+        self.assertFalse(ledger_mirror._held("ember", None))
 
     def test_a_row_no_source_check_can_read_costs_only_itself(self):
         """Regression (#21 review): a waiting row whose time overflowed the clock raised in every judging sync, so no
@@ -419,9 +429,8 @@ class WithinARunTest(IsolatedCase):
         good = self.made(2)
         self.write(self.root / commitments.FILE, [bad, good])
         ledger_mirror.observe("ember", self.root)
-        self.write(self.root / commitments.FILE, [])
         self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
-        ledger_mirror.sync("ember", self.root)
+        ledger_mirror.sync("ember", self.root)          # still in the current ledger: it must not come back from there
         recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
         self.assertEqual(recs[good["id"]]["checked"]["made_to"], "operator")
         self.assertTrue(recs[bad["id"]].get("unjudged"))
@@ -441,4 +450,25 @@ class WithinARunTest(IsolatedCase):
         ledger_mirror.sync("ember", self.root, now=NOW)
         rec = ledger_mirror.records("ember", "commitments", as_of=NOW - timedelta(days=1))[0]
         self.assertEqual(rec["checked"]["made_to"], "operator")
+
+    def test_an_episode_the_check_cannot_read_leaves_every_promise_waiting(self):
+        """Regression (#21 review): an unreadable episode failed every row's check, and each was recorded as unjudged
+        for good; repairing the episode could not bring their verdicts back."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        made = self.made()
+        self.write(self.root / commitments.FILE, [made])
+        ledger_mirror.observe("ember", self.root)
+        broken = {"ts": "0001-01-01T00:00:00+23:59", "kind": "live"}
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk(), broken])
+        with self.assertRaises(OverflowError):
+            ledger_mirror.sync("ember", self.root)
+        self.assertNotIn("unjudged", ledger_mirror.records("ember", "commitments")[0])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])          # repaired
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
+
+    def test_relabelled_is_the_commitments_note(self):
+        from supervisor import ledger_mirror
+        self.assertEqual(ledger_mirror.RELABELLED, commitments.RELABELLED)
 
