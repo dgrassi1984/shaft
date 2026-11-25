@@ -29,6 +29,7 @@ Held, it counts as watching the chat.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -38,7 +39,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import apns, order, web
+from . import apns, meetings, order, speakers, web
 from .core import NAME_RE, log
 from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
@@ -1514,8 +1515,9 @@ def _setup_hello(req: Request, n: str) -> Response:
 
 # -- access (§18.6) ---------------------------------------------------------------------------------------------------
 GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
-                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"}}
-GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat"}
+                "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"},
+                "meetings": {"alias"}}
+GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat", "meetings": "meetings"}
 
 
 def _get_access(req: Request, n: str) -> Response:
@@ -1542,6 +1544,8 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
     if not google.ALIAS_RE.fullmatch(alias):
         raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")
     verb = GRANT_VERBS[grant]
+    if grant == "meetings":
+        return [[verb, action, n, alias]]
     if grant in ("drive", "chat"):
         return [[verb, n, action, alias] + (["--all"] if action == "grant" and data.get("all") else [])]
     op = action
@@ -1614,7 +1618,156 @@ def _google_calendars(req: Request, alias: str) -> Response:
                                                      for c in cals]})
 
 
+# -- meetings (§20) ---------------------------------------------------------------------------------------------------
+MEETING_ID = rf"(?P<meeting_id>{meetings.ID})"
+MEETING_ERRORS = {
+    meetings.Invalid: (400, "bad_request"),
+    meetings.Missing: (404, "not_found"),
+    meetings.Conflict: (409, "refused"),
+    meetings.TooLarge: (413, "too_large"),
+}
+
+
+def _meeting_call(operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except meetings.Error as e:
+        status, code = MEETING_ERRORS[type(e)]
+        raise Refusal(status, code, str(e)) from None
+
+
+def _meeting_metadata(row: dict) -> dict:
+    public = {key: value for key, value in row.items() if key not in ("notified", "ready_revision")}
+    return {**public, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
+
+
+def _create_meeting(req: Request) -> Response:
+    row = _meeting_call(meetings.create, _body(req))
+    return _json(201, {"id": row["id"], **meetings.upload_status(row)})
+
+
+def _meeting_chunk(req: Request, meeting_id: str, index: str) -> Response:
+    content_type = req.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/octet-stream":
+        raise Refusal(400, "bad_request", "Send each chunk as application/octet-stream.")
+    digits = index.lstrip("0") or "0"
+    if len(digits) > 255:
+        raise Refusal(400, "bad_request", "Chunk index is too large.")
+    source, length = req.body_stream or (io.BytesIO(req.body), len(req.body))
+    received = _meeting_call(meetings.put_chunk, meeting_id, int(digits), source, length)
+    return _json(200, {"received": received})
+
+
+def _meeting_upload(req: Request, meeting_id: str) -> Response:
+    return _json(200, meetings.upload_status(_meeting_call(meetings.get, meeting_id)))
+
+
+def _finish_meeting(req: Request, meeting_id: str) -> Response:
+    data = _body(req)
+    fields = {key: data.get(key) for key in ("size", "sha256", "chunks")}
+    return _json(200, _meeting_metadata(_meeting_call(meetings.finish, meeting_id, **fields)))
+
+
+def _list_meetings(req: Request) -> Response:
+    return _json(200, {"meetings": [_meeting_metadata(row) for row in _meeting_call(meetings.list_meetings)]})
+
+
+def _show_meeting(req: Request, meeting_id: str) -> Response:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    try:
+        page = int(query.get("page", ["1"])[0])
+        if page < 1:
+            raise ValueError
+    except ValueError:
+        raise Refusal(400, "bad_request", "page must be a positive integer.") from None
+    return _json(200, _meeting_metadata(_meeting_call(meetings.detail, meeting_id, page)))
+
+
+def _update_meeting(req: Request, meeting_id: str) -> Response:
+    return _json(200, _meeting_metadata(_meeting_call(meetings.update, meeting_id, _body(req))))
+
+
+def _meeting_proposals(req: Request) -> Response:
+    from . import meeting_proposals
+    return _json(200, {"proposals": meeting_proposals.pending()})
+
+
+def _decide_meeting_proposal(req: Request) -> Response:
+    from . import meeting_proposals
+    data = _body(req)
+    return _json(200, _meeting_call(meeting_proposals.decide, data.get("id"), data.get("approve")))
+
+
+def _reprocess_meeting(req: Request, meeting_id: str) -> Response:
+    return _json(200, _meeting_metadata(_meeting_call(meetings.reprocess, meeting_id)))
+
+
+def _delete_meeting(req: Request, meeting_id: str) -> Response:
+    delete = speakers.delete_meeting if _meeting_flag(req, "forget_voices") else meetings.delete
+    _meeting_call(delete, meeting_id)
+    return _json(200, {"id": meeting_id, "deleted": True})
+
+
+def _meeting_flag(req: Request, key: str) -> bool:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    value = query.get(key, ["0"])
+    if value not in (["0"], ["1"]):
+        raise Refusal(400, "bad_request", f"{key} must be 0 or 1.")
+    return value == ["1"]
+
+
+def _meeting_clip(req: Request, meeting_id: str) -> Response:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    try:
+        index = int(query.get("n", ["0"])[0])
+        if index < 0:
+            raise ValueError
+    except ValueError:
+        raise Refusal(400, "bad_request", "n must be a non-negative integer.") from None
+    try:
+        audio = _meeting_call(speakers.clip, meeting_id, query.get("speaker", [""])[0], index)
+    except OSError:
+        raise Refusal(500, "internal", "Could not read speaker clip.") from None
+    return Response(200, audio, {"Content-Type": "audio/wav", "Cache-Control": "no-store"})
+
+
+def _meeting_speaker(req: Request, meeting_id: str) -> Response:
+    body = _body(req)
+    if ("name" in body) == ("merge_into" in body):
+        raise Refusal(400, "bad_request", "Supply either name or merge_into.")
+    operation, value = ((speakers.name_label, body["name"]) if "name" in body
+                        else (speakers.merge_labels, body["merge_into"]))
+    return _json(200, _meeting_call(operation, meeting_id, body.get("label"), value))
+
+
+def _list_speakers(req: Request) -> Response:
+    people = _meeting_call(speakers.list_people)
+    return _json(200, {"people": [{**p, "created": stamp(p["created"])} for p in people]})
+
+
+def _rename_speaker(req: Request, pid: str) -> Response:
+    person = _meeting_call(speakers.rename, pid, _body(req).get("name"))
+    return _json(200, {**person, "created": stamp(person["created"])})
+
+
+def _forget_speaker(req: Request, pid: str) -> Response:
+    _meeting_call(speakers.forget, pid, anonymise=_meeting_flag(req, "anonymise"))
+    return _json(200, {"id": pid, "deleted": True})
+
+
 ROUTES: list[tuple[str, dict]] = [
+    (r"/meetings", {"GET": _list_meetings, "POST": _create_meeting}),
+    (r"/meetings/proposals", {"GET": _meeting_proposals, "POST": _decide_meeting_proposal}),
+    (rf"/meetings/{MEETING_ID}", {"GET": _show_meeting, "POST": _update_meeting, "DELETE": _delete_meeting}),
+    (meetings.CHUNK_ROUTE, {"PUT": _meeting_chunk}),
+    (rf"/meetings/{MEETING_ID}/upload", {"GET": _meeting_upload}),
+    (rf"/meetings/{MEETING_ID}/finish", {"POST": _finish_meeting}),
+    (rf"/meetings/{MEETING_ID}/reprocess", {"POST": _reprocess_meeting}),
+    (rf"/meetings/{MEETING_ID}/clip", {"GET": _meeting_clip}),
+    (rf"/meetings/{MEETING_ID}/speakers", {"POST": _meeting_speaker}),
+    (r"/speakers", {"GET": _list_speakers}),
+    (rf"/speakers/(?P<pid>{speakers.ID})/rename", {"POST": _rename_speaker}),
+    (rf"/speakers/(?P<pid>{speakers.ID})", {"DELETE": _forget_speaker}),
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
     (r"/instances/move", {"POST": _move}),

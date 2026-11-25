@@ -165,10 +165,15 @@ targets:
         CFBundleDisplayName: SHAFT
         LSApplicationCategoryType: public.app-category.productivity
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
-        # Voice mode: asked when voice mode first opens.
+        # Voice mode and meeting recording: asked when either first starts.
         NSMicrophoneUsageDescription: >-
-          SHAFT listens while voice mode is open, so you can talk with an instance. The audio stays on this Mac: only
-          the transcript of what you say is sent, as your message.
+          SHAFT listens while voice mode is open, so you can talk with an instance; that audio stays on this Mac and
+          only the transcript is sent. When you record a meeting, the recording goes to your SHAFT server and nowhere
+          else.
+        # Meeting recording (online): the other participants, through the sound other apps play.
+        NSAudioCaptureUsageDescription: >-
+          SHAFT records the sound of your call while you record a meeting, so the transcript has everyone who spoke.
+          The recording goes to your SHAFT server and nowhere else.
         NSSpeechRecognitionUsageDescription: >-
           SHAFT turns what you say into text on this Mac while voice mode is open. The audio stays on the device: only
           the transcript is sent, as your message.

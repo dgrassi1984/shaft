@@ -621,7 +621,7 @@ public final class APIClient: Sendable {
         return request
     }
 
-    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+    func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         let (data, _) = try await send(makeRequest("GET", path, query: query), path: path)
         return try Self.decode(data, path: path)
     }
@@ -636,7 +636,7 @@ public final class APIClient: Sendable {
         return .value(try Self.decode(data, path: path), etag: response.value(forHTTPHeaderField: "ETag"))
     }
 
-    private func post<T: Decodable, Body: Encodable>(_ path: String, json body: Body,
+    func post<T: Decodable, Body: Encodable>(_ path: String, json body: Body,
                                                timeout: TimeInterval? = nil) async throws -> T {
         var request = makeRequest("POST", path)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -646,7 +646,7 @@ public final class APIClient: Sendable {
         return try Self.decode(data, path: path)
     }
 
-    private func send(_ request: URLRequest, path: String, upload: URL? = nil) async throws -> (Data, HTTPURLResponse) {
+    func send(_ request: URLRequest, path: String, upload: URL? = nil) async throws -> (Data, HTTPURLResponse) {
         try await Self.perform(request, session: session, path: path, upload: upload)
     }
 

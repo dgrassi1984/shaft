@@ -17,6 +17,7 @@ __pycache__/
 /.venv-ft/
 /.models/
 /.venv-bonsai/
+/.venv-listen/
 /.venv-ui/
 
 # the Chromium every instance browses with (shaft browser install); .new/.old while it is replaced

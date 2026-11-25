@@ -17,7 +17,7 @@ from . import messages
 from .core import (jsonl_lines, SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, list_beneath, paused,
                    safe_read)
 
-SERVICES = ("model", "embed", "api", "scheduler", "telegram", "web")
+SERVICES = ("model", "embed", "listen", "api", "scheduler", "telegram", "web")
 NOISE = ('api "GET', 'api "POST', "background journal write-up started")   # feed lines that say nothing new
 
 

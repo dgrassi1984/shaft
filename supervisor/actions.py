@@ -270,6 +270,11 @@ def guard_reason(service: str, action: str, scheduled: list[str], busy: list[str
                 + LATER)
     if service in ("model", "embed", "api") and busy:
         return f"runs in progress use it: {', '.join(busy)}." + LATER
+    if service == "listen":
+        from . import meetings
+        processing = [row["id"] for row in meetings.list_meetings() if row["state"] == "processing"]
+        if processing:
+            return f"meetings are processing: {', '.join(processing)}." + LATER
     return ""
 
 
@@ -282,6 +287,8 @@ def force_question(service: str, action: str, why: str) -> str:
     verb = {"off": "stop", "restart": "restart"}.get(action, f"turn {action}")
     what = f"autonomy {action}" if service == "autonomy" else f"{verb} {service}"
     then = "They end unfinished." if service in ("scheduler", "autonomy") else "Their calls to it fail while it is down."
+    if service == "listen":
+        then = "This interrupts processing."
     return f"force {what} now? Not safe: {why.removesuffix(LATER)} {then}"
 
 
@@ -290,7 +297,7 @@ def log_forced(who: str, args: list[str], why: str) -> None:
 
 
 FORCE = "--force"
-GUARDED_CLI = ("api", "model", "embed", "autonomy")   # the shaft verbs whose on/off restarts or stops a service
+GUARDED_CLI = ("api", "model", "embed", "listen", "autonomy")   # the shaft verbs whose on/off restarts or stops a service
 
 
 def cli_guard(cmd: str, action: str, force: bool) -> str:
@@ -308,6 +315,8 @@ def cli_guard(cmd: str, action: str, force: bool) -> str:
         return ""
     drain = " Or `shaft autonomy restart`: it restarts once they end, cutting none." if service == "scheduler" \
         and action == "on" else ""
+    if why and service == "listen":
+        return f"not now: {why.removesuffix(LATER)} Try again when they end, or add {FORCE} to interrupt processing."
     return why and (f"not now: {why.removesuffix(LATER)} Try again when they end, or add {FORCE} (they end "
                     f"unfinished).{drain}")
 

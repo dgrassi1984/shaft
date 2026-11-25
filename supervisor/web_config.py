@@ -21,7 +21,7 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar", "gdrive", "gchat",
-         "battery-switch", "channel", "orders-add", "orders-drop")
+         "meetings", "battery-switch", "channel", "orders-add", "orders-drop")
 DRIVE_MAX = 20000
 
 
@@ -95,6 +95,11 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
             raise Refused("gdrive grant or revoke needs an account")
         return _ran(["gdrive", name, op, alias] +
                     (["--all"] if op == "grant" and form.get("all") == "1" else []))
+    if verb == "meetings":
+        op, alias = form.get("op", ""), form.get("alias", "").strip()
+        if op not in ("grant", "revoke") or not alias:
+            raise Refused("meetings grant or revoke needs an account")
+        return _ran(["meetings", op, name, alias])
     if verb == "gchat":
         for field in form:
             if field not in ("op", "alias", "name"):
@@ -395,6 +400,20 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                          button("gchat", "Revoke all Chat", f"revoke every Chat grant of {n} and delete its copies?",
                                 {"name": n, "op": "off"}, "" if chat_items else "none granted", cls="small")])
 
+    meeting_rows = [h('<li>{alias} {b}</li>', alias=g["account"],
+                      b=button("meetings", "Revoke", f"Revoke the meeting grant for {g['account']}?",
+                               {"name": n, "op": "revoke", "alias": g["account"]}, cls="small"))
+                    for g in a.get("meetings", [])]
+    meeting_grant = (h('<form class="act" data-post="/action/meetings" '
+                       'data-confirm="Let {n} read transcripts filed under this account?"{a}>'
+                       '<input type="hidden" name="name" value="{n}"><input type="hidden" name="op" value="grant">'
+                       '<select name="alias" aria-label="account">{o}</select>'
+                       '<button type="submit" class="small">Grant</button></form>',
+                       n=n, o=acct_opts, a=post_attrs("Access", actions.RUN_NOW_S)) if accounts else
+                     h('<p class="dim">No Google account logged in.</p>'))
+    meeting_access = join([h('<ul class="lines">{r}</ul>', r=join(meeting_rows)) if meeting_rows else
+                           h('<p class="dim">none</p>'), meeting_grant])
+
     bat_op = "on" if a["battery_off"] else "off"
     battery = join([h('<p>The capability battery is <b>{s}</b> for {n}.</p>', s="off" if a["battery_off"] else "on",
                       n=n),
@@ -421,6 +440,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                 ("calendar", "Your calendars (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
                 ("gdrive", "Your Drive it may read (shaft gdrive)", drive_access),
                 ("gchat", "Your Google Chat it may read (shaft gchat)", chat_access),
+                ("meetings", "Meeting transcripts it may read (shaft meetings)", meeting_access),
                 ("", "Google accounts", google_accounts(n, a.get("google_accounts", {}))),
                 ("battery-switch", "Capability battery", battery),
                 ("", "Its own keys (shaft secret): names only", join([keys, h(
@@ -434,7 +454,7 @@ def access(name: str) -> dict:
     """What the Access page shows, from the readers the CLI verbs use."""
     from . import autonomy, battery, cloudllm, google, jobs
     from .core import (calendar_grants, gdrive_grants, gchat_grants, describe_key, disabled_tools, instance_root, mail_grants, read_secrets,
-                       shared_folder)
+                       meetings_grants, shared_folder)
     from . import channel
     floor = autonomy.wake_floor(name)
     cap = cloudllm.daily_cap(name)
@@ -446,6 +466,7 @@ def access(name: str) -> dict:
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
             "mail": mail_grants(name), "calendar": calendar_grants(name), "gdrive": gdrive_grants(name), "gchat": gchat_grants(name), "accounts": sorted(accounts),
+            "meetings": meetings_grants(name),
             "google_accounts": {alias: {k: data.get(k) for k in ("address", "client", "scope", "created")}
                                 for alias, data in accounts.items()},
             "battery_off": battery.off_path(name).exists(),

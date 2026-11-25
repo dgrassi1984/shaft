@@ -192,7 +192,9 @@ _WAKE = "wake (the note also wakes it, at most once per SHAFT_WATCH_WAKE_MIN"
 WATCH_HELP = {"WATCH_MAIL": f"New mail on your granted labels: off, inbox (a note in its inbox) or {_WAKE}).",
               "WATCH_CALENDAR": f"Changes on your granted calendars: off, inbox (a note in its inbox) or {_WAKE}).",
               "WATCH_GCHAT": f"New messages in your granted Google Chat: off, inbox (a note with their text in its "
-                             f"inbox) or {_WAKE}; your own messages alone never wake it)."}
+                             f"inbox) or {_WAKE}; your own messages alone never wake it).",
+              "WATCH_MEETINGS": "Newly ready meetings on granted accounts: off, inbox (a marked transcript page), "
+                                "or wake (the note also wakes the instance)."}
 
 
 def voice_mode(cfg: dict) -> str:

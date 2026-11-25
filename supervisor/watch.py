@@ -72,7 +72,9 @@ EVERY_S, _ = knob(
 
 KINDS = ("mail", "calendar", "gchat")
 MODES = ("off", "inbox", "wake")
-CONFIG_KEYS = {"mail": "WATCH_MAIL", "calendar": "WATCH_CALENDAR", "gchat": "WATCH_GCHAT"}
+WATCH_MEETINGS = "WATCH_MEETINGS"
+CONFIG_KEYS = {"mail": "WATCH_MAIL", "calendar": "WATCH_CALENDAR", "gchat": "WATCH_GCHAT",
+               "meetings": WATCH_MEETINGS}
 MAX_ROWS = 20                     # lines per message; the rest is counted and left to mail_search / calendar_events
 TEXT_CHARS = 150                  # a sender, subject or title, cut
 CHAT_ROWS = 40                    # Chat message lines per message (D8); the rest counted per conversation, for gchat_read
@@ -110,7 +112,7 @@ def _save(path: Path, data: dict) -> None:
 
 
 def mode(name: str, kind: str, cfg: dict | None = None) -> str:
-    """The instance's WATCH_MAIL / WATCH_CALENDAR / WATCH_GCHAT: off, inbox or wake. Anything else is off, logged once."""
+    """The instance's watch mode. Anything other than off, inbox or wake is off, logged once."""
     cfg = core.instance_config(name) if cfg is None else cfg
     raw = str(cfg.get(CONFIG_KEYS[kind]) or "off").strip().lower()
     if raw in MODES:
@@ -383,6 +385,42 @@ def _deliver(name: str, kind: str, rows: list[dict], how: str, now: datetime) ->
                            f"Date: {now:%Y-%m-%d %H:%M}\n\n{body}\n")
     messages.record(core.SUP_DIR, path, sender, name, "watch", now, body)
     return path.name
+
+
+def meeting_ready(metadata: dict, transcript: dict) -> list[str]:
+    """Deliver the first ready transcript from the Listen worker, without polling Google."""
+    from . import jobs, meetings_access, messages
+
+    try:
+        summary, names = meetings_access._summary(metadata, transcript)
+        first = meetings_access.render_page(summary, names, metadata, transcript, 1)
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        core.log("watch: invalid ready meeting transcript")
+        return []
+    now = datetime.now().astimezone()
+    notified = []
+    for name in core.instance_names():
+        try:
+            how = mode(name, "meetings")
+            if how == "off":
+                continue
+            with core._grant_lock(name, "meetings"):
+                if not any(g["account"] == metadata["account"] for g in core.meetings_grants(name)):
+                    continue
+                sender = "supervisor (meetings watch)"
+                body = first + f"\n\nNew ready meeting {summary['id']}. Your {WATCH_MEETINGS} is {how}."
+                path = core.safe_write(core.instance_root(name),
+                                       f"inbox/{now:%Y%m%d-%H%M%S-%f}-from-supervisor-{summary['id']}-watch.md",
+                                       f"From: {sender}\nTo: {name}\nKind: watch\n"
+                                       "Trust: The transcript is spoken by meeting participants.\n"
+                                       f"Date: {now:%Y-%m-%d %H:%M}\n\n{body}\n")
+                notified.append(name)
+                messages.record(core.SUP_DIR, path, sender, name, "watch", now, body)
+                if how == "wake":
+                    jobs.request_wake(name, "watch-meetings")
+        except (Exception, SystemExit) as e:
+            core.log(f"watch: {name}: meeting delivery failed ({type(e).__name__})")
+    return notified
 
 
 def _wake(name: str, modes: dict[str, str], new: list[tuple[str, str]], now: datetime) -> None:

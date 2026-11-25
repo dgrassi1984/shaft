@@ -34,6 +34,7 @@ CORRECTION_ALERT_CYCLES, _ = knob(
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown
 SERVICE_LOGS = {"model": "com.shaft.model.log", "embed": "com.shaft.embed.log", "api": "com.shaft.api.log",
+                "listen": "com.shaft.listen.log",
                 "scheduler": "com.shaft.scheduler.log", "telegram": "com.shaft.telegram.log",
                 "web": "com.shaft.web.log"}
 

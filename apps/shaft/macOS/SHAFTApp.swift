@@ -3,8 +3,8 @@ import SHAFTKit
 import SwiftUI
 import UserNotifications
 
-/// The Mac app's entry point (native SwiftUI, not Catalyst): one window (`MacRoot`: the instances, the chat, its
-/// documents), the menu commands (`MacCommands`, and "Check for Updates…" in the app menu) and a Settings window. The app delegate takes the push token and
+/// The Mac app's entry point: the main, Meetings and Settings windows, and the menu commands.
+/// The app delegate takes the push token and
 /// notification clicks, hands them to `AppModel`, and keeps the app running with its window closed, so a push still
 /// arrives and a click brings the window back on that chat.
 @main
@@ -21,6 +21,29 @@ struct SHAFTApp: App {
         .commands {
             MacCommands(state: delegate.state, menu: delegate.state.menu)
             CommandGroup(after: .appInfo) { CheckForUpdatesCommand(updates: delegate.updates) }
+            CommandMenu("Meeting") { MeetingMenuItems(recorder: delegate.meetings) }
+        }
+
+        Window("Meetings", id: MeetingsWindow.windowID) {
+            if let client = delegate.model.session?.store?.client {
+                MeetingsWindow(client: client, recorder: delegate.meetings)
+                    .id(ObjectIdentifier(client))
+                    .modifier(MacAppearance())
+            } else {
+                MarkMessage("Meetings unavailable", message: Text("Pair this Mac in the SHAFT window first."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .defaultSize(width: 960, height: 700)
+        .commands {
+            CommandMenu("Meeting") { MeetingMenuItems(recorder: delegate.meetings) }
+        }
+
+        // Meeting recording from the menu bar, also with the window closed (docs/meetings.md).
+        MenuBarExtra {
+            MeetingMenuItems(recorder: delegate.meetings)
+        } label: {
+            MeetingMenuLabel(recorder: delegate.meetings)
         }
 
         Settings {
@@ -38,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let setup = MacSetup()
     /// Self-update, in the Developer ID download only (`AppUpdates`, `UpdateFeed`).
     let updates = AppUpdates()
+    /// Meeting recording: the capture, and sending each recording to the paired server.
+    lazy var meetings = MeetingRecorder { [weak self] in self?.model.session?.store?.client }
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 
@@ -46,6 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A recording whose upload did not finish (the app quit, no server) goes out once the session has opened.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            await self?.meetings.sendPending()
+        }
         #if DEBUG
         FrameMeter.startIfAsked()
         #endif

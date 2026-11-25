@@ -25,14 +25,14 @@ from .core import KNOB_GROUPS, KNOBS, SERVICE_NAMES, config_lock, log, resolve
 
 # Every module that calls knob() at import (test_settings greps the code for knob(" calls and checks each is here).
 MODULES = ("core", "actions", "api", "apns", "autonomy", "battery", "broker", "calendar_proposals", "cloudllm", "effortcatalog", "codexcli", "grokcli", "claudecli", "agycli", "coder", "consult",
-           "finetune", "gate", "jobs", "judge", "localmodel", "metrics", "orders", "panel", "planchannel", "pushes", "recap", "selfhosted", "telegram", "trial",
+           "finetune", "gate", "jobs", "judge", "listen_worker", "localmodel", "metrics", "orders", "panel", "planchannel", "pushes", "recap", "selfhosted", "speakers", "telegram", "trial",
            "vision", "watch", "web")
 VALUE_MAX = 4000
 HEADER = ("# SHAFT's supervisor settings — written by `shaft settings set|unset` (and the web UI's Settings page).\n"
           "# KEY=value, the value verbatim to the end of its line (no quotes, no comments after it).\n"
           "# A process's environment wins over this file; a service reads it when it starts.\n")
 RESTART = {"api": "shaft api restart", "scheduler": "shaft autonomy on", "telegram": "shaft telegram on",
-           "web": "shaft web restart", "model": "shaft model on", "embed": "shaft embed on"}
+           "web": "shaft web restart", "model": "shaft model on", "embed": "shaft embed on", "listen": "shaft listen on"}
 
 
 class Refused(Exception):
