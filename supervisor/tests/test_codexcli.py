@@ -125,6 +125,29 @@ class CodexDiscoveryTest(unittest.TestCase):
         ])
         self.assertEqual(codex.login_env(str(wrapper), home)["PATH"].split(os.pathsep)[0], str(node.parent))
 
+    def test_seatbelt_reads_bundled_codex_resources_in_home_applications(self):
+        app = self.apps[1] / "ChatGPT.app"
+        package = app / "Contents/Resources/codex-cli"
+        self.executable(package / "CodexCLI.app/Contents/MacOS/codex")
+        wrapper = self.executable(package / "bin/codex",
+                                  '#!/bin/sh\nexec "$(dirname "$0")/../CodexCLI.app/Contents/MacOS/codex" "$@"\n')
+        (package / "codex-package.json").write_text("{}")
+        (package / "codex-resources").mkdir()
+        (package / "codex-path").mkdir()
+        folder = self.root / "run"
+        folder.mkdir()
+        home = self.home / "shaft-codex"
+
+        with mock.patch.object(Path, "home", return_value=self.home), \
+                mock.patch.object(codex.sandbox, "user_folder", return_value=self.root / "cache"):
+            codex._seatbelt([str(wrapper)], folder, home, home / "auth.json")
+
+        rules = (folder / "seatbelt.sb").read_text().splitlines()
+        self.assertIn(f"(allow file-read* (subpath {json.dumps(str(package))}))", rules)
+        read_allows = [line for line in rules if line.startswith("(allow file-read* ")]
+        for path in (app, self.home):
+            self.assertFalse(any(json.dumps(str(path)) in line for line in read_allows), read_allows)
+
     def test_seatbelt_does_not_allow_relative_executable(self):
         folder = self.root / "run"
         folder.mkdir()

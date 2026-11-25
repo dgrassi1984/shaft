@@ -1504,10 +1504,10 @@ def cmd_codex(action: str, as_json: bool = False) -> int:
 
 def _codex_login_json(home: Path) -> int:
     """`shaft codex login --json`, for the Mac app (no terminal): `codex login --device-auth` in SHAFT's private Codex
-    home, stdin closed. One JSON line each: `{"url"}` (the page to open) and `{"code"}` (the code to enter there) as soon
-    as Codex prints them, then `{"ok": true}` once the login is in that home, or `{"ok": false, "error"}` with Codex's
-    own words. It opens no browser: the app does. SIGTERM (the app's Cancel), the app quitting, or 10 minutes without
-    the code entered stop Codex too."""
+    home, stdin closed. Print JSON lines with `codex` (the absolute executable path before launch), `url` (the page
+    to open), `code` (the one-time code), and `say` (other output, up to 200 lines of 300 characters, never repeating the page or the code). Finish with
+    `{"ok": true}` once the login is saved, or `{"ok": false, "error": …}` with the failure reason. The app opens
+    the browser. SIGTERM, the app quitting, or 10 minutes without the code entered stop Codex."""
     from . import codexcli
 
     def emit(row: dict) -> None:

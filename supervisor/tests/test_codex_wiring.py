@@ -855,7 +855,7 @@ class CLITest(Case):
     # A fake `codex` (never the real login): it records how it was run, prints the device-code prompt as Codex 0.167
     # does (with colour codes), then waits for the code to be "entered" (the file `entered` in its CODEX_HOME), writes
     # auth.json and exits 0. FAIL=1 makes it refuse after the prompt, EARLY=1 before it; HANG=1 makes it wait forever;
-    # CLOSE=1 closes its output after the code and keeps running.
+    # CLOSE=1 closes its output after the code and keeps running. INLINE=1 puts the page and code on their prompt lines.
     FAKE_CODEX = r"""#!/bin/sh
 echo "$$" > "$CODEX_HOME/pid"
 printf '%s\n' "$@" > "$CODEX_HOME/args"
@@ -870,18 +870,43 @@ fi
 if [ "${EARLY:-}" = 1 ]; then
   echo "Error: failed to request device code: device code login is not enabled for this Codex server." >&2; exit 1
 fi
+if [ "${ERROR_URL:-}" = 1 ]; then
+  echo "Open this link in your browser" >&2
+  echo "Error: error sending request for url (https://auth.openai.com/api/accounts/deviceauth/usercode)" >&2; exit 1
+fi
+if [ "${WARN:-}" = 1 ]; then
+  echo "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)" >&2
+  while [ ! -f "$CODEX_HOME/warning-seen" ]; do sleep 0.05; done
+fi
+if [ "${NOLINK:-}" = 1 ]; then
+  echo "Preparing device authorization"
+  printf '%310s\n' x | tr ' ' x
+  n=0
+  while [ $n -lt 240 ]; do echo "Still preparing"; n=$((n+1)); done
+  while :; do sleep 0.05; done
+fi
 B=$(printf '\033[94m'); R=$(printf '\033[0m')
 printf '\nWelcome to Codex [v0.167.0]\nOpenAI\047s command-line coding agent\n\n'
 printf 'Follow these steps to sign in with ChatGPT using device code authorization:\n\n'
-printf '1. Open this link in your browser and sign in to your account\n   %shttps://auth.openai.com/codex/device%s\n\n' "$B" "$R"
-printf '2. Enter this one-time code (expires in 15 minutes)\n   %sWXYZ-12345%s\n\n' "$B" "$R"
+if [ "${DECOY:-}" = 1 ]; then
+  echo "Could not open browser: https://example.invalid/status"
+  echo "Device code service is unavailable (incident AUTH-5030)"
+fi
+if [ "${INLINE:-}" = 1 ]; then
+  echo "Open this link in your browser: https://auth.openai.com/codex/device"
+  echo "Device code help: https://example.com/HELP-12345"
+  echo "Enter this one-time code: WXYZ-12345"
+else
+  printf '1. Open this link in your browser and sign in to your account\n   %shttps://auth.openai.com/codex/device%s\n\n' "$B" "$R"
+  printf '2. Enter this one-time code (expires in 15 minutes)\n   %sWXYZ-12345%s\n\n' "$B" "$R"
+fi
 printf 'Continue only if you started this login in Codex. If a website or another person gave you this code, cancel.\n'
-if [ "${FAIL:-}" = 1 ]; then echo "Error logging in with device code: device auth was declined" >&2; exit 1; fi
 n=0
 while [ ! -f "$CODEX_HOME/entered" ]; do
   sleep 0.05; n=$((n+1))
   if [ "${HANG:-}" != 1 ] && [ $n -gt 400 ]; then echo "never entered" >&2; exit 4; fi
 done
+if [ "${FAIL:-}" = 1 ]; then echo "Error logging in with device code: device auth was declined" >&2; exit 1; fi
 echo '{"tokens": {}}' > "$CODEX_HOME/auth.json"
 echo "Successfully logged in"
 """
@@ -912,6 +937,26 @@ echo "Successfully logged in"
             code = cli.main(["codex", "login", "--json"])
         return code, rows
 
+    URL_ROW = {"url": "https://auth.openai.com/codex/device"}
+    CODE_ROW = {"code": "WXYZ-12345"}
+    BANNER_ROWS = [
+        {"say": "Welcome to Codex [v0.167.0]"},
+        {"say": "OpenAI's command-line coding agent"},
+        {"say": "Follow these steps to sign in with ChatGPT using device code authorization:"},
+    ]
+    PROMPT_ROWS = [
+        {"say": "1. Open this link in your browser and sign in to your account"}, URL_ROW,
+        {"say": "2. Enter this one-time code (expires in 15 minutes)"}, CODE_ROW,
+    ]
+    CAUTION_ROW = {"say": "Continue only if you started this login in Codex. "
+                          "If a website or another person gave you this code, cancel."}
+    SUCCESS_ROWS = [{"say": "Successfully logged in"}, {"ok": True}]
+    TIMEOUT_ROW = {"ok": False, "error": "Codex sign-in timed out after 1 min: the code was not entered in time. "
+                                        "Sign in again for a new code."}
+
+    def binary_row(self):
+        return {"codex": str(self.root / "fake-codex")}
+
     def test_codex_login_json_relays_the_url_and_waits(self):
         home = self.fake_codex()
         seen_before_login = []
@@ -919,39 +964,107 @@ echo "Successfully logged in"
         def on_row(row):
             # The page and the code arrive while Codex still waits: nothing is logged in yet.
             seen_before_login.append((row, (home / "auth.json").exists()))
+            if "codex" in row:
+                self.assertFalse((home / "pid").exists())
             if "code" in row:
                 (home / "entered").touch()          # the operator enters the code on the page
         code, rows = self.login_json(on_row)
         self.assertEqual(code, 0)
-        self.assertEqual(rows, [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}, {"ok": True}])
-        self.assertEqual(seen_before_login[:2], [({"url": "https://auth.openai.com/codex/device"}, False),
-                                                 ({"code": "WXYZ-12345"}, False)])
+        before_code = [self.binary_row(), *self.BANNER_ROWS, *self.PROMPT_ROWS]
+        self.assertEqual(rows, [*before_code, self.CAUTION_ROW, *self.SUCCESS_ROWS])
+        self.assertEqual(seen_before_login[:len(before_code)], [(row, False) for row in before_code])
         self.assertEqual((home / "args").read_text().split(), ["login", "--device-auth"])
         self.assertEqual(home.stat().st_mode & 0o777, 0o700)
         self.assertTrue((home / "auth.json").is_file())
 
     def test_codex_login_json_failure_carries_codexs_own_words(self):
         home = self.fake_codex(FAIL="1")
-        code, rows = self.login_json()
+        def on_row(row):
+            if row == self.CAUTION_ROW:
+                (home / "entered").touch()
+        code, rows = self.login_json(on_row)
         self.assertEqual(code, 1)
-        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
-        self.assertEqual(rows[-1], {"ok": False, "error": "Error logging in with device code: device auth was declined"})
+        message = "Error logging in with device code: device auth was declined"
+        self.assertEqual(rows, [self.binary_row(), *self.BANNER_ROWS, *self.PROMPT_ROWS, self.CAUTION_ROW,
+                                {"say": message}, {"ok": False, "error": message}])
         self.assertFalse((home / "auth.json").exists())
 
     def test_codex_login_json_refused_before_any_code_says_why(self):
         self.fake_codex(EARLY="1")
         code, rows = self.login_json()
         self.assertEqual(code, 1)
-        self.assertEqual(rows, [{"ok": False, "error": "Error: failed to request device code: device code login is not "
-                                                       "enabled for this Codex server."}])
+        message = "Error: failed to request device code: device code login is not enabled for this Codex server."
+        self.assertEqual(rows, [self.binary_row(), {"say": message}, {"ok": False, "error": message}])
+
+    def test_codex_login_json_relays_inline_page_and_code_without_taking_a_code_from_a_url(self):
+        home = self.fake_codex(INLINE="1")
+        def on_row(row):
+            if "code" in row:
+                (home / "entered").touch()
+        code, rows = self.login_json(on_row)
+        self.assertEqual((code, rows), (0, [
+            self.binary_row(), *self.BANNER_ROWS, self.URL_ROW,
+            {"say": "Device code help: https://example.com/HELP-12345"}, self.CODE_ROW, self.CAUTION_ROW,
+            *self.SUCCESS_ROWS,
+        ]))
+
+    def test_codex_login_json_never_takes_a_foreign_link_or_an_id_in_prose_for_the_page_or_code(self):
+        """Review of the inline parsing: "open"/"browser" before a status link made it the page, and a line mentioning
+        "code" gave up an incident id as the code; the real page and code then went by as prose."""
+        home = self.fake_codex(DECOY="1")
+        def on_row(row):
+            if "code" in row:
+                (home / "entered").touch()
+        code, rows = self.login_json(on_row)
+        self.assertEqual((code, rows), (0, [
+            self.binary_row(), *self.BANNER_ROWS, {"say": "Could not open browser: https://example.invalid/status"},
+            {"say": "Device code service is unavailable (incident AUTH-5030)"}, *self.PROMPT_ROWS, self.CAUTION_ROW,
+            *self.SUCCESS_ROWS,
+        ]))
+
+    def test_codex_login_json_relays_path_alias_warning_before_the_page_and_code(self):
+        home = self.fake_codex(WARN="1")
+        warning = {"say": "WARNING: proceeding, even though we could not create PATH aliases: "
+                          "Operation not permitted (os error 1)"}
+        def on_row(row):
+            if row == warning:
+                (home / "warning-seen").touch()
+            if "code" in row:
+                (home / "entered").touch()
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 2):
+            code, rows = self.login_json(on_row)
+        self.assertEqual((code, rows), (0, [
+            self.binary_row(), warning, *self.BANNER_ROWS, *self.PROMPT_ROWS, self.CAUTION_ROW, *self.SUCCESS_ROWS,
+        ]))
+
+    def test_codex_login_json_streams_bounded_prose_while_the_page_is_missing(self):
+        home = self.fake_codex(NOLINK="1")
+        alive_during_output = []
+        def on_row(row):
+            if "say" in row:
+                os.kill(int((home / "pid").read_text()), 0)
+                alive_during_output.append(row)
+        with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
+            code, rows = self.login_json(on_row)
+        prose = [{"say": "Preparing device authorization"}, {"say": "x" * 300}, *[{"say": "Still preparing"}] * 198]
+        self.assertEqual(alive_during_output, prose)
+        self.assertEqual((code, rows), (1, [self.binary_row(), *prose, self.TIMEOUT_ROW]))
+
+    def test_codex_login_json_relays_an_error_url_as_prose_only(self):
+        self.fake_codex(ERROR_URL="1")
+        prompt = "Open this link in your browser"
+        message = "Error: error sending request for url (https://auth.openai.com/api/accounts/deviceauth/usercode)"
+        self.assertEqual(self.login_json(), (1, [
+            self.binary_row(), {"say": prompt}, {"say": message}, {"ok": False, "error": f"{prompt} {message}"},
+        ]))
 
     def test_codex_login_json_times_out_and_stops_codex(self):
         home = self.fake_codex(HANG="1")
         with mock.patch.object(codexcli, "LOGIN_TIMEOUT_S", 1.5):
             code, rows = self.login_json()
         self.assertEqual(code, 1)
-        self.assertFalse(rows[-1]["ok"])
-        self.assertIn("timed out", rows[-1]["error"])
+        self.assertEqual(rows, [self.binary_row(), *self.BANNER_ROWS, *self.PROMPT_ROWS, self.CAUTION_ROW,
+                                self.TIMEOUT_ROW])
         pid = int((home / "pid").read_text())
         with self.assertRaises(ProcessLookupError):          # the fake Codex is gone, not left polling
             os.kill(pid, 0)
@@ -968,8 +1081,7 @@ echo "Successfully logged in"
             code, rows = self.login_json()
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(code, 1)
-        self.assertEqual(rows[:2], [{"url": "https://auth.openai.com/codex/device"}, {"code": "WXYZ-12345"}])
-        self.assertIn("timed out", rows[-1]["error"])
+        self.assertEqual(rows, [self.binary_row(), *self.PROMPT_ROWS, self.TIMEOUT_ROW])
         with self.assertRaises(ProcessLookupError):
             os.kill(int((home / "pid").read_text()), 0)
         (home / "entered").touch()
@@ -987,8 +1099,8 @@ echo "Successfully logged in"
         with mock.patch.object(codexcli.os, "getppid", side_effect=lambda: 1 if quit else real):
             code, rows = self.login_json(on_row)
         self.assertEqual(code, 1)
-        self.assertEqual(rows[1], {"code": "WXYZ-12345"})
-        self.assertEqual(rows[-1], {"ok": False, "error": "the app that started this sign-in quit"})
+        self.assertEqual(rows, [self.binary_row(), *self.PROMPT_ROWS,
+                                {"ok": False, "error": "the app that started this sign-in quit"}])
         with self.assertRaises(ProcessLookupError):
             os.kill(int((home / "pid").read_text()), 0)
 
@@ -1003,7 +1115,8 @@ echo "Successfully logged in"
         before = signal.getsignal(signal.SIGTERM)
         code, rows = self.login_json(on_row)
         self.assertEqual(code, 1)
-        self.assertEqual(rows[-1], {"ok": False, "error": "Codex sign-in stopped (SIGTERM)"})
+        self.assertEqual(rows, [self.binary_row(), *self.BANNER_ROWS, *self.PROMPT_ROWS,
+                                {"ok": False, "error": "Codex sign-in stopped (SIGTERM)"}])
         self.assertIs(signal.getsignal(signal.SIGTERM), before)
         pid = int((home / "pid").read_text())
         with self.assertRaises(ProcessLookupError):

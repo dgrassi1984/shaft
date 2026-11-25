@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import Foundation
 
 /// What a finished command left: its exit status and everything it wrote.
@@ -150,11 +151,18 @@ private final class Child: @unchecked Sendable {
         pending?.resume(with: result)
     }
 
-    /// Reads a stream to its end; with `onLine`, hands over each complete line (and a last unterminated one).
+    /// Reads available bytes as they arrive. Delivers complete lines as soon as they are read and a final
+    /// unterminated line when the drain ends.
     private static func drain(_ handle: FileHandle, onLine: (@Sendable (String) -> Void)?) -> Data {
         var all = Data()
         var partial = Data()
-        while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+        let capacity = 64 * 1024
+        var buffer = [UInt8](repeating: 0, count: capacity)
+        while true {
+            let count = Darwin.read(handle.fileDescriptor, &buffer, capacity)
+            if count == -1, errno == EINTR { continue }
+            guard count > 0 else { break }
+            let chunk = Data(buffer.prefix(count))
             all.append(chunk)
             guard let onLine else { continue }
             partial.append(chunk)

@@ -206,9 +206,10 @@ Debug builds only, these move the install away from the real `~/SHAFT` and the n
 The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
 which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step the
 wizard goes on to Model while the server has no instance (or this wizard made one already); a server with instances
-opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install (Codex's
-device-code sign-in, no terminal): the app opens the `{"url": …}` it relays in the browser once and shows the
-`{"code": …}` to enter there, copyable; Cancel terminates the command, which stops Codex. The Access step grants the
+opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install. The app tries
+to open the relayed `url` once and shows the page link and `code` with copy controls. It shows recent `say` lines
+while waiting. If the page is still missing after 20 seconds, it shows a notice and the executable path from `codex`.
+A final `ok` reports success or carries an `error`. Cancel terminates the command, which stops Codex. The Access step grants the
 non-Google rows (a folder, the browser, web search, Telegram) through `/access/<n>`, `/setup/secret` and
 `/setup/telegram*` (the bot's token, the service on, the pairing code shown until the pairing lands). Its Google
 rows (mail labels, calendars, Drive, Chat) are granted by "Set up Google…" (`macOS/Setup/GoogleStep.swift`): five

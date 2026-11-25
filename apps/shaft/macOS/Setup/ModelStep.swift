@@ -151,8 +151,29 @@ struct ModelStepView: View {
              + "Codex keeps its login inside SHAFT's own folder.")
             .font(.caption).foregroundStyle(Color.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
-        if steps.signingIn.running, steps.loginCode != nil || steps.loginURL != nil {
-            codexCode
+        if steps.signingIn.running {
+            if steps.loginCode != nil || steps.loginURL != nil {
+                codexCode
+            }
+            if steps.loginURL == nil, let started = steps.loginStarted {
+                let noticeAt = started.addingTimeInterval(20)
+                TimelineView(.periodic(from: started, by: 20)) { context in
+                    if context.date >= noticeAt {
+                        Text("Codex has not given a sign-in page yet.")
+                        if let path = steps.loginBinary {
+                            Text("Codex executable: \(path)").textSelection(.enabled)
+                        }
+                    }
+                }
+                .font(.caption).foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            // What Codex said, while it has given no page: once the page and code show, its prompt would only repeat them.
+            ForEach(Array((steps.loginURL == nil ? steps.loginSaid : []).enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         if let failure = steps.signingIn.failure {
             SetupFailure(message: failure) { steps.signInToCodex(installer: setup.installer(for: session)) }
@@ -160,11 +181,13 @@ struct ModelStepView: View {
         }
     }
 
-    /// The code to enter on ChatGPT's page, copyable, and that page again should its tab have closed.
+    /// The sign-in code and page, with controls to copy them or open the page.
     private var codexCode: some View {
         VStack(alignment: .leading, spacing: Design.Space.s8) {
             if let code = steps.loginCode {
-                Text("Enter this code on the page that opened in your browser (it expires in 15 minutes):")
+                Text(steps.loginOpened == false
+                     ? "Enter this code on the sign-in page (it expires in 15 minutes):"
+                     : "Enter this code on the page that opened in your browser (it expires in 15 minutes):")
                     .foregroundStyle(Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: Design.Space.s12) {
@@ -178,12 +201,28 @@ struct ModelStepView: View {
                         NSPasteboard.general.setString(code, forType: .string)
                     }
                 }
-                Text("Enter it only on a page this sign-in opened: anyone with the code could sign in as you.")
+                Text(steps.loginOpened == false
+                     ? "Enter it only on the sign-in page shown here: anyone with the code could sign in as you."
+                     : "Enter it only on a page this sign-in opened: anyone with the code could sign in as you.")
                     .font(.caption).foregroundStyle(Color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let url = steps.loginURL {
-                Link("Open the sign-in page again", destination: url).foregroundStyle(Color.brand)
+                if steps.loginOpened == false {
+                    Text("Your browser did not open: open this link yourself")
+                        .foregroundStyle(Color.warning)
+                }
+                Text(url.absoluteString)
+                    .foregroundStyle(Color.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Design.Space.s12) {
+                    Button("Open sign-in page") { steps.openLoginPage() }
+                    Button("Copy link") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                    }
+                }
             }
         }
         .padding(Design.Space.s12)

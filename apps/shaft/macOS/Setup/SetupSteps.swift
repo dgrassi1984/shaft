@@ -38,9 +38,13 @@ final class SetupSteps {
     private(set) var check: ProviderCheckResponse?
     private(set) var checked: ProviderRequest?
     private(set) var signingIn: Work = .idle
-    /// What `shaft codex login --json` relayed: the sign-in page (opened in the browser) and the code to enter there.
+    /// The page, code, and diagnostics from `shaft codex login --json`.
     private(set) var loginURL: URL?
     private(set) var loginCode: String?
+    private(set) var loginSaid: [String] = []
+    private(set) var loginBinary: String?
+    private(set) var loginOpened: Bool?
+    private(set) var loginStarted: Date?
     private(set) var signedIn = false
 
     // MARK: Your instance
@@ -97,12 +101,12 @@ final class SetupSteps {
     /// The Codex sign-in's own identity: Cancel and a new sign-in move it on, so a late line of one given up is dropped.
     @ObservationIgnored private var loginRun = 0
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored private let openURL: @MainActor (URL) -> Void
+    @ObservationIgnored private let openURL: @MainActor (URL) -> Bool
 
     /// `openURL` opens the Codex sign-in page; tests give one that records it.
-    init(openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }) {
+    init(openURL: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
         self.openURL = openURL
-        google = GoogleSetup(openURL: openURL)
+        google = GoogleSetup(openURL: { _ = openURL($0) })
     }
 
     static let unpaired = "This app is not paired with the server on this Mac: go back to Install, which pairs it."
@@ -125,7 +129,7 @@ final class SetupSteps {
         if signingIn.running {
             loginRun &+= 1
             signingIn = .idle
-            (loginURL, loginCode) = (nil, nil)       // that code is dead with its command
+            clearLoginDetails()
         }
         if loadingDrives.running { loadingDrives = .idle }
         if loadingAccess.running { loadingAccess = .idle }
@@ -142,7 +146,8 @@ final class SetupSteps {
         (saving, testing, signingIn, loadingDrives, creating, loadingAccess, granting, loadingSettings, savingAlone,
          greeting) = (.idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle, .idle)
         (coverage, saved, check, checked, settings, restarting) = (nil, nil, nil, nil, nil, nil)
-        (loginURL, loginCode, signedIn, drives, capText) = (nil, nil, false, [], "")
+        clearLoginDetails()
+        (signedIn, drives, capText) = (false, [], "")
         (access, telegram, telegramCode, accessPrepared, accessSuggested, accessChecked, accessDone) =
             (nil, nil, nil, nil, [], [], [])
         telegramStarting = false
@@ -267,12 +272,13 @@ final class SetupSteps {
         }
     }
 
-    /// `shaft codex login --json` through the installed server (`codex login --device-auth`, no terminal): its page opens
-    /// in the browser as soon as it is relayed, and its code shows here to enter there. Signed in only on its final
+    /// `shaft codex login --json` through the installed server. Try to open the relayed page and show the code and
+    /// progress as they arrive. Signed in only on its final
     /// `{"ok": true}`; a failure shows Codex's own words. Nothing of it is kept in `setup.state`: a provider is saved only
     /// by Save, so a sign-in given up (Cancel, the window closed, the app quit) leaves the step as it was.
     func signInToCodex(installer: Installer?) {
         guard !signingIn.running else { return }
+        clearLoginDetails()
         guard let installer else {
             signingIn = .failed("SHAFT is not installed on this Mac: go back to Install.")
             return
@@ -280,7 +286,8 @@ final class SetupSteps {
         loginRun &+= 1
         let mine = generation, run = loginRun
         forgetTest(saved: false)                     // another login: the check is of the one before
-        (loginURL, loginCode, signedIn) = (nil, nil, false)
+        signedIn = false
+        loginStarted = Date()
         signingIn = .running
         // Each line hops to the main actor; one from an earlier sign-in (cancelled, or another wizard's) is dropped there.
         let onLine: @Sendable (String) -> Void = { [self] line in
@@ -321,7 +328,20 @@ final class SetupSteps {
         tasks["login"]?.cancel()
         tasks["login"] = nil
         if signingIn.running { signingIn = .idle }
+        clearLoginDetails()
+    }
+
+    private func clearLoginDetails() {
         (loginURL, loginCode) = (nil, nil)
+        loginSaid = []
+        loginBinary = nil
+        loginOpened = nil
+        loginStarted = nil
+    }
+
+    func openLoginPage() {
+        guard let loginURL else { return }
+        loginOpened = openURL(loginURL)
     }
 
     /// Drop the last check (and with `saved`, what the last save answered): nothing tested before a change counts.
@@ -340,8 +360,12 @@ final class SetupSteps {
         case .url(let url)?:
             guard loginURL == nil else { return }    // one page per sign-in
             loginURL = url
-            openURL(url)
+            openLoginPage()
         case .code(let code)?: loginCode = code
+        case .say(let text)?:
+            loginSaid.append(text)
+            if loginSaid.count > 6 { loginSaid.removeFirst() }
+        case .codex(let path)?: loginBinary = path
         default: break
         }
     }

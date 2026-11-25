@@ -280,6 +280,12 @@ def _limits(value: dict) -> bool:
     return False
 
 
+# The folder a Codex install reads as a whole: npm's package.json, or ChatGPT.app's codex-cli/ (codex-package.json),
+# whose bin/codex only execs ../CodexCLI.app; with just bin/ readable, a ChatGPT.app in ~/Applications made every
+# request fail ("error sending request for url").
+PACKAGE_MARKERS = ("package.json", "codex-package.json")
+
+
 def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path, node: str | None = None) -> list[str]:
     """Close the operator's home, shared disks and temp files to surviving native tools."""
     quote = json.dumps
@@ -293,9 +299,8 @@ def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path, node: str |
     profile.append("(allow file-read-metadata " + " ".join(f"(literal {quote(str(p))})" for p in ancestors) + ")")
     binary = Path(os.path.realpath(argv[0])) if os.path.isabs(argv[0]) else None
     if binary is not None and operator_home in binary.parents:
-        package = next((p for p in binary.parents
-                        if p != operator_home and p.is_relative_to(operator_home) and (p / "package.json").is_file()),
-                       binary.parent)
+        package = next((p for p in binary.parents if p != operator_home and p.is_relative_to(operator_home)
+                        and any((p / marker).is_file() for marker in PACKAGE_MARKERS)), binary.parent)
         # An executable placed directly in ~ gets a literal allow, never a subpath allow on ~.
         scope, allowed = ("literal", binary) if package == operator_home else ("subpath", package)
         profile.append(f"(allow file-read* ({scope} {quote(str(allowed))}))")
@@ -532,6 +537,12 @@ LOGIN_TIMEOUT_S = 600
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _LINK = re.compile(r"https?://[^\s<>\"'`]+")
 _CODE = re.compile(r"[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+")
+_LINK_INVITATION = re.compile(r"\b(?:open|visit|go\s+to|browser)\b", re.IGNORECASE)
+_LINK_DIAGNOSTIC = re.compile(r"\b(?:error|failed|warning)\b", re.IGNORECASE)
+_INLINE_CODE = re.compile(rf"(?<![\w-]){_CODE.pattern}(?![\w-])")
+# The sign-in page is OpenAI's: a link to any other host (a status page in a diagnostic, say) is never opened.
+_PAGE_HOST = re.compile(r"https://(?:[a-z0-9-]+\.)*(?:openai\.com|chatgpt\.com)(?:[/:?#]|$)", re.IGNORECASE)
+SAY_ROWS = 200
 
 
 class LoginStopped(Exception):
@@ -557,10 +568,10 @@ def _stop_login(proc: subprocess.Popen) -> None:
 
 
 def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None = None) -> tuple[bool, str]:
-    """`codex login --device-auth` with CODEX_HOME=home and stdin closed. `emit` gets `{"url": …}` and `{"code": …}` as
-    soon as the CLI prints them (each once). (True, "") once it exits 0 with a login in `home` (what `shaft codex status`
-    reads, auth.json); else (False, its real error). A timeout, SIGTERM/SIGHUP or the parent's exit (the app quit) stops
-    the CLI first: nothing of this sign-in keeps running."""
+    """Run `codex login --device-auth` with CODEX_HOME=home and stdin closed. Emit `{"codex": …}` with the absolute
+    executable path before launch, then `{"url": …}` and `{"code": …}` once each as they arrive. Relay other nonempty
+    lines from either stream as `{"say": …}` after stripping ANSI (up to 200 lines of 300 characters, never repeating the page or the code). Return (True, "")
+    after exit 0 with auth.json in `home`, or (False, the error). A timeout, SIGTERM/SIGHUP or the parent's exit stops Codex."""
     binary = find_bin()
     if error := bin_error(binary):
         return False, error
@@ -578,7 +589,9 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
     proc = None
     readers: list = []
     try:
-        proc = subprocess.Popen([os.path.abspath(binary), "login", "--device-auth"],
+        executable = os.path.abspath(binary)
+        emit({"codex": executable})
+        proc = subprocess.Popen([executable, "login", "--device-auth"],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, env={**login_env(binary, home), "NO_COLOR": "1"},
                                 start_new_session=True)
@@ -597,6 +610,7 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
         # what each stream printed besides the page and the code, and where the code was on the stream that printed it
         # (only one stream's order is known: the two are read apart)
         said: dict[str, list[str]] = {"out": [], "err": []}
+        relayed = 0
         code_at: tuple[str, int] | None = None
         def over() -> str:
             """Why the sign-in must end now, whatever Codex is doing: '' while it may go on."""
@@ -622,23 +636,35 @@ def device_login(home: Path, emit: Callable[[dict], None], timeout: float | None
             text = _plain(line)
             if not text:
                 continue
-            # the page: a link on its own line, or the first one after "Open this link" (never one inside an error)
+            # Ignore URLs when looking for invitation words, diagnostics, or an inline code.
             found = _LINK.search(text)
-            if url is None and found and (expect_url == name or _LINK.fullmatch(text)):
+            prose = _LINK.sub(" ", text) if found else text
+            is_page = (url is None and found and _PAGE_HOST.match(found.group(0)) and not _LINK_DIAGNOSTIC.search(prose)
+                       and (expect_url == name or _LINK.fullmatch(text) or _LINK_INVITATION.search(prose)))
+            if is_page:
                 url = found.group(0).rstrip(".,;:)")
                 emit({"url": url})
-                continue
-            # the code: the line right after "one-time code", or one shaped like a device code (ABCD-1234)
-            if code is None and (expect_code == name and re.fullmatch(r"[A-Za-z0-9-]{4,32}", text)
-                                 or _CODE.fullmatch(text)):
-                code, code_at = text, (name, len(said[name]))
-                emit({"code": code})
+            if code is None:
+                candidate = _CODE.fullmatch(text)
+                if candidate is None and expect_code == name:
+                    candidate = re.fullmatch(r"[A-Za-z0-9-]{4,32}", text)
+                # inline only where it is asked for ("Enter this one-time code: ABCD-1234"), never an id in prose
+                if candidate is None and re.search(r"\benter\b.*\bcode\b", prose, re.IGNORECASE):
+                    candidate = _INLINE_CODE.search(prose)
+                if candidate is not None:
+                    code, code_at = candidate.group(0), (name, len(said[name]))
+                    emit({"code": code})
+                    continue
+            if is_page:
                 continue
             low = text.lower()
             if "open this link" in low:
                 expect_url = name
             expect_code = name if "one-time code" in low else None if expect_code == name else expect_code
             said[name].append(text)
+            if relayed < SAY_ROWS and not any(v and v in text for v in (url, code)):
+                emit({"say": text[:300]})
+                relayed += 1
         # Its output closed, but Codex may still run (and log in later): it stays under the same limits until it exits.
         while (status := proc.poll()) is None:
             if why := over():

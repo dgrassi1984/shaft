@@ -365,12 +365,16 @@ struct SetupAccessTests {
     @Test func codexLoginLinesParse() {
         #expect(CodexLogin.event(in: Self.url) == .url(URL(string: "https://auth.openai.com/codex/device")!))
         #expect(CodexLogin.event(in: Self.code) == .code("WXYZ-12345"))
+        let say = #"{"say": "Preparing device authorization"}"#
+        let binary = #"{"codex": "/opt/homebrew/bin/codex"}"#
+        #expect(CodexLogin.event(in: say) == .say("Preparing device authorization"))
+        #expect(CodexLogin.event(in: binary) == .codex("/opt/homebrew/bin/codex"))
         #expect(CodexLogin.event(in: #"{"ok": true}"#) == .ok)
         #expect(CodexLogin.event(in: #"{"ok": false, "error": "declined"}"#) == .failed("declined"))
         #expect(CodexLogin.event(in: #"{"url": "file:///etc/passwd"}"#) == nil)
         #expect(CodexLogin.event(in: "Open https://auth.openai.com/codex/device") == nil)
         #expect(CodexLogin.outcome(Data((Self.url + "\n" + Self.code + "\n" + #"{"ok": true}"# + "\n").utf8)) == .ok)
-        #expect(CodexLogin.outcome(Data((Self.url + "\n").utf8)) == nil)
+        #expect(CodexLogin.outcome(Data([binary, say, Self.url].joined(separator: "\n").utf8)) == nil)
     }
 
     @Test func codexLoginShowsTheCodeOpensThePageOnceAndSignsInOnItsOk() async throws {
@@ -395,6 +399,28 @@ struct SetupAccessTests {
         await until { f.setup.steps.signingIn.failure != nil }
         #expect(f.setup.steps.signingIn == .failed("Error logging in with device code: device auth was declined"))
         #expect(!f.setup.steps.signedIn)
+    }
+
+    @Test func codexLoginExposesRecentOutputWhileWaitingWithoutAPage() async throws {
+        let lines = (1...7).map { #"{"say": "Preparing \#($0)"}"# }
+        let runner = LoginRunner(lines: [#"{"codex": "/opt/homebrew/bin/codex"}"#] + lines, status: nil)
+        let f = try Fixture(step: .model, runner: runner)
+        let steps = f.setup.steps
+        steps.signInToCodex(installer: try runner.installer(home: f.home))
+        defer { steps.cancelSignIn() }
+        await until { steps.loginSaid.last == "Preparing 7" }
+        #expect(steps.signingIn.running)
+        #expect(steps.loginURL == nil)
+        #expect(steps.loginOpened == nil)
+        #expect(steps.loginStarted != nil)
+        #expect(steps.loginBinary == "/opt/homebrew/bin/codex")
+        #expect(steps.loginSaid == (2...7).map { "Preparing \($0)" })
+        #expect(f.opened.all.isEmpty)
+
+        steps.cancelSignIn()
+        #expect(steps.loginSaid.isEmpty)
+        #expect(steps.loginBinary == nil)
+        #expect(steps.loginStarted == nil)
     }
 
     @Test func missingCodexShowsTheServersErrorWithoutADeviceCode() async throws {
@@ -462,7 +488,7 @@ struct SetupAccessTests {
         let home = f.home
         let reopened = MacSetup(states: SetupStateStore(defaults: f.defaults),
                                 configure: { Installer.Configuration(home: home) }, runner: NoProcesses(),
-                                steps: SetupSteps(openURL: { _ in }))
+                                steps: SetupSteps(openURL: { _ in true }))
         #expect(reopened.stateError == nil)
         #expect(reopened.state.step == .model)
         #expect(reopened.state.provider == nil)

@@ -179,7 +179,7 @@ struct SetupStepsTests {
         /// The pages the steps asked to open: never the real browser in a test.
         let opened = Opened()
 
-        init(step: SetupWizardStep, runner: any ProcessRunning = NoProcesses(),
+        init(step: SetupWizardStep, runner: any ProcessRunning = NoProcesses(), opensURL: Bool = true,
              edit: (inout SetupState) -> Void = { _ in }) throws {
             defaults = try #require(UserDefaults(suiteName: suite))
             let states = SetupStateStore(defaults: defaults)
@@ -192,7 +192,10 @@ struct SetupStepsTests {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             let home = home, opened = opened
             setup = MacSetup(states: states, configure: { Installer.Configuration(home: home) }, runner: runner,
-                             steps: SetupSteps(openURL: { opened.add($0) }))
+                             steps: SetupSteps(openURL: { url in
+                                 opened.add(url)
+                                 return opensURL
+                             }))
             server = SetupStub()
             store = InstancesStore(client: APIClient(credential: server.credential, session: server.session),
                                    outbox: try Outbox(directory: root.appending(path: "outbox")),
@@ -207,6 +210,23 @@ struct SetupStepsTests {
         func settle() async {
             for _ in 0..<1000 where setup.steps.busy { try? await Task.sleep(for: .milliseconds(5)) }
         }
+    }
+
+    @Test func failedBrowserOpenKeepsTheCodexPageAvailable() async throws {
+        let runner = LoginRunner(lines: [SetupAccessTests.url], status: nil)
+        let f = try Fixture(step: .model, runner: runner, opensURL: false)
+        let steps = f.setup.steps
+        steps.signInToCodex(installer: try runner.installer(home: f.home))
+        defer { steps.cancelSignIn() }
+        for _ in 0..<800 where steps.loginOpened == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let page = try #require(URL(string: "https://auth.openai.com/codex/device"))
+        #expect(steps.loginOpened == false)
+        #expect(steps.loginURL == page)
+        #expect(f.opened.all == [page])
+
+        steps.openLoginPage()
+        #expect(f.opened.all == [page, page])
+        #expect(steps.loginOpened == false)
     }
 
     @Test func theKeyGoesFirstAndIsNeverKept() async throws {
