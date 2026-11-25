@@ -29,6 +29,7 @@ Held, it counts as watching the chat.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -38,7 +39,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import apns, order, web
+from . import apns, meetings, order, web
 from .core import NAME_RE, log
 from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
@@ -1614,7 +1615,74 @@ def _google_calendars(req: Request, alias: str) -> Response:
                                                      for c in cals]})
 
 
+# -- meetings (§20) ---------------------------------------------------------------------------------------------------
+MEETING_ID = rf"(?P<meeting_id>{meetings.ID})"
+MEETING_ERRORS = {
+    meetings.Invalid: (400, "bad_request"),
+    meetings.Missing: (404, "not_found"),
+    meetings.Conflict: (409, "refused"),
+    meetings.TooLarge: (413, "too_large"),
+}
+
+
+def _meeting_call(operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except meetings.Error as e:
+        status, code = MEETING_ERRORS[type(e)]
+        raise Refusal(status, code, str(e)) from None
+
+
+def _meeting_metadata(row: dict) -> dict:
+    return {**row, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
+
+
+def _create_meeting(req: Request) -> Response:
+    row = _meeting_call(meetings.create, _body(req))
+    return _json(201, {"id": row["id"], **meetings.upload_status(row)})
+
+
+def _meeting_chunk(req: Request, meeting_id: str, index: str) -> Response:
+    content_type = req.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/octet-stream":
+        raise Refusal(400, "bad_request", "Send each chunk as application/octet-stream.")
+    digits = index.lstrip("0") or "0"
+    if len(digits) > 255:
+        raise Refusal(400, "bad_request", "Chunk index is too large.")
+    source, length = req.body_stream or (io.BytesIO(req.body), len(req.body))
+    received = _meeting_call(meetings.put_chunk, meeting_id, int(digits), source, length)
+    return _json(200, {"received": received})
+
+
+def _meeting_upload(req: Request, meeting_id: str) -> Response:
+    return _json(200, meetings.upload_status(_meeting_call(meetings.get, meeting_id)))
+
+
+def _finish_meeting(req: Request, meeting_id: str) -> Response:
+    data = _body(req)
+    fields = {key: data.get(key) for key in ("size", "sha256", "chunks")}
+    return _json(200, _meeting_metadata(_meeting_call(meetings.finish, meeting_id, **fields)))
+
+
+def _list_meetings(req: Request) -> Response:
+    return _json(200, {"meetings": [_meeting_metadata(row) for row in _meeting_call(meetings.list_meetings)]})
+
+
+def _show_meeting(req: Request, meeting_id: str) -> Response:
+    return _json(200, _meeting_metadata(_meeting_call(meetings.get, meeting_id)))
+
+
+def _delete_meeting(req: Request, meeting_id: str) -> Response:
+    _meeting_call(meetings.delete, meeting_id)
+    return _json(200, {"id": meeting_id, "deleted": True})
+
+
 ROUTES: list[tuple[str, dict]] = [
+    (r"/meetings", {"GET": _list_meetings, "POST": _create_meeting}),
+    (rf"/meetings/{MEETING_ID}", {"GET": _show_meeting, "DELETE": _delete_meeting}),
+    (meetings.CHUNK_ROUTE, {"PUT": _meeting_chunk}),
+    (rf"/meetings/{MEETING_ID}/upload", {"GET": _meeting_upload}),
+    (rf"/meetings/{MEETING_ID}/finish", {"POST": _finish_meeting}),
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
     (r"/instances/move", {"POST": _move}),

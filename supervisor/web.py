@@ -56,6 +56,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import BinaryIO
 
 from . import apns, web_icons, web_pages
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
@@ -289,6 +290,7 @@ class Request:
     set_cookies: list = field(default_factory=list)     # cookies to send with whatever the route answers
     device: str = ""                # the paired browser's id, once _route has checked its cookie
     local: bool = False             # a loopback request to /app/v1 (SHAFT_WEB_LOCAL): no tailnet login, the bearer only
+    body_stream: tuple[BinaryIO, int] | None = field(default=None, init=False)
 
     def __post_init__(self):
         split = urllib.parse.urlsplit(self.target)
@@ -1720,11 +1722,22 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _serve(self, method: str) -> None:
+        from . import meetings
         from .messages import ATTACH_MAX_TOTAL
-        length = int(self.headers.get("Content-Length") or 0)
         sends = self.path.startswith("/chat/") or re.match(r"/app/v1/chat/[^/?]+/send(\?|$)", self.path)
         limit = ATTACH_MAX_TOTAL + 1_000_000 if sends else 1_000_000   # files go with a chat
-        if length > limit:
+        chunk = method == "PUT" and re.fullmatch("/app/v1" + meetings.CHUNK_ROUTE, self.path.partition("?")[0])
+        raw_length = self.headers.get("Content-Length")
+        if chunk:
+            limit = meetings.CHUNK_SIZE + 65_536
+            # The route reads the stream after authentication. Close even if it refuses before reading.
+            self.close_connection = True
+        if chunk and (self.headers.get("Transfer-Encoding") is not None
+                      or len(self.headers.get_all("Content-Length", [])) != 1
+                      or not re.fullmatch(r"[0-9]{1,20}", raw_length or "")):
+            from . import app_api
+            r = _secured(app_api.error(400, "bad_request", "A chunk needs one valid Content-Length header."))
+        elif (length := int(raw_length or 0)) > limit:
             # Plain text, as a refusal the page shows: send_error's own HTML page landed whole in the document view
             # (W15, review 2026-10-24); the apps get their JSON error. The body is never read, so the connection
             # closes after it.
@@ -1736,9 +1749,15 @@ class Handler(BaseHTTPRequestHandler):
                 r = _secured(Response(413, said.encode(), {"Content-Type": "text/plain; charset=utf-8"}))
             r.headers["Connection"] = "close"
             self.close_connection = True
+        elif chunk:
+            req = Request(method, self.path, dict(self.headers.items()))
+            req.body_stream = (self.rfile, length)
+            r = respond(req)
         else:
             body = self.rfile.read(length) if length else b""
             r = respond(Request(method, self.path, dict(self.headers.items()), body))
+        if chunk:
+            r.headers["Connection"] = "close"
         self.send_response(r.status)
         for k, v in r.headers.items():
             for one in v if isinstance(v, list) else [v]:
@@ -1777,6 +1796,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._serve("POST")
+
+    def do_PUT(self):
+        if self.path.startswith("/app/v1/"):
+            self._serve("PUT")
+        else:
+            self.send_error(501, "Unsupported method ('PUT')")
 
     def do_DELETE(self):                          # the apps' DELETE /app/v1/push/register
         self._serve("DELETE")

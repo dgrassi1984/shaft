@@ -1653,6 +1653,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["set", "unset", "list"])
     p.add_argument("name", nargs="?")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
+    p = sub.add_parser("meetings", help="list, show, delete, or import meeting recordings")
+    msub = p.add_subparsers(dest="action", required=True)
+    for action in ("list", "show", "delete", "import"):
+        q = msub.add_parser(action)
+        q.add_argument("--json", action="store_true", help="one JSON object on stdout")
+        if action in ("show", "delete"):
+            q.add_argument("id")
+        if action == "import":
+            q.add_argument("file")
+            q.add_argument("--title")
+            q.add_argument("--mode", choices=("online", "inperson"), default="inperson")
     p = sub.add_parser("provider", help="use PROVIDER: one consistent preset of every model the supervisor calls "
                                         "(openrouter, codex or custom); check PROVIDER: one live call per configured "
                                         "model of it. Never touches .env (shaft secrets sets the keys)")
@@ -2163,6 +2174,9 @@ def _dispatch(args, parser) -> int:
     if args.cmd == "secrets":
         from . import opsecrets
         return opsecrets.command(args.action, args.name, args.json)
+    if args.cmd == "meetings":
+        from . import meetings
+        return meetings.command(args)
     if args.cmd == "provider":
         from . import provider
         return provider.command(args)

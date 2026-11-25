@@ -51,10 +51,11 @@ whatever `Host` it names, and must pass all three checks as above. Such a device
 
 ### 1.3 Requests
 
-- **Bodies:** `POST` bodies are JSON (`Content-Type: application/json`), except `POST /app/v1/chat/<n>/send`, which is
-  `multipart/form-data` (files go with it).
-- **Size:** a send's body is at most `ATTACH_MAX_TOTAL` + 1 MB (51 MB); every other body at most 1 MB. A larger one is
-  refused before it is read: `413 too_large`.
+- **Bodies.** `POST` bodies are JSON (`Content-Type: application/json`). Chat send uses `multipart/form-data` for
+  attachments. Meeting chunk uploads use `PUT` with `application/octet-stream` (§20.2).
+- **Size.** Chat send admits `ATTACH_MAX_TOTAL + 1_000_000` bytes. The meeting chunk route admits 8,454,144 bytes at
+  the HTTP gate and accepts up to 8,388,608 bytes of audio per chunk. All other bodies are limited to 1,000,000 bytes.
+  The server returns `413 too_large` before reading a body over its limit.
 - **Names:** `<n>` is an instance name (`[A-Za-z0-9_-]+`, one of `instance_names()`), `<cid>` a web chat id
   (`web-` + 16 hex). An unknown one, or a chat of another instance: `404 not_found`.
 - **Ids made by the app:**
@@ -1775,6 +1776,59 @@ restarted (`"restarted": [str]`); restarting the web service drops the app's con
 `"waiting": true` (a conversation is open) shows its reason and a Retry that runs
 `shaft deploy <tag> --json --services-only`. The iPhone and iPad apps have no Update server: they say to update from
 the Mac.
+
+## 20. Meetings
+
+Every route uses the paired-device bearer (§1.2). The supervisor stores meeting files on the Mac that runs SHAFT.
+See [meeting storage and CLI](meetings.md).
+
+| Method | Route under `/app/v1` | Request | Success |
+|---|---|---|---|
+| POST | `/meetings` | `{title?, mode, started, ended?, device, ext, sidecar?, account?}` | 201, `{id, chunk_size, received: []}` (§20.1) |
+| PUT | `/meetings/<id>/chunk/<index>` | Raw audio bytes | 200, `{received}` (§20.2) |
+| GET | `/meetings/<id>/upload` | | 200, `{received, chunk_size}` (§20.2) |
+| POST | `/meetings/<id>/finish` | `{size, sha256, chunks}` | 200, meeting metadata (§20.3) |
+| GET | `/meetings` | | 200, `{meetings: [metadata]}`, newest first (§20.4) |
+| GET | `/meetings/<id>` | | 200, meeting metadata (§20.4) |
+| DELETE | `/meetings/<id>` | | 200, `{id, deleted: true}` (§20.4) |
+
+### 20.1 Create
+
+The server assigns an ID of the form `m-YYYYMMDD-HHMM-<4 lowercase hex digits>` using its local time. `mode` is
+`online` or `inperson`. `device` is a non-empty string. `ext` is `m4a`, `caf`, or `wav`. `started` is an ISO 8601
+date and time. `ended` uses the same format and defaults to `null`. `title` defaults to an empty string. `account`
+is a non-empty account alias or `null` for an unfiled meeting.
+
+`sidecar` defaults to `{}` and must be a JSON object. The server stores its fields as supplied, including nested
+objects. Its compact UTF-8 JSON representation can occupy up to 65,536 bytes. Larger sidecars return `413 too_large`.
+
+### 20.2 Upload and resume
+
+`index` is a zero-based chunk number. A chunk request uses `Content-Type: application/octet-stream` and a
+`Content-Length` header. Send chunks in any order. Repeating an index replaces the previous chunk after the new body
+arrives in full. `received` lists saved indices in ascending order. After a connection drops, fetch
+`/meetings/<id>/upload` to see which chunks need sending. The server accepts chunk writes in state `uploading` and
+returns `409 refused` in later states.
+
+### 20.3 Finish
+
+`size` is the total byte count. `sha256` is the 64-digit hexadecimal digest of the complete audio. `chunks` is the
+number of chunks. The server joins indices 0 through `chunks - 1` in order. A missing chunk or a size or digest
+mismatch returns `409 refused` with the reason. The meeting stays `uploading` and keeps its chunks.
+
+On success, the server stores the assembled audio, queues the meeting, and deletes the upload directory. If the
+finish response is lost, repeating the same finish request returns the current metadata.
+
+### 20.4 Metadata and deletion
+
+Metadata contains `id`, `title`, `created`, `started`, `ended`, `mode`, `device`, `ext`, `channels`, `account`,
+`state`, `error`, `size`, `sha256`, `chunk_size`, `chunks_received`, and `processed_with`.
+Timestamps follow §1.6. `channels` comes from `sidecar.channels` when present. `size` and `sha256` start as `null`.
+`error` and `processed_with` start as `null` and can be set by the processing worker.
+The state is one of `uploading`, `queued`, `processing`, `ready`, or `failed`.
+
+Delete removes the meeting, including its audio or any saved chunks. Routes for an unknown meeting return
+`404 not_found`.
 
 ## Appendix A. Implementation notes
 
