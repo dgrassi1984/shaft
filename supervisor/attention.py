@@ -25,7 +25,8 @@ from urllib.parse import urlsplit
 from . import metrics
 
 CONTROLS = ("declare_intent", "confirm_confidence", "settle_commitment", "finish_cycle")
-MEMORY_TOOLS = ("search_memory", "remember", "rewrite_facts", "write_digest", "update_self_model", "update_personality")
+MEMORY_TOOLS = ("search_memory", "search_corrections", "remember", "rewrite_facts", "write_digest",
+                "update_self_model", "update_personality")
 # Where a tool looks when its arguments do not say: the supervisor's own tools. A plugin an instance built reaches what
 # its name says (PLUGIN_SOURCES: gmail and mail_tail are mail, cal-watch calendar, gdrive drive). Every tool touches
 # its own name.
@@ -45,7 +46,7 @@ AGENT_TOOLS = frozenset({
     "read_file", "write_file", "append_file", "list_files", "rewrite_facts", "write_digest", "search_memory",
     "remember", "update_self_model", "update_personality", "view_image", "commit_to", "settle_commitment",
     "close_surprise", "retire_fact", "open_project", "close_project", "propose_drive_amendment", "record_correction",
-    "close_correction", "plan_improvement", "close_improvement", *CONTROLS})
+    "close_correction", "search_corrections", "plan_improvement", "close_improvement", *CONTROLS})
 PATH_ARGS = ("path", "save_to", "save_as", "body_file")
 # Words a declared source may use for what the calls touch. Plain "chat" is not one: it reads as the web UI's
 # conversations with an instance, not the operator's Google Chat.
