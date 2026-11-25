@@ -17,7 +17,7 @@ On an Apple Silicon Mac with `uv`, run these commands from the SHAFT checkout.
 brew install ffmpeg
 uv venv --python 3.12 .venv-listen
 uv pip install --python .venv-listen/bin/python \
-  'pyannote.audio==4.0.4' 'mlx-whisper==0.4.3' 'soundfile==0.13.1' 'numpy==2.3.5'
+  'pyannote.audio==4.1.1' 'mlx-whisper==0.4.3' 'soundfile==0.14.0' 'numpy==2.5.5'
 ```
 
 Accept the conditions for the gated model, then set the supervisor's `HF_TOKEN` with
