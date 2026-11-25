@@ -342,7 +342,7 @@ def _remote_spec(host: str, path: str) -> str:
 def _tailscale_exe_local() -> str | None:
     for p in TAILSCALE_PATHS:
         candidate = Path.home() / p[2:] if p.startswith("~/") else Path(p)
-        if candidate.exists():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return shutil.which("tailscale")
 

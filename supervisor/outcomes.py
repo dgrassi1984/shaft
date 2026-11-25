@@ -88,7 +88,8 @@ def records(name: str, now: datetime | None = None, since: datetime | None = Non
             link_quote(reply.get("text"), reply["ts"], at, f"quote:message:{reply['file']}")
     for turn in metrics._episodes(name, "talk"):
         stamp, talk_id = turn.get("ts"), turn.get("talk_id")
-        if (turn.get("role") == "user" and isinstance(talk_id, str) and talk_id
+        # The operator's own turns only: a guest's turn carries `speaker` (as commitments._source_rows reads it)
+        if (turn.get("role") == "user" and not turn.get("speaker") and isinstance(talk_id, str) and talk_id
                 and (at := pushes._time(stamp)) and (since is None or since <= at) and at <= now):
             link_quote(turn.get("content"), stamp, at, f"quote:talk:{talk_id}@{stamp}")
     for link in reply_links.records():
@@ -187,6 +188,6 @@ def offer_lines(name: str, now: datetime | None = None, weeks: int = 3) -> list[
                 kind = ("quote" if evidence.startswith("quote:") else "otherwise") if evidence else outcome
                 counts[kind] += 1
         lines.append(f"unprompted offers, week to {end:%m-%d} (self-origin cycles): {sum(counts.values())} — "
-                     f"replied by quote {counts['quote']}, otherwise {counts['otherwise']}, "
+                     f"replied by quote {counts['quote']}, other link (reply, thumb or comment) {counts['otherwise']}, "
                      f"no reply {counts['no_link']}, open {counts['open']}")
     return lines

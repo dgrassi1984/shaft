@@ -123,8 +123,8 @@ class QuoteReplyLinksTest(unittest.TestCase):
         ])
 
         assert outcomes.offer_lines("m", NOW, weeks=2) == [
-            "unprompted offers, week to 11-25 (self-origin cycles): 2 — replied by quote 1, otherwise 0, no reply 1, open 0",
-            "unprompted offers, week to 11-18 (self-origin cycles): 0 — replied by quote 0, otherwise 0, no reply 0, open 0",
+            "unprompted offers, week to 11-25 (self-origin cycles): 2 — replied by quote 1, other link (reply, thumb or comment) 0, no reply 1, open 0",
+            "unprompted offers, week to 11-18 (self-origin cycles): 0 — replied by quote 0, other link (reply, thumb or comment) 0, no reply 0, open 0",
         ]
 
     def test_push_review_survives_offer_read_failure(self):
@@ -136,3 +136,10 @@ class QuoteReplyLinksTest(unittest.TestCase):
         lines = pushes.lines("m", [], NOW)
         assert "Unprompted offers could not be read: OSError: bad store" in lines
         assert any(line.startswith("pushes to the operator today: 0") for line in lines)
+
+    def test_guest_quote_is_not_an_operator_reply(self):
+        """#14 review: a guest's turn (`speaker` set) quoting a delivery is not the operator's reply."""
+        write_rows(self.sup / "messages.jsonl", [message()])
+        write_rows(self.episodes, [turn("> " + BODY, speaker="Guest")])
+        row, = outcomes.records("m", NOW)
+        assert row["outcome"] == "no_link"
