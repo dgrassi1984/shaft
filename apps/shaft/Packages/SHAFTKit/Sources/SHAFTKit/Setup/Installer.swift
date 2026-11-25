@@ -633,7 +633,19 @@ public final class Installer {
     @discardableResult
     private func git(_ args: [String], _ what: String) async throws -> ProcessResult {
         let r = try await run(Self.git, args, env: gitEnvironment())
-        guard r.succeeded else { throw Self.failure(what + " (git \(args.first == "-C" ? args[2] : args[0]))", r) }
+        if !r.succeeded {
+            let command = args.first == "-C" ? args[2] : args[0]
+            let stderr = String(decoding: r.stderr, as: UTF8.self)
+            let signInErrors = ["could not read Username", "could not read Password", "Authentication failed",
+                                "terminal prompts disabled", "Repository not found"]
+            if signInErrors.contains(where: { stderr.localizedCaseInsensitiveContains($0) }) {
+                throw InstallError("GitHub asked for a sign-in to read \(origin): the repository is private, or this Mac "
+                                   + "has no access to it. Ask its owner to make it public, or to add your GitHub account "
+                                   + "to it and then sign this Mac's git in to GitHub. Then Try again. "
+                                   + "(git \(command), exit \(r.status): \(r.said))")
+            }
+            throw Self.failure(what + " (git \(command))", r)
+        }
         return r
     }
 

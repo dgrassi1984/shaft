@@ -68,6 +68,18 @@ def _said(r: subprocess.CompletedProcess) -> str:
     return (r.stderr.strip() or r.stdout.strip() or f"git exited {r.returncode}")
 
 
+def _origin_failure(command: str, r: subprocess.CompletedProcess) -> str:
+    stderr = r.stderr.lower()
+    if any(marker in stderr for marker in ("could not read username", "could not read password",
+                                            "authentication failed", "terminal prompts disabled",
+                                            "repository not found")):
+        return ("GitHub asked for a sign-in to read the SHAFT repository on origin: the repository is private, "
+                "or this Mac has no access to it. Ask its owner to make it public, or to add your GitHub account "
+                "to it and then sign this Mac's git in to GitHub. Then Try again. "
+                f"({command}, exit {r.returncode}: {_said(r)})")
+    return f"{command} failed: {_said(r)}"
+
+
 def _template() -> Path:
     return core.PROJECT / "template"
 
@@ -114,7 +126,7 @@ def preflight(tag: str, fetch_tags: bool = True) -> str:
     if fetch_tags:
         r = _git(project, "fetch", "--quiet", "origin", "--tags")
         if r.returncode:
-            raise StepFailed(f"git fetch origin --tags failed: {_said(r)}")
+            raise StepFailed(_origin_failure("git fetch origin --tags", r))
     main_at, template_at = _commit(project, f"refs/tags/{tag}"), _commit(project, f"refs/tags/template-{tag}")
     if not main_at:
         raise StepFailed(f"{tag} is not a release tag on origin")
@@ -127,7 +139,7 @@ def preflight(tag: str, fetch_tags: bool = True) -> str:
 def fetch(tag: str) -> str:
     r = _git(core.PROJECT, "fetch", "--quiet", "origin")
     if r.returncode:
-        raise StepFailed(f"git fetch origin failed: {_said(r)}")
+        raise StepFailed(_origin_failure("git fetch origin", r))
     return "fetched origin"
 
 
@@ -466,7 +478,7 @@ def check(local: bool = False) -> int:
         return 0
     r = _git(project, "ls-remote", "--tags", "--refs", "origin", "v*", "template-v*")
     if r.returncode:
-        _emit({"ok": False, "error": f"git ls-remote origin failed: {_said(r)}"})
+        _emit({"ok": False, "error": _origin_failure("git ls-remote origin", r)})
         return 1
     releases, templates = {}, set()
     for line in r.stdout.splitlines():
