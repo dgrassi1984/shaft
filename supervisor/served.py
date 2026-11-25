@@ -42,7 +42,7 @@ MAX_OUTPUT_CHARS = 1_000_000
 EPISODE_CUT = MAX_RESULT_CHARS - READ_MARKER_ROOM
 # The two markers the template writes, matched to their end: nothing may follow them. (The second carries up to 200
 # characters of an error message, as the template cuts it: the one free text a cut result can end with.)
-_N = r"(0|[1-9]\d{0,9})"           # a number as the template prints it: no padding, never too long to read
+_N = r"(0|[1-9][0-9]{0,9})"          # a number as the template prints it: no padding, never too long to read
 _SAVED = re.compile(rf"\n\[\.\.\. truncated, {_N} chars total(; storage cap: first {_N} chars saved)?; saved to "
                     r"(\.tmp/outputs/output-[A-Za-z0-9_]+\.txt)\. Read the rest with read_file\('(\4)', "
                     rf"offset={_N}\)\]")
@@ -120,12 +120,13 @@ def run_event(name: str, run: str, kind, event: str, at: datetime | None = None,
 
 
 def keep(name: str, tool: str, result, run: str | None = None, at: datetime | None = None,
-         base: Path | None = None, kind: str | None = None) -> None:
+         base: Path | None = None, kind: str | None = None, talk: str | None = None) -> None:
     """Append the fingerprint of one successful call's result (a non-text result is kept as its JSON)."""
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
     at = at or datetime.now()
     jsonl.append_locked(_dir(base) / f"{name}.jsonl", [json.dumps(
-        {"ts": at.isoformat(timespec="seconds"), "tool": tool, "run": run, "kind": kind, **fingerprint(text)}) + "\n"])
+        {"ts": at.isoformat(timespec="seconds"), "tool": tool, "run": run, "kind": kind, "talk": talk,
+         **fingerprint(text)}) + "\n"])
 
 
 def _at(value) -> datetime | None:
@@ -160,16 +161,20 @@ class Record:
             if isinstance(row.get("tool"), str) and (at := _at(row.get("ts"))) is not None:
                 self.by_tool.setdefault(row["tool"], []).append({**row, "at": at})
 
-    def _run(self, ep: dict, end: datetime) -> tuple | None:
-        """The run an episode that ended at `end` was written in, by the supervisor's record: of the runs of its
-        kind (a cycle's, a sleep's, else a conversation's) going on then, the one that started last."""
+    def runs_for(self, ep: dict, end: datetime) -> list[tuple]:
+        """The runs an episode that ended at `end` may have been written in, by the supervisor's record: of the runs of
+        its kind going on then, a cycle's or a sleep's the one that started last (one runs at a time); for a
+        conversation every conversation's run going on then (several may be open at once: the calls are told apart by
+        the conversation they served, `talk`)."""
         kinds = EPISODE_RUNS.get(ep.get("kind"))
-        going = [(r["start"], key) for key, r in self.runs.items()
-                 if (r["kind"] in kinds if kinds else r["kind"] not in ("live", "sleep"))
-                 and r["start"] - SLACK <= end
-                 and end <= (r["end"] + SLACK if r["end"] is not None
-                             else r["start"] + OPEN_RUN.get(r["kind"], OPEN_TALK))]
-        return max(going)[1] if going else None
+        going = sorted((r["start"], key) for key, r in self.runs.items()
+                       if (r["kind"] in kinds if kinds else r["kind"] not in ("live", "sleep"))
+                       and r["start"] <= end
+                       and end <= (r["end"] + SLACK if r["end"] is not None
+                                   else r["start"] + OPEN_RUN.get(r["kind"], OPEN_TALK)))
+        if not going:
+            return []
+        return [going[-1][1]] if kinds else [key for _, key in going]
 
     def check(self, ep: dict, call: dict) -> str | None:
         from .broker import SPECS
@@ -181,12 +186,13 @@ class Record:
             return "the cited cycle has no end time"
         if self.since is None or end < self.since:
             return None       # before the record began: read as it was then
-        key = self._run(ep, end)
-        if key is None:
+        keys = self.runs_for(ep, end)
+        if not keys:
             return "the supervisor has no record of a run of this instance going on when that episode ended"
-        start = self.runs[key]["start"]
-        served = [r for r in self.by_tool.get(tool, ()) if r.get("run") == key[0]
-                  and r.get("kind") in (None, key[1]) and start - SLACK <= r["at"] <= end + SLACK]
+        talk = ep.get("talk_id") if isinstance(ep.get("talk_id"), str) else None
+        served = [r for key in keys for r in self.by_tool.get(tool, ()) if r.get("run") == key[0]
+                  and r.get("kind") in (None, key[1]) and self.runs[key]["start"] - SLACK <= r["at"] <= end + SLACK
+                  and (talk is None or r.get("talk") in (None, talk))]
         if not served:
             return f"the supervisor served no successful {tool} call in that run"
         if any(matches(r, call.get("result")) for r in served):

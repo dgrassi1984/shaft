@@ -378,7 +378,7 @@ class GaugesTest(unittest.TestCase):
         path.write_text('{"seen": "2026-11-11T10:00:00", "row": {"event": "recor')   # an interrupted first copy
         path.with_name("corrections.backfilled").unlink()
         text = "".join(json.dumps(r) + "\n" for r in recorded)
-        with mock.patch.object(ledger_mirror, "_history", side_effect=lambda name, rel, project: [text]
+        with mock.patch.object(ledger_mirror, "_history", side_effect=lambda name, rel, project: [(text, None)]
                                if rel.endswith("corrections.jsonl") else []):
             self.assertEqual(ledger_mirror.sync("ember", self.root), 3)
         self.assertEqual(len(ledger_mirror.rows("ember", "corrections")), 3)
@@ -458,6 +458,94 @@ class GaugesTest(unittest.TestCase):
                                       {"event": "settled", "status": "kept", "evidence": "x",
                                        "at": (NOW - timedelta(hours=1)).isoformat()}])
         self.assertEqual(claimlint.lint("ember", ep), [])
+
+    def test_an_old_blob_that_is_not_utf8_does_not_stop_the_backfill(self):
+        """Regression (#7 final review): history was decoded strictly, so one old ledger state with a bad byte failed
+        every backfill, and the corrections after it were never copied."""
+        from supervisor import ledger_mirror, mind
+        made, recorded = self.ledgers()
+        mind.init("ember")
+        (self.root / commitments.FILE).write_bytes(json.dumps(made[0]).encode() + b"\n\xff\xfe broken\n")
+        self.write("memory/corrections.jsonl", recorded)
+        self.assertTrue(mind.commit("ember", "ember: live", self.root))
+        self.write(commitments.FILE, made)
+        self.assertEqual(ledger_mirror.sync("ember", self.root), 5)
+        self.assertTrue(ledger_mirror.path("ember", "commitments").with_name("commitments.backfilled").exists())
+
+    def test_a_new_operator_promise_without_sourced_is_still_source_checked(self):
+        """Regression (#7 final review): a row with no `sourced` field kept made_to=operator unchecked, as rows older
+        than the source rule are, and the copy kept that verdict."""
+        from supervisor import ledger_mirror
+        made, _ = self.ledgers()
+        self.write(commitments.FILE, made[:1])
+        ledger_mirror.sync("ember", self.root)         # the backfill: rows from before the rule keep their word
+        self.write(commitments.FILE, made)               # a row after it, with no `sourced` and no source
+        ledger_mirror.sync("ember", self.root)
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual({i: it["made_to"] for i, it in items.items()},
+                         {made[0]["id"]: "operator", made[1]["id"]: "self"})
+
+    def test_a_replay_with_an_aware_moment_reads_the_ledger_gauges(self):
+        """Regression (#7 final review): menu_text passes the replay's moment as `now`; an aware one broke the
+        promise and correction readings ("could not be read")."""
+        made, recorded = self.ledgers()
+        self.write(commitments.FILE, made)
+        self.write("memory/corrections.jsonl", recorded)
+        text = gauges.menu_text("ember", as_of=NOW.astimezone())
+        self.assertNotIn("could not be read", text)
+        self.assertIn("Promised to the operator and still open: 2", text)
+
+    def test_claim_lint_takes_the_cycle_from_the_supervisors_run(self):
+        """Regression (#8 final review): claim lint chose the settles to check by the episode's own run_started, so
+        an invalid one skipped the check; and a settle in the cycle's last second (microseconds) fell outside it."""
+        from supervisor import claimlint, ledger_mirror, served
+        made, _ = self.ledgers()
+        end = NOW - timedelta(minutes=30)
+        settled = {"event": "settled", "id": made[0]["id"], "at": end.isoformat(timespec="microseconds")[:-6] + "500000",
+                   "status": "kept", "evidence": end.isoformat() + "#1"}
+        self.write(commitments.FILE, made + [settled])
+        served.begin(NOW - timedelta(days=2))
+        served.run_event("ember", (NOW - timedelta(hours=2)).isoformat(timespec="seconds"), "live", "start",
+                         at=NOW - timedelta(hours=2))
+        ep = {"ts": end.isoformat(), "run_started": "not a time", "kind": "live", "finish": {},
+              "tools": [{"tool": "fetch_page", "args": {}, "result": "forged"}]}
+        self.write("memory/episodes/day.jsonl", [ep])
+        self.assertEqual([f["ref"] for f in claimlint.lint("ember", ep)], [made[0]["id"]])
+
+    def test_a_cycle_a_removed_settle_cites_is_still_judged(self):
+        """Regression (#7 final review): judging found commitment-cited cycles in the instance's file only, so
+        removing a kept settle left its cited cycle unjudged."""
+        from supervisor import judge, ledger_mirror
+        made, _ = self.ledgers()
+        ep = {"ts": (NOW - timedelta(minutes=30)).isoformat(), "run_started": (NOW - timedelta(hours=1)).isoformat(),
+              "kind": "live", "tools": [{"tool": "fetch_page", "args": {}, "result": "x"}]}
+        settled = {"event": "settled", "id": made[0]["id"], "at": (NOW - timedelta(minutes=20)).isoformat(),
+                   "status": "kept", "evidence": ep["ts"]}
+        self.write("memory/episodes/day.jsonl", [ep])
+        self.write(commitments.FILE, made + [settled])
+        ledger_mirror.sync("ember", self.root)
+        self.write(commitments.FILE, made)
+        with mock.patch.object(metrics, "unsampled", return_value={ep["ts"]}), \
+                mock.patch.object(metrics, "judgments", return_value=[]), \
+                mock.patch.object(metrics, "change_outcomes", return_value=[]), \
+                mock.patch.object(judge, "ask") as ask:
+            self.assertEqual(metrics.judge_pending("ember"), 1)    # judged by rule: it declared no intent
+        ask.assert_not_called()
+
+    def test_a_backfilled_row_is_seen_when_it_was_committed(self):
+        """Regression (#7 final review): the backfill stamped every historical row with the time of the first sync,
+        so a replay of a cycle before it read empty promises and corrections."""
+        from supervisor import ledger_mirror
+        _, recorded = self.ledgers()
+        text = "".join(json.dumps(r) + "\n" for r in recorded)
+        committed = (NOW - timedelta(hours=3)).astimezone().isoformat(timespec="seconds")
+        with mock.patch.object(ledger_mirror, "_history", side_effect=lambda name, rel, project: [
+                (text, (NOW - timedelta(hours=3)).isoformat(timespec="seconds"))] if rel.endswith("corrections.jsonl") else []):
+            ledger_mirror.sync("ember", self.root, now=NOW + timedelta(days=1))
+        self.assertEqual({r["seen"] for r in ledger_mirror.records("ember", "corrections")},
+                         {(NOW - timedelta(hours=3)).isoformat(timespec="seconds")})
+        self.assertIn("still open: 3 of 3", gauges._corrections("ember", NOW, as_of=NOW).text)
+        self.assertTrue(committed)
 
 
 if __name__ == "__main__":

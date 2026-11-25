@@ -208,7 +208,8 @@ AS_OF = ("promises", "corrections")   # read from the supervisor's copy, which a
 def reading(name: str, key: str, now: datetime | None = None, as_of: datetime | None = None) -> Reading:
     """One gauge's reading. A record that cannot be read is said, never hidden and never a reason to drop the line.
     `as_of`: a replay's moment, for the readings whose record keeps when it learned each row."""
-    try:
+    now, as_of = (at.astimezone().replace(tzinfo=None) if at is not None and at.tzinfo else at for at in (now, as_of))
+    try:   # naive local, as every record's stamps are (a replay's moment may come with its offset)
         return MENU[key][1](name, now or datetime.now(), **({"as_of": as_of} if key in AS_OF and as_of else {}))
     except (Exception, SystemExit) as e:   # one unreadable record must not cost the instance its other gauges
         return Reading(f"{MENU[key][0]}: could not be read ({type(e).__name__}: {e})"[:200])

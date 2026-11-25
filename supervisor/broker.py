@@ -1568,7 +1568,8 @@ class Broker:
             from . import served   # a fingerprint of what was served, never the text (#8): what citations are checked on
             try:
                 served.keep(self.name, tool, result["result"], run=getattr(self, "run_started", None),
-                            base=self.log_path.parent, kind=getattr(self, "run_kind", None))
+                            base=self.log_path.parent, kind=getattr(self, "run_kind", None),
+                            talk=getattr(self, "talk_id", None))
             except Exception as e:   # the record's bookkeeping never costs the call
                 self._quiet_log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
         return result

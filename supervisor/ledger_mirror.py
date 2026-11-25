@@ -79,22 +79,35 @@ def rows(name: str, kind: str, project: Path | None = None) -> list[dict]:
     return [rec["row"] for rec in records(name, kind, project)]
 
 
-def _history(name: str, rel: str, project: Path | None) -> list[str]:
-    """Every committed state of the file in the mind store, oldest first ([] without a store)."""
+def _history(name: str, rel: str, project: Path | None) -> list[tuple[str, str | None]]:
+    """Every committed state of the file in the mind store, oldest first, with when it was committed (naive local:
+    a backfilled row is `seen` then, so a replay of an earlier cycle still reads it); [] without a store."""
     from . import mind
     if not mind.exists(name, project) or not mind.head(name, project):
         return []
-    revs = mind.log(name, "--format=%H", "--reverse", mind.BRANCH, "--", rel, project=project).split()
-    return [mind.show(name, rev, rel, project) or "" for rev in revs]
+    out = []
+    for line in mind.log(name, "--format=%H %cI", "--reverse", mind.BRANCH, "--", rel, project=project).splitlines():
+        rev, _, when = line.partition(" ")
+        at = _at(when.strip())
+        # As bytes, decoded leniently: one old blob that is not UTF-8 must not stop every backfill.
+        r = mind.git(name, "show", f"{rev}:{rel}", project=project, binary=True, check=False)
+        out.append((r.stdout.decode("utf-8", "replace") if r.returncode == 0 else "",
+                    at.isoformat(timespec="seconds") if at else None))
+    return out
 
 
-def _checked(name: str, new: list[dict]) -> dict[int, dict]:
-    """The source verdict of each new promise row, judged now (index in `new` -> the row as checked)."""
+def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict[int, dict]:
+    """The source verdict of each new promise row, judged now (index in `new` -> the row as checked). A row in
+    `strict` (one that first appeared after the backfill, so after the source rule) is checked as a sourced promise
+    whatever it says: an operator promise without `sourced` would otherwise be kept as made, as rows older than the
+    rule are."""
     from . import commitments
     made = [i for i, row in enumerate(new) if row.get("event") == "made"]
     if not made or not commitments.NAME.fullmatch(name):
         return {}
-    checked = commitments._source_rows([new[i] for i in made], commitments._episodes(name),
+    rows = [{**new[i], "sourced": True} if i in strict and new[i].get("made_to") == "operator" else new[i]
+            for i in made]
+    checked = commitments._source_rows(rows, commitments._episodes(name),
                                        lambda file: bool(commitments.operator_message(name, file)), name,
                                        commitments._received(name))
     return dict(zip(made, checked))
@@ -102,32 +115,46 @@ def _checked(name: str, new: list[dict]) -> dict[int, dict]:
 
 def sync(name: str, root: Path, project: Path | None = None, now: datetime | None = None) -> int:
     """Append to the copy every row of the two ledgers in `root` it does not hold yet; the first sync of an instance
-    also takes every row its mind store's history holds. Returns the number of rows added."""
+    also takes every row its mind store's history holds. Returns the number of rows added. A ledger that cannot be
+    copied does not keep the other from being copied (its error is raised after)."""
     stamp = (now or datetime.now()).isoformat(timespec="seconds")
-    added = 0
+    added, failed = 0, None
     for kind, rel in KINDS.items():
-        p = path(name, kind, project)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        done = p.with_name(f"{kind}.backfilled")
-        with p.open("a+") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            seen = {_key(r) for r in rows(name, kind, project)}
-            first = not done.exists()
-            texts = _history(name, rel, project) if first else []
-            texts.append(core.safe_read(root, rel, "", errors="replace"))
-            new = []
-            for text in texts:
-                for row in parse(text)[0]:
-                    if (k := _key(row)) not in seen:
-                        seen.add(k)
-                        new.append(row)
-            checked = _checked(name, new) if kind == "commitments" else {}
-            jsonl.append(f, [json.dumps({"seen": stamp, "row": row, **({"checked": checked[i]} if i in checked else {})})
-                             + "\n" for i, row in enumerate(new)])   # ASCII: a lone surrogate cannot stop the copy
-            if first:
-                done.write_text(stamp + "\n")    # only once the backfill is written: an interrupted one is redone
-            added += len(new)
+        try:
+            added += _sync_kind(name, kind, rel, root, project, stamp)
+        except Exception as e:
+            failed = failed or e
+    if failed is not None:
+        raise failed
     return added
+
+
+def _sync_kind(name: str, kind: str, rel: str, root: Path, project: Path | None, stamp: str) -> int:
+    p = path(name, kind, project)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    done = p.with_name(f"{kind}.backfilled")
+    with p.open("a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        seen = {_key(r) for r in rows(name, kind, project)}
+        first = not done.exists()
+        texts = _history(name, rel, project) if first else []
+        texts.append((core.safe_read(root, rel, "", errors="replace"), None))
+        new, strict = [], set()
+        stamps = []
+        for n, (text, committed) in enumerate(texts):
+            for row in parse(text)[0]:
+                if (k := _key(row)) not in seen:
+                    seen.add(k)
+                    if not first and n == len(texts) - 1:
+                        strict.add(len(new))
+                    new.append(row)
+                    stamps.append(min(committed, stamp) if committed else stamp)
+        checked = _checked(name, new, strict) if kind == "commitments" else {}
+        jsonl.append(f, [json.dumps({"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {})})
+                         + "\n" for i, row in enumerate(new)])   # ASCII: a lone surrogate cannot stop the copy
+        if first:
+            done.write_text(stamp + "\n")    # only once the backfill is written: an interrupted one is redone
+        return len(new)
 
 
 def _time(row: dict) -> datetime | None:

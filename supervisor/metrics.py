@@ -878,7 +878,8 @@ def judge_pending(name: str) -> int:
     episodes = live_episodes(name)
     cited = set()
     try:
-        for item in commitments.ledger(name).values():
+        # The supervisor's copy too (ledger_mirror.py): a settle removed from the file still gets its cycle judged.
+        for item in commitments.ledger(name, rows=commitments.recorded(name)[0]).values():
             if item.get("status") == "kept" and isinstance(item.get("evidence"), str):
                 citation = commitments._citation(item["evidence"])
                 matches = [ep["ts"] for ep in episodes if citation and commitments._matches(ep.get("ts"), citation[0])]

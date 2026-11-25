@@ -61,7 +61,7 @@ class ServedTest(unittest.TestCase):
         self.assertNotIn("Reading", text)
         self.assertNotIn("aaaa", text)
         short, long = (json.loads(line) for line in text.splitlines())
-        self.assertEqual(set(short), {"ts", "tool", "run", "kind", "len", "sha256", "cut"})
+        self.assertEqual(set(short), {"ts", "tool", "run", "kind", "talk", "len", "sha256", "cut"})
         self.assertTrue(served.matches(short, "Reading: 42"))
         self.assertFalse(served.matches(short, "Reading: 43"))
         self.assertTrue(served.matches(long, cut(LONG)))
@@ -304,6 +304,33 @@ class ServedTest(unittest.TestCase):
         served.begin(START)
         self.assertEqual((self.sup / "served/since").read_text(), START.isoformat() + "\n")
         self.assertEqual([p.name for p in (self.sup / "served").iterdir() if p.name.startswith(".since")], [])
+
+    def test_overlapping_conversations_check_against_their_own_calls(self):
+        """Regression (#8 final review): a conversation's episode was checked against the conversation run that
+        started last, so an older terminal conversation's honest reply failed while a newer one idled."""
+        old = self.add_run(start=START + timedelta(minutes=1), end=None, kind="talk")
+        new = self.add_run(start=START + timedelta(minutes=2), end=None, kind="api")
+        served.keep("ember", "web_search", "old reply", run=old, at=START + timedelta(minutes=3), kind="talk",
+                    talk="t-old")
+        served.keep("ember", "web_search", "new reply", run=new, at=START + timedelta(minutes=3), kind="api",
+                    talk="t-new")
+        record = served.Record("ember")
+        for talk, result, reason in (("t-old", "old reply", ""), ("t-new", "new reply", ""),
+                                     ("t-old", "new reply", "result differs from the supervisor's record")):
+            with self.subTest(talk=talk, result=result):
+                ep = {**episode(tool="web_search", result=result, ts=START + timedelta(minutes=4), kind="talk",
+                                run_started=None), "talk_id": talk}
+                self.assertEqual(record.check(ep, ep["tools"][0]), reason)
+        # A run that started after the episode ended is not the episode's.
+        late = self.add_run(start=END + timedelta(seconds=1), end=END + timedelta(minutes=5))
+        served.keep("ember", "fetch_page", "later", run=late, at=END + timedelta(seconds=2), kind="live")
+        self.keep()
+        ep = episode()
+        self.assertEqual(served.Record("ember").check(ep, ep["tools"][0]), "")
+
+    def test_marker_numbers_are_ascii_digits(self):
+        """Regression (#8 final review): fullwidth digits in the marker's length matched."""
+        self.assertFalse(served.matches(served.fingerprint(LONG), cut(LONG).replace("9000 chars", "9\uff10\uff10\uff10 chars")))
 
     # -- the files ---------------------------------------------------------------------------------------------------
     def test_a_torn_last_line_costs_only_itself(self):
