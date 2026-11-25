@@ -26,6 +26,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,7 @@ GATE = re.compile(r"(^|\s)-m (unittest|pytest|supervisor\.gate_suite)(\s|$)|shaf
 TERM_GRACE_S = 15
 LIST_TIMEOUT_S = 30
 PROBE_TIMEOUT_S = 5
+REAP_TIMEOUT_S = 1
 MAX_PROBES = 80
 PS, LSOF = "/bin/ps", "/usr/sbin/lsof"
 
@@ -54,7 +56,9 @@ class Proc:
 
 
 class _ListTimeout(RuntimeError):
-    pass
+    def __init__(self, message: str, *, stuck: bool):
+        super().__init__(message)
+        self.stuck = stuck
 
 
 def _list_command(argv: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
@@ -69,7 +73,10 @@ def _list_command(argv: list[str], *, timeout: float | None = None) -> subproces
             # A child stuck in the kernel may never exit. Close the pipes without draining them or waiting.
             proc.stdout.close()
             proc.stderr.close()
-        raise _ListTimeout(f"{argv[0]} timed out after {timeout:g}s") from e
+        deadline = time.monotonic() + REAP_TIMEOUT_S
+        while (stuck := proc.poll() is None) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        raise _ListTimeout(f"{argv[0]} timed out after {timeout:g}s", stuck=stuck) from e
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
@@ -79,16 +86,12 @@ def processes() -> dict[int, Proc]:
     Both tools by absolute path: the launchd services run with PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     (autonomy.py), which has no /usr/sbin — a bare "lsof" raised FileNotFoundError on the web panel's kill
     (2026-10-20). An ordinary sleeping process whose cwd lookup blocked in the kernel froze every run end.
-    Bisect a timed-out lsof list and remember the blockers. Blockers, exiting processes and zombies keep an
-    empty cwd. Raise RuntimeError if ps times out, the probe limit is reached, or no working folders are found.
+    Bisect a timed-out lsof list and remember singleton probes still running a second after SIGKILL. Blockers,
+    slow probes, exiting processes and zombies keep an empty cwd. Drop pids that vanish or change commands during lookup.
+    Raise RuntimeError if ps times out, the probe limit is reached, or lsof finds no working folders.
     """
     path = core.SUP_DIR / "cwd-blockers.json"
-    # Share discoveries across callers before another can launch an lsof against the same blocker.
-    with core.config_lock(path):
-        return _processes(path)
-
-
-def _processes(path: Path) -> dict[int, Proc]:
+    previous = _read_blockers(path) or {}
     out = _list_command([PS, "-x", "-o", "pid=,ppid=,stat=,command="]).stdout
     procs: dict[int, Proc] = {}
     pids = []
@@ -100,19 +103,37 @@ def _processes(path: Path) -> dict[int, Proc]:
             if "E" not in stat and "Z" not in stat:
                 pids.append(pid)
 
+    confirmed: dict[str, str] = {}
+    try:
+        _list_cwds(procs, [pid for pid in pids if previous.get(pid) != procs[int(pid)].command], confirmed)
+    finally:
+        # Check identities and keep valid discoveries even if the remaining probes hit the cap.
+        out = _list_command([PS, "-x", "-o", "pid=,command="]).stdout
+        current = {}
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if parts and parts[0].isdigit():
+                current[parts[0]] = parts[1] if len(parts) > 1 else ""
+        _merge_blockers(path, confirmed, current)
+    return {pid: p for pid, p in procs.items() if current.get(str(pid)) == p.command}
+
+
+def _merge_blockers(path: Path, confirmed: dict[str, str], current: dict[str, str]) -> None:
     stored = _read_blockers(path)
     previous = stored or {}
-    blockers = {str(pid): p.command for pid, p in procs.items() if previous.get(str(pid)) == p.command}
+    blockers = {pid: command for entries in (previous, confirmed) for pid, command in entries.items()
+                if current.get(pid) == command}
+    if blockers == stored:
+        return
     try:
-        _list_cwds(procs, [pid for pid in pids if pid not in blockers], blockers)
-    finally:
-        # Keep discoveries even if the remaining probes hit the cap.
-        if blockers != stored:
-            _save_blockers(path, blockers)
-            for pid, command in blockers.items():
-                if previous.get(pid) != command:
-                    log(f"skipping cwd lookup for pid {pid} after lsof timed out")
-    return procs
+        _save_blockers(path, blockers)
+    except OSError as e:
+        with suppress(OSError):  # The same filesystem failure can also prevent logging.
+            log(f"could not save cwd blockers: {e}")
+        return
+    for pid, command in confirmed.items():
+        if blockers.get(pid) == command and previous.get(pid) != command:
+            log(f"skipping cwd lookup for pid {pid} after lsof timed out")
 
 
 def _read_blockers(path: Path) -> dict[str, str] | None:
@@ -126,6 +147,7 @@ def _read_blockers(path: Path) -> dict[str, str] | None:
 
 
 def _save_blockers(path: Path, blockers: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
     try:
         with os.fdopen(fd, "w") as stream:
@@ -147,10 +169,11 @@ def _list_cwds(procs: dict[int, Proc], pids: list[str], blockers: dict[str, str]
         argv = [LSOF, "-a", "-d", "cwd", "-p", ",".join(batch), "-Fpn"]
         try:
             result = _list_command(argv, timeout=PROBE_TIMEOUT_S) if attempt else _list_command(argv)
-        except _ListTimeout:
+        except _ListTimeout as e:
             if len(batch) == 1:
-                pid = batch[0]
-                blockers[pid] = procs[int(pid)].command
+                if e.stuck:
+                    pid = batch[0]
+                    blockers[pid] = procs[int(pid)].command
             else:
                 middle = len(batch) // 2
                 pending.extend((batch[middle:], batch[:middle]))
