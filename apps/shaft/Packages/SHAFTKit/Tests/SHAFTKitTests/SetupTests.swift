@@ -74,6 +74,8 @@ final class Machine: @unchecked Sendable {
     let lock = NSLock()
     var toolsInstalled = true
     var toolsArriveAfterPolls = 0
+    var toolsInstallError: String?
+    var isAdmin = true
     var tags = ["v0.55.0", "v0.56.0", "v0.57.0", "template-v0.55.0", "template-v0.56.0"]
     var installLines = [
         #"{"step": "identity", "ok": true, "detail": "set Ada <ada@example.com> for this repository"}"#,
@@ -112,7 +114,14 @@ final class Machine: @unchecked Sendable {
                 if toolsArriveAfterPolls > 0, polls > toolsArriveAfterPolls { toolsInstalled = true; return ok("/Library/Developer/CommandLineTools\n") }
                 return failed(2, "xcode-select: error: unable to get active developer directory")
             }
-            if a == ["--install"] { return ok("", "xcode-select: note: install requested for command line developer tools\n") }
+            if a == ["--install"] {
+                if let toolsInstallError { return failed(1, toolsInstallError) }
+                return ok("", "xcode-select: note: install requested for command line developer tools\n")
+            }
+        case "dsmemberutil":
+            if a == ["checkmembership", "-U", NSUserName(), "-G", "admin"] {
+                return ok(isAdmin ? "user is a member of the group\n" : "user is not a member of the group\n")
+            }
         case "git":
             if a.first == "ls-remote" {
                 return ok(tags.map { "abc123\trefs/tags/\($0)" }.joined(separator: "\n") + "\n")
@@ -578,6 +587,43 @@ struct SetupTests {
         guard case .failed(let message) = waiting.steps[.git] else { Issue.record("the git step did not fail"); return }
         #expect(message.contains("Command Line Tools"))
         #expect(waiting.steps[.server] == .pending)
+    }
+
+    @Test func rejectedCommandLineToolsInstallReportsTheErrorWithoutPolling() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        machine.toolsInstalled = false
+        let stderr = "xcode-select: error: install request refused"
+        machine.toolsInstallError = stderr + "\n"
+        let runner = FakeRunner(machine.answer)
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+
+        await installer.run(only: .git)
+
+        guard case .failed(let message) = installer.steps[.git] else { Issue.record("the git step did not fail"); return }
+        #expect(runner.calls.filter { $0.line == "xcode-select -p" }.count <= 2)
+        #expect(message.contains(stderr))
+        #expect(message.contains("administrator account on this Mac"))
+        #expect(message.contains("Try again"))
+    }
+
+    @Test func commandLineToolsWaitAndTimeoutExplainAdministratorCredentialsForNonAdmin() async throws {
+        let home = try temporaryFolder("setup")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let machine = Machine(home: home)
+        machine.toolsInstalled = false
+        machine.isAdmin = false
+        let runner = FakeRunner(machine.answer)
+        let installer = makeInstaller(machine, runner: runner, downloader: FakeDownloader(uvBytes), store: MemoryCredentialStore())
+
+        await installer.run(only: .git)
+
+        guard case .failed(let message) = installer.steps[.git] else { Issue.record("the git step did not time out"); return }
+        #expect(runner.calls.filter { $0.line == "xcode-select -p" }.count > 2)
+        #expect(installer.details[.git]?.contains("administrator's name and password") == true)
+        #expect(message.contains("administrator's name and password"))
+        #expect(message.contains("administrator account"))
     }
 
     @Test func noTemplateTagFailsTheServerStep() async throws {

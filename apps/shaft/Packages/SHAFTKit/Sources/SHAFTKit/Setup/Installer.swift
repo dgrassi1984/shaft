@@ -274,15 +274,34 @@ public final class Installer {
     private static let tar = URL(fileURLWithPath: "/usr/bin/tar")
     private static let xattr = URL(fileURLWithPath: "/usr/bin/xattr")
 
-    /// git comes with the Command Line Tools. Missing: `xcode-select --install` opens the system dialog, and the step
-    /// waits for the install to finish.
+    /// git comes with the Command Line Tools. If `xcode-select --install` succeeds, wait for the install to finish.
     private func commandLineTools() async throws {
         if try await run(Self.xcodeSelect, ["-p"]).succeeded {
             details[.git] = "Command Line Tools installed"
             return
         }
         let asked = try await run(Self.xcodeSelect, ["--install"])
-        details[.git] = "Waiting for the Command Line Tools: finish the install in the system dialog"
+        if !asked.succeeded {
+            if try await run(Self.xcodeSelect, ["-p"]).succeeded {
+                details[.git] = "Command Line Tools installed"
+                return
+            }
+            throw InstallError("Could not start the Command Line Tools install.\n\(asked.said)\n"
+                               + "Ask someone with an administrator account on this Mac to install the Command Line Tools "
+                               + "(which provide git), then Try again.")
+        }
+
+        let membership = try? await run(URL(fileURLWithPath: "/usr/bin/dsmemberutil"),
+                                        ["checkmembership", "-U", NSUserName(), "-G", "admin"])
+        try Task.checkCancellation()
+        let needsAdministrator = membership?.succeeded == true
+            && String(decoding: membership?.stdout ?? Data(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "user is not a member of the group"
+        let administratorHelp = "The system dialog asks for an administrator's name and password. "
+            + "Someone with an administrator account on this Mac must enter them."
+        details[.git] = needsAdministrator
+            ? "Waiting for the Command Line Tools. " + administratorHelp
+            : "Waiting for the Command Line Tools: finish the install in the system dialog"
         let attempts = max(1, Int((configuration.toolsTimeout / configuration.pollInterval).rounded(.up)))
         for _ in 0..<attempts {
             try await sleep(configuration.pollInterval)
@@ -291,8 +310,11 @@ public final class Installer {
                 return
             }
         }
-        let said = asked.succeeded ? "" : " (the system said: \(asked.said))"
-        throw InstallError("The Command Line Tools are still not installed\(said). Finish the install in the system dialog "
+        if needsAdministrator {
+            throw InstallError("The Command Line Tools are still not installed. " + administratorHelp
+                               + " Finish the install, then Try again. If the dialog closed, Try again opens it again.")
+        }
+        throw InstallError("The Command Line Tools are still not installed. Finish the install in the system dialog "
                            + "(Try again opens it again if it closed), then Try again.")
     }
 

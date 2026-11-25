@@ -204,9 +204,10 @@ Debug builds only, these move the install away from the real `~/SHAFT` and the n
 | `SHAFT_DEV_SETUP=<step>` | open the wizard at a step after Install (`model`, `instance`, `access`, `alone`, `hello`) on the run's own pairing: with `SHAFT_DEV_DIR` and `SHAFT_DEV_PAIR` (a fixture server's link) its steps run against the fixture, with nothing installed |
 
 The Install step really runs the commands (the Command Line Tools check, `git clone`, the uv download, `shaft install`,
-which installs the services with launchd): run it only on a Mac or user account meant for it. After the pair step the
-wizard goes on to Model while the server has no instance (or this wizard made one already); a server with instances
-opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install. The app tries
+which installs the services with launchd): run it only on a Mac or user account meant for it.
+If the Command Line Tools are missing, someone with an administrator account on that Mac must install them.
+After the pair step the wizard goes on to Model while the server has no instance (or this wizard made one already);
+a server with instances opens the app. The Model step's "Sign in" for ChatGPT runs `shaft codex login --json` from the install. The app tries
 to open the relayed `url` once and shows the page link and `code` with copy controls. It shows recent `say` lines
 while waiting. If the page is still missing after 20 seconds, it shows a notice and the executable path from `codex`.
 A final `ok` reports success or carries an `error`. Cancel terminates the command, which stops Codex. The Access step grants the
