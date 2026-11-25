@@ -1278,10 +1278,12 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             return docs_to_sync
         reply = chat["reply"]
         sent = reply.get("interjections", 0)
-        # One sent before the relay read the chat for its request (relay.upto) is in that request: its answer covers
-        # it, though the API refused it as an interjection (409, the reply not registered yet; Codex review of #16)
+        # A refused one sent before the relay read the chat for its request (relay.upto) is in that request: its
+        # answer covers it, though the API refused it as an interjection (409, the reply not registered yet; Codex
+        # review of #16). An accepted one is the API's heard count's, wherever it sits.
         interjected = [t for k, t in enumerate(chat["turns"]) if k >= reply.get("turn_start", len(chat["turns"]))
-                       and k >= (relay.upto or 0) and t["role"] == "user" and t.get("interjected")]
+                       and t["role"] == "user" and t.get("interjected")
+                       and not (t.get("refused") and k < (relay.upto or 0))]
         # The API's heard count covers only the interjections it accepted, in the order sent: one it refused (409) is
         # never heard, whatever came after it (#16: a 409 then a 202 heard took the refused one as heard)
         accepted = [t for t in interjected if not t.get("refused")]
