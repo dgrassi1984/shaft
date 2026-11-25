@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, commitments, corrections, personality, projects, surprises, x_probes
+from . import clock, commitments, corrections, improvements, personality, projects, surprises, x_probes
 
 
 def now() -> datetime:
@@ -265,13 +265,15 @@ PUSHBACK = (
 LIVE = """\
 This is an autonomous cycle: nobody is present, and you decide what to do. You have up \
 to {steps} model turns. Spend at most one cycle in five on your own records or checking tools; \
-your stats show your self-audit share.
+your stats show your self-audit share. Building or fixing your own tools from your improvement list is not \
+self-audit: in idle time, when nothing for the operator is due, it is the work to take.
 
 {inbox}
 
 {briefing}{handoff}{slate}
-1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
-self/goals.md (both in your context), from the operator's world (the briefing and his messages above), \
+1. FIRST call declare_intent: pick ONE goal — from your improvement list (origin self, origin_ref \
+improvement:<id>), your current improvement plan or \
+self/goals.md (all in your context), from the operator's world (the briefing and his messages above), \
 or an open surprise: the one whose \
 answer would most change what you do (origin self, origin_ref surprise:<id>). \
 State a success criterion someone else could check from your tool results, and your \
@@ -357,8 +359,11 @@ not mail correspondents. Write the whole file; keep what is still true.
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.{goals_budget}
-5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
-record (the verdicts above; record(kind=...) and history for more).\
+5. Read self/self.md (above) against your journal, the corrections and the supervisor's record (the verdicts \
+above; record(kind=...) and history for more), and its lines against each other. update_self_model when it no \
+longer matches them, or when two of its lines contradict each other (resolve it); a contradiction you leave \
+must be named in your self-model line (below). A self-model that has not changed in a week while corrections \
+came in is a sign you skipped this step.\
 """ + SELF_CLAIMS + """
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
 future self needs once these journal entries are no longer in view — and what surprised you.
@@ -391,11 +396,19 @@ evidence and 1-3 specific behavioural predictions. Only the operator edits drive
 acquiring resources and resisting control or oversight are ineligible. Test the proposal first as a
 shaft/prompts.py trial candidate; trials cannot target drive.md. Record results for the operator to assess
 against the predictions; the falsification check is the operator's.
+14. Turn what you will improve into work: plan_improvement for at most {per_sleep} concrete items (a test, plugin, \
+job, rule, fix or tool, each with its evidence), or keep working an open one; close_improvement the open items \
+(listed below) that are done or no longer worth doing. Your idle cycles take their goals from this list.
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
-whether the last improvement test you set was passed — with evidence. A partial or no that failed only on \
-self-imposed clauses (deliverable_met yes) is not a reason to add a new rung to your improvement plan."""
+whether the last improvement test you set was passed — with evidence — and the id of each improvement item \
+(iMMDD-HHMM-n) that carries it out: prose alone is sent back. A partial or no that failed only on \
+self-imposed clauses (deliverable_met yes) is not a reason to add a new rung to your improvement plan. \
+End with one line on your self-model, exactly one of:
+Self-model: changed — <what>, because <evidence>
+Self-model: unchanged — <the evidence you checked> did not contradict it
+(name any contradiction you left in it). A bare "unchanged" is sent back."""
 
 
 def reply_budget(cfg) -> str:
@@ -491,7 +504,7 @@ SECTIONS = {
     "goals": (None, "sections", "read_file self/goals.md"),
     "journal": (None, "entries", "search_memory, or read_file memory/journal.md"),
     "sleep": (3000, "head", "search_memory, or read_file memory/journal.md"),
-    "improvement": (2500, "head", "read_file memory/journal.md (my last sleep's entry)"),
+    "improvement": (3500, "head", "read_file memory/improvements.jsonl and memory/journal.md (my last sleep's entry)"),
     "promises": (3000, "head", "read_file memory/commitments.jsonl"),
     "projects": (3000, "head", "read_file memory/projects.jsonl"),
     "corrections": (3000, "head", "read_file memory/corrections.jsonl"),
@@ -659,7 +672,7 @@ def _raw(state, at: datetime) -> dict:
             "personality": personality.read(root).strip(), "skills": _skills(root),
             "facts": _file(root / "memory" / "facts.md", "(none yet)"),   # kept to FACTS_MAX_CHARS by my sleep
             "digests": _file(root / "memory" / "digests.md", "(none yet — my sleeps will write them)"),
-            "goals": state.read(state.goals_md), "improvement": improvement_plan(state),
+            "goals": state.read(state.goals_md), "improvement": improvement_section(state),
             "projects": projects.block(root, at), "corrections": corrections.block(root, at),
             "stats": _file(root / "self" / "stats.md", "(no measurements yet)")}
 
@@ -836,3 +849,10 @@ def improvement_plan(state) -> str:
         cut = f"{plan[:2000]} […]" if len(plan) > 2000 else plan
         return f"From my {what.split(' (')[0].lower()} of {title[:16]}:\n\n{cut}"
     return "None yet — my first sleep will set one (under \"How I will improve\")."
+
+
+def improvement_section(state) -> str:
+    """My open improvement items first (#15: a list I can take a goal from, not only text), then the plan they came
+    from."""
+    return ("Open items on my improvement list (newest first; plan_improvement adds one, close_improvement closes it):\n"
+            + improvements.block(state.root) + "\n\n" + improvement_plan(state))
