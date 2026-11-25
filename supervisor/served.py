@@ -16,7 +16,15 @@ call of that tool whose fingerprint matches the episode's text. Built-in and plu
 reach the broker: they cannot be checked this way, and the output says so. Episodes that ended before the record began
 (`since`, written once, when the first run's broker started) are read as they were before it.
 
-SUP_DIR/served/<name>.jsonl: one row per successful call, {ts, tool, run, len, sha256, cut}.
+The arguments are fingerprinted too (#22): a real result cited under other arguments (a forecast fetched for one city
+cited as another's) does not count. The digest is of the arguments as the broker received them, in one canonical form
+(`canonical_args`), never their text; the episode's arguments are brought to the same form: parsed from the tool log's
+JSON, typed by the tool's schema as the template's coerce_args types them before the call, and secret_set's value
+withheld as the template's tool log withholds it. Arguments the tool log cut ("[... cut in the log") cannot be
+checked, and the step does not count. A fingerprint kept before arguments were (no `args` key) is checked on its
+result; one whose arguments the broker could not digest (`args` null) does not count.
+
+SUP_DIR/served/<name>.jsonl: one row per successful call, {ts, tool, run, len, sha256, cut, args}.
 SUP_DIR/served/<name>.runs.jsonl: {run, kind, event: start|end, ts}. SUP_DIR/served/since: when the record began.
 A trial replay keeps none (its calls are not the instance's).
 """
@@ -58,6 +66,79 @@ NOT_CHECKED = "built-in and plugin calls never reach the supervisor and are not 
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+# The template's tool log (shaft/tools.py for_log): arguments over its LOG_CHARS are cut with this note.
+LOG_CUT = "\n[... cut in the log, "
+WITHHELD = "[withheld]"     # secret_set's value, as the template's _loggable writes it in the tool log
+_INT = re.compile(r"[+-]?\d+")
+_NUM = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+
+
+def _coerce(tool: str, args: dict) -> dict:
+    """The arguments typed as the tool's schema declares them, exactly as the template's coerce_args (shaft/tools.py)
+    types them before calling the supervisor: only a string whose declared types rule out a string is converted.
+    (test_served runs the template's own function in a subprocess against this one.)"""
+    from .broker import SPECS
+    props = (((SPECS.get(tool) or {}).get("function") or {}).get("parameters") or {}).get("properties") or {}
+    out = dict(args)
+    for key, value in args.items():
+        declared = props.get(key) if isinstance(props, dict) else None
+        if not isinstance(value, str) or not isinstance(declared, dict):
+            continue
+        kinds = declared.get("type")
+        kinds = [kinds] if isinstance(kinds, str) else list(kinds) if isinstance(kinds, list) else []
+        text = value.strip()
+        if "null" in kinds and text.lower() in ("null", "none"):
+            out[key] = None
+        elif "string" in kinds:
+            continue
+        elif "integer" in kinds and _INT.fullmatch(text):
+            out[key] = int(text)
+        elif "number" in kinds and _NUM.fullmatch(text):
+            out[key] = float(text)
+        elif "boolean" in kinds and text.lower() in ("true", "false"):
+            out[key] = text.lower() == "true"
+    return out
+
+
+def canonical_args(tool: str, args: dict) -> str:
+    """One form for a call's arguments on both sides: typed as the call was made, secret_set's value withheld (the
+    digest never covers a secret), keys sorted, no spacing."""
+    args = _coerce(tool, args)
+    if tool == "secret_set" and "value" in args:
+        args = {**args, "value": WITHHELD}
+    return json.dumps(args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def args_digest(tool: str, args) -> str | None:
+    """The digest the broker keeps of a call's arguments (a dict), or None when they are not a dict."""
+    return _sha(canonical_args(tool, args)) if isinstance(args, dict) else None
+
+
+def episode_args(tool: str, logged) -> tuple[str | None, str]:
+    """(digest, "") of the arguments a tool-log step shows, or (None, why they cannot be checked)."""
+    if isinstance(logged, dict):
+        try:
+            logged = json.dumps(logged, ensure_ascii=False)   # an older log's dict: checked as its JSON is
+        except (ValueError, RecursionError):
+            return None, "the cited step's arguments are not JSON"
+    if not isinstance(logged, str):
+        return None, "the cited step has no arguments to check"
+    if LOG_CUT in logged:
+        return None, "the cited step's arguments were cut in the log and cannot be checked"
+    try:
+        args = json.loads(logged or "{}")
+    except (ValueError, RecursionError):   # nested past the parser's depth: no call could have carried it
+        return None, "the cited step's arguments are not JSON"
+    if not isinstance(args, dict):
+        return None, "the cited step's arguments are not a JSON object"
+    if tool == "secret_set" and "value" in args and args["value"] != WITHHELD:
+        return None, "the cited step shows a secret's value, which the tool log never holds"
+    try:
+        return args_digest(tool, args), ""
+    except Exception:     # a value no call could have carried (a number too long to read): never costs the check
+        return None, "the cited step's arguments cannot be typed as the call's"
 
 
 def fingerprint(text: str) -> dict:
@@ -120,21 +201,22 @@ def run_event(name: str, run: str, kind, event: str, at: datetime | None = None,
 
 
 def keep(name: str, tool: str, result, run: str | None = None, at: datetime | None = None,
-         base: Path | None = None, kind: str | None = None, talk: str | None = None) -> None:
-    """Append the fingerprint of one successful call's result (a non-text result is kept as its JSON)."""
+         base: Path | None = None, kind: str | None = None, talk: str | None = None, args: str | None = None) -> None:
+    """Append the fingerprint of one successful call's result (a non-text result is kept as its JSON) and the digest
+    of its arguments (args_digest, taken as the call arrived)."""
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
     at = at or datetime.now()
     jsonl.append_locked(_dir(base) / f"{name}.jsonl", [json.dumps(
         {"ts": at.isoformat(timespec="seconds"), "tool": tool, "run": run, "kind": kind, "talk": talk,
-         **fingerprint(text)}) + "\n"])
+         **fingerprint(text), "args": args}) + "\n"])
 
 
 def _at(value) -> datetime | None:
     try:
         at = datetime.fromisoformat(value) if isinstance(value, str) else None
-    except ValueError:
+        return at.astimezone().replace(tzinfo=None) if at is not None and at.tzinfo else at
+    except (ValueError, OverflowError):    # a time no clock holds in local time: no time
         return None
-    return at.astimezone().replace(tzinfo=None) if at is not None and at.tzinfo else at
 
 
 class Record:
@@ -195,6 +277,16 @@ class Record:
                   and (talk is None or r.get("talk") in (None, talk))]
         if not served:
             return f"the supervisor served no successful {tool} call in that run"
-        if any(matches(r, call.get("result")) for r in served):
+        same = [r for r in served if matches(r, call.get("result"))]
+        if not same:
+            return "result differs from the supervisor's record"
+        if any("args" not in r for r in same):
+            return ""         # kept before arguments were fingerprinted: checked on its result
+        digest, why = episode_args(tool, call.get("args"))
+        if digest is None:
+            return why
+        if any(r["args"] == digest for r in same):
             return ""
-        return "result differs from the supervisor's record"
+        if all(r["args"] is None for r in same):
+            return "the supervisor could not fingerprint that call's arguments"
+        return "arguments differ from the call the supervisor served with that result"

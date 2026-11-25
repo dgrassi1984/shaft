@@ -441,11 +441,22 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
             return _pause(name, root, kind, proc, held, run, broker)
         time.sleep(0.25)
     log(f"{name}: {kind} paused — a reply to the operator needs the instance")
-    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
-    held.release()
-    while replying(name):
-        time.sleep(1)
-    held.acquire(wait=True)
+    from . import ledger_mirror
+    try:      # from its own commit on, until it ends: its episode, its promises' source, is not written yet (#21)
+        hold = ledger_mirror.holding(name)
+        hold.__enter__()
+    except OSError as e:
+        hold = None
+        log(f"{name}: commitments copy not held for the pause: {e}")
+    try:
+        _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
+        held.release()
+        while replying(name):
+            time.sleep(1)
+        held.acquire(wait=True)
+    finally:
+        if hold is not None:
+            hold.__exit__(None, None, None)
     # The conversation's changes are not mine.
     approved = _reconcile(name, root)
     run["before"] = _snapshot(root, approved)

@@ -1159,6 +1159,7 @@ class Broker:
             def do_POST(self):
                 if not self._authorised():
                     return
+                broker._observe_ledger()   # before serving: a row written by the step that led here is copied (#21)
                 from . import ledger
                 token = ledger.charges.set(broker._project_charges)
                 try:
@@ -1373,6 +1374,9 @@ class Broker:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._run_event("start")   # before the first call can be served
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        if self._observes_ledger():
+            self._ledger_stop = threading.Event()
+            threading.Thread(target=self._watch_ledger, args=(self._ledger_stop,), daemon=True).start()
         self.egress.start()
         return f"http://127.0.0.1:{self.server.server_address[1]}"
 
@@ -1381,7 +1385,11 @@ class Broker:
         return self.server.server_address[1] if self.server else 0
 
     def stop(self) -> None:
+        if (stop := getattr(self, "_ledger_stop", None)) is not None:
+            stop.set()
+            self._ledger_stop = None
         if self.server:
+            self._observe_ledger()   # what the run's last step left, before the run ends
             self._run_event("end")
         if self.channel is not None:
             self.channel.close()
@@ -1456,6 +1464,7 @@ class Broker:
 
     def _call(self, tool: str, args: dict) -> dict:
         started = time.monotonic()
+        received = self._args_digest(tool, args)   # as the call arrived, before any step below reads or fills args
         failure = "refused"   # the error's class for a Chat call's log line; a refusal before dispatch has none
         self._current_action = None
         self.calls += 1
@@ -1566,10 +1575,22 @@ class Broker:
             try:
                 served.keep(self.name, tool, result["result"], run=getattr(self, "run_started", None),
                             base=self.log_path.parent, kind=getattr(self, "run_kind", None),
-                            talk=getattr(self, "talk_id", None))
+                            talk=getattr(self, "talk_id", None), args=received)
             except Exception as e:   # the record's bookkeeping never costs the call
                 self._quiet_log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
         return result
+
+    def _args_digest(self, tool: str, args: dict) -> str | None:
+        """The digest of a call's arguments for the served record (#22), never their text; None in a trial replay or
+        when it cannot be taken (the fingerprint is then checked on its result alone)."""
+        if not self._keeps_record():
+            return None
+        from . import served
+        try:
+            return served.args_digest(tool, args)
+        except Exception as e:
+            self._quiet_log(f"{self.name}: arguments of {tool} not fingerprinted: {type(e).__name__}: {e}")
+            return None
 
     def _keeps_record(self) -> bool:
         """The served record (served.py) is the instance's real runs only: never a trial replay's."""
@@ -1584,6 +1605,42 @@ class Broker:
             served.run_event(self.name, self.run_started, self.run_kind, event, base=self.log_path.parent)
         except Exception as e:
             self._quiet_log(f"{self.name}: run {event} not recorded for fingerprints: {type(e).__name__}: {e}")
+
+    def _observes_ledger(self) -> bool:
+        """The instance's own runs in its own folder copy its commitments ledger as it goes (#21): never a trial
+        replay, a battery exam or a broker built without __init__ (tests)."""
+        from . import core
+        root = getattr(self, "root", None)
+        return (root is not None and self._keeps_record() and getattr(self, "usage_name", None) == self.name
+                and root == (core.INSTANCES / self.name).resolve())
+
+    def _observe_ledger(self) -> None:
+        """Copy the commitments ledger's new rows into the supervisor's add-only copy (ledger_mirror.observe) when
+        the file changed since the last look; never costs the request or the run."""
+        try:
+            if not self._observes_ledger():
+                return
+            from . import ledger_mirror
+            from .commitments import FILE
+            try:
+                st = os.lstat(self.root / FILE)
+                sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode)   # ctime: a restored mtime
+            except FileNotFoundError:
+                return
+            lock = self.__dict__.setdefault("_ledger_lock", threading.Lock())
+            with lock:
+                if sig == getattr(self, "_ledger_sig", None):
+                    return
+                ledger_mirror.observe(self.name, self.root)   # the copy the run's mind commit syncs (core.commit_state)
+                self._ledger_sig = sig   # stat before the read: a change while copying is seen at the next look
+        except Exception as e:
+            self._quiet_log(f"{self.name}: commitments copy not updated during the run: {type(e).__name__}: {e}")
+
+    def _watch_ledger(self, stop: threading.Event) -> None:
+        """Between requests: a plugin or a long tool step can write and take back a row with no request between."""
+        from .ledger_mirror import POLL_S
+        while not stop.wait(POLL_S):
+            self._observe_ledger()
 
     def _quiet_log(self, line: str) -> None:
         """A bookkeeping failure's own log line: if even that cannot be written, the call or run goes on."""

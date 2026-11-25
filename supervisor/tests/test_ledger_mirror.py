@@ -1,9 +1,13 @@
 """The supervisor's copy of commitments survives changes to the instance's files."""
 import json
+import os
+import time
+import urllib.error
+import urllib.request
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import commitments, core, metrics
+from supervisor import broker, commitments, core, metrics
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -167,3 +171,302 @@ class LedgerMirrorTest(IsolatedCase):
         self.assertEqual({r["seen"] for r in ledger_mirror.records("ember", "commitments")}, {committed})
         rows, _ = commitments.recorded("ember", as_of=NOW)
         self.assertEqual([row["id"] for row in rows], [row["id"] for row in made])
+
+
+class WithinARunTest(IsolatedCase):
+    """#21: a row written and taken back within one run never reached the copy, which synced only at the mind commit."""
+
+    def made(self, i=1, talk="t1", **extra):
+        return {"event": "made", "id": f"c1111-1200-{i}", "at": (NOW - timedelta(minutes=5)).isoformat(),
+                "source": "talk", "promise": f"Send report {i}", "criterion": "Report delivered", "made_to": "operator",
+                "sourced": True, "talk_id": talk, "due": (NOW + timedelta(days=1)).isoformat(), **extra}
+
+    def talk(self, talk="t1"):
+        return {"ts": (NOW - timedelta(minutes=6)).isoformat(), "kind": "talk", "role": "user", "talk_id": talk,
+                "content": "please"}
+
+    def write(self, path, rows):
+        super().write(path, rows)
+        st = path.stat()   # a later write in the same test must look changed to the broker's stat check
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000 * (1 + getattr(self, "_writes", 0))))
+        self._writes = getattr(self, "_writes", 0) + 1
+
+    def test_a_promise_taken_back_in_its_run_is_copied_and_judged_at_the_commit(self):
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)                    # an earlier commit: the copy is backfilled
+        made = self.made()
+        self.write(self.root / commitments.FILE, [made])          # commit_to, mid-run: the conversation's episode
+        self.assertEqual(ledger_mirror.observe("ember", self.root), 1)   # is not written yet
+        self.write(self.root / commitments.FILE, [])              # taken back before the run's commit
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])   # the run ends: its episode is written
+        ledger_mirror.sync("ember", self.root)                    # the mind commit judges it now, with its source
+        rows, changed = commitments.recorded("ember")
+        items = commitments.ledger("ember", NOW, rows)
+        self.assertEqual(items[made["id"]]["made_to"], "operator")   # judged mid-run it would read "self"
+        self.assertEqual(changed["removed"], {made["id"]})
+        self.assertIn("To the operator: made 1;", "\n".join(commitments.section("ember")))
+        # Judged once: a second commit adds nothing, and the verdict stays when the episode goes.
+        size = ledger_mirror.path("ember", "commitments").stat().st_size
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(ledger_mirror.path("ember", "commitments").stat().st_size, size)
+        self.write(self.root / "memory/episodes/day.jsonl", [])
+        self.assertEqual(commitments.ledger("ember", NOW, commitments.recorded("ember")[0])[made["id"]]["made_to"],
+                         "operator")
+
+    def test_a_promise_copied_in_its_run_is_source_checked_strictly(self):
+        """Copied during a run, a promise first appears after the backfill: no source, or no `sourced`, is no source."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        sourceless, unsourced = self.made(1, talk="never"), self.made(2, talk="never")
+        del unsourced["sourced"]
+        self.write(self.root / commitments.FILE, [sourceless, unsourced])
+        ledger_mirror.observe("ember", self.root)
+        self.write(self.root / commitments.FILE, [])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual({i: it["made_to"] for i, it in items.items()},
+                         {sourceless["id"]: "self", unsourced["id"]: "self"})
+
+    def test_a_fresh_instances_first_run_is_copied_as_it_goes(self):
+        """Regression (#21 review): observe copied nothing until a first commit had backfilled the copy, so a promise
+        made and taken back in a fresh instance's first run was lost."""
+        from supervisor import ledger_mirror
+        made = self.made()
+        self.write(self.root / commitments.FILE, [made])
+        self.assertEqual(ledger_mirror.observe("ember", self.root), 1)
+        self.assertTrue(ledger_mirror.path("ember", "commitments").with_name("commitments.backfilled").exists())
+        self.assertTrue(all(r.get("judge") for r in ledger_mirror.records("ember", "commitments")))
+        self.write(self.root / commitments.FILE, [])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual(items[made["id"]]["made_to"], "operator")
+
+    def test_a_pause_commit_records_found_sources_and_defers_missing_ones(self):
+        """Regression (#21 review): a cycle paused for a conversation is committed before its episode is written; its
+        promises were judged then, without their source, and recorded as the instance's own for good. A promise whose
+        source is already there is recorded then: deferring it let a later removal of the episode relabel it."""
+        from supervisor import ledger_mirror, mind, runner
+        mind.init("ember")
+        ledger_mirror.sync("ember", self.root)
+        cycles, talks = self.made(1, talk="later"), self.made(2)
+        self.write(self.root / commitments.FILE, [cycles, talks])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        (self.root / ".tmp").mkdir(exist_ok=True)
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        (self.root / ".tmp/pausable-4242").write_text("")        # its code handles the pause
+        (self.root / ".tmp/paused-4242").write_text("")          # and it acknowledged it
+
+        def settle(*a, **kw):   # the pause's own commit, under its hold
+            self.assertTrue(ledger_mirror._held("ember", None))
+            with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+                core.commit_state("ember", "live", [], root=self.root)
+        with mock.patch.object(runner, "_settle", side_effect=settle), \
+                mock.patch.object(runner, "replying", return_value=False), mock.patch.object(runner, "_reconcile"), \
+                mock.patch.object(runner, "_snapshot"), mock.patch("os.kill"), mock.patch.object(runner, "log"):
+            runner._pause("ember", self.root, "live", proc, mock.Mock(), {"before": {}, "seen": 0, "cseen": 0},
+                          mock.Mock(handoffs=[], config_writes=[]))
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual(recs[talks["id"]]["checked"]["made_to"], "operator")
+        self.assertNotIn("checked", recs[cycles["id"]])
+        self.assertFalse(ledger_mirror._held("ember", None))                       # released at the resume
+        self.write(self.root / commitments.FILE, [])
+        self.assertTrue(all(r.get("sourced") for r in commitments.recorded("ember")[0]))   # read strictly meanwhile
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("later")])  # the cycle ends; the talk's gone
+        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+            core.commit_state("ember", "live", [], root=self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual((recs[cycles["id"]]["checked"]["made_to"], recs[talks["id"]]["checked"]["made_to"]),
+                         ("operator", "operator"))
+
+    def test_a_verdict_judged_later_is_not_read_by_an_earlier_replay(self):
+        """Regression (#21 review): the verdict record kept the row's `seen`, so a replay as of a moment before the
+        judging read the verdict."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root, now=NOW - timedelta(minutes=10))
+        made = {**self.made(talk="never"), "at": (NOW - timedelta(minutes=9)).isoformat()}
+        self.write(self.root / commitments.FILE, [made])
+        ledger_mirror.observe("ember", self.root, now=NOW - timedelta(minutes=8))
+        ledger_mirror.sync("ember", self.root, now=NOW)                          # judged at NOW: no source, self
+        self.assertEqual(commitments.ledger("ember", NOW, commitments.recorded("ember")[0])[made["id"]]["made_to"],
+                         "self")
+        rows = commitments.recorded("ember", as_of=NOW - timedelta(minutes=5))[0]
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn(ledger_mirror.CHECKED, rows[0])                          # still waiting then
+        self.assertTrue(rows[0].get("sourced"))                                   # and read strictly
+
+    def test_a_same_size_rewrite_with_its_mtime_put_back_is_still_seen(self):
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        box = self.box()
+        path = self.root / commitments.FILE
+        self.write(path, [self.made(1)])
+        box._observe_ledger()
+        st = path.stat()
+        path.write_text(path.read_text().replace("c1111-1200-1", "c1111-1200-9"))   # same size
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        box._observe_ledger()
+        self.assertEqual([r["id"] for r in ledger_mirror.rows("ember", "commitments")],
+                         ["c1111-1200-1", "c1111-1200-9"])
+
+    def test_the_broker_copies_on_each_request_and_between_requests(self):
+        """Regression (#21) through the broker of a real run: a POST it serves (a model step, a tool call) and its
+        poll each copy what the ledger holds; a trial replay and a battery copy never do."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        box = self.box()
+        box.egress = mock.Mock()
+        with mock.patch.object(ledger_mirror, "POLL_S", 3600), mock.patch("supervisor.browser.sweep"):
+            url = box.start()
+            try:
+                self.write(self.root / commitments.FILE, [self.made(1)])
+                req = urllib.request.Request(url + "/tools/no_such_tool", data=b"{}", method="POST",
+                                             headers={"X-Shaft-Token": box.token})
+                with self.assertRaises(urllib.error.HTTPError):   # refused, but the step that led here is copied
+                    urllib.request.urlopen(req, timeout=10)
+                self.write(self.root / commitments.FILE, [])
+                self.assertEqual([r["id"] for r in ledger_mirror.rows("ember", "commitments")], ["c1111-1200-1"])
+                self.write(self.root / commitments.FILE, [self.made(2)])   # the run's last step
+            finally:
+                box.stop()
+        self.assertEqual([r["id"] for r in ledger_mirror.rows("ember", "commitments")],
+                         ["c1111-1200-1", "c1111-1200-2"])
+        # The poll, with no request at all.
+        box = self.box()
+        box.egress = mock.Mock()
+        with mock.patch.object(ledger_mirror, "POLL_S", 0.05), mock.patch("supervisor.browser.sweep"):
+            box.start()
+            try:
+                self.write(self.root / commitments.FILE, [self.made(3)])
+                for _ in range(100):
+                    if len(ledger_mirror.rows("ember", "commitments")) == 3:
+                        break
+                    time.sleep(0.05)
+                self.write(self.root / commitments.FILE, [])
+            finally:
+                box.stop()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 3)
+        # Not a trial replay's, nor a run outside the instance's own folder.
+        self.write(self.root / commitments.FILE, [self.made(4)])
+        replay = self.box(replay=True)
+        replay._observe_ledger()
+        elsewhere = self.box()
+        elsewhere.root = self.base / "battery/ember"
+        self.write(elsewhere.root / commitments.FILE, [self.made(5)])   # a row it would copy, were it the instance's
+        elsewhere._observe_ledger()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 3)
+        self.box()._observe_ledger()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 4)
+
+    def test_a_failing_copy_never_costs_the_request(self):
+        from supervisor import ledger_mirror
+        box = self.box()
+        self.write(self.root / commitments.FILE, [self.made()])
+        with mock.patch.object(ledger_mirror, "observe", side_effect=OSError("disk full")), \
+                mock.patch.object(broker.Broker, "_log", autospec=True, side_effect=OSError("disk full")):
+            box._observe_ledger()          # neither the copy nor its log line raises
+
+    def test_the_conversation_a_pause_made_room_for_does_not_judge_the_cycles_promises(self):
+        """Regression (#21 review): the conversation's own commit, while the cycle waited, judged the cycle's promises
+        before its episode existed; and holding every verdict let the resumed cycle relabel the conversation's own."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        cycles, talks = self.made(1, talk="later"), self.made(2)
+        self.write(self.root / commitments.FILE, [cycles, talks])
+        ledger_mirror.observe("ember", self.root)
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])          # the conversation's episode
+        with ledger_mirror.holding("ember"):
+            ledger_mirror.sync("ember", self.root)                     # the conversation ends: its commit
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual(recs[talks["id"]]["checked"]["made_to"], "operator")      # its source is there: recorded
+        self.assertNotIn("checked", recs[cycles["id"]])                            # the cycle's waits
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("later")])  # the cycle ends, the talk's gone
+        ledger_mirror.sync("ember", self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual((recs[cycles["id"]]["checked"]["made_to"], recs[talks["id"]]["checked"]["made_to"]),
+                         ("operator", "operator"))
+
+    def test_a_hold_whose_runner_is_gone_holds_nothing(self):
+        """The hold is a lock, not a pid: a runner that died (its pid reused or not) holds nothing."""
+        import subprocess
+        import sys
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        mark = ledger_mirror._hold_path("ember", None)
+        script = ("import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+                  "fcntl.flock(fd, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)")
+        proc = subprocess.Popen([sys.executable, "-c", script, str(mark)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(proc.stdout.readline().strip(), "held")
+            self.assertTrue(ledger_mirror._held("ember", None))
+        finally:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        self.assertTrue(mark.exists())
+        self.assertFalse(ledger_mirror._held("ember", None))
+
+    def test_a_row_or_episode_of_the_wrong_shape_never_stops_the_check(self):
+        """Regression (#21 review): a copied row whose time overflowed the local clock, or a live episode whose inbox
+        was not a list, raised in the source check at every commit (so no promise was ever judged again) and in every
+        reader, and the copy kept the row after the instance took it back."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        bad = {**self.made(1), "source": "cycle", "at": "0001-01-01T00:00:00+23:59",
+               "due": "0001-01-01T00:00:00+23:59"}
+        del bad["talk_id"]
+        cycle = {**self.made(3), "source": "cycle", "at": (NOW - timedelta(minutes=5)).isoformat()}
+        del cycle["talk_id"]
+        good = self.made(2)
+        self.write(self.root / commitments.FILE, [bad, good, cycle])
+        ledger_mirror.observe("ember", self.root)
+        self.write(self.root / commitments.FILE, [bad])               # one taken back, one still there
+        odd = {"ts": (NOW - timedelta(minutes=1)).isoformat(), "kind": "live", "inbox": 1, "tools": "x"}
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk(), odd])
+        ledger_mirror.sync("ember", self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual({i: r["checked"]["made_to"] for i, r in recs.items()},
+                         {bad["id"]: "self", good["id"]: "operator", cycle["id"]: "self"})
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])   # no reader raises
+        self.assertEqual(set(items), {good["id"], cycle["id"]})                       # a row with no time folds out
+        commitments.recorded("ember", as_of=NOW - timedelta(minutes=1))
+        "\n".join(commitments.section("ember"))
+
+    def test_a_held_commit_defers_a_reopened_legacy_promise_without_its_source(self):
+        """Regression (#21 review): a legacy row recorded as self (note RELABELLED) is reopened by the source check;
+        without its cycle's episode it came back self, unchanged, and a held commit recorded that for good."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        legacy = {**self.made(1), "source": "cycle", "made_to": "self", "note": commitments.RELABELLED}
+        del legacy["talk_id"]
+        self.write(self.root / commitments.FILE, [legacy])
+        ledger_mirror.observe("ember", self.root)
+        with ledger_mirror.holding("ember"):
+            ledger_mirror.sync("ember", self.root)
+        self.assertNotIn("checked", ledger_mirror.records("ember", "commitments")[0])
+        live = {"ts": (NOW - timedelta(minutes=1)).isoformat(), "kind": "live",
+                "inbox": ["20261111-115000-000000-from-operator.md"]}
+        self.write(self.root / "memory/episodes/day.jsonl", [live])       # the cycle ends, answering the operator
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(ledger_mirror.records("ember", "commitments")[0]["checked"]["made_to"], "operator")
+
+    def test_a_first_backfill_by_the_broker_keeps_history_verdicts_at_their_seen(self):
+        """Regression (#21 review): a history row backfilled by observe got its verdict stamped at the judging, so a
+        replay of a moment between the two read it against the current episodes."""
+        from supervisor import ledger_mirror
+        made = self.made()
+        committed = (NOW - timedelta(days=2)).isoformat(timespec="seconds")
+        text = json.dumps(made) + "\n"
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        with mock.patch.object(ledger_mirror, "_history", return_value=[(text, committed)]):
+            ledger_mirror.observe("ember", self.root, now=NOW)
+        ledger_mirror.sync("ember", self.root, now=NOW)
+        rec = ledger_mirror.records("ember", "commitments", as_of=NOW - timedelta(days=1))[0]
+        self.assertEqual(rec["checked"]["made_to"], "operator")
+
+    def test_relabelled_is_the_commitments_note(self):
+        from supervisor import ledger_mirror
+        self.assertEqual(ledger_mirror.RELABELLED, commitments.RELABELLED)
+
