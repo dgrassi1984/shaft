@@ -65,9 +65,9 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
                     self.assertEqual(getattr(cfg, knob), value)
 
     def test_default_live_instruction_bytes_are_unchanged(self):
-        # SHA-256 of LIVE on do-instance-code before this change, including PUSHBACK.
+        # SHA-256 of LIVE, including PUSHBACK; last changed for the improvement list (#15).
         self.assertEqual(hashlib.sha256(prompts.live_instructions(self.cfg).encode()).hexdigest(),
-                         "bbe3d22f03d9dde9eab39a9520a3a253615570b8451635d482be5c23b5fc319e")
+                         "82e0ddc2b4eda298a96614d9cb1e5eb04a507e75ff0a563437f6168e22bad344")
 
     def test_doubts_on_keeps_the_original_optional_schema(self):
         _, tools = self.capture_live()

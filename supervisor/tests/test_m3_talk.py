@@ -300,6 +300,7 @@ class CorrectionsTest(InstanceFixture, unittest.TestCase):
             self.assertIn("Answer first", seen[0][0]["content"])
             self.assertEqual(corrections.fold(self.root)["k1028-1405-1"]["status"], "open")
 
+    @mock.patch.object(sleep, "entry_problems", new=lambda *a, **k: [], create=True)   # not about the #13 entry check
     def test_close_requires_closed_by_and_evidence_and_is_offered_in_sleep(self):
         self.record()
         for args in ({"id": "k1028-1405-1"}, {"id": "k1028-1405-1", "closed_by": "fact"},
@@ -326,6 +327,7 @@ class CorrectionsTest(InstanceFixture, unittest.TestCase):
         (self.root / corrections.FILE).write_text("broken\n")
         self.assertIn("corrections could not be read", corrections.block(self.root, NOW))
 
+    @mock.patch.object(sleep, "entry_problems", new=lambda *a, **k: [], create=True)   # not about the #13 entry check
     def test_broken_ledger_does_not_crash_sleep_when_a_close_is_attempted(self):
         (self.root / corrections.FILE).write_text("broken\n")
         client = mock.Mock()

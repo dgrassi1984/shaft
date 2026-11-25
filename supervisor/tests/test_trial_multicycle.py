@@ -255,6 +255,7 @@ class LiveRunTest(existing.Fixture):
         self.fake.replies = self.live(1) + [
             {"tool_calls": [("write_digest", {"text": "SLEEP-DIGEST-108"})]},
             {"content": "Consolidated the first cycle."},
+            {"content": "Nothing to add."},   # the entry names no improvement item: sent back once (#13)
         ] + self.live(2)
         rec = self.run_replay(2, True)
         self.assertEqual(len(rec["sleeps"]), 1)

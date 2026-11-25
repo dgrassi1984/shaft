@@ -45,7 +45,7 @@ AGENT_TOOLS = frozenset({
     "read_file", "write_file", "append_file", "list_files", "rewrite_facts", "write_digest", "search_memory",
     "remember", "update_self_model", "update_personality", "view_image", "commit_to", "settle_commitment",
     "close_surprise", "retire_fact", "open_project", "close_project", "propose_drive_amendment", "record_correction",
-    "close_correction", *CONTROLS})
+    "close_correction", "plan_improvement", "close_improvement", *CONTROLS})
 PATH_ARGS = ("path", "save_to", "save_as", "body_file")
 # Words a declared source may use for what the calls touch. Plain "chat" is not one: it reads as the web UI's
 # conversations with an instance, not the operator's Google Chat.

@@ -123,6 +123,15 @@ retry notice on stderr and both attempts in the usage log. The retry turns think
 while still thinking (no text, no tool call begun). A second truncation fails the sleep without advancing its
 review marker.
 
+Each sleep ends with a self-model line (`Self-model: changed — <what>, because <evidence>` or `Self-model: unchanged —
+<the evidence checked> did not contradict it`) and names, under "How I will improve", the id of an open item on the
+instance's improvement list (`memory/improvements.jsonl`, `iMMDD-HHMM-n`). The sleep adds at most two items with
+`plan_improvement` (a test, plugin, job, rule, fix or tool, with its evidence) and closes done or dropped ones with
+`close_improvement`; live cycles have the same two tools. A sleep entry missing the line, giving it no evidence,
+contradicting what `update_self_model` did, or naming no open item is sent back once with what is missing; what the
+model adds then is appended to the entry, and anything still missing is noted under `*Sleep check:*` and kept in the
+episode's `check`. The prompt also asks the sleep to resolve, or name, two self-model lines that contradict each other.
+
 Memory search keeps an in-process file index keyed by path, nanosecond mtime and size. Only changed files are
 parsed again; new verdicts refresh cycle annotations, and fact ages refresh each day. Surprise expiry also refreshes
 at its deadline. Decoded embeddings stay in memory; unchanged chunks reuse them. The existing on-disk chunk cache
@@ -355,7 +364,8 @@ The check never creates a commitment or standing order itself: recording one is 
 
 Before a live cycle calls `declare_intent`, its prompt shows the inbox (the operator's messages whole, every other one as one line, `INBOX_CHARS`), the
 operator briefing (`BRIEFING`), the handoff (`HANDOFF`) and a slate of up to six candidate goals from the instance's
-records, each with the judged value of a similar earlier goal (`GOAL_SLATE`); `declare_intent` answers with the judge's
+records, each with the judged value of a similar earlier goal (`GOAL_SLATE`) — in idle time (inbox empty, no commitment
+overdue) led by up to three open items of its improvement list; `declare_intent` answers with the judge's
 first error on the newest similar goal that fell short (`FIRST_ERROR`). Every section of the standing context has a
 budget, all within `CONTEXT_CHARS`, stable sections first; tool results older than `RESULTS_KEEP_TURNS` turns shrink to
 a reference whose whole the instance re-reads with `read_file` (see [template knobs](configuration.md#instance-configenv)). The briefing is a local file written by the instance's own scheduled watchers, with no
@@ -452,7 +462,17 @@ whose deliverable was met. Old and rule-only rows with no answer stay unknown.
 
 For every instance, `value_for=own_capability` or `own_record` caps at 3 unless the same cycle's log shows that
 work used in something delivered to the operator. `value_reason` states when the cap applies; the operator-facing
-scale stays unchanged. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
+scale stays unchanged. The main judge also gives `value_uncapped`, the grade without the cap. Seven days after an
+`own_capability` cycle, `after_cycle` re-grades it without a model (`supervisor/use_regrade.py`): the files it wrote
+(bookkeeping, tests and scratch left out) are kept when they still exist and, for code, passed the gate in its run
+(settled from `run_started` to 15 minutes after the episode ended, before the next live run) and were not reverted on
+probation; they are used when a later cycle or conversation within the seven days called the plugin or named the file
+or module as a whole name in a call that succeeded (writing its name is not use), a job ran the plugin and exited 0,
+the file is in `notes/docs/`, or it is runtime code or `config.env`. Kept and used takes `value_uncapped`; not kept or
+not used, 1; nothing written, the grade stands. The re-grade goes to `use_regrade/<name>.jsonl`; a trial replay before
+it was recorded sees the provisional grade, and `shaft judge value-regrade` compares with the judge's own grade; `metrics.judgments()` shows it as `value` and keeps the judge's as
+`value_provisional`, and the stats' value section counts the re-grades. Verdicts without `value_uncapped` (judged
+before it existed) are never re-graded. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
 prints a comparison without changing stored verdicts. See [CLI](cli.md).
 An internal ledger or book the operator does not read or act on is `own_record`, even when described as for them.
 
