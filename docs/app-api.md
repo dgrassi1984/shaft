@@ -1791,7 +1791,12 @@ See [meeting storage and CLI](meetings.md).
 | GET | `/meetings` | | 200, `{meetings: [metadata]}`, newest first (§20.4) |
 | GET | `/meetings/<id>` | | 200, meeting metadata (§20.4) |
 | POST | `/meetings/<id>/reprocess` | | 200, queued meeting metadata (§20.4) |
-| DELETE | `/meetings/<id>` | | 200, `{id, deleted: true}` (§20.4) |
+| DELETE | `/meetings/<id>` | Optional `?forget_voices=1` | 200, `{id, deleted: true}` (§20.4) |
+| GET | `/meetings/<id>/clip` | `?speaker=<label>&n=0` | 200, `audio/wav` (§20.5) |
+| POST | `/meetings/<id>/speakers` | `{label, name}` or `{label, merge_into}` | 200, speaker entry with `label` (§20.5) |
+| GET | `/speakers` | | 200, `{people: [{id, name, created, count}]}` (§20.5) |
+| POST | `/speakers/<pid>/rename` | `{name}` | 200, `{id, name, created}` (§20.5) |
+| DELETE | `/speakers/<pid>` | Optional `?anonymise=1` | 200, `{id, deleted: true}` (§20.5) |
 
 ### 20.1 Create
 
@@ -1840,8 +1845,28 @@ empty `segments` array. An invalid page number returns `400 bad_request`.
 `POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
 Other states return `409 refused`.
 
-Delete removes the meeting, including its audio or any saved chunks. Routes for an unknown meeting return
-`404 not_found`.
+Delete removes the meeting, including its audio or any saved chunks. Use `forget_voices=1` to also remove
+gallery samples learned from it. The flag defaults to `0`. Routes for an unknown meeting return `404 not_found`.
+
+### 20.5 Speakers
+
+`transcript.speakers` maps labels to entries with `channel` and `seconds`. New transcripts also have `clips`,
+an array of up to three `[start, end]` ranges in seconds. Named entries also have `person` (a person ID) and
+`name`. Anonymised entries have a generic `name`.
+
+Clip playback returns mono 16 kHz PCM WAV, up to 10 seconds from the label's channel. `n` is a zero-based index
+and defaults to `0`. A missing label or clip returns `404 not_found`. Clip playback and label edits require a
+ready meeting.
+
+Naming a label confirms its voiceprint for the gallery. Names are matched case-insensitively. Merging labels
+moves the source label's segments to the destination and keeps the destination's name, channel, and clips.
+Both operations update the saved transcript. Merges apply to the current transcript. Reprocessing creates
+labels again from the audio and matches them against the current gallery.
+
+Person IDs have the form `p-<8 lowercase hex digits>`. `count` is the number of confirmed voiceprints. Rename
+updates the gallery and saved transcripts. Forget removes the person's gallery voiceprints and records a
+tombstone. With `anonymise=1`, it also replaces saved names with labels such as `Speaker S2`. The flag defaults
+to `0`.
 
 ## Appendix A. Implementation notes
 

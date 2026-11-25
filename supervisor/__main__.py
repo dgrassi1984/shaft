@@ -1653,17 +1653,31 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["set", "unset", "list"])
     p.add_argument("name", nargs="?")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
-    p = sub.add_parser("meetings", help="list, show, delete, import, or reprocess meeting recordings")
+    p = sub.add_parser("meetings", help="manage meeting recordings and name speakers")
     msub = p.add_subparsers(dest="action", required=True)
-    for action in ("list", "show", "delete", "import", "reprocess"):
+    for action in ("list", "show", "delete", "import", "reprocess", "name"):
         q = msub.add_parser(action)
         q.add_argument("--json", action="store_true", help="one JSON object on stdout")
-        if action in ("show", "delete", "reprocess"):
+        if action in ("show", "delete", "reprocess", "name"):
             q.add_argument("id")
+        if action == "name":
+            q.add_argument("label")
+            q.add_argument("name")
         if action == "import":
             q.add_argument("file")
             q.add_argument("--title")
             q.add_argument("--mode", choices=("online", "inperson"), default="inperson")
+    p = sub.add_parser("speakers", help="list, rename, or forget known meeting speakers")
+    ssub = p.add_subparsers(dest="action", required=True)
+    for action in ("list", "rename", "forget"):
+        q = ssub.add_parser(action)
+        q.add_argument("--json", action="store_true", help="one JSON object on stdout")
+        if action != "list":
+            q.add_argument("pid")
+        if action == "rename":
+            q.add_argument("name")
+        if action == "forget":
+            q.add_argument("--anonymise", action="store_true")
     p = sub.add_parser("provider", help="use PROVIDER: one consistent preset of every model the supervisor calls "
                                         "(openrouter, codex or custom); check PROVIDER: one live call per configured "
                                         "model of it. Never touches .env (shaft secrets sets the keys)")
@@ -2180,6 +2194,9 @@ def _dispatch(args, parser) -> int:
     if args.cmd == "meetings":
         from . import meetings
         return meetings.command(args)
+    if args.cmd == "speakers":
+        from . import speakers
+        return speakers.command(args)
     if args.cmd == "provider":
         from . import provider
         return provider.command(args)

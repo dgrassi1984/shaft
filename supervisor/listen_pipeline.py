@@ -2,10 +2,20 @@
 from __future__ import annotations
 
 import subprocess
+from bisect import bisect_right
+from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
 SAMPLE_RATE = 16_000
+
+
+class DiarisationTurns(list):
+    """Exclusive turns for ASR, with the original turns for clip selection."""
+
+    def __init__(self, exclusive, original):
+        super().__init__(exclusive)
+        self.original = original
 
 
 def decode(audio: Path, work: Path, mode: str) -> list[Path]:
@@ -66,14 +76,41 @@ def drop_bleed(segments):
     return [row for row in segments if row["channel"] == 2 or not echoed(row)]
 
 
+def _clean_turns(turns):
+    """Keep intervals with exactly one active label, including in overlapped speech."""
+    events = defaultdict(list)
+    for start, end, label in turns:
+        events[start].append((label, 1))
+        events[end].append((label, -1))
+    active = {}
+    previous = 0
+    for at, changes in sorted(events.items()):
+        if len(active) == 1 and at > previous:
+            yield previous, at, next(iter(active))
+        for label, delta in changes:
+            active[label] = active.get(label, 0) + delta
+            if not active[label]:
+                del active[label]
+        previous = at
+
+
+def longest_clips(ranges):
+    return [[start, min(end, start + 10)] for start, end in
+            sorted(ranges, key=lambda span: (span[0] - span[1], span[0]))[:3] if end - start >= 5]
+
+
 def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, engines) -> dict:
     """Engine word timestamps use seconds from the start of the recording."""
     segments = []
     intervals = []
+    embeddings = {}
+    clean = defaultdict(list)
     for channel, wav in enumerate(decode(audio, work, meeting["mode"]), 1):
         labels = {}
         prefix = "M" if channel == 1 else "S"
-        turns = sorted(engines.diarise(wav))
+        turns, vectors = engines.diarise(wav)
+        original = getattr(turns, "original", turns)
+        turns = sorted(turns)
         intervals.extend((start, end) for start, end, _ in turns)
         for start, end, label in merge_turns(turns):
             speaker = labels.setdefault(label, f"{prefix}{len(labels) + 1}")
@@ -81,6 +118,10 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
             if text := result["text"].strip():
                 segments.append({"start": start, "end": end, "channel": channel, "speaker": speaker,
                                  "lang": result["lang"], "text": text, "words": result["words"]})
+        embeddings.update({speaker: vectors[label] for label, speaker in labels.items() if label in vectors})
+        for start, end, label in _clean_turns(original):
+            if label in labels:
+                clean[labels[label]].append((start, end))
 
     speech = speech_seconds(intervals)
     if not speech:
@@ -95,11 +136,22 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
         raise ValueError("ASR produced no words for the detected speech.")
 
     speakers = {}
+    clips = defaultdict(list)
     for row in segments:
         speaker = speakers.setdefault(row["speaker"], {"channel": row["channel"], "seconds": 0.0})
         speaker["seconds"] += row["end"] - row["start"]
+        spans = clean[row["speaker"]]
+        first = bisect_right(spans, row["start"], key=lambda span: span[1])
+        for index in range(first, len(spans)):
+            start, end = spans[index]
+            if start >= row["end"]:
+                break
+            clips[row["speaker"]].append((max(start, row["start"]), min(end, row["end"])))
+    for label, speaker in speakers.items():
+        speaker["clips"] = longest_clips(clips[label])
     return {"meeting": meeting["id"], "segments": sorted(segments, key=lambda row: row["start"]),
-            "gaps": sidecar.get("gaps", []), "speakers": speakers, "processed_with": engines.processed_with}
+            "gaps": sidecar.get("gaps", []), "speakers": speakers, "processed_with": engines.processed_with,
+            "_embeddings": {label: embeddings[label] for label in speakers if label in embeddings}}
 
 
 def _clock(seconds) -> str:
@@ -109,8 +161,11 @@ def _clock(seconds) -> str:
 
 
 def render_markdown(transcript: dict) -> str:
-    lines = [(row["start"], f'{_clock(row["start"])} {row["speaker"]}: {" ".join(row["text"].splitlines())}')
-             for row in transcript["segments"]]
+    lines = []
+    for row in transcript["segments"]:
+        label = row["speaker"]
+        name = transcript["speakers"].get(label, {}).get("name") or f"Speaker {label} (unknown)"
+        lines.append((row["start"], f'{_clock(row["start"])} {name}: {" ".join(row["text"].splitlines())}'))
     lines.extend((gap["start"], f'[gap {_clock(gap["start"])}-{_clock(gap["end"])}: {gap["reason"]}]')
                  for gap in transcript["gaps"])
     return "".join(line + "\n" for _, line in sorted(lines, key=lambda item: item[0]))

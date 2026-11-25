@@ -39,7 +39,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import apns, meetings, order, web
+from . import apns, meetings, order, speakers, web
 from .core import NAME_RE, log
 from .web import Request, Response
 from .watch import CONFIG_KEYS, MODES
@@ -1684,8 +1684,56 @@ def _reprocess_meeting(req: Request, meeting_id: str) -> Response:
 
 
 def _delete_meeting(req: Request, meeting_id: str) -> Response:
-    _meeting_call(meetings.delete, meeting_id)
+    delete = speakers.delete_meeting if _meeting_flag(req, "forget_voices") else meetings.delete
+    _meeting_call(delete, meeting_id)
     return _json(200, {"id": meeting_id, "deleted": True})
+
+
+def _meeting_flag(req: Request, key: str) -> bool:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    value = query.get(key, ["0"])
+    if value not in (["0"], ["1"]):
+        raise Refusal(400, "bad_request", f"{key} must be 0 or 1.")
+    return value == ["1"]
+
+
+def _meeting_clip(req: Request, meeting_id: str) -> Response:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    try:
+        index = int(query.get("n", ["0"])[0])
+        if index < 0:
+            raise ValueError
+    except ValueError:
+        raise Refusal(400, "bad_request", "n must be a non-negative integer.") from None
+    try:
+        audio = _meeting_call(speakers.clip, meeting_id, query.get("speaker", [""])[0], index)
+    except OSError:
+        raise Refusal(500, "internal", "Could not read speaker clip.") from None
+    return Response(200, audio, {"Content-Type": "audio/wav", "Cache-Control": "no-store"})
+
+
+def _meeting_speaker(req: Request, meeting_id: str) -> Response:
+    body = _body(req)
+    if ("name" in body) == ("merge_into" in body):
+        raise Refusal(400, "bad_request", "Supply either name or merge_into.")
+    operation, value = ((speakers.name_label, body["name"]) if "name" in body
+                        else (speakers.merge_labels, body["merge_into"]))
+    return _json(200, _meeting_call(operation, meeting_id, body.get("label"), value))
+
+
+def _list_speakers(req: Request) -> Response:
+    people = _meeting_call(speakers.list_people)
+    return _json(200, {"people": [{**p, "created": stamp(p["created"])} for p in people]})
+
+
+def _rename_speaker(req: Request, pid: str) -> Response:
+    person = _meeting_call(speakers.rename, pid, _body(req).get("name"))
+    return _json(200, {**person, "created": stamp(person["created"])})
+
+
+def _forget_speaker(req: Request, pid: str) -> Response:
+    _meeting_call(speakers.forget, pid, anonymise=_meeting_flag(req, "anonymise"))
+    return _json(200, {"id": pid, "deleted": True})
 
 
 ROUTES: list[tuple[str, dict]] = [
@@ -1695,6 +1743,11 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/meetings/{MEETING_ID}/upload", {"GET": _meeting_upload}),
     (rf"/meetings/{MEETING_ID}/finish", {"POST": _finish_meeting}),
     (rf"/meetings/{MEETING_ID}/reprocess", {"POST": _reprocess_meeting}),
+    (rf"/meetings/{MEETING_ID}/clip", {"GET": _meeting_clip}),
+    (rf"/meetings/{MEETING_ID}/speakers", {"POST": _meeting_speaker}),
+    (r"/speakers", {"GET": _list_speakers}),
+    (rf"/speakers/(?P<pid>{speakers.ID})/rename", {"POST": _rename_speaker}),
+    (rf"/speakers/(?P<pid>{speakers.ID})", {"DELETE": _forget_speaker}),
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
     (r"/instances/move", {"POST": _move}),

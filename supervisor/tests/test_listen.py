@@ -19,13 +19,14 @@ from supervisor.tests import test_app_api
 class FakeEngines:
     processed_with = {"diarisation": "fake", "asr": "fake", "versions": {"fake": "1"}}
 
-    def __init__(self, turns, results):
+    def __init__(self, turns, results, embeddings=None):
         self.turns = turns
         self.results = results
+        self.embeddings = embeddings or {}
         self.calls = []
 
     def diarise(self, wav):
-        return self.turns.get(wav.stem, [])
+        return self.turns.get(wav.stem, []), self.embeddings.get(wav.stem, {})
 
     def transcribe(self, wav, start, end):
         key = (wav.stem, start, end)
@@ -92,11 +93,13 @@ class ListenTest(unittest.TestCase):
                 {"start": 4, "end": 5, "channel": 1, "speaker": "M2", **spoken("Sono d'accordo.", 4, "it")},
             ],
             "gaps": [{"start": 5, "end": 6, "reason": "interruption"}],
-            "speakers": {"S1": {"channel": 2, "seconds": 4}, "M2": {"channel": 1, "seconds": 1}},
+            "speakers": {"S1": {"channel": 2, "seconds": 4, "clips": []},
+                         "M2": {"channel": 1, "seconds": 1, "clips": []}},
             "processed_with": FakeEngines.processed_with,
         })
         self.assertEqual((folder / "transcript.md").read_text(),
-                         "00:00:01 S1: What is the next step?\n00:00:04 M2: Sono d'accordo.\n"
+                         "00:00:01 Speaker S1 (unknown): What is the next step?\n"
+                         "00:00:04 Speaker M2 (unknown): Sono d'accordo.\n"
                          "[gap 00:00:05-00:00:06: interruption]\n")
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is unavailable")

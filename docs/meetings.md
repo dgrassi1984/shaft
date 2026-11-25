@@ -47,6 +47,28 @@ Listen marks a meeting `failed` if decoding fails or it detects no speech or tra
 least 10 seconds of detected speech, it also requires at least one word per 30 seconds of speech. Use
 `shaft meetings show <id>` to read the error.
 
+## Speaker names and voiceprints
+
+The Listen worker stores cluster voiceprints in `speakers.npz` in the meeting folder and up to three clean
+5–10 second clip ranges per label in `transcript.json`. The paired app plays these clips from the original
+audio channel. To enrol a voiceprint, the operator names a label in the paired app or runs `shaft meetings name`.
+Naming a label updates both transcript files without running the speech engines again.
+Reprocess older meetings to generate voiceprints and clip ranges.
+
+The gallery lives under `.supervisor/speakers/`. It stores people in `people.json`, their confirmed voiceprints
+in `embeddings/<person>.npz`, and forgotten person IDs in `tombstones.json`. Each gallery row records its source
+meeting, label, and channel kind. Voiceprints stay on the supervisor Mac and are never shown to instances.
+
+Listen compares each label with the mean voiceprint for the same channel kind, using all of a person's samples
+when that kind is unavailable. It uses the current gallery every time it processes a meeting. The minimum
+cosine similarity is `SHAFT_LISTEN_MATCH` (default `0.6`, uncalibrated until measured on real meetings).
+If the top two people score within `0.05`, the label stays unknown.
+
+Forgetting a person removes their voiceprints and saved clip ranges. Existing transcript names remain unless
+the operator chooses `--anonymise`, which replaces them with labels such as `Speaker S2`. The worker preserves
+anonymisation for those meeting labels on reprocessing. To delete a recording and its outputs, delete the
+meeting. The paired app can also remove gallery samples learned from that meeting when it deletes it.
+
 ## CLI
 
 | Command | Result |
@@ -56,5 +78,9 @@ least 10 seconds of detected speech, it also requires at least one word per 30 s
 | `shaft meetings reprocess <id>` | Queues a ready or failed meeting again using its stored audio. |
 | `shaft meetings delete <id>` | Deletes the meeting folder and its contents. |
 | `shaft meetings import FILE [--title T] [--mode online\|inperson]` | Copies local audio into a new queued meeting. The file stem supplies the default title. The default mode is `inperson`. |
+| `shaft meetings name <id> <label> <name>` | Enrols the label's voiceprint under the name. |
+| `shaft speakers list` | Lists people and their gallery sample counts. |
+| `shaft speakers rename <pid> <name>` | Renames a person in the gallery and saved transcripts. |
+| `shaft speakers forget <pid> [--anonymise]` | Deletes the person's voiceprints. With `--anonymise`, replaces their name in saved transcripts. |
 
 Each subcommand accepts `--json` after the subcommand name.

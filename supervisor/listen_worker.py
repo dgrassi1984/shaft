@@ -11,7 +11,7 @@ import time
 from importlib.metadata import version
 from pathlib import Path
 
-from . import core, listen_pipeline, meetings
+from . import core, listen_pipeline, meetings, speakers
 from .core import knob
 from .version import record_service
 
@@ -56,7 +56,13 @@ class Engines:
         if not len(samples):
             raise ValueError("Audio decode yielded no samples.")
         result = self.pipeline({"waveform": torch.from_numpy(samples[None, :]), "sample_rate": rate})
-        return [(turn.start, turn.end, label) for turn, label in result.exclusive_speaker_diarization]
+        turns = listen_pipeline.DiarisationTurns(
+            [(turn.start, turn.end, label) for turn, label in result.exclusive_speaker_diarization],
+            [(turn.start, turn.end, label) for turn, label in result.speaker_diarization],
+        )
+        labels = result.speaker_diarization.labels()
+        vectors = result.speaker_embeddings if labels else ()
+        return turns, dict(zip(labels, vectors, strict=True))
 
     def transcribe(self, wav: Path, start: float, end: float) -> dict:
         import mlx_whisper
@@ -110,7 +116,7 @@ def process_next(engines) -> bool:
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
                     row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines)
-            meetings.complete_processing(meeting_id, transcript, listen_pipeline.render_markdown(transcript))
+            speakers.complete_processing(meeting_id, transcript, transcript.pop("_embeddings"))
             LOG.info("%s ready", meeting_id)
         except meetings.Missing:
             return True

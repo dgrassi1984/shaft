@@ -198,8 +198,12 @@ def list_meetings() -> list[dict]:
 
 def delete(meeting_id: str) -> None:
     with _locked(meeting_id) as (folder, _):
-        with tempfile.TemporaryDirectory(dir=folder.parent, prefix=".delete-") as trash:
-            os.replace(folder, Path(trash) / folder.name)
+        _delete_folder(folder)
+
+
+def _delete_folder(folder: Path) -> None:
+    with tempfile.TemporaryDirectory(dir=folder.parent, prefix=".delete-") as trash:
+        os.replace(folder, Path(trash) / folder.name)
 
 
 def upload_status(metadata: dict) -> dict:
@@ -304,16 +308,22 @@ def recover_processing(meeting_id: str) -> None:
 
 
 def complete_processing(meeting_id: str, transcript: dict, markdown: str) -> None:
-    content = _json_bytes(transcript)
-    rendered = markdown.encode()
     with _locked(meeting_id) as (folder, metadata):
-        if metadata["state"] != "processing":
-            raise Conflict("This meeting is no longer processing.")
-        with _atomic_output(folder / "transcript.json") as out, _atomic_output(folder / "transcript.md") as md:
-            out.write(content)
-            md.write(rendered)
-        metadata.update(state="ready", error=None, processed_with=transcript["processed_with"])
-        _save(folder, metadata)
+        _complete_processing(folder, metadata, transcript, markdown)
+
+
+def _write_transcript(folder: Path, transcript: dict, markdown: str) -> None:
+    with _atomic_output(folder / "transcript.json") as out, _atomic_output(folder / "transcript.md") as md:
+        out.write(_json_bytes(transcript))
+        md.write(markdown.encode())
+
+
+def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdown: str) -> None:
+    if metadata["state"] != "processing":
+        raise Conflict("This meeting is no longer processing.")
+    _write_transcript(folder, transcript, markdown)
+    metadata.update(state="ready", error=None, processed_with=transcript["processed_with"])
+    _save(folder, metadata)
 
 
 def detail(meeting_id: str, page: int) -> dict:
@@ -352,6 +362,10 @@ def command(args) -> int:
             delete(args.id)
             result = {"id": args.id, "deleted": True}
             line = f"Deleted {args.id}."
+        elif args.action == "name":
+            from . import speakers
+            result = speakers.name_label(args.id, args.label, args.name)
+            line = result["name"]
         else:
             result = (get(args.id) if args.action == "show"
                       else reprocess(args.id) if args.action == "reprocess"
