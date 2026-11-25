@@ -327,6 +327,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             del messages[mark:]   # keeps it (a live cycle writes its record, #241); the run still ends as a failure
             e.outcome = ended("llm_error")
             raise
+        if step != turn_step:   # a new model turn, not a continuation: counted across runs of one toolbox, so a
+            toolbox.turn = getattr(toolbox, "turn", 0) + 1   # message held with my corrections is sent later (#11)
         turn_step = step
         same_turn = reply.same_turn and bool(reply.tool_calls) and uncounted < SAME_TURN_LIMIT
         if same_turn:

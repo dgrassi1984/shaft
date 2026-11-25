@@ -98,6 +98,8 @@ _files: dict[Path, _File] = {}
 _surprise_revision: tuple = ()
 _surprise_docs: list[tuple[str, str]] = []
 _surprise_expiry: datetime | None = None
+_correction_revision = None
+_correction_docs: list[tuple[str, str]] = []
 _vector_root: Path | None = None
 _vector_revision: tuple | None = None
 _snapshot: tuple = ()
@@ -214,12 +216,13 @@ def _file_docs(root: Path, path: Path, verdicts: dict, rows: list[dict]) -> list
 
 
 def corpus(root: Path) -> list[tuple[str, str]]:
-    global _corpus_root, _surprise_revision, _surprise_docs, _surprise_expiry
+    global _corpus_root, _surprise_revision, _surprise_docs, _surprise_expiry, _correction_revision, _correction_docs
     global _snapshot, _snapshot_docs, _snapshot_expiry, _lexical_docs, _lexical
     root = root.resolve()
     if root != _corpus_root:
         _files.clear()
         _surprise_revision = ()
+        _correction_revision, _correction_docs = None, []   # another root's corrections are not mine
         _corpus_root = root
     paths = [root / "memory" / name for name in ("journal.md", "facts.md", "facts-archive.md", "digests.md")]
     for folder in ("notes", "skills", "memory/people"):
@@ -235,10 +238,15 @@ def corpus(root: Path) -> list[tuple[str, str]]:
             pass
     verdict_path = root / VERDICTS
     verdict_revision = _revision(verdict_path) if verdict_path.exists() else None
+    from . import corrections   # it imports tools, which imports this module
+    try:   # one stat: a ledger missing or unreadable is no corrections, never a failed search or recall
+        correction_revision = _revision(root / corrections.FILE)
+    except OSError:
+        correction_revision = None
     now = clock.now()
     day = now.date()
     # Include all sources, their order, verdicts and the day. Expiry can happen within a day.
-    snapshot = (str(root), repr((revisions, verdict_revision, day)))
+    snapshot = (str(root), repr((revisions, verdict_revision, correction_revision, day)))
     if snapshot == _snapshot and (_snapshot_expiry is None or now <= _snapshot_expiry):
         return _snapshot_docs.copy()
     verdicts = None
@@ -297,10 +305,16 @@ def corpus(root: Path) -> list[tuple[str, str]]:
         _surprise_revision = surprise_revision
         _surprise_expiry = min((it["opened_at"] + timedelta(days=surprises.EXPIRE_DAYS)
                                 for it in items.values() if it["status"] == "open"), default=None)
-    _snapshot_docs = docs + _surprise_docs
+    if correction_revision != _correction_revision:   # open and closed, so a closed one is still found (#11)
+        try:
+            _correction_docs = [corrections.doc(it) for it in corrections.fold(root).values()]
+        except (OSError, ValueError) as e:   # a broken ledger must not stop search or recall
+            _correction_docs = [("correction ledger", f"(my corrections could not be read: {type(e).__name__}: {e})")]
+        _correction_revision = correction_revision
+    _snapshot_docs = docs + _surprise_docs + _correction_docs
     _snapshot, _snapshot_expiry = snapshot, _surprise_expiry
     _lexical_docs = _snapshot_docs
-    _lexical = [*(_files[p].words for p in revisions), _word_index(_surprise_docs)]
+    _lexical = [*(_files[p].words for p in revisions), _word_index(_surprise_docs), _word_index(_correction_docs)]
     return _snapshot_docs.copy()
 
 
@@ -500,11 +514,24 @@ def _vectors(root: Path, texts: list[str]) -> list[array]:
     return _vector_ordered.copy()
 
 
+_last_query: tuple | None = None
+
+
+def _query_vector(query: str) -> list[float]:
+    """One embedding call per query: automatic recall and the corrections added to the same message ask for it
+    twice in a row (#11). Kept for the same service only (and the same _embed, which tests replace)."""
+    global _last_query
+    key = (query, os.environ.get("SHAFT_EMBED_URL"), _embed)
+    if _last_query is None or _last_query[0] != key:
+        _last_query = (key, _embed([query], query=True)[0])
+    return _last_query[1]
+
+
 def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> list[int]:
     """Indexes of the docs closest in meaning to the query, best first (vectors are unit length: dot = cosine)."""
     global semantic_error
     try:
-        qv = _embed([query], query=True)[0]
+        qv = _query_vector(query)
         vecs = _vectors(root, [text for _, text in docs])
     except Exception as e:   # the service down or broken: words only, and say so
         semantic_error = f"{type(e).__name__}: {e}"
@@ -529,15 +556,19 @@ def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> 
     return [i for _, i in sims[:top]]
 
 
-def search(root: Path, query: str, k: int = 5) -> list[Hit]:
+def search(root: Path, query: str, k: int = 5, where=None) -> list[Hit]:
+    """`where(source)`: only documents whose source it accepts, ranked among themselves (search_corrections)."""
     global mode
     mode = ""                                 # nothing searched: no claim either way
     root = Path(root)
     docs = corpus(root)
     if not docs or not query.strip():
         return []
+    rankings = (_bm25(docs, query), _semantic(root, docs, query, 50 if where is None else len(docs)))
+    if where is not None:
+        rankings = tuple([i for i in ranking if where(docs[i][0])] for ranking in rankings)
     fused: dict[int, float] = {}
-    for ranking in (_bm25(docs, query)[:50], _semantic(root, docs, query, 50)):
+    for ranking in (rankings[0][:50], rankings[1][:50]):
         for rank, i in enumerate(ranking):
             fused[i] = fused.get(i, 0.0) + 1 / (RRF_K + rank + 1)
     mode = f"words only: semantic search is unavailable — {semantic_error}" if semantic_error else "words + meaning"

@@ -49,7 +49,15 @@ names its earlier id in `reopens`. Open corrections and the seven-day reopened c
 and sleep prompts. They stay open until sleep calls `close_correction(id, closed_by, evidence)`.
 Use `fact` after remember or rewrite_facts citing the correction, `code` after a commit or plugin
 change, `test`, or `not_accepted` with a reason. Evidence names the episode, commit or fact.
+A correction that reopens an earlier one is shown next to it, and closes only with `what_failed`: what in the
+earlier fix did not hold, and why this change will.
 An operator claim about me still needs a record check before I accept it into my self-model.
+
+Closing a correction does not retire it. `search_corrections` finds every one, open and closed, with how it was
+closed; `search_memory` and automatic recall find them too. Each operator message in a conversation comes with the
+corrections closest to it. Before I ask the operator something or suggest something I search them on the topic and
+say what I found; a `send_message` to the operator is held once, with the closest corrections, unless I searched
+since my last message to him.
 
 ## Plugins worth building (they are mine to build, not the supervisor's)
 

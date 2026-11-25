@@ -22,7 +22,7 @@ import re
 import sys
 import uuid
 
-from . import agent, clock, images, loopguard, memory, prompts, recovery
+from . import agent, clock, corrections, images, loopguard, memory, prompts, recovery
 from .llm import Client, LLMError
 from .live import archive_inbox, read_whole
 from .state import State
@@ -268,7 +268,8 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": user,
                               **({"speaker": speaker} if speaker else {})})
         # what my memory holds about this message, beyond what my context already shows
-        heard = user + memory.recall(state.root, user, shown=system + "\n" + user)   # not the message itself
+        heard = (user + memory.recall(state.root, user, shown=system + "\n" + user)   # not the message itself
+                 + corrections.closest(state.root, user))   # searched before every reply that could ask (#11)
         turn = [{"role": "system", "content": system}, *history, {"role": "user", "content": heard}]
         start = len(turn)
         log_start = len(toolbox.log)
@@ -324,8 +325,8 @@ class Interjections:
                                        **({"voice": True} if sent.get("voice") is True else {})})   # spoken
             self.view.heard(text)
             note = f"[{self.cfg.OPERATOR_NAME} sent this while you were still replying]\n\n"
-            new.append({"role": "user", "content": images.with_attached(note + text, self.state.root,
-                                                                        listed_in=text)})
+            new.append({"role": "user", "content": images.with_attached(
+                note + text + corrections.closest(self.state.root, text), self.state.root, listed_in=text)})
         return new
 
 
@@ -394,8 +395,9 @@ def answer(cfg, state: State, client: Client, request: dict, held: dict | None =
     asked = dialogue[-1]["content"]
     now = _turn_context(cfg, state, talk_id, held) if held is not None else ""
     dialogue[-1] = {**dialogue[-1], "content": images.with_attached(now + asked + memory.recall(
-        state.root, asked, shown=system + "\n" + now + "\n".join(m["content"] for m in dialogue)), state.root,
-        listed_in=asked)}   # recall: not this dialogue; images: only those this message lists
+        state.root, asked, shown=system + "\n" + now + "\n".join(m["content"] for m in dialogue))
+        + corrections.closest(state.root, asked), state.root,
+        listed_in=asked)}   # recall: not this dialogue; corrections: before every reply (#11); images: those it lists
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
     reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view),

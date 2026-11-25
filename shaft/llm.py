@@ -45,8 +45,8 @@ TRANSIENT_HTTP = {502, 503, 504}
 BACKOFF_S = (10, 30)  # waits before the 2nd and 3rd attempt
 # Tools whose arguments are code, queries or secrets: never respaced. Every other tool, my own plugins included,
 # gets its text respaced (spacing.py touches only boundaries that are never a name), so a tool I build is covered.
-CODE_TOOLS = {"run", "read_file", "list_files", "search_memory", "view_image", "http_request", "fetch_page",
-              "web_search", "secret_set", "secret_list", "secret_delete", "history", "list_instances"}
+CODE_TOOLS = {"run", "read_file", "list_files", "search_memory", "search_corrections", "view_image", "http_request",
+              "fetch_page", "web_search", "secret_set", "secret_list", "secret_delete", "history", "list_instances"}
 PROSE_FILES = (".md", ".markdown", ".txt")   # write_file/append_file elsewhere is code or data
 _NAMING_KEYS = {"path", "id", "name", "to", "project", "slug", "commitment_id",
                 "made_to", "conversation", "supersedes", "reopens"}

@@ -118,6 +118,12 @@ ABILITIES_TOOLS = (
     "through the supervisor's "
     "proxy (localhost and the operator's network are not reachable); your keys stay with the supervisor's "
     "tools (http_request).")
+# #11: a quarter of the operator's corrections reopened one already closed, and he was asked for what could have been
+# looked up. send_message to him is held until search_corrections ran (tools.Toolbox._corrections_first).
+CORRECTIONS_FIRST = (" Before you ask the operator anything or suggest something, search_corrections on its topic, and "
+                     "say what it found or that nothing applies: a closed correction still holds. Look up what you "
+                     "can before asking him for it. Device or account state you report carries when you last read "
+                     "it (\"last read 09:12\"); never give remembered state as just read.")
 DELEGATION = (" For any non-trivial code, use delegate_coding: your coder writes it faster and more reliably than "
               "you do — you decide what to build and judge the result.")
 SHARED = (" shared/ is a folder {operator} lets you read (read-only: read_file, list_files, and `run` "
@@ -375,6 +381,8 @@ one needs nothing — a fact citing it only if it taught you something.{settle}
 9. Close every open operator correction with close_correction(id, closed_by, evidence): fact after
 remember/rewrite_facts citing its id; code after a commit/plugin change; test after a test; or not_accepted
 with a reason. Evidence must name the episode, commit or fact. An unclosed item stays open for the next sleep.
+A correction that reopens an earlier one is listed with it: the earlier fix did not hold. Give what_failed — what
+in that fix did not hold, and why this change will — and make the change stronger than the last one.
 
 10. Review the stale context scan below. Fix, retire or keep each item with a stated reason; include \
 each finding and its disposition in your sleep journal entry. If the scan failed, say so and continue.
@@ -626,6 +634,8 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None, at: date
                       "Keep the question self-contained and the option labels short. Other free text is always "
                       "offered, so do not add an Other option. The answer comes back as the operator's next "
                       "message, quoting the question.")
+    if tools and "search_corrections" in tools:
+        abilities += CORRECTIONS_FIRST
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
         abilities += DELEGATION
     if tools and "run" in tools and os.environ.get("SHAFT_SHARED"):   # granted by the operator (shaft share <name> <folder>)
