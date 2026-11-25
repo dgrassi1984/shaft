@@ -228,7 +228,11 @@ def lines(name: str, judgments: list[dict], now: datetime | None = None) -> list
         outcome_lines = outcomes.lines(name, now)
     except Exception as e:
         outcome_lines = [f"Outcomes could not be read: {type(e).__name__}: {e}"]
-    return outcome_lines + [f"pushes to the operator today: {daily[now.date()]}{budget}",
+    try:
+        offer_lines = outcomes.offer_lines(name, now)
+    except Exception as e:
+        offer_lines = [f"Unprompted offers could not be read: {type(e).__name__}: {e}"]
+    return outcome_lines + offer_lines + [f"pushes to the operator today: {daily[now.date()]}{budget}",
             "pushes per day (last 7 days" + (f", budget {PUSH_BUDGET}/day" if PUSH_BUDGET else "") + "): "
             + ", ".join(f"{day:%m-%d}: {daily[day]}" for day in days),
             f"should_have_waited=yes (last 7 days, judged push cycles): {share}; "

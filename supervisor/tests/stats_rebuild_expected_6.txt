@@ -6,6 +6,9 @@
 
 *Success, claims and achieved difficulty below count only the 6 cycles graded by the judges in today's rotation (fixture-judge 6). Judges, today's too, differ in how strictly they grade criteria and claims, so success and claims are given per judge, each read against that judge's own earlier figure. Value counts every cycle: the judges agree on it.*
 
+- unprompted offers, week to 11-03 (self-origin cycles): 0 — replied by quote 0, other link (reply, thumb or comment) 0, no reply 0, open 0
+- unprompted offers, week to 10-27 (self-origin cycles): 0 — replied by quote 0, other link (reply, thumb or comment) 0, no reply 0, open 0
+- unprompted offers, week to 10-20 (self-origin cycles): 0 — replied by quote 0, other link (reply, thumb or comment) 0, no reply 0, open 0
 - pushes to the operator today: 0 of budget 6
 - pushes per day (last 7 days, budget 6/day): 10-28: 0, 10-29: 0, 10-30: 0, 10-31: 0, 11-01: 0, 11-02: 0, 11-03: 0
 - should_have_waited=yes (last 7 days, judged push cycles): not graded; na 0, ungraded 6

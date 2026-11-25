@@ -2,10 +2,11 @@
 
 No supervisor record links a delivered mail draft to a sent mail: `sent` is missing,
 not inferred from mail reads, feedback delivery, or unrelated operator activity.
-`no_link` is not "ignored": only item-linked evidence counts. Explicit app, web and
-Telegram replies are linked by the delivered message's stable `file` identity;
-unlinked chat answers still make `followed_up` a floor. Links count only within
-OUTCOME_WINDOW_H of delivery. These statistics never grade, reward or impose probation.
+`no_link` means there is no item-linked evidence. Explicit app, web and Telegram
+replies use the delivered message's stable `file` identity. A quote in an operator
+message or conversation turn can also link to a unique delivery. Plain chat
+answers without an explicit link still leave the outcome unknown. Links count only
+within OUTCOME_WINDOW_H of delivery. These statistics never grade, reward or impose probation.
 """
 from __future__ import annotations
 
@@ -15,10 +16,16 @@ from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 
 from .core import jsonl_lines
-from . import core, doc_comments, feedback, pushes, reply_links
+from . import core, doc_comments, feedback, metrics, pushes, reply_links
 
 OUTCOME_WINDOW_H = 48
 KINDS = ("followed_up", "edited", "sent", "no_link", "open")
+
+
+def _plain(text: str) -> str:
+    text = re.sub(r"\[([^\]\n]+)\]\([^\s)]*\)", r"\1", text)
+    text = re.sub(r"[*`]|(?<!\w)_|_(?!\w)", "", text)
+    return " ".join(text.split())
 
 
 def _ratings(name: str) -> list[dict]:
@@ -49,21 +56,42 @@ def records(name: str, now: datetime | None = None, since: datetime | None = Non
     if not delivered:
         return []
     stamps = [times[r["file"]] for r in delivered]
-    bodies = {r["file"]: " ".join(r.get("text", "").split()) for r in delivered}
+    bodies = {r["file"]: _plain(r["text"]) if isinstance(r.get("text"), str) else "" for r in delivered}
     by_file = {r["file"]: r for r in delivered}
     replies = {}
+
+    def link_quote(text: object, stamp: str, at: datetime, evidence: str) -> None:
+        if not isinstance(text, str):
+            return
+        quoted = []
+        for block in re.findall(r"(?m)(?:^[^\S\r\n]*>[^\n]*\n?)+", text):
+            quote = _plain(re.sub(r"(?m)^[^\S\r\n]*>", "", block))
+            quote = quote.removesuffix("…").removesuffix("...").rstrip()
+            if len(quote) >= 20:
+                quoted.append(quote)
+        if not quoted:
+            return
+        eligible = delivered[bisect_left(stamps, at - window):bisect_right(stamps, at)]
+        matched = {item["file"] for item in eligible if any(q in bodies[item["file"]] for q in quoted)}
+        if len(matched) == 1:
+            target, = matched
+            replies.setdefault(target, []).append((stamp, "followed_up", evidence))
+
     for reply in rows:
         if reply.get("from") != "operator" or reply.get("to") != name:
             continue
         at = times[reply["file"]]
-        quoted = [" ".join(" ".join(line[1:].strip() for line in b.splitlines()).split())
-                  for b in re.findall(r"(?m)(?:^>[^\n]*\n?)+", reply.get("text", ""))]
-        quoted = [q for q in quoted if len(q) >= 20]
-        eligible = delivered[bisect_left(stamps, at - window):bisect_right(stamps, at)]
-        matched = {item["file"] for item in eligible if any(q in bodies[item["file"]] for q in quoted)}
-        target = reply.get("in_reply_to") or (next(iter(matched)) if len(matched) == 1 else None)
-        if target in by_file and at - window <= times[target] <= at:
-            replies.setdefault(target, []).append((reply["ts"], "followed_up", f"message:{reply['file']}"))
+        if target := reply.get("in_reply_to"):
+            if isinstance(target, str) and target in by_file and at - window <= times[target] <= at:
+                replies.setdefault(target, []).append((reply["ts"], "followed_up", f"message:{reply['file']}"))
+        else:
+            link_quote(reply.get("text"), reply["ts"], at, f"quote:message:{reply['file']}")
+    for turn in metrics._episodes(name, "talk"):
+        stamp, talk_id = turn.get("ts"), turn.get("talk_id")
+        # The operator's own turns only: a guest's turn carries `speaker` (as commitments._source_rows reads it)
+        if (turn.get("role") == "user" and not turn.get("speaker") and isinstance(talk_id, str) and talk_id
+                and (at := pushes._time(stamp)) and (since is None or since <= at) and at <= now):
+            link_quote(turn.get("content"), stamp, at, f"quote:talk:{talk_id}@{stamp}")
     for link in reply_links.records():
         target = link["in_reply_to"]
         if link.get("instance") == name and target in by_file:
@@ -82,7 +110,8 @@ def records(name: str, now: datetime | None = None, since: datetime | None = Non
         attached = row.get("attachments") or []
         paths = {att["path"] for att in attached if isinstance(att, dict) and isinstance(att.get("path"), str)} \
             if isinstance(attached, list) else set()
-        named = set(re.findall(r"(?<![\w/])notes/docs/[\w ./-]+?\.md(?![\w./-])", row.get("text", "")))
+        text = row.get("text")
+        named = set(re.findall(r"(?<![\w/])notes/docs/[\w ./-]+?\.md(?![\w./-])", text)) if isinstance(text, str) else set()
         for path in paths:
             marker = "notes/docs/"
             named.add(path[path.index(marker):] if marker in path else path)
@@ -123,6 +152,42 @@ def lines(name: str, now: datetime | None = None) -> list[str]:
     if not rows:
         return []
     return [f"operator outcomes (last 7 days' messages, {OUTCOME_WINDOW_H} h window; a floor, "
-            "unlinked chat answers remain unknown): "
+            "includes conversation quotes, plain chat without a link remains unknown): "
             + ", ".join(f"{k} {sum(r['outcome'] == k for r in rows)}" for k in KINDS if k != "sent")
             + "; sent: missing draft-to-sent record"]
+
+
+def offer_lines(name: str, now: datetime | None = None, weeks: int = 3) -> list[str]:
+    """Weekly reply counts for messages delivered during judged self-origin cycles."""
+    now = now or datetime.now()
+    self_judged = {j["episode_ts"] for j in metrics.judgments(name, core.SUP_DIR) if j.get("origin") == "self"}
+    if not self_judged:
+        return []
+    cycles = []
+    for episode in metrics.live_episodes(name):
+        stamp = episode.get("ts")
+        start = pushes._time(episode.get("run_started"))
+        end = pushes._time(stamp)
+        if start and end and start <= end <= now and stamp in self_judged:
+            cycles.append((start, end))
+    if not cycles:
+        return []
+
+    week = timedelta(days=7)
+    offers = []
+    for row in records(name, now, since=now - weeks * week):
+        sent = pushes._time(row["ts"])
+        if any(start <= sent <= end for start, end in cycles):
+            offers.append((sent, row["outcome"], row["evidence"]))
+    lines = []
+    for i in range(weeks):
+        end = now - i * week
+        counts = dict.fromkeys(("quote", "otherwise", "no_link", "open"), 0)
+        for sent, outcome, evidence in offers:
+            if end - week < sent <= end:
+                kind = ("quote" if evidence.startswith("quote:") else "otherwise") if evidence else outcome
+                counts[kind] += 1
+        lines.append(f"unprompted offers, week to {end:%m-%d} (self-origin cycles): {sum(counts.values())} — "
+                     f"replied by quote {counts['quote']}, other link (reply, thumb or comment) {counts['otherwise']}, "
+                     f"no reply {counts['no_link']}, open {counts['open']}")
+    return lines

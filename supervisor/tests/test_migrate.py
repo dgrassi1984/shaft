@@ -710,6 +710,39 @@ class RemoteFreeKbTest(MigCase):
 
 
 class TailscaleJsonTest(MigCase):
+    def test_issue_39_tailscale_in_local_home_applications(self):
+        exe = self.home / "Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        with mock.patch.object(Path, "home", return_value=self.home), \
+                mock.patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path == exe), \
+                mock.patch.object(migrate.os, "access", return_value=True), \
+                mock.patch.object(shutil, "which", return_value=None):
+            self.assertEqual(migrate._tailscale_exe_local(), str(exe))
+
+    def test_issue_39_unusable_home_copy_does_not_shadow_a_working_cli(self):
+        """#39 review: a non-executable ~/Applications copy is skipped for /opt/homebrew/bin/tailscale."""
+        home = self.home / "Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        brew = Path("/opt/homebrew/bin/tailscale")
+        with mock.patch.object(Path, "home", return_value=self.home), \
+                mock.patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path in (home, brew)), \
+                mock.patch.object(migrate.os, "access", side_effect=lambda path, mode: Path(path) == brew), \
+                mock.patch.object(shutil, "which", return_value=None):
+            self.assertEqual(migrate._tailscale_exe_local(), str(brew))
+
+    def test_issue_39_tailscale_in_remote_home_applications(self):
+        remote_exe = '"$HOME"/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+        self.runner.script = {
+            "test -x /Applications/Tailscale.app/Contents/MacOS/Tailscale": cp(1),
+            f"test -x {remote_exe}": cp(0),
+            f"{remote_exe} status --json": cp(0, '{"MagicDNSSuffix": "example.ts.net"}'),
+        }
+        self.assertEqual(migrate._tailscale_json(self.runner, remote=True, host="new"),
+                         {"MagicDNSSuffix": "example.ts.net"})
+        self.assertEqual([call[-1] for call in self.runner.calls], [
+            "test -x /Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            f"test -x {remote_exe}",
+            f"{remote_exe} status --json",
+        ])
+
     def test_remote_missing_returns_none(self):
         m = self.mig()
         with mock.patch.object(migrate, "_remote_which_file", return_value=None):

@@ -10,9 +10,10 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
-from supervisor import api, core
+from supervisor import api, codexcli, core
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
 EVENTS = [{"type": "ready", "name": "shaft"}, {"type": "status", "phase": "waiting for the model"},
@@ -772,6 +773,20 @@ class StreamHeardTest(unittest.TestCase):
                       if l.startswith("data: {")]
         self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
         self.assertEqual(chunks[-1]["interjections_heard"], 0)
+
+
+class TailscaleLookupTest(unittest.TestCase):
+    def test_issue_39_tailscale_in_home_applications(self):
+        home_apps = Path("/Users/example/Applications")
+        exe = home_apps / "Tailscale.app/Contents/MacOS/Tailscale"
+        status = [str(exe), "status", "--json"]
+        with mock.patch("shutil.which", return_value=None), \
+                mock.patch.object(codexcli, "APP_FOLDERS", (Path("/Applications"), home_apps)), \
+                mock.patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path == exe), \
+                mock.patch.object(api.os, "access", return_value=True), \
+                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess(status, 0)) as run:
+            self.assertEqual(api._tailscale("status", "--json").returncode, 0)
+        run.assert_called_once_with(status, capture_output=True, text=True)
 
 
 class OutsideTheGuiSessionTest(unittest.TestCase):

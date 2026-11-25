@@ -36,6 +36,7 @@ VERB = {"scheduler": "autonomy"}              # the scheduler's launchd service 
 FORCE_OK = {"autonomy", "api", "embed", "model"}   # the four verbs whose `off` accepts --force
 SUP_RE = re.compile(r"(?:^|\s)-m\s+(?:supervisor(?:\.[\w.]+)?|shaft(?:\.plugin_runner)?)(?:\s|$)")
 TAILSCALE_PATHS = ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+                   "~/Applications/Tailscale.app/Contents/MacOS/Tailscale",
                    "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale")
 
 
@@ -285,9 +286,15 @@ def _remote_test(runner: Runner, host: str, expr: str) -> bool:
     return runner.ssh(f"test {expr}", host=host).returncode == 0
 
 
+def _remote_path(path: str) -> str:
+    if path.startswith("~/"):
+        return '"$HOME"/' + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
 def _remote_which_file(runner: Runner, host: str, candidates) -> str | None:
     for p in candidates:
-        if _remote_test(runner, host, f"-x {shlex.quote(p)}"):
+        if _remote_test(runner, host, f"-x {_remote_path(p)}"):
             return p
     return None
 
@@ -334,8 +341,9 @@ def _remote_spec(host: str, path: str) -> str:
 
 def _tailscale_exe_local() -> str | None:
     for p in TAILSCALE_PATHS:
-        if Path(p).exists():
-            return p
+        candidate = Path.home() / p[2:] if p.startswith("~/") else Path(p)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return shutil.which("tailscale")
 
 
@@ -344,7 +352,7 @@ def _tailscale_json(runner: Runner, *, remote: bool = False, host: str | None = 
         exe = _remote_which_file(runner, host, TAILSCALE_PATHS)
         if not exe:
             return None
-        r = runner.ssh(f"{shlex.quote(exe)} status --json", host=host)
+        r = runner.ssh(f"{_remote_path(exe)} status --json", host=host)
     else:
         exe = _tailscale_exe_local()
         if not exe:

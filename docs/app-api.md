@@ -717,9 +717,11 @@ not the URL-encoded feed key. Native clients decode it optionally for older serv
 A Reply card keeps its optional `in_reply_to` through draft and outbox persistence;
 `OutgoingMessage` sends the last card with an identity as multipart `in_reply_to`.
 The web Reply button carries the same raw identity. Telegram keeps each forwarded
-text part's message id mapped to that identity. Outcomes count accepted links only
-within 48 hours of delivery, as `followed_up`; otherwise items remain `no_link`
-after the window. These links have no grade, probation or reward consumers.
+text part's message id mapped to that identity. Outcomes count explicit links and
+quotes in operator messages or conversation turns as `followed_up` within 48 hours
+of delivery. A quote must identify a single delivered message. After the window,
+`no_link` means there is no item-linked evidence. These links have no grade,
+probation or reward consumers.
 
 - **The quotes become the message's text** on the server, exactly as the web's composer writes them (`web.js`
   `quoteText`, `takeQuote`), so both clients send the same text:
