@@ -13,24 +13,24 @@ later does not turn a recorded promise into one made to itself.
 The first sync backfills the copy from the instance's mind store history. A `commitments.backfilled` marker records
 completion. The next sync retries an interrupted backfill. Statistics use the copy and the current file.
 
-A promise copied during its run is judged at the run's mind commit, once the run's episode (its source) is written:
-the copy is add-only, so the verdict is a second record of the same row, and a reader folds the two.
+A promise copied during its run, or at the commit of a cycle paused for a conversation, is judged at the next mind
+commit that ends a run, once the run's episode (its source) is written: the copy is add-only, so the verdict is a second
+record of the same row, and a reader folds the two.
 
-<supervisor dir>/ledger_mirror/<name>/commitments.jsonl: {seen, row[, checked][, judge]}, row being the ledger's line as
-it was parsed, checked the promise as its source was judged, and judge true on a promise copied during its run and not
-judged yet (false once judging found nothing to judge).
+<supervisor dir>/ledger_mirror/<name>/commitments.jsonl: {seen, row[, checked][, judge, strict][, judged]}, row being the
+ledger's line as it was parsed and checked the promise as its source was judged. A promise copied without judging has
+judge true (and strict: judged as a row made after the source rule); its verdict record has judge false and judged, when.
 """
 from __future__ import annotations
 
 import fcntl
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from . import core, jsonl
 from .served import _at
 
-RELABELLED = "operator source missing or invalid; recorded as self"   # commitments.RELABELLED (a test pins it)
 
 # What marks a row of the copy as checked when copied: a key no JSON row can carry, so the instance cannot claim it.
 CHECKED = object()
@@ -71,11 +71,6 @@ def parse(text: str) -> tuple[list[dict], int]:
 # How often a run's broker looks at the ledger between requests (observe): a row written and taken back by one tool
 # step, with no request in between, is copied when the two are further apart than this.
 POLL_S = 2.0
-# A promise whose source is not found yet stays waiting this long: the run that made it (a cycle paused for a
-# conversation is committed before its episode is written; a conversation lasts up to served.OPEN_TALK) has written
-# its episode by then. Found, it is recorded at once; still missing after this, it is recorded as the instance's own.
-SOURCE_WAIT = timedelta(hours=24)
-
 
 def records(name: str, kind: str, project: Path | None = None, as_of: datetime | None = None) -> list[dict]:
     """The copy's records ({seen, row[, checked][, judge]}), one per row, oldest first; [] before the first sync. A
@@ -136,86 +131,68 @@ def _checked(name: str, new: list[dict], strict: set[int] = frozenset()) -> dict
     return dict(zip(made, checked))
 
 
-def _verdicts(name: str, rows: list[dict], seen: list[str], strict: set[int], now: datetime) -> dict[int, dict]:
-    """The verdict to record now for each promise in `rows` (index -> the row as checked); a promise whose source is not
-    found while its run may still be writing the episode that holds it (seen less than SOURCE_WAIT ago) gets none and
-    waits."""
-    out = {}
-    for i, checked in _checked(name, rows, strict).items():
-        missing = checked.get("made_to") != rows[i].get("made_to") and checked.get("note") == RELABELLED
-        if missing and (at := _at(seen[i])) is not None and now - at < SOURCE_WAIT:
-            continue
-        out[i] = checked
-    return out
-
-
 def sync(name: str, root: Path, project: Path | None = None, now: datetime | None = None, judge: bool = True) -> int:
     """Copy new commitment rows and return their count. Backfill the mind store's history on the first sync.
 
-    `judge` (the mind commit): judge each new promise's source now, and the promises still waiting for it. False
-    (observe, during a run): copy the ledger's current rows without judging them (their source, the run's episode,
-    is written when the run ends), marking each promise to be judged; the history of a first sync is judged either way.
-    A promise not judged yet is read strictly (merged), and its verdict is a later record of the same row."""
+    `judge` (the mind commit at a run's end): judge each new promise's source now, and every promise waiting for it.
+    False (observe during a run, or the commit of a cycle paused for a conversation: the run's episode, which holds
+    a promise's source, is not written yet): copy without judging, marking each new promise to be judged at the next
+    judging sync. A promise not judged yet is read strictly (merged), and its verdict is a later record of the row."""
     from .commitments import FILE
-    now = (now or datetime.now()).replace(microsecond=0)
-    stamp = now.isoformat(timespec="seconds")
+    stamp = (now or datetime.now()).isoformat(timespec="seconds")
     p = path(name, "commitments", project)
     p.parent.mkdir(parents=True, exist_ok=True)
     done = p.with_name("commitments.backfilled")
     with p.open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        current = core.safe_read(root, FILE, "", errors="replace")   # first: what the ledger holds as this sync began
         first = not done.exists()
         recs = records(name, "commitments", project)
         seen = {_key(rec["row"]) for rec in recs}
-        texts = _history(name, FILE, project) if first else []
-        texts.append((core.safe_read(root, FILE, "", errors="replace"), None))
-        new, stamps, current = [], [], set()
+        texts = (_history(name, FILE, project) if first else []) + [(current, None)]
+        new, strict = [], set()
+        stamps = []
         for n, (text, committed) in enumerate(texts):
             for row in parse(text)[0]:
                 if (k := _key(row)) not in seen:
                     seen.add(k)
-                    if n == len(texts) - 1:
-                        current.add(len(new))
+                    if not first and n == len(texts) - 1:
+                        strict.add(len(new))
                     new.append(row)
                     stamps.append(min(committed, stamp) if committed else stamp)
-        # Judged now: the history (committed after its runs); the current rows only at a commit. A current row of a
-        # sync after the backfill, or of one during a run, first appeared after the source rule: judged strictly.
-        now_judged = [i for i in range(len(new)) if judge or i not in current]
-        strict = {j for j, i in enumerate(now_judged) if i in current and not first}
-        verdicts = _verdicts(name, [new[i] for i in now_judged], [stamps[i] for i in now_judged], strict, now)
-        checked = {now_judged[j]: v for j, v in verdicts.items()}
-        waits = {i for i in range(len(new)) if new[i].get("event") == "made" and i not in checked
-                 and (i in current and (not judge or not first)) and commitments_name(name)}
-        out = [{"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {}),
-                **({"judge": True} if i in waits else {})} for i, row in enumerate(new)]
-        if judge:   # the promises waiting for their source
+        if judge:
+            checked = _checked(name, new, strict)
+            out = [{"seen": stamps[i], "row": row, **({"checked": checked[i]} if i in checked else {})}
+                   for i, row in enumerate(new)]
             waiting = [rec for rec in recs if rec.get("judge") is True and "checked" not in rec]
-            found = _verdicts(name, [rec["row"] for rec in waiting], [rec["seen"] for rec in waiting],
-                              set(range(len(waiting))), now)
-            out += [{"seen": rec["seen"], "row": rec["row"], "checked": found[i], "judge": False, "judged": stamp}
-                    for i, rec in enumerate(waiting) if i in found]
+            verdicts = _checked(name, [rec["row"] for rec in waiting],
+                                {i for i, rec in enumerate(waiting) if rec.get("strict", True)})
+            out += [{"seen": rec["seen"], "row": rec["row"], **({"checked": verdicts[i]} if i in verdicts else {}),
+                     "judge": False, "judged": stamp} for i, rec in enumerate(waiting)]
+        else:
+            out = [{"seen": stamps[i], "row": row,
+                    **({"judge": True, "strict": i in strict} if row.get("event") == "made" else {})}
+                   for i, row in enumerate(new)]
         jsonl.append(f, [json.dumps(rec) + "\n" for rec in out])   # ASCII: a lone surrogate cannot stop the copy
         if first:
             done.write_text(stamp + "\n")    # only once the backfill is written: an interrupted one is redone
         return len(new)
 
 
-def commitments_name(name: str) -> bool:
-    from . import commitments
-    return bool(commitments.NAME.fullmatch(name))
-
-
 def observe(name: str, root: Path, project: Path | None = None, now: datetime | None = None) -> int:
-    """Copy the rows the ledger holds now, during a run (#21): what its broker calls on each request and poll. The
-    current rows are only copied, never judged here (see sync); a first sync's backfill is done here too, so a fresh
-    instance's first run is copied as it goes."""
+    """Copy the rows the ledger holds now, during a run (#21): what its broker calls on each request and poll. Rows
+    are only copied, never judged here (see sync); a first sync's backfill is done here too, so a fresh instance's
+    first run is copied as it goes."""
     return sync(name, root, project, now, judge=False)
 
 
-def _strict(row: dict) -> dict:
+def _strict(rec: dict) -> dict:
     """A promise not judged yet is read as one made after the source rule (it was): an operator promise needs its
     source, whatever the row says about `sourced`."""
-    return {**row, "sourced": True} if row.get("event") == "made" and row.get("made_to") == "operator" else row
+    row = rec["row"]
+    if rec.get("strict", True) and row.get("event") == "made" and row.get("made_to") == "operator":
+        return {**row, "sourced": True}
+    return row
 
 
 def merged(name: str, kind: str, current: list[dict], project: Path | None = None,
@@ -240,6 +217,6 @@ def merged(name: str, kind: str, current: list[dict], project: Path | None = Non
     gone = {rec["row"].get("id") for rec in kept
             if _key(rec["row"]) not in now and isinstance(rec["row"].get("id"), str)}
     out = [{**rec["checked"], CHECKED: True} if isinstance(rec.get("checked"), dict)
-           else _strict(rec["row"]) if rec.get("judge") is True else rec["row"] for rec in kept]
+           else _strict(rec) if rec.get("judge") is True else rec["row"] for rec in kept]
     return (out + [r for r in current if _key(r) not in known],
             {"removed": {i for i in gone if i not in ids_now}, "altered": {i for i in gone if i in ids_now}})

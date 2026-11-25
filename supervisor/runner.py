@@ -441,7 +441,8 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
             return _pause(name, root, kind, proc, held, run, broker)
         time.sleep(0.25)
     log(f"{name}: {kind} paused — a reply to the operator needs the instance")
-    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
+    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:],
+            pausing=True)
     held.release()
     while replying(name):
         time.sleep(1)
@@ -1039,7 +1040,7 @@ def _tell_broken(name: str, broker: Broker) -> None:
 
 def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict],
             config_writes: list[dict] = (), rejected_to: Path | None = None, regating: dict | None = None,
-            outcome: dict | None = None) -> bool:
+            outcome: dict | None = None, pausing: bool = False) -> bool:
     """Everything enforced after the instance acted: append-only journal, core-personality pace, the
     test gate on code and on the config.env lines it set (revert on failure), the commit, probation and
     the personality check. Returns False if the commit failed.
@@ -1048,7 +1049,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     change is also held (gate_held) and re-gated once the baseline is green (regate_held). `regating`: the held change
     this settle gates again — a red baseline then counts one more try instead of holding it twice. `outcome`, when
     given: filled with how the gate ended ({"result": kept / candidate-failed / held / dropped / baseline-failed,
-    "why", "failing", "mine"}); left empty when there was nothing to gate. Every gate is a row of record(kind="gate")."""
+    "why", "failing", "mine"}); left empty when there was nothing to gate. Every gate is a row of record(kind="gate").
+    `pausing`: the run goes on after a conversation; its promises are judged when it ends (commit_state)."""
     for note in (enforce_journal(root, before["journal"]), enforce_core(name, root, before["core"])):
         if note:
             log(f"{name}: {note}")
@@ -1181,7 +1183,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         (SUP_DIR / "code_changes").mkdir(parents=True, exist_ok=True)
         with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
-    committed = commit_state(name, kind, kept, note=note, gated=after)
+    committed = commit_state(name, kind, kept, note=note, gated=after, judge_ledger=not pausing)
     _check_kept(name, root, after, kept)
     if approved is not None:
         # #243: a change held on the code is never approved by a settle that did not gate and commit it (a run that

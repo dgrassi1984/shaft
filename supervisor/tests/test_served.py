@@ -445,6 +445,8 @@ class ArgumentsTest(unittest.TestCase):
         self.assertEqual(self.cite(json.dumps({key: "9" * 5000}), tool=tool),
                          "the cited step's arguments cannot be typed as the call's")
         self.assertEqual(self.cite(json.dumps({key: 3}), tool=tool), "")
+        self.assertEqual(self.cite('{"a": ' + "[" * 100_000 + "]" * 100_000 + "}", tool=tool),   # past the parser's depth
+                         "the cited step's arguments are not JSON")
 
     def test_a_cited_secret_value_is_never_read_as_withheld(self):
         """Regression (#22 review): the check replaced whatever value the episode showed with the placeholder, so a

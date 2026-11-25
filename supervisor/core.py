@@ -1759,7 +1759,8 @@ def changed_vs_head(root: Path, project: Path | None = None) -> list[str]:
 
 
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
-                 project: Path | None = None, note: str = "", gated: dict | None = None) -> bool:
+                 project: Path | None = None, note: str = "", gated: dict | None = None,
+                 judge_ledger: bool = True) -> bool:
     """Commit the instance's mind to its mind store, then its skills and the code changes that passed the gate
     to its branch — the same message on both sides. A mind path is never staged on the branch, whatever its
     .gitignore says.
@@ -1768,7 +1769,8 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
     instance) is unknown to git and would fail as a pathspec. Returns False — after logging git's own error —
     if either commit failed; the mind is committed first, so a failure there leaves the branch untouched too.
     `gated` (the gate's snapshot): kept code paths are committed with those bytes, never the working tree's
-    (_commit_gated).
+    (_commit_gated). `judge_ledger` False: the commit of a run that goes on (a cycle paused for a conversation), whose
+    episode is not written yet: its promises are copied but judged at the commit that ends it (ledger_mirror.sync).
     """
     from . import mind
     root = root or INSTANCES / name
@@ -1785,7 +1787,7 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
         minded = mind.commit(name, msg, root, project)
         try:      # the supervisor's own copy of the commitments ledger
             from . import ledger_mirror
-            ledger_mirror.sync(name, root, project)
+            ledger_mirror.sync(name, root, project, judge=judge_ledger)
         except Exception as e:
             try:
                 log(f"{name}: ledger copy not updated: {type(e).__name__}: {e}")

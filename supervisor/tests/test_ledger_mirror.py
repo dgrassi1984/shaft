@@ -49,10 +49,8 @@ class LedgerMirrorTest(IsolatedCase):
         self.assertEqual([item["id"] for item in items.values() if item["made_to"] == "operator"],
                          [made["id"]])
         # A promise whose source never held is copied as the instance's own, and stays so.
-        # (Its source may still come while its run writes its episode: it is recorded once SOURCE_WAIT has passed.)
         self.write_ledger(commitments.FILE, [made, {**made, "id": "c1111-1200-2", "talk_id": "never"}])
-        ledger_mirror.sync("ember", self.root, now=NOW)
-        ledger_mirror.sync("ember", self.root, now=NOW + ledger_mirror.SOURCE_WAIT)
+        ledger_mirror.sync("ember", self.root)
         self.write_ledger("memory/episodes/day.jsonl", [{**talk, "talk_id": "never"}])
         items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
         self.assertEqual([item["id"] for item in items.values() if item["made_to"] == "operator"],
@@ -238,34 +236,61 @@ class WithinARunTest(IsolatedCase):
         self.write(self.root / commitments.FILE, [made])
         self.assertEqual(ledger_mirror.observe("ember", self.root), 1)
         self.assertTrue(ledger_mirror.path("ember", "commitments").with_name("commitments.backfilled").exists())
+        self.assertTrue(all(r.get("judge") for r in ledger_mirror.records("ember", "commitments")))
         self.write(self.root / commitments.FILE, [])
         self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
         ledger_mirror.sync("ember", self.root)
         items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
         self.assertEqual(items[made["id"]]["made_to"], "operator")
 
-    def test_a_commit_before_the_episode_leaves_the_promise_waiting(self):
+    def test_a_pause_commit_leaves_the_promise_to_the_commit_that_ends_the_run(self):
         """Regression (#21 review): a cycle paused for a conversation is committed before its episode is written; its
         promises were judged then, without their source, and recorded as the instance's own for good."""
-        from supervisor import ledger_mirror
-        ledger_mirror.sync("ember", self.root, now=NOW)
+        from supervisor import ledger_mirror, mind
+        mind.init("ember")
+        ledger_mirror.sync("ember", self.root)
         made, never = self.made(1), self.made(2, talk="never")
         self.write(self.root / commitments.FILE, [made, never])
-        ledger_mirror.observe("ember", self.root, now=NOW)
-        ledger_mirror.sync("ember", self.root, now=NOW + timedelta(minutes=1))     # the pause's commit: no episode
-        self.assertNotIn("checked", next(r for r in ledger_mirror.records("ember", "commitments")
-                                         if r["row"]["id"] == made["id"]))
+        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+            core.commit_state("ember", "live", [], root=self.root, judge_ledger=False)   # the pause: no episode yet
+        self.assertTrue(all("checked" not in r for r in ledger_mirror.records("ember", "commitments")))
         self.write(self.root / commitments.FILE, [])
         rows = commitments.recorded("ember")[0]
         self.assertTrue(all(r.get("sourced") for r in rows))                       # read strictly meanwhile
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])         # the cycle ends
-        ledger_mirror.sync("ember", self.root, now=NOW + timedelta(minutes=30))
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])         # the cycle ends: its episode
+        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+            core.commit_state("ember", "live", [], root=self.root)
         recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
-        self.assertEqual(recs[made["id"]]["checked"]["made_to"], "operator")
-        self.assertNotIn("checked", recs[never["id"]])                             # its source may still come
-        ledger_mirror.sync("ember", self.root, now=NOW + ledger_mirror.SOURCE_WAIT + timedelta(minutes=1))
-        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
-        self.assertEqual(recs[never["id"]]["checked"]["made_to"], "self")          # never came: the instance's own
+        self.assertEqual((recs[made["id"]]["checked"]["made_to"], recs[never["id"]]["checked"]["made_to"]),
+                         ("operator", "self"))
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("never")])   # judged once: kept as judged
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual(items[never["id"]]["made_to"], "self")
+
+    def test_a_pause_hands_its_commit_to_the_ledger_unjudged(self):
+        from supervisor import runner
+        (self.root / ".tmp").mkdir(exist_ok=True)
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        (self.root / ".tmp/pausable-4242").write_text("")        # its code handles the pause
+        (self.root / ".tmp/paused-4242").write_text("")          # and it acknowledged it
+        broker_ = mock.Mock(handoffs=[], config_writes=[])
+        run = {"before": {}, "seen": 0, "cseen": 0}
+        with mock.patch.object(runner, "_settle") as settle, mock.patch.object(runner, "replying", return_value=False), \
+                mock.patch.object(runner, "_reconcile"), mock.patch.object(runner, "_snapshot"), \
+                mock.patch("os.kill"), mock.patch.object(runner, "log"):
+            runner._pause("ember", self.root, "live", proc, mock.Mock(), run, broker_)
+        self.assertTrue(settle.call_args.kwargs["pausing"])
+        before = {"journal": None, "core": None, "code": None}
+        with mock.patch.object(runner, "commit_state", return_value=True) as commit, \
+                mock.patch.object(runner, "enforce_journal", return_value=""), \
+                mock.patch.object(runner, "enforce_core", return_value=""), \
+                mock.patch.object(runner.gate, "snapshot", return_value=None), \
+                mock.patch.object(runner, "_commit_outside_config"), mock.patch.object(runner, "_commit_outside_drive"), \
+                mock.patch.object(runner, "_check_kept"), mock.patch.object(runner, "log"):
+            for pausing in (True, False):
+                runner._settle("ember", self.root, "live", before, [], pausing=pausing)
+        self.assertEqual([c.kwargs["judge_ledger"] for c in commit.call_args_list], [False, True])
 
     def test_a_verdict_judged_later_is_not_read_by_an_earlier_replay(self):
         """Regression (#21 review): the verdict record kept the row's `seen`, so a replay as of a moment before the
@@ -275,14 +300,13 @@ class WithinARunTest(IsolatedCase):
         made = {**self.made(talk="never"), "at": (NOW - timedelta(minutes=9)).isoformat()}
         self.write(self.root / commitments.FILE, [made])
         ledger_mirror.observe("ember", self.root, now=NOW - timedelta(minutes=8))
-        ledger_mirror.sync("ember", self.root, now=NOW + ledger_mirror.SOURCE_WAIT)   # judged: no source, self
-        before = commitments.ledger("ember", NOW, commitments.recorded("ember", as_of=NOW - timedelta(minutes=5))[0])
-        after = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
-        self.assertEqual(after[made["id"]]["made_to"], "self")
+        ledger_mirror.sync("ember", self.root, now=NOW)                          # judged at NOW: no source, self
+        self.assertEqual(commitments.ledger("ember", NOW, commitments.recorded("ember")[0])[made["id"]]["made_to"],
+                         "self")
         rows = commitments.recorded("ember", as_of=NOW - timedelta(minutes=5))[0]
-        self.assertTrue(rows[0].get("sourced"))                                  # still waiting then: read strictly
-        self.assertNotIn(ledger_mirror.CHECKED, rows[0])
-        self.assertIn(made["id"], before)
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn(ledger_mirror.CHECKED, rows[0])                          # still waiting then
+        self.assertTrue(rows[0].get("sourced"))                                   # and read strictly
 
     def test_a_same_size_rewrite_with_its_mtime_put_back_is_still_seen(self):
         from supervisor import ledger_mirror
@@ -354,8 +378,3 @@ class WithinARunTest(IsolatedCase):
         with mock.patch.object(ledger_mirror, "observe", side_effect=OSError("disk full")), \
                 mock.patch.object(broker.Broker, "_log", autospec=True, side_effect=OSError("disk full")):
             box._observe_ledger()          # neither the copy nor its log line raises
-
-
-    def test_relabelled_is_the_commitments_note(self):
-        from supervisor import ledger_mirror
-        self.assertEqual(ledger_mirror.RELABELLED, commitments.RELABELLED)

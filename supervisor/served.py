@@ -119,14 +119,17 @@ def args_digest(tool: str, args) -> str | None:
 def episode_args(tool: str, logged) -> tuple[str | None, str]:
     """(digest, "") of the arguments a tool-log step shows, or (None, why they cannot be checked)."""
     if isinstance(logged, dict):
-        logged = json.dumps(logged, ensure_ascii=False)   # an older log's dict: checked as its JSON is
+        try:
+            logged = json.dumps(logged, ensure_ascii=False)   # an older log's dict: checked as its JSON is
+        except (ValueError, RecursionError):
+            return None, "the cited step's arguments are not JSON"
     if not isinstance(logged, str):
         return None, "the cited step has no arguments to check"
     if LOG_CUT in logged:
         return None, "the cited step's arguments were cut in the log and cannot be checked"
     try:
         args = json.loads(logged or "{}")
-    except ValueError:
+    except (ValueError, RecursionError):   # nested past the parser's depth: no call could have carried it
         return None, "the cited step's arguments are not JSON"
     if not isinstance(args, dict):
         return None, "the cited step's arguments are not a JSON object"

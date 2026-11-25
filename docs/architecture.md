@@ -721,7 +721,8 @@ Every supervisor-tool step a citation covers must match. Prediction outcomes cit
 the same way. The promises section reads the supervisor's copy of the ledger (`supervisor/ledger_mirror.py`), which
 the run's broker updates as the run goes (before every POST it serves, each model step and tool call, and every
 two seconds) and the mind commit
-completes, so a promise written and taken back within one run is still counted. Built-in and plugin calls never
+that ends the run judges (a cycle paused for a conversation is judged when it ends, once its episode exists), so a
+promise written and taken back within one run is still counted. Built-in and plugin calls never
 reach the broker and cannot be checked this way: evidence made only of them is counted as
 verified but not checkable. The ledger accepts promises only
 to the operator (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
