@@ -147,6 +147,7 @@ def main() -> int:
         for work in root.glob(".listen-work-*"):
             shutil.rmtree(work)
         recover()
+        meetings.deliver_owed()
         record_service("listen", {"diarisation": DIARISATION, "asr": ASR})
         LOG.info("Listen started, polling every %ss at background priority with %s and %s",
                  POLL_SECONDS, DIARISATION, ASR)

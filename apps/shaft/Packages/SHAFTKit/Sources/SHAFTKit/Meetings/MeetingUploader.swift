@@ -215,6 +215,12 @@ public final class MeetingUploader {
             where url.pathExtension == recordExtension {
             guard let record = try loadRecord(at: url),
                   let finishedAt = record.finishedAt, finishedAt < cutoff else { continue }
+            // Only the file the record describes: another recording at the same path is not sent yet, keep it
+            // (review 2026-11-25).
+            let audio = url.deletingPathExtension()
+            if let size = (try? files.attributesOfItem(atPath: audio.path)[.size]) as? Int, size != record.size {
+                continue
+            }
             do {
                 try files.removeItem(at: url.deletingPathExtension())
             } catch let error as CocoaError where error.code == .fileNoSuchFile {

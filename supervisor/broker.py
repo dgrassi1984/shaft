@@ -3392,9 +3392,13 @@ class Broker:
     # -- the operator's Google Chat: read-only, every conversation of an account granted now --------
     # The grant is read again on every call. Every page and listing starts with the line marking it as written by its
     # senders; broker.log names handles and conversations, never what a message says.
-    def _meeting_aliases(self) -> set[str]:
+    def meetings_grants(self) -> list[dict]:
+        """The accounts whose meetings this run may read now, like gchat_grants: read on every call."""
         from .core import meetings_grants
-        return {g["account"] for g in meetings_grants(self.name)} if self.grants_allowed and not self.as_of else set()
+        return meetings_grants(self.name) if self.grants_allowed else []
+
+    def _meeting_aliases(self) -> set[str]:
+        return {g["account"] for g in self.meetings_grants()} if not self.as_of else set()
 
     def _meeting_search(self, text="", person="", after="", before=""):
         from . import meetings_access
@@ -3410,7 +3414,9 @@ class Broker:
         with meetings_access.visible(meeting, self._meeting_aliases()) as (_, names, metadata, _):
             if not isinstance(speaker, str) or speaker not in names:
                 raise meetings_access.NotVisible(meetings_access.NOT_VISIBLE)
-            return meeting_proposals.create(self.name, metadata, speaker, name, why)
+            made = meeting_proposals.create(self.name, metadata, speaker, name, why)
+            return (f"Proposed {name!r} for speaker {speaker} (proposal {made['id']}): the operator confirms or rejects "
+                    "it in the SHAFT app; until then the speaker keeps its current label.")
 
     def gchat_grants(self) -> list[dict]:
         """The accounts this run may read now: read on every call, so a revoke holds from the next call."""

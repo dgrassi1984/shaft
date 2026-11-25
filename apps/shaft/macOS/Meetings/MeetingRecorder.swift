@@ -30,6 +30,9 @@ final class MeetingRecorder {
     @ObservationIgnored let folder: URL
 
     var isRecording: Bool { if case .recording = phase { true } else { false } }
+    /// Set before the permission prompt's await, so a second Record click cannot start a second capture over the first
+    /// (review 2026-11-25).
+    @ObservationIgnored private var starting = false
 
     init(client: @escaping @MainActor () -> APIClient?,
          folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory)) {
@@ -39,7 +42,9 @@ final class MeetingRecorder {
 
     /// Start recording: online (the microphone and every other app's sound) or in person (the microphone).
     func start(online: Bool) async {
-        guard !isRecording else { return }
+        guard !isRecording, !starting else { return }
+        starting = true
+        defer { starting = false }
         warning = nil
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
             phase = .failed("SHAFT may not use the microphone: allow it in System Settings → Privacy & Security → Microphone.")
@@ -47,7 +52,9 @@ final class MeetingRecorder {
         }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let stamp = Self.stamp.string(from: Date())
+            // A new name every time (a time stamp and a random suffix): never an earlier recording's, whose upload
+            // record would then describe another file (review 2026-11-25).
+            let stamp = Self.stamp.string(from: Date()) + "-" + UUID().uuidString.prefix(8).lowercased()
             let url = folder.appending(path: "\(stamp).m4a")
             let capture = MeetingCapture(online: online, url: url, stallSeconds: 20)
             capture.onWarning = { [weak self] message in Task { @MainActor in self?.warning = message } }
@@ -63,9 +70,12 @@ final class MeetingRecorder {
     /// Stop, finalise the file, and send it.
     func stop() async {
         guard case .recording = phase, let capture, let file else { return }
-        _ = capture.stop()                      // also writes <stamp>.json
+        let sidecar = capture.stop()            // also writes <stamp>.json
         self.capture = nil
         self.file = nil
+        if let problems = sidecar["problems"] as? [String], !problems.isEmpty {
+            warning = "The recording is incomplete: " + problems.joined(separator: "; ") + "."
+        }
         await send(file)
     }
 

@@ -304,6 +304,10 @@ def finish(meeting_id: str, *, size=None, sha256=None, chunks=None) -> dict:
                     raise Conflict(f"Chunk {index} is missing.")
             if len(received) < chunks:
                 raise Conflict(f"Chunk {len(received)} is missing.")
+            if len(received) > chunks:
+                # A stale finish that describes fewer chunks would assemble a prefix and delete the rest (review
+                # 2026-11-25): refuse it and keep every chunk.
+                raise Conflict(f"Chunk {chunks} and later were sent, but finish names {chunks} chunk(s).")
             parts = (upload / str(index) for index in range(chunks))
             _assemble(folder / f"audio.{metadata['ext']}", parts, expected=(size, sha256))
             metadata.update(state="queued", size=size, sha256=sha256, chunks_received=received[:chunks])
@@ -362,15 +366,34 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
         raise Conflict("This meeting is no longer processing.")
     _write_transcript(folder, transcript, markdown)
     first_ready = "notified" not in metadata
-    metadata.setdefault("notified", [])
+    if first_ready:
+        metadata["notified"] = None                 # owed: delivered below, or at the worker's next start
     metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
-    if first_ready and metadata["account"]:
-        from . import watch
+    if metadata["notified"] is None:
+        _deliver(folder, metadata, transcript)
 
-        metadata["notified"] = watch.meeting_ready(metadata, transcript)
-        _save(folder, metadata)
+
+def _deliver(folder: Path, metadata: dict, transcript: dict) -> None:
+    """The first-ready watch note, once. `notified` None means owed: a crash between saving ready and delivering
+    leaves it owed, and deliver_owed() sends it at the worker's next start (review 2026-11-25)."""
+    from . import watch
+
+    metadata["notified"] = watch.meeting_ready(metadata, transcript) if metadata["account"] else []
+    _save(folder, metadata)
+
+
+def deliver_owed() -> None:
+    """Send every first-ready note a crash left owed."""
+    for row in list_meetings():
+        if row.get("state") == "ready" and "notified" in row and row["notified"] is None:
+            try:
+                with _locked(row["id"]) as (folder, metadata):
+                    if metadata.get("notified", []) is None:
+                        _deliver(folder, metadata, json.loads((folder / "transcript.json").read_bytes()))
+            except Missing:
+                continue
 
 
 def detail(meeting_id: str, page: int) -> dict:

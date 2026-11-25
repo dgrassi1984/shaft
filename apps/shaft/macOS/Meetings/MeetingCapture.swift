@@ -105,6 +105,10 @@ final class MeetingCapture: @unchecked Sendable {
     let lastAudio = Atomic<UInt64>(0)           // mach host time of the last IOProc call that wrote audio
     let tapEverHeard = Atomic<Bool>(false)      // any non-zero system-audio sample since the start
     let framesWritten = Atomic<Int>(0)
+    /// Frames the writer refused (`ExtAudioFileWriteAsync` failed): reported in the sidecar and to the operator, never
+    /// counted as recorded (review 2026-11-25: a refused write still counted, so a short file had a full-length sidecar).
+    let framesLost = Atomic<Int>(0)
+    let lastWriteError = Atomic<Int32>(0)
     let tapSilentFrames = Atomic<Int>(0)        // consecutive frames of exact-zero tap audio
     let micLoudWhileSilent = Atomic<Int>(0)     // frames in that stretch where the mic was above −50 dBFS
     // IO-thread-only state.
@@ -271,8 +275,13 @@ final class MeetingCapture: @unchecked Sendable {
         guard let f = file else { return }
         var abl = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: channels,
                                   mDataByteSize: UInt32(frames * Int(channels) * 4), mData: scratch))
-        _ = ExtAudioFileWriteAsync(f, UInt32(frames), &abl)
-        framesWritten.add(frames, ordering: .relaxed)
+        let status = ExtAudioFileWriteAsync(f, UInt32(frames), &abl)
+        if status == noErr {
+            framesWritten.add(frames, ordering: .relaxed)
+        } else {
+            framesLost.add(frames, ordering: .relaxed)
+            lastWriteError.store(status, ordering: .relaxed)
+        }
     }
 
     func writeSilence(seconds: Double, reason: String) {
@@ -351,14 +360,24 @@ final class MeetingCapture: @unchecked Sendable {
         // Audio that never came before the stop is still time on the meeting's clock: pad it, as a gap.
         let missing = hostSeconds(mach_absolute_time()) - hostSeconds(lastAudio.load(ordering: .relaxed))
         if file != nil, missing > 0.5 { writeSilence(seconds: min(missing, 600), reason: "no audio before stop") }
-        if let f = file { ExtAudioFileDispose(f); file = nil }
+        var finalise: OSStatus = noErr
+        if let f = file { finalise = ExtAudioFileDispose(f); file = nil }
         let seconds = Double(framesWritten.load(ordering: .relaxed)) / sampleRate
+        let lost = Double(framesLost.load(ordering: .relaxed)) / sampleRate
+        var problems: [String] = []
+        if lost > 0 {
+            problems.append(String(format: "%.1f s of audio could not be written (OSStatus %d)", lost,
+                                   lastWriteError.load(ordering: .relaxed)))
+        }
+        if finalise != noErr { problems.append("the file could not be finalised (OSStatus \(finalise))") }
+        if !problems.isEmpty { log("stop: " + problems.joined(separator: "; ")) }
         let sidecar: [String: Any] = [
             "started": iso(started), "ended": iso(Date()), "mode": online ? "online" : "inperson",
             "input_device": inputName, "sample_rate": sampleRate, "channels": Int(channels),
             "channel_map": online ? ["mic", "system"] : ["mic"], "seconds": seconds,
             "input_buffers": bufferChannels, "mic_buffers": micBuffers,
             "gaps": gaps.map { ["start": $0.start, "end": $0.end, "reason": $0.reason] }, "rebuilds": rebuilds,
+            "seconds_lost": lost, "problems": problems,
         ]
         let side = url.deletingPathExtension().appendingPathExtension("json")
         if let data = try? JSONSerialization.data(withJSONObject: sidecar, options: [.prettyPrinted, .sortedKeys]) {

@@ -151,7 +151,7 @@ class ServerThreadsTest(unittest.TestCase):
         for cid in ("web-foreign", "web-unknown", "../escape"):
             with self.assertRaises(web_chat.Refused):
                 b._read_thread(cid)
-        for method in ("mail_grants", "calendar_grants", "gdrive_grants", "gchat_grants"):
+        for method in ("mail_grants", "calendar_grants", "gdrive_grants", "gchat_grants", "meetings_grants"):
             self.patch(b, method, return_value=[])
         self.patch(b, "_channel_line", return_value="")
         self.patch(b, "_orders_line", return_value="")

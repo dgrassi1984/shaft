@@ -204,6 +204,20 @@ struct MeetingUploaderTests {
         #expect(try files.contentsOfDirectory(atPath: recording.directory.path).isEmpty)
     }
 
+    /// Review 2026-11-25: pruning checked only the record's date, so another file at a finished upload's path (not
+    /// sent yet) would have been deleted.
+    @Test func pruningKeepsAFileTheRecordDoesNotDescribe() async throws {
+        let recording = try Recording()
+        defer { recording.cleanUp() }
+        let server = StubServer { Self.answer($0) }
+        let uploader = MeetingUploader(client: server.client, audioURL: recording.audio)
+        await uploader.upload(create)
+        #expect(uploader.state == .done(Self.id))
+        try Data(repeating: 7, count: 12_345).write(to: recording.audio)
+        try MeetingUploader.pruneUploaded(in: recording.directory, olderThan: .distantFuture)
+        #expect(FileManager.default.fileExists(atPath: recording.audio.path))
+    }
+
     @Test func meetingRoutesDecodeMetadataAndTranscriptAsReturnedByServer() async throws {
         let transcript = """
             "transcript": {
