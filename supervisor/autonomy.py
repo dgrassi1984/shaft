@@ -576,6 +576,7 @@ def serve(poll_s: int = 30) -> int:
         if not (SUP_DIR / "paused").exists():
             st, now = _state(), datetime.now()
             _batteries(children, now, sleep_due(now, st))
+            _night_replays(children, now, sleep_due(now, st))
             if sleep_due(now, st) and "sleep" not in children:
                 children["sleep"] = (_start(["sleep", "--all"]), time.monotonic())
             names = [n for n in instance_names() if not paused(n) and not updating(n, children)]   # not skipped:
@@ -941,6 +942,36 @@ def _batteries(children: dict, now: datetime, sleeping_due: bool) -> None:
     for name in start:
         children[f"battery {name}"] = (_start(["battery", "run", name, "--until", f"{end:%H:%M}"]),
                                        time.monotonic())
+
+
+def night_replay_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, battery_due,
+                      awake_of) -> tuple[list[str], list[str]]:
+    """(night-replay jobs to stop, instances whose night replay to start). Pure, like battery_jobs: inside the battery's
+    night window only, never beside the same instance's battery (running or still due), never while it is awake; the
+    window's end or a due sleep stops one still running (#5)."""
+    from . import battery
+    _, end = battery.window(now)
+    stop = [job for job in children if job.startswith("night-replay ") and (now >= end or sleeping_due)]
+    start = [] if sleeping_due else [n for n in names if f"night-replay {n}" not in children
+                                     and f"battery {n}" not in children and not battery_due(n, now)
+                                     and due(n, now) and not awake_of(n)]
+    return stop, start
+
+
+def _night_replays(children: dict, now: datetime, sleeping_due: bool) -> None:
+    from . import battery, nightreplay
+    names = [n for n in instance_names() if not paused(n)]
+    stop, start = night_replay_jobs(children, now, sleeping_due, names, nightreplay.due, battery.due, _awake)
+    for job in stop:
+        proc, _ = children[job]
+        if proc.poll() is None and not getattr(proc, "stopping", False):
+            proc.send_signal(signal.SIGTERM)
+            proc.stopping = True
+            log(f"scheduler: stopping {job} — {'a sleep is due' if sleeping_due else 'the night window closed'}")
+    _, end = battery.window(now)
+    for name in start:
+        children[f"night-replay {name}"] = (_start(["night-replay", "run", name, "--until", f"{end:%H:%M}"]),
+                                            time.monotonic())
 
 
 WARM_RETRY_S = 3600   # a timeout is retried one hour after it ended, until it passes or the commits move

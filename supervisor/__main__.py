@@ -1310,6 +1310,35 @@ def cmd_battery(args) -> int:
     return worst
 
 
+def cmd_night_replay(args) -> int:
+    import signal
+    from . import nightreplay
+    names = args.names or instance_names()
+    for name in names:
+        instance_root(name)
+        if args.action == "report":
+            print(f"{name}:\n" + (nightreplay.record_text(name) or "(no night replay yet)"))
+            continue
+        until = None
+        if args.until:
+            h, m = map(int, args.until.split(":"))
+            end = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+            until = (end if end > datetime.now() else end + timedelta(days=1)).timestamp()
+        # The scheduler stops a run with SIGTERM at the window's end: the replay in progress is stopped (its agent runs
+        # in its own session, so it would outlive a killed parent), recorded, and nothing further starts.
+        stopped = {}
+        signal.signal(signal.SIGTERM, lambda signum, _frame: stopped.setdefault("signal", signum))
+        try:
+            nightreplay.run(name, until=until, dry_run=args.dry_run,
+                            stop=lambda name=name: paused(name) or bool(stopped))
+        except Exception as e:   # recorded, so the scheduler does not start it again tonight
+            log(f"{name}: night replay failed: {type(e).__name__}: {e}")
+            if not args.dry_run:
+                nightreplay.record_failure(name, f"{type(e).__name__}: {e}")
+            return 1
+    return 0
+
+
 def _pairs(specs: list[str]) -> dict:
     out = {}
     for spec in specs:
@@ -1799,6 +1828,12 @@ def main(argv: list[str]) -> int:
                    help="run: only the control, on coding and research (checks the items discriminate)")
     p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
     p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
+    p = sub.add_parser("night-replay", help="replay the day's worst judged cycles with the judge's first error shown "
+                       "(cloud-model instances, night window; #5)")
+    p.add_argument("action", choices=["run", "report"])
+    p.add_argument("names", nargs="*")
+    p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
+    p.add_argument("--dry-run", action="store_true", help="run: show eligibility, picks and the cap; no model call")
     p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (the surprise baseline)")
     p.add_argument("names", nargs="*")
     p.add_argument("--freeze", action="store_true", help="also write the baseline the surprise loop is judged against")
@@ -2348,6 +2383,8 @@ def _dispatch(args, parser) -> int:
         return 0
     if args.cmd == "battery":
         return cmd_battery(args)
+    if args.cmd == "night-replay":
+        return cmd_night_replay(args)
     if args.cmd == "surprise":
         for name in args.names:
             instance_root(name)
