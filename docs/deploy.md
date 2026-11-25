@@ -45,6 +45,11 @@ git tag template-vX.Y.Z <template commit>
 git push origin vX.Y.Z template-vX.Y.Z <template commit>:refs/heads/template
 ```
 
+Then publish the release page, which the README sends Mac users to for the DMG: `gh release create vX.Y.Z
+SHAFT-<app version>.dmg --title vX.Y.Z --notes "$(git tag -l --format='%(contents:body)' vX.Y.Z)" --latest`. A release
+with no app change attaches the current app's DMG and says which app version it is, so the latest release always has
+one (until 2026-11-25 tags were pushed without release pages, and the page showed a weeks-old v0.63.1 as latest).
+
 The template commit is the template that passed the gate with that release (`bin/shaft gate budget` tests committed
 supervisor and template code together). Start it from `origin/template`, never from the local `template` branch: the
 primary checkout's template worktree moves only at a deploy, so it can lag a release behind, and a tag cut there ships
