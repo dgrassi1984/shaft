@@ -1381,6 +1381,7 @@ class Broker:
                             self.wfile.flush()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._run_event("start")   # before the first call can be served
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.egress.start()
         return f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -1390,6 +1391,8 @@ class Broker:
         return self.server.server_address[1] if self.server else 0
 
     def stop(self) -> None:
+        if self.server:
+            self._run_event("end")
         if self.channel is not None:
             self.channel.close()
         if self.server:
@@ -1561,13 +1564,35 @@ class Broker:
         action = self._current_action
         classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
         self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
-        if result["ok"] and getattr(self, "as_of", None) is None and not isinstance(self, ReplayBroker):
+        if result["ok"] and self._keeps_record():
             from . import served   # a fingerprint of what was served, never the text (#8): what citations are checked on
             try:
-                served.keep(self.name, tool, result["result"], base=self.log_path.parent)
+                served.keep(self.name, tool, result["result"], run=getattr(self, "run_started", None),
+                            base=self.log_path.parent, kind=getattr(self, "run_kind", None))
             except Exception as e:   # the record's bookkeeping never costs the call
-                self._log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
+                self._quiet_log(f"{self.name}: fingerprint of {tool} not kept: {type(e).__name__}: {e}")
         return result
+
+    def _keeps_record(self) -> bool:
+        """The served record (served.py) is the instance's real runs only: never a trial replay's."""
+        return getattr(self, "as_of", None) is None and not isinstance(self, ReplayBroker)
+
+    def _run_event(self, event: str) -> None:
+        """A run's start or end in the served record, by which cited steps are looked for (#8); never costs the run."""
+        if not getattr(self, "run_started", None) or not self._keeps_record():
+            return
+        from . import served
+        try:
+            served.run_event(self.name, self.run_started, self.run_kind, event, base=self.log_path.parent)
+        except Exception as e:
+            self._quiet_log(f"{self.name}: run {event} not recorded for fingerprints: {type(e).__name__}: {e}")
+
+    def _quiet_log(self, line: str) -> None:
+        """A bookkeeping failure's own log line: if even that cannot be written, the call or run goes on."""
+        try:
+            self._log(line)
+        except Exception:
+            pass
 
     def _action_route(self, tool, args, *, event=None, address=''):
         """#142: one class-policy dispatch for operator actions. Calendar calls arrive after their grant/event

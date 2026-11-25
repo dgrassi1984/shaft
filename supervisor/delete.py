@@ -74,6 +74,7 @@ def own_files(name: str) -> list[Path]:
              s / "predictions" / f"{name}.jsonl", s / "unrecorded_orders" / f"{name}.jsonl",
              s / "unrecorded_orders" / f"{name}.lock", s / "wake_reasons" / f"{name}.json",
              s / "wake_reasons" / f"{name}.tmp",
+             s / "ledger_mirror" / name, s / "served" / f"{name}.jsonl", s / "served" / f"{name}.runs.jsonl",
              *(s / "provenance" / f"{name}.sqlite{suffix}" for suffix in ("", "-journal", "-wal", "-shm"))]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")

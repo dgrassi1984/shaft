@@ -311,6 +311,154 @@ class GaugesTest(unittest.TestCase):
         self.assertIn("2 corrections removed from the ledger", gauges._corrections("ember", NOW).text)
         self.assertIn("2 promises removed from the ledger", gauges._promises("ember", NOW).text)
 
+    def test_a_malformed_row_costs_only_itself(self):
+        """Regression (#7 review): one row with a list id made the promises and corrections gauges "could not be
+        read", and one non-JSON line in the corrections ledger did the same: every recorded row dropped out."""
+        from supervisor import ledger_mirror
+        made, recorded = self.ledgers()
+        self.write(commitments.FILE, made)
+        self.write("memory/corrections.jsonl", recorded)
+        ledger_mirror.sync("ember", self.root)
+        self.write(commitments.FILE, made + [{"event": "made", "id": []}])
+        self.write("memory/corrections.jsonl", recorded + [{"id": {"a": 1}}])
+        with (self.root / "memory/corrections.jsonl").open("a") as f:
+            f.write("not json\n[1]\n")
+        promises, corrections = gauges._promises("ember", NOW), gauges._corrections("ember", NOW)
+        self.assertTrue(promises.text.startswith("Promised to the operator and still open: 2"), promises.text)
+        self.assertEqual(corrections.text, "Corrections from the operator still open: 3 of 3, oldest 3 days old; "
+                                           "2 unreadable lines in the ledger, skipped")
+
+    def test_a_recorded_promise_keeps_the_source_it_had_when_copied(self):
+        """Regression (#7 review): a mirrored operator promise was re-checked against the current episodes on every
+        read, so removing the conversation it was made in turned it into a promise to itself."""
+        from supervisor import ledger_mirror
+        made = {"event": "made", "id": "c1111-1200-1", "at": (NOW - timedelta(days=1)).isoformat(), "source": "talk",
+                "promise": "Send report", "criterion": "Report delivered", "made_to": "operator", "sourced": True,
+                "talk_id": "t1", "due": (NOW + timedelta(days=1)).isoformat()}
+        talk = {"ts": (NOW - timedelta(days=1, minutes=1)).isoformat(), "kind": "talk", "role": "user",
+                "talk_id": "t1", "content": "please"}
+        self.write("memory/episodes/day.jsonl", [talk])
+        self.write(commitments.FILE, [made])
+        ledger_mirror.sync("ember", self.root)
+        self.write("memory/episodes/day.jsonl", [])          # the conversation is gone from the instance's files
+        self.assertTrue(gauges._promises("ember", NOW).text.startswith("Promised to the operator and still open: 1"))
+        # A promise whose source never held is copied as the instance's own, and stays so.
+        self.write(commitments.FILE, [made, {**made, "id": "c1111-1200-2", "talk_id": "never"}])
+        ledger_mirror.sync("ember", self.root)
+        self.write("memory/episodes/day.jsonl", [{**talk, "talk_id": "never"}])
+        self.assertTrue(gauges._promises("ember", NOW).text.startswith("Promised to the operator and still open: 1"))
+
+    def test_a_replay_reads_the_copy_as_it_stood(self):
+        """Regression (#7 review): a replay's gauges counted ledger rows the supervisor copied after its moment."""
+        from supervisor import ledger_mirror
+        made, recorded = self.ledgers()
+        self.write("memory/corrections.jsonl", recorded[:1])
+        ledger_mirror.sync("ember", self.root, now=NOW - timedelta(hours=2))
+        self.write("memory/corrections.jsonl", recorded)
+        ledger_mirror.sync("ember", self.root, now=NOW + timedelta(hours=2))
+        self.write("memory/corrections.jsonl", [])
+        self.assertIn("still open: 3 of 3", gauges._corrections("ember", NOW).text)
+        self.assertIn("still open: 1 of 1", gauges._corrections("ember", NOW, as_of=NOW).text)
+        self.assertIn("still open: 1 of 1", gauges.menu_text("ember", as_of=NOW))
+        # A current row stamped after the replay's moment is not counted either.
+        late = {**recorded[0], "id": "k1111-1200-9", "when": (NOW + timedelta(hours=1)).isoformat()}
+        self.write("memory/corrections.jsonl", [late])
+        self.assertIn("still open: 1 of 1", gauges._corrections("ember", NOW, as_of=NOW).text)
+
+    def test_backfill_is_marked_done_and_retried_if_torn(self):
+        """Regression (#7 review): backfill was judged done by the copy being non-empty: an empty ledger walked git
+        at every commit, and a torn first copy never walked it again."""
+        from supervisor import ledger_mirror
+        made, recorded = self.ledgers()
+        with mock.patch.object(ledger_mirror, "_history", return_value=[]) as history:
+            ledger_mirror.sync("ember", self.root)
+            ledger_mirror.sync("ember", self.root)
+        self.assertEqual(history.call_count, 2)                     # once per ledger, never again
+        path = ledger_mirror.path("ember", "corrections")
+        path.write_text('{"seen": "2026-11-11T10:00:00", "row": {"event": "recor')   # an interrupted first copy
+        path.with_name("corrections.backfilled").unlink()
+        text = "".join(json.dumps(r) + "\n" for r in recorded)
+        with mock.patch.object(ledger_mirror, "_history", side_effect=lambda name, rel, project: [text]
+                               if rel.endswith("corrections.jsonl") else []):
+            self.assertEqual(ledger_mirror.sync("ember", self.root), 3)
+        self.assertEqual(len(ledger_mirror.rows("ember", "corrections")), 3)
+
+    def test_the_stats_section_and_claim_lint_still_see_a_removed_settle(self):
+        """Regression (#7 review): the promises section and claim lint read the instance's file, so deleting a forged
+        "kept" settle (and its promise) took it out of both."""
+        from supervisor import claimlint, ledger_mirror
+        made, _ = self.ledgers()
+        settled = {"event": "settled", "id": made[0]["id"], "at": (NOW - timedelta(hours=1)).isoformat(),
+                   "status": "kept", "evidence": (NOW - timedelta(minutes=30)).isoformat() + "#1"}
+        ep = {"ts": (NOW - timedelta(minutes=30)).isoformat(), "run_started": (NOW - timedelta(hours=2)).isoformat(),
+              "kind": "live", "finish": {}, "tools": [{"tool": "fetch_page", "args": {}, "result": "x"}]}
+        self.write("memory/episodes/day.jsonl", [ep])
+        self.write(commitments.FILE, made + [settled])
+        ledger_mirror.sync("ember", self.root)
+        self.write(commitments.FILE, made[1:])
+        with mock.patch.object(metrics, "judgments", return_value=[]):
+            section = "\n".join(commitments.section("ember"))
+            report = commitments.report(["ember"])
+        self.assertIn("made 2; kept (verified) 0; kept (verified, evidence not checkable) 0; kept (not verified) 1",
+                      section)
+        self.assertIn(f"{made[0]['id']}: kept; cited cycle not judged", report)
+        self.assertIn("removed from its ledger since recorded", report)
+        self.assertEqual([f["ref"] for f in claimlint.lint("ember", ep)], [])   # no record: nothing to flag
+        from supervisor import served
+        served.begin(NOW - timedelta(days=2))
+        served.run_event("ember", ep["run_started"], "live", "start", at=NOW - timedelta(hours=2))
+        self.assertEqual([f["ref"] for f in claimlint.lint("ember", ep)], [made[0]["id"]])
+
+    def test_a_row_cannot_claim_it_was_checked_when_copied(self):
+        """Regression (#7 re-review): a ledger row carrying "_checked": true skipped the source check."""
+        from supervisor import ledger_mirror
+        made = {"event": "made", "id": "c1111-1200-1", "at": (NOW - timedelta(days=1)).isoformat(), "source": "talk",
+                "promise": "Send report", "criterion": "Report delivered", "made_to": "operator", "sourced": True,
+                "talk_id": "never", "due": (NOW + timedelta(days=1)).isoformat(), "_checked": True}
+        self.write(commitments.FILE, [made])
+        self.assertEqual(gauges._promises("ember", NOW).text, "Promises to the operator: none recorded")
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(gauges._promises("ember", NOW).text, "Promises to the operator: none recorded")
+
+    def test_a_replay_does_not_take_a_later_closure_or_a_later_copy_from_the_file(self):
+        """Regression (#7 re-review): a correction's `closed` event (stamped `at`, not `when`) and a row copied after
+        the replay's moment but stamped before it reached the replay through the current file."""
+        from supervisor import ledger_mirror
+        _, recorded = self.ledgers()
+        closed = {"event": "closed", "id": recorded[0]["id"], "closed_by": "fact", "evidence": "Checked",
+                  "at": (NOW + timedelta(hours=1)).isoformat()}
+        self.write("memory/corrections.jsonl", recorded[:1])
+        ledger_mirror.sync("ember", self.root, now=NOW - timedelta(hours=2))
+        self.write("memory/corrections.jsonl", recorded[:1] + [closed])
+        self.assertIn("still open: 1 of 1", gauges._corrections("ember", NOW, as_of=NOW).text)
+        self.write("memory/corrections.jsonl", recorded)
+        ledger_mirror.sync("ember", self.root, now=NOW + timedelta(hours=2))
+        self.assertIn("still open: 1 of 1", gauges._corrections("ember", NOW, as_of=NOW).text)
+        aware = (NOW).astimezone()
+        self.assertIn("still open: 1 of 1", gauges._corrections("ember", NOW, as_of=aware).text)
+
+    def test_a_lone_surrogate_does_not_stop_the_copy(self):
+        """Regression (#7 re-review): a row with an escaped lone surrogate could not be written, and the whole batch
+        (and the corrections after it) went uncopied."""
+        from supervisor import ledger_mirror
+        made, recorded = self.ledgers()
+        path = self.root / commitments.FILE
+        path.write_text(json.dumps({**made[0], "promise": "bad \ud800 text"}) + "\n" + json.dumps(made[1]) + "\n")
+        self.write("memory/corrections.jsonl", recorded)
+        self.assertEqual(ledger_mirror.sync("ember", self.root), 5)
+        self.assertEqual(ledger_mirror.rows("ember", "commitments")[0]["promise"], "bad \ud800 text")
+
+    def test_claim_lint_skips_a_settle_with_a_bad_id(self):
+        """Regression (#7 re-review): a mirrored kept settle with a list id raised TypeError in claim lint."""
+        from supervisor import claimlint
+        ep = {"ts": (NOW - timedelta(minutes=30)).isoformat(), "run_started": (NOW - timedelta(hours=2)).isoformat(),
+              "kind": "live", "finish": {}, "tools": []}
+        self.write(commitments.FILE, [{"event": "settled", "id": [], "status": "kept", "evidence": "x",
+                                       "at": (NOW - timedelta(hours=1)).isoformat()},
+                                      {"event": "settled", "status": "kept", "evidence": "x",
+                                       "at": (NOW - timedelta(hours=1)).isoformat()}])
+        self.assertEqual(claimlint.lint("ember", ep), [])
+
 
 if __name__ == "__main__":
     unittest.main()

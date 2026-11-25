@@ -39,7 +39,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `custom_price`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `custom_stream`, `as_sse`, `efforts` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/codexcli.py` | `CodexFailure`, `CodexClosed`, `CodexSecurity`, `Channel`, `LoginStopped` | `serves`, `models`, `rate_limit`, `outage`, `report_failure`, `report_success`, `device_login`, `efforts` |
-| `supervisor/commitments.py` | — | `operator_inbox`, `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report`, `broken_notice`, `tell_broken` |
+| `supervisor/commitments.py` | — | `operator_inbox`, `recorded`, `ledger`, `operator_message`, `coming_due`, `overdue_reminders`, `verify`, `section`, `report`, `broken_notice`, `tell_broken` |
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `worst_price`, `envelope`, `complete` |
 | `supervisor/consultstats.py` | — | `rows`, `vendor`, `cycle_of`, `submitted`, `models_in`, `section`, `review_line`, `report` |
@@ -74,12 +74,12 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/idle.py` | — | `path`, `rows`, `record`, `revoke`, `standing`, `exits`, `stats_lines` |
 | `supervisor/install.py` | `StepFailed` | `run` |
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `quiet_jobs`, `inbox_can_wake`, `results_since`, `tick`, `describe` |
-| `supervisor/jsonl.py` | — | `jsonl_lines` |
+| `supervisor/jsonl.py` | — | `jsonl_lines`, `append`, `append_locked`, `rows` |
 | `supervisor/judge.py` | `JudgeError`, `NoJudgeLeft` | `spoken`, `same_model`, `pick`, `independence`, `rotation`, `unavailable`, `available`, `ask`, `second_available`, `normalize_anticipated`, `ask_second` |
 | `supervisor/judge_probe.py` | — | `records`, `plant`, `plant_missed`, `run`, `line` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
-| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `rows`, `sync`, `merged`, `changed_text` |
+| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `sync`, `merged`, `changed_text` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible`, `HistoryExpired` | `labels`, `label_id`, `visible`, `get_thread`, `row`, `search`, `history_now`, `history`, `header`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `reply_defaults`, `build_message`, `create_draft`, `update_draft`, `label_message`, `draft_message_id` |
 | `supervisor/messages.py` | — | `record`, `attachment_name`, `size_text`, `store_attachments`, `from_operator`, `attachment_lines`, `logged_rows`, `cancel`, `history`, `appended`, `pending`, `show_inbox`, `deliver_background`, `deliver_feedback`, `sent_mid`, `deliver_external`, `reply`, `answer_quoted`, `quoted_questions`, `send`, `clear_notes`, `dismissal` |
@@ -112,7 +112,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/runner.py` | `Busy`, `Presence`, `RunRefused`, `Turn`, `Warm` | `run_lock`, `busy_with`, `judge_ok`, `spawn_recover`, `model_server`, `sharing_model`, `request_yield`, `replying`, `Reply`, `open_conversations`, `is_busy`, `enforce_journal`, `enforce_core`, `run_agent`, `rebuild_env`, `agent_command`, `stage_docs`, `end_all_runs`, `stop_runs_on_signal`, `regate_held`, `regate_all`, `run_conversation`, `warm_pids`, `end_warm` |
 | `supervisor/sandbox.py` | — | `user_folder`, `profile`, `protected_code`, `run_profile`, `job_profile`, `agent_env`, `wrap` |
 | `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
-| `supervisor/served.py` | `Record` | `fingerprint`, `matches`, `begin`, `keep` |
+| `supervisor/served.py` | `Record` | `fingerprint`, `matches`, `begin`, `run_event`, `keep` |
 | `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
 | `supervisor/setup.py` | — | `access`, `telegram_status`, `opening_text` |
 | `supervisor/stats_head.py` | — | `since_sleep`, `model_change`, `verdicts`, `alerts`, `head` |
@@ -205,6 +205,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_gate_budget.py` | `BudgetTest` | — |
 | `supervisor/tests/test_gate_held.py` | `ClassifyTest`, `HeldCase`, `WithdrawTest`, `HoldTest`, `RegateTest`, `RecheckTest`, `RecordTest`, `SchedulerTest` | — |
 | `supervisor/tests/test_gate_shared_limit.py` | `SharedLimitTest`, `WaitsTest`, `HoldOnCodeCase`, `HoldOnCodeTest`, `TemplateMergeTest`, `ChannelRetryTest`, `BudgetReportTest` | — |
+| `supervisor/tests/test_gate_stop_group.py` | `StopGroupTest` | — |
 | `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run`, `Workers` | `plain`, `count` |
 | `supervisor/tests/test_gate_timeout.py` | `GateTimeoutTest` | — |
 | `supervisor/tests/test_gauges.py` | `GaugesTest` | — |
@@ -227,6 +228,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_judge_rotation.py` | `FakeClaude`, `PickTest`, `ProviderPoolTest`, `RoutingTest`, `CycleVerdictTest`, `IndependenceWritersTest` | — |
 | `supervisor/tests/test_keys_and_http.py` | `FakeAPI`, `KeysAndHttpTest`, `TailnetGrantTest`, `KeyStoreDurabilityTest`, `ThroughTheInstancesClientTest`, `KeysOutOfReachTest`, `InstanceSideTest`, `OperatorCommandTest` | — |
 | `supervisor/tests/test_kill_delete.py` | `TargetsTest`, `ProcessesTest`, `KillTest`, `TrialsOfAPausedOrDeletedInstance`, `NothingWritesIntoADeletedInstance`, `DeleteTest` | `git` |
+| `supervisor/tests/test_kill_stuck_process.py` | `StuckProcessTest` | — |
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |

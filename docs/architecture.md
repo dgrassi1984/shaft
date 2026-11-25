@@ -300,7 +300,7 @@ No gauge appears in the stats head until chosen; `MAX_CHOSEN=4`. The instance ca
 recomputed at every build. `promises` and `corrections` read ledgers the instance keeps in its folder through the
 supervisor's own add-only copy of their rows (`supervisor/ledger_mirror.py`, synced at every mind commit and
 backfilled once from the mind store): a row the instance later alters or removes is still counted, and the reading
-names the change. `plan` is the instance's own account, read as it stands and labelled so; the others read the
+names the change. A promise's source is judged when it is copied, and a replay reads the copy as it stood then. `plan` is the instance's own account, read as it stands and labelled so; the others read the
 supervisor's own record. In a trial replay the readings are computed as of the replayed cycle's start.
 The broker's `gauges` tool lists readings or accepts `choose=[...]`; an empty list clears the choice.
 `shaft gauges <name> [list|set a,b,c|clear]` lets the operator choose too.
@@ -736,10 +736,13 @@ recorded with a due date and a checkable criterion. With `COMMITMENTS=off`, conv
 ORDER and its criterion with `queue_for_next_cycle`. Blocked orders get a one-line reply. Conversation write-ups
 receive the tool results and list orders with neither a recorded commitment nor a result. Commitments are settled in live cycles or sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The episode is the instance's file,
-so a cited supervisor-tool step counts only if the broker served that call in the cycle's run window and the step's
+so a cited supervisor-tool step counts only if the broker served that call in the run that was going on when the
+episode ended, by the supervisor's own record of the instance's runs (never the episode's times), and the step's
 result matches the fingerprint (length and sha256, never the text) the broker kept at the call
-(`supervisor/served.py`); prediction outcomes and claim lint cite steps the same way. Built-in and plugin calls never
-reach the broker and cannot be checked this way. The ledger accepts promises only
+(`supervisor/served.py`); every supervisor-tool step a citation covers must match. Prediction outcomes and claim lint
+cite steps the same way, and the promises section and claim lint read the supervisor's copy of the ledger. Built-in
+and plugin calls never reach the broker and cannot be checked this way: evidence made only of them is counted as
+verified but not checkable. The ledger accepts promises only
 to the operator (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
 refused; own plans belong in goals/notes. A promise to the operator needs a source the model does not
 name. In a conversation it is the conversation open now (`talk_id`, set by `talk.run`/`talk.answer`; not when

@@ -47,11 +47,11 @@ def lint(name: str, ep: dict) -> list[dict]:
             add("delivered_via",
                 f"said delivered via {channel}; no successful {detail} in this cycle's tool log", channel)
 
-    rows = commitments._rows(core.safe_read(core.INSTANCES / name, commitments.FILE, "", errors="replace"))
+    rows = commitments.recorded(name)[0]   # the supervisor's copy too: a settle removed from the file still counts
     start, end = commitments._at(ep.get("run_started")), commitments._at(ep["ts"])
     settled = set()
     for row in rows:
-        if row.get("event") != "settled" or row.get("status") != "kept":
+        if row.get("event") != "settled" or row.get("status") != "kept" or not isinstance(row.get("id"), str):
             continue
         if "run_started" not in ep:
             in_cycle = any(c.get("tool") == "settle_commitment" and _arg(c, "id") == row.get("id") for c in calls)
@@ -62,7 +62,7 @@ def lint(name: str, ep: dict) -> list[dict]:
             settled.add(row["id"])
     if settled:
         from . import served
-        items, episodes, record = commitments.ledger(name), commitments._episodes(name), served.Record(name)
+        items, episodes, record = commitments.ledger(name, rows=rows), commitments._episodes(name), served.Record(name)
         for cid in sorted(settled):
             item = items.get(cid)
             if item is None or item["status"] != "kept":

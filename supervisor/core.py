@@ -1770,7 +1770,10 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
             from . import ledger_mirror
             ledger_mirror.sync(name, root, project)
         except Exception as e:
-            log(f"{name}: ledger copy not updated: {type(e).__name__}: {e}")
+            try:
+                log(f"{name}: ledger copy not updated: {type(e).__name__}: {e}")
+            except Exception:
+                pass      # not even the log line: the commit still goes on
         from .gate import CODE_PATHS
         code = [p for p in kept_code if Path(p).parts[0] in CODE_PATHS] if gated is not None else []
         paths = [p for p in SKILL_PATHS if (root / p).exists()] + [p for p in kept_code if p not in code]

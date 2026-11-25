@@ -52,12 +52,11 @@ def _days(since: datetime, now: datetime) -> str:
 
 
 # -- the readings: each from records the supervisor already keeps -------------------------------------------------
-def _promises(name: str, now: datetime) -> Reading:
+def _promises(name: str, now: datetime, as_of: datetime | None = None) -> Reading:
     """Folded from the supervisor's own copy of the ledger with the rows not copied yet (ledger_mirror.py): a promise
     the instance later altered or removed in its file is still counted, and the reading says so."""
     from . import commitments, ledger_mirror
-    current = commitments._rows(core.safe_read(core.INSTANCES / name, commitments.FILE, "", errors="replace"))
-    rows, changes = ledger_mirror.merged(name, "commitments", current)
+    rows, changes = commitments.recorded(name, as_of=as_of)
     items = [it for it in commitments.ledger(name, now, rows).values() if it["made_to"] == "operator"]
     if not items:
         return Reading("Promises to the operator: none recorded")
@@ -96,22 +95,22 @@ def _claims(name: str, now: datetime) -> Reading:
                    _share(bad, len(js)))
 
 
-def _corrections(name: str, now: datetime) -> Reading:
+def _corrections(name: str, now: datetime, as_of: datetime | None = None) -> Reading:
     """Folded from the supervisor's own copy of the ledger with the rows not copied yet (ledger_mirror.py), as
     _promises is."""
     from . import corrections, ledger_mirror
-    text = core.safe_read(core.INSTANCES / name, corrections.FILE, "")
-    corrections._fold(text)      # a ledger that cannot be read is said, as before
-    rows, changes = ledger_mirror.merged(name, "corrections", ledger_mirror.parse(text))
+    current, bad = ledger_mirror.parse(core.safe_read(core.INSTANCES / name, corrections.FILE, "", errors="replace"))
+    rows, changes = ledger_mirror.merged(name, "corrections", current, as_of=as_of)
     items = list(corrections._fold("\n".join(json.dumps(r) for r in rows)).values())
+    unreadable = f"; {bad} unreadable line{'' if bad == 1 else 's'} in the ledger, skipped" if bad else ""
     if not items:
-        return Reading("Corrections from the operator: none recorded")
+        return Reading("Corrections from the operator: none recorded" + unreadable)
     opened = [it for it in items if it["status"] == "open"]
     since = [at for it in opened if (at := corrections._at(it.get("when")))]
     text = f"Corrections from the operator still open: {len(opened)} of {len(items)}"
     if since:
         text += f", oldest {_days(min(since), now)} old"
-    text += ledger_mirror.changed_text(changes, [it["id"] for it in items], "correction")
+    text += ledger_mirror.changed_text(changes, [it["id"] for it in items], "correction") + unreadable
     return Reading(text, _share(len(opened), len(items)))
 
 
@@ -203,10 +202,14 @@ MENU = {   # key: (what it reads, in the menu's words; its reading)
 }
 
 
-def reading(name: str, key: str, now: datetime | None = None) -> Reading:
-    """One gauge's reading. A record that cannot be read is said, never hidden and never a reason to drop the line."""
+AS_OF = ("promises", "corrections")   # read from the supervisor's copy, which a replay reads as it stood (#7)
+
+
+def reading(name: str, key: str, now: datetime | None = None, as_of: datetime | None = None) -> Reading:
+    """One gauge's reading. A record that cannot be read is said, never hidden and never a reason to drop the line.
+    `as_of`: a replay's moment, for the readings whose record keeps when it learned each row."""
     try:
-        return MENU[key][1](name, now or datetime.now())
+        return MENU[key][1](name, now or datetime.now(), **({"as_of": as_of} if key in AS_OF and as_of else {}))
     except (Exception, SystemExit) as e:   # one unreadable record must not cost the instance its other gauges
         return Reading(f"{MENU[key][0]}: could not be read ({type(e).__name__}: {e})"[:200])
 
@@ -279,7 +282,7 @@ def head_lines(name: str, now: datetime | None = None, as_of: datetime | None = 
         return []
     known = [k for k in c["chosen"] if k in MENU]   # a gauge since removed from the menu is no longer shown
     now = as_of or now          # a replay reads the gauges as they stood at its cycle's start
-    readings = sorted(((reading(name, k, now), i) for i, k in enumerate(known)),
+    readings = sorted(((reading(name, k, now, as_of), i) for i, k in enumerate(known)),
                       key=lambda ri: (-(ri[0].gap if ri[0].gap is not None else -1.0), ri[1]))
     who = "me" if c["by"] == "instance" else "the operator"
     return ([f"## My gauges (chosen by {who} on {c['ts'][:10]}; largest gap first; readings only, the `gauges` tool "
@@ -299,7 +302,7 @@ def menu_text(name: str, now: datetime | None = None, as_of: datetime | None = N
              "reading; plan from your own account of it, as it stands; the others from the supervisor's own "
              "record). You can change the choice at any time.", ""]
     for key, (what, _) in MENU.items():
-        lines.append(f"- {key}{' [chosen]' if key in chosen else ''}: {reading(name, key, now).text}")
+        lines.append(f"- {key}{' [chosen]' if key in chosen else ''}: {reading(name, key, now, as_of).text}")
     lines += ["", (f"Chosen now: {', '.join(chosen)} (by {'you' if c['by'] == 'instance' else 'the operator'}, "
                    f"{c['ts'][:16].replace('T', ' ')})" if c else "Chosen now: none, so no gauge is shown.")]
     return "\n".join(lines)
