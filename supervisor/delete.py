@@ -69,7 +69,6 @@ def own_files(name: str) -> list[Path]:
              s / "expectations" / f"{name}-scored.jsonl", s / "expectations" / f"{name}-baselines.jsonl",
              s / "experiments" / f"{name}.jsonl",
              s / "experiments" / f"{name}-workspace.jsonl",
-             s / "gauges" / f"{name}.jsonl", s / "claimlint" / f"{name}.jsonl", s / "claimlint" / f"{name}.lock",
              s / "probation" / f"{name}.jsonl", s / "verdicts" / f"{name}.json", s / "idle_exits" / f"{name}.jsonl",
              s / "predictions" / f"{name}.jsonl", s / "unrecorded_orders" / f"{name}.jsonl",
              s / "unrecorded_orders" / f"{name}.lock", s / "wake_reasons" / f"{name}.json",

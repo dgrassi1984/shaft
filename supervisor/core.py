@@ -1766,7 +1766,7 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
         if note:
             msg += "\n\n" + note
         minded = mind.commit(name, msg, root, project)
-        try:      # the supervisor's own copy of the promises and corrections ledgers (#7): never costs the commit
+        try:      # the supervisor's own copy of the commitments ledger
             from . import ledger_mirror
             ledger_mirror.sync(name, root, project)
         except Exception as e:

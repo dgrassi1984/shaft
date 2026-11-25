@@ -235,13 +235,10 @@ class UnrecordedTest(unittest.TestCase):
         self.assertEqual(unrecorded.run("ember", NOW), 2)
         self.ask.assert_not_called()
         self.assertEqual([(r["orders"], r["judge"]) for r in unrecorded.rows("ember")], [([], None), ([], None)])
-        self.assertEqual(unrecorded.reading("ember", NOW)[1], None)
         self.assertIn("0 orders for later", unrecorded.record_text("ember"))
 
-    def test_reading_record_text_windows_and_as_of(self):
+    def test_record_text_windows_and_as_of(self):
         """Reports count orders, omit recorded quotes, honor cutoffs, and do not count skipped history."""
-        self.assertEqual(unrecorded.reading("ember", NOW), (
-            "Orders the operator gave me for later that I did not record: no conversation checked yet", None))
         self.assertEqual(unrecorded.record_text("ember"), "(no conversation checked yet)")
         self.talk()
         self.ask.return_value = {"orders": [{"words": WORDS, "recorded": False},
@@ -251,8 +248,6 @@ class UnrecordedTest(unittest.TestCase):
         self.talk(tid="talk-2", at=later)
         self.ask.return_value = {"orders": [{"words": WORDS, "recorded": True}]}
         unrecorded.run("ember", later)
-        self.assertEqual(unrecorded.reading("ember", later), (
-            "Orders the operator gave me for later that I did not record: 1 of 3 (last 14 days' conversations)", 1 / 3))
         self.assertEqual(len(unrecorded.rows("ember", as_of=NOW)), 1)
         self.assertEqual(unrecorded.rows("ember", as_of=NOW - timedelta(seconds=1)), [])
         self.assertEqual(unrecorded.missing("ember", now=later, as_of=NOW - timedelta(seconds=1)), [])
@@ -265,7 +260,6 @@ class UnrecordedTest(unittest.TestCase):
         self.assertEqual(text.count("Nothing was created for you"), 1)
         self.assertNotIn("talk-1", unrecorded.record_text("ember", limit=1))
         self.assertNotIn("talk-2", unrecorded.record_text("ember", as_of=NOW))
-        self.assertEqual(unrecorded.reading("ember", later + timedelta(days=15))[1], None)
         self.assertEqual(unrecorded.missing("ember", now=later + timedelta(days=15)), [])
         self.assertEqual(len(unrecorded.missing("ember", days=20, now=later + timedelta(days=15))), 1)
 

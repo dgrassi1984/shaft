@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import battery, claimlint, core, gauges, metacog, metrics, panel, stats_head, surprise
+from supervisor import battery, core, metacog, metrics, panel, predictions, stats_head, surprise
 
 from supervisor.tests.test_idle_exit import IsolatedCase
 
@@ -26,9 +26,7 @@ class StatsHeadTest(unittest.TestCase):
         self.enterContext(mock.patch.object(metrics, "INSTANCES", self.sup / "agents"))
         self.enterContext(mock.patch.object(stats_head, "log"))
         self.js = self.enterContext(mock.patch.object(metrics, "judgments_for_stats", return_value=[]))
-        self.gauges = self.enterContext(mock.patch.object(gauges, "head_lines", return_value=[]))
-        self.lint = self.enterContext(mock.patch.object(claimlint, "head_lines", return_value=[]))
-        self.enterContext(mock.patch.object(stats_head, "_last_sleep", return_value=None))
+        self.due = self.enterContext(mock.patch.object(predictions, "due_lines", return_value=[]))
         self.since = self.enterContext(mock.patch.object(stats_head, "since_sleep", return_value=[]))
         self.misses = self.enterContext(mock.patch.object(battery, "self_miss_lines", return_value=[]))
         self.paired = self.enterContext(mock.patch.object(metacog, "paired_v3", return_value={"n": 0}))
@@ -46,7 +44,6 @@ class StatsHeadTest(unittest.TestCase):
         body = metrics.TITLE + "\n\n## Old tables\n\n  keep spacing  \n"
         self.since.return_value = ["- Recent work"]
         head = stats_head.head("ember", NOW)
-        self.gauges.return_value = []  # head appends to the list returned by its gauge source.
         with mock.patch.object(metrics, "_stats_text", return_value=body):
             text = metrics.stats_text("ember")
         self.assertEqual(text, metrics.TITLE + "\n\n" + "\n".join(head) + "\n" + body[len(metrics.TITLE) + 2:])
@@ -54,7 +51,7 @@ class StatsHeadTest(unittest.TestCase):
         self.assertLess(text.index(stats_head.BODY_MARK), text.index("## Old tables"))
 
     def crowded_head(self, notes=20):
-        self.gauges.return_value = ["## " + "g" * 400] + ["- gauge " + str(i) + "g" * 400 for i in range(4)] + [""]
+        self.due.return_value = ["- prediction " + str(i) + "p" * 400 for i in range(4)]
         self.since.return_value = ["- note " + str(i) + "n" * 400 for i in range(notes)]
         # A timeout reports a trimming loop as a failure instead of hanging the suite.
         def timed_out(signum, frame):
@@ -67,12 +64,12 @@ class StatsHeadTest(unittest.TestCase):
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous)
 
-    def test_head_limits_include_body_marker_and_keep_gauges_before_last_notes(self):
+    def test_head_limits_include_body_marker_and_keep_predictions_before_last_notes(self):
         lines = self.crowded_head()
         for line in lines:
             self.assertLessEqual(len(line), stats_head.LINE_CHARS)
         for i in range(4):
-            self.assertTrue(any(line.startswith(f"- gauge {i}") for line in lines))
+            self.assertTrue(any(line.startswith(f"- prediction {i}") for line in lines))
         self.assertTrue(any(line.startswith("- note 0") for line in lines))
         self.assertFalse(any(line.startswith("- note 19") for line in lines))
         self.assertLessEqual(len("\n".join(lines)), stats_head.HEAD_CHARS)
@@ -179,11 +176,11 @@ class StatsHeadTest(unittest.TestCase):
         self.coin.assert_not_called()
 
     def test_a_raising_part_does_not_remove_other_head_parts(self):
-        self.gauges.return_value = ["- gauge survives", ""]
-        self.lint.side_effect = ValueError("broken lint")
+        self.due.return_value = ["- prediction survives"]
+        self.misses.side_effect = ValueError("broken battery topics")
         self.since.return_value = ["- note survives"]
         text = "\n".join(stats_head.head("ember", NOW))
-        self.assertIn("- gauge survives", text)
+        self.assertIn("- prediction survives", text)
         self.assertIn("- note survives", text)
         self.assertIn(stats_head.BODY_MARK, text)
 
@@ -226,20 +223,16 @@ class BatteryTopicsTest(unittest.TestCase):
 
 
 class StatsHeadRecordsTest(IsolatedCase):
-    def test_unfinished_sleep_does_not_hide_earlier_claim_lint(self):
-        """A sleep cut short must not reset the window and erase an unresolved lint finding."""
+    def test_unfinished_sleep_does_not_reset_summary_window(self):
         finished = (NOW - timedelta(hours=8)).isoformat()
-        finding = (NOW - timedelta(hours=4)).isoformat()
         self.write(self.root / "memory/episodes/day.jsonl", [
             {"kind": "sleep", "ts": finished, "content": "Consolidated notes"},
+            {"kind": "live", "ts": (NOW - timedelta(hours=4)).isoformat()},
             {"kind": "sleep", "ts": (NOW - timedelta(hours=1)).isoformat()}])
-        self.write(self.sup / "claimlint/ember.jsonl", [{"at": finding, "episode_ts": finding,
-            "findings": [{"episode_ts": finding, "what": "Report had no checked source"}]}])
-        self.assertEqual(stats_head._last_sleep("ember"), finished)
-        with mock.patch.object(stats_head, "verdicts", return_value=[]), \
-             mock.patch.object(battery, "self_miss_lines", return_value=[]):
-            text = "\n".join(stats_head.head("ember", NOW))
-        self.assertIn("Report had no checked source", text)
+        with mock.patch.object(metrics, "judgments_for_stats", return_value=[]):
+            self.assertEqual(stats_head.since_sleep("ember"), [
+                "- Since my last sleep (2026-11-11 04:00): 1 cycles, 0 judged "
+                "(yes 0, partial 0, no 0); code changes kept 0"])
 
     def test_since_sleep_parses_mixed_separators_for_cycles_judgments_and_changes(self):
         """A space-separated noon timestamp must sort after a T-separated morning sleep."""

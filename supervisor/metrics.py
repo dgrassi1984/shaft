@@ -203,8 +203,7 @@ ERROR_PROPS = {
 }
 ERRORS = tuple(ERROR_PROPS)
 # Two strings that add no call: which earlier goal this one repeats (the links form the goal families, families.py),
-# and the claim a failed claim_supported rests on (matched to the instance's unsourced facts, factledger.py). Both
-# are '' for none; neither changes a grade, and a judgment made before they existed simply has neither.
+# and the claim a failed claim_supported rests on. Both are '' for none and neither changes a grade.
 LINK_PROPS = {
     "resembles": {"type": "string", "description": "YYYY-MM-DD HH:MM of the earlier listed goal this one most "
                                                    "resembles, or ''"},
@@ -452,6 +451,9 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     sup = sup or SUP_DIR
     p = sup / "judgments" / f"{name}.jsonl"
     rows = [json.loads(l) for l in jsonl_lines(p.read_text()) if l.strip()] if p.exists() else []
+    for row in rows:
+        # Omit the retired fact match from historical verdicts.
+        row.pop("unsourced_fact", None)
     # A row judged before the supervisor copied a field takes it from its episode: confidence_of (rows from before
     # A4), and the v3 fields on a v3 row — the supervisor on main writes confidence_of but none of them.
     missing = [r for r in rows if r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE and (
@@ -924,13 +926,6 @@ def judge_pending(name: str) -> int:
                 verdict = judge.ask(JUDGE_SYSTEM, case, MAIN_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
                 _links(verdict, js, ep["ts"])
-                if verdict["unsupported_claim"]:   # the fact with no checked source the failed claim rested on, if any
-                    try:
-                        from . import factledger
-                        fact = factledger.match_claim(name, verdict["unsupported_claim"])
-                        verdict["unsourced_fact"] = f"[{fact['date']}] {fact['text']}"[:300] if fact else ""
-                    except Exception as e:   # naming the fact never costs the verdict
-                        log(f"{name}: unsourced fact not matched for {ep['ts']}: {type(e).__name__}: {e}")
                 verdict["judge"] = by
                 verdict.update(judge.independence(by, own))   # a one-model pool: graded by the instance's own model
                 if second and not judge.same_model(by, judge.JUDGE2_MODEL):   # never a model agreeing with itself
@@ -1938,9 +1933,7 @@ def _stats_text(name: str) -> str:
     achieved[-1:-1] = ran_out_by_model(name, all_js)
     lines += achieved + _surprise_section(name)
     lines += _part_lines(name, "predictions", "stats_lines") + _battery_section(name)
-    lines += _part_lines(name, "families", "stats_lines") + _part_lines(name, "orders", "stats_lines")
-    kept = _part_lines(name, "usage", "kept_lines")
-    lines += kept
+    lines += _part_lines(name, "families", "stats_lines")
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -2530,11 +2523,9 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    from . import claimlint, judge_probe, predictions, unrecorded
-    # claim_lint: model-free checks of what the cycle claimed against its tool log, on every cycle, before the page
-    # is written, so a finding stands at its head for the next cycle (not in a sampled verdict after the next sleep)
+    from . import judge_probe, predictions, unrecorded
     for label, step in (("judge_pending", judge_pending), ("judge_catch", judge_probe.run),
-                        ("claim_lint", claimlint.run), ("score_predictions", predictions.score),
+                        ("score_predictions", predictions.score),
                         # one judge call per conversation ended and written up since: what the operator ordered for
                         # later against what was recorded (unrecorded.py); an unrecorded one reaches the instance's
                         # inbox as a note, never as a commitment or order

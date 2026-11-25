@@ -26,7 +26,7 @@ _cache: dict[str, dict] = {}
 
 def append(f, lines: list[str]) -> None:
     """Append whole lines to an open, exclusively locked file. A last line an interrupted write left without its LF is
-    closed first, so it cannot swallow the next row (claimlint's rows do the same)."""
+    closed first, so it cannot swallow the next row."""
     f.flush()
     size = _os.fstat(f.fileno()).st_size
     if size and _os.pread(f.fileno(), 1, size - 1) != b"\n":
