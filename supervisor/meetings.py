@@ -218,8 +218,16 @@ def update(meeting_id: str, changes: dict) -> dict:
     except UnicodeError:
         raise Invalid("Meeting fields must contain valid Unicode.") from None
     with _locked(meeting_id) as (folder, metadata):
+        account_changed = "account" in changes and changes["account"] != metadata["account"]
         metadata.update(changes)
+        if account_changed and (metadata["state"] == "ready" or "notified" in metadata):
+            if metadata["account"]:
+                metadata["notification_owed"] = True
+            else:
+                metadata.pop("notification_owed", None)
         _save(folder, metadata)
+        if metadata["state"] == "ready" and _notification_owed(metadata):
+            _deliver(folder, metadata, json.loads((folder / "transcript.json").read_bytes()))
         return metadata
 
 
@@ -371,26 +379,33 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
-    if metadata["notified"] is None:
+    if _notification_owed(metadata):
         _deliver(folder, metadata, transcript)
 
 
+def _notification_owed(metadata: dict) -> bool:
+    return metadata.get("notified", []) is None or metadata.get("notification_owed", False)
+
+
 def _deliver(folder: Path, metadata: dict, transcript: dict) -> None:
-    """The first-ready watch note, once. `notified` None means owed: a crash between saving ready and delivering
-    leaves it owed, and deliver_owed() sends it at the worker's next start (review 2026-11-25)."""
+    """Keep prior recipients when sending a ready note after filing under a new account."""
     from . import watch
 
-    metadata["notified"] = watch.meeting_ready(metadata, transcript) if metadata["account"] else []
+    notified = metadata.get("notified") or []
+    if metadata["account"]:
+        notified.extend(watch.meeting_ready(metadata, transcript))
+    metadata["notified"] = notified
+    metadata.pop("notification_owed", None)
     _save(folder, metadata)
 
 
 def deliver_owed() -> None:
-    """Send every first-ready note a crash left owed."""
+    """Send ready notes left pending by an interrupted processing or filing operation."""
     for row in list_meetings():
-        if row.get("state") == "ready" and "notified" in row and row["notified"] is None:
+        if row["state"] == "ready" and _notification_owed(row):
             try:
                 with _locked(row["id"]) as (folder, metadata):
-                    if metadata.get("notified", []) is None:
+                    if metadata["state"] == "ready" and _notification_owed(metadata):
                         _deliver(folder, metadata, json.loads((folder / "transcript.json").read_bytes()))
             except Missing:
                 continue
