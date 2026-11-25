@@ -574,7 +574,8 @@ echo "$appcast"
 if [ -n "$tag" ]; then
   echo "Copy the DMG and signed appcast.xml into shaft-app/ in the dgrassi1984/dgrassi1984.github.io Pages checkout, then review and push the site repository."
   echo "The DMG must be downloadable at: $enclosure_url"
-  echo "Optionally attach the DMG to the private GitHub release $tag as an archive copy."
+  echo "Then publish the GitHub release $tag with this DMG and the tag's notes, marked latest (docs/deploy.md, Cutting a release):"
+  echo "  gh release create $tag \"$dmg\" --title $tag --notes \"\$(git tag -l --format='%(contents:body)' $tag)\" --latest"
 else
   echo "Serve the trial DMG at $enclosure_url and the signed appcast.xml at $feed_url."
 fi
