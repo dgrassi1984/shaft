@@ -75,7 +75,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/judge_probe.py` | — | `records`, `plant`, `plant_missed`, `run`, `line` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
-| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `sync`, `merged` |
+| `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `sync`, `observe`, `merged` |
 | `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `merge_turns`, `speech_seconds`, `drop_bleed`, `longest_clips`, `transcribe_meeting`, `render_markdown` |
 | `supervisor/listen_worker.py` | `Engines` | `recover`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
@@ -113,7 +113,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/runner.py` | `Busy`, `Presence`, `RunRefused`, `Turn`, `Warm` | `run_lock`, `busy_with`, `judge_ok`, `spawn_recover`, `model_server`, `sharing_model`, `request_yield`, `replying`, `Reply`, `open_conversations`, `is_busy`, `enforce_journal`, `enforce_core`, `run_agent`, `rebuild_env`, `agent_command`, `stage_docs`, `end_all_runs`, `stop_runs_on_signal`, `regate_held`, `regate_all`, `run_conversation`, `warm_pids`, `end_warm` |
 | `supervisor/sandbox.py` | — | `user_folder`, `profile`, `protected_code`, `run_profile`, `job_profile`, `agent_env`, `wrap` |
 | `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
-| `supervisor/served.py` | `Record` | `fingerprint`, `matches`, `begin`, `run_event`, `keep` |
+| `supervisor/served.py` | `Record` | `canonical_args`, `args_digest`, `episode_args`, `fingerprint`, `matches`, `begin`, `run_event`, `keep` |
 | `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
 | `supervisor/setup.py` | — | `access`, `telegram_status`, `opening_text` |
 | `supervisor/speakers.py` | — | `complete_processing`, `name_label`, `merge_labels`, `clip`, `list_people`, `rename`, `forget`, `delete_meeting`, `command` |
@@ -230,7 +230,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_kill_delete.py` | `TargetsTest`, `ProcessesTest`, `KillTest`, `TrialsOfAPausedOrDeletedInstance`, `NothingWritesIntoADeletedInstance`, `DeleteTest` | `git` |
 | `supervisor/tests/test_kill_stuck_process.py` | `StuckProcessTest` | — |
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
-| `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest` | — |
+| `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest`, `WithinARunTest` | — |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest` | `spoken` |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
@@ -311,7 +311,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_secrets_writer.py` | `SecretsWriterTest` | — |
 | `supervisor/tests/test_seen_sync.py` | `SeenSyncTest` | `model` |
 | `supervisor/tests/test_selfhosted.py` | `HostedServerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
-| `supervisor/tests/test_served.py` | `ServedTest` | `cut`, `episode` |
+| `supervisor/tests/test_served.py` | `ServedTest`, `ArgumentsTest` | `cut`, `episode` |
 | `supervisor/tests/test_service_guard_cli.py` | `CliGuardTest` | — |
 | `supervisor/tests/test_settings.py` | `FileCase`, `PrecedenceTest`, `SetTest`, `NotLiveTest`, `RegistryTest`, `DocumentedValuesTest` | — |
 | `supervisor/tests/test_shaft_docs.py` | `StageDocsTest`, `DocsSandboxTest`, `DocsNeverCommittedTest` | — |

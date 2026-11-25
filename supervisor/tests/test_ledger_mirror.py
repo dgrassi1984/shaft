@@ -1,9 +1,13 @@
 """The supervisor's copy of commitments survives changes to the instance's files."""
 import json
+import os
+import time
+import urllib.error
+import urllib.request
 from datetime import timedelta
 from unittest import mock
 
-from supervisor import commitments, core, metrics
+from supervisor import broker, commitments, core, metrics
 from supervisor.tests.test_idle_exit import IsolatedCase, NOW
 
 
@@ -167,3 +171,122 @@ class LedgerMirrorTest(IsolatedCase):
         self.assertEqual({r["seen"] for r in ledger_mirror.records("ember", "commitments")}, {committed})
         rows, _ = commitments.recorded("ember", as_of=NOW)
         self.assertEqual([row["id"] for row in rows], [row["id"] for row in made])
+
+
+class WithinARunTest(IsolatedCase):
+    """#21: a row written and taken back within one run never reached the copy, which synced only at the mind commit."""
+
+    def made(self, i=1, talk="t1", **extra):
+        return {"event": "made", "id": f"c1111-1200-{i}", "at": (NOW - timedelta(minutes=5)).isoformat(),
+                "source": "talk", "promise": f"Send report {i}", "criterion": "Report delivered", "made_to": "operator",
+                "sourced": True, "talk_id": talk, "due": (NOW + timedelta(days=1)).isoformat(), **extra}
+
+    def talk(self, talk="t1"):
+        return {"ts": (NOW - timedelta(minutes=6)).isoformat(), "kind": "talk", "role": "user", "talk_id": talk,
+                "content": "please"}
+
+    def write(self, path, rows):
+        super().write(path, rows)
+        st = path.stat()   # a later write in the same test must look changed to the broker's stat check
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000 * (1 + getattr(self, "_writes", 0))))
+        self._writes = getattr(self, "_writes", 0) + 1
+
+    def test_a_promise_taken_back_in_its_run_is_copied_and_judged_at_the_commit(self):
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)                    # an earlier commit: the copy is backfilled
+        made = self.made()
+        self.write(self.root / commitments.FILE, [made])          # commit_to, mid-run: the conversation's episode
+        self.assertEqual(ledger_mirror.observe("ember", self.root), 1)   # is not written yet
+        self.write(self.root / commitments.FILE, [])              # taken back before the run's commit
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])   # the run ends: its episode is written
+        ledger_mirror.sync("ember", self.root)                    # the mind commit judges it now, with its source
+        rows, changed = commitments.recorded("ember")
+        items = commitments.ledger("ember", NOW, rows)
+        self.assertEqual(items[made["id"]]["made_to"], "operator")   # judged mid-run it would read "self"
+        self.assertEqual(changed["removed"], {made["id"]})
+        self.assertIn("To the operator: made 1;", "\n".join(commitments.section("ember")))
+        # Judged once: a second commit adds nothing, and the verdict stays when the episode goes.
+        size = ledger_mirror.path("ember", "commitments").stat().st_size
+        ledger_mirror.sync("ember", self.root)
+        self.assertEqual(ledger_mirror.path("ember", "commitments").stat().st_size, size)
+        self.write(self.root / "memory/episodes/day.jsonl", [])
+        self.assertEqual(commitments.ledger("ember", NOW, commitments.recorded("ember")[0])[made["id"]]["made_to"],
+                         "operator")
+
+    def test_a_promise_copied_in_its_run_is_source_checked_strictly(self):
+        """Copied during a run, a promise first appears after the backfill: no source, or no `sourced`, is no source."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        sourceless, unsourced = self.made(1, talk="never"), self.made(2, talk="never")
+        del unsourced["sourced"]
+        self.write(self.root / commitments.FILE, [sourceless, unsourced])
+        ledger_mirror.observe("ember", self.root)
+        self.write(self.root / commitments.FILE, [])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
+        ledger_mirror.sync("ember", self.root)
+        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
+        self.assertEqual({i: it["made_to"] for i, it in items.items()},
+                         {sourceless["id"]: "self", unsourced["id"]: "self"})
+
+    def test_observe_before_the_first_commit_waits_for_the_backfill(self):
+        from supervisor import ledger_mirror
+        self.write(self.root / commitments.FILE, [self.made()])
+        self.assertEqual(ledger_mirror.observe("ember", self.root), 0)
+        self.assertFalse(ledger_mirror.path("ember", "commitments").with_name("commitments.backfilled").exists())
+        self.assertEqual(ledger_mirror.sync("ember", self.root), 1)
+
+    def test_the_broker_copies_on_each_request_and_between_requests(self):
+        """Regression (#21) through the broker of a real run: a POST it serves (a model step, a tool call) and its
+        poll each copy what the ledger holds; a trial replay and a battery copy never do."""
+        from supervisor import ledger_mirror
+        ledger_mirror.sync("ember", self.root)
+        box = self.box()
+        box.egress = mock.Mock()
+        with mock.patch.object(ledger_mirror, "POLL_S", 3600), mock.patch("supervisor.browser.sweep"):
+            url = box.start()
+            try:
+                self.write(self.root / commitments.FILE, [self.made(1)])
+                req = urllib.request.Request(url + "/tools/no_such_tool", data=b"{}", method="POST",
+                                             headers={"X-Shaft-Token": box.token})
+                with self.assertRaises(urllib.error.HTTPError):   # refused, but the step that led here is copied
+                    urllib.request.urlopen(req, timeout=10)
+                self.write(self.root / commitments.FILE, [])
+                self.assertEqual([r["id"] for r in ledger_mirror.rows("ember", "commitments")], ["c1111-1200-1"])
+                self.write(self.root / commitments.FILE, [self.made(2)])   # the run's last step
+            finally:
+                box.stop()
+        self.assertEqual([r["id"] for r in ledger_mirror.rows("ember", "commitments")],
+                         ["c1111-1200-1", "c1111-1200-2"])
+        # The poll, with no request at all.
+        box = self.box()
+        box.egress = mock.Mock()
+        with mock.patch.object(ledger_mirror, "POLL_S", 0.05), mock.patch("supervisor.browser.sweep"):
+            box.start()
+            try:
+                self.write(self.root / commitments.FILE, [self.made(3)])
+                for _ in range(100):
+                    if len(ledger_mirror.rows("ember", "commitments")) == 3:
+                        break
+                    time.sleep(0.05)
+                self.write(self.root / commitments.FILE, [])
+            finally:
+                box.stop()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 3)
+        # Not a trial replay's, nor a run outside the instance's own folder.
+        self.write(self.root / commitments.FILE, [self.made(4)])
+        replay = self.box(replay=True)
+        replay._observe_ledger()
+        elsewhere = self.box()
+        elsewhere.root = self.base / "battery/ember"
+        elsewhere._observe_ledger()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 3)
+        self.box()._observe_ledger()
+        self.assertEqual(len(ledger_mirror.rows("ember", "commitments")), 4)
+
+    def test_a_failing_copy_never_costs_the_request(self):
+        from supervisor import ledger_mirror
+        box = self.box()
+        self.write(self.root / commitments.FILE, [self.made()])
+        with mock.patch.object(ledger_mirror, "observe", side_effect=OSError("disk full")), \
+                mock.patch.object(broker.Broker, "_log", autospec=True, side_effect=OSError("disk full")):
+            box._observe_ledger()          # neither the copy nor its log line raises

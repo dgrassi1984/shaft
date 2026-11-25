@@ -713,8 +713,13 @@ episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). 
 so a cited supervisor-tool step counts only if the broker served that call in the run that was going on when the
 episode ended, by the supervisor's own record of the instance's runs (never the episode's times), and the step's
 result matches the fingerprint (length and sha256, never the text) the broker kept at the call
-(`supervisor/served.py`); every supervisor-tool step a citation covers must match. Prediction outcomes cite steps
-the same way. The promises section reads the supervisor's copy of the ledger. Built-in and plugin calls never
+(`supervisor/served.py`), and so do its arguments: the broker keeps a digest of the arguments it received, and the
+step's logged arguments, typed by the tool's schema as the template types them before the call, must have the same
+(a real result cited under another call's arguments does not count; arguments cut in the log cannot be checked).
+Every supervisor-tool step a citation covers must match. Prediction outcomes cite steps
+the same way. The promises section reads the supervisor's copy of the ledger (`supervisor/ledger_mirror.py`), which
+the run's broker updates as the run goes (on every request it serves and every two seconds) and the mind commit
+completes, so a promise written and taken back within one run is still counted. Built-in and plugin calls never
 reach the broker and cannot be checked this way: evidence made only of them is counted as
 verified but not checkable. The ledger accepts promises only
 to the operator (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
