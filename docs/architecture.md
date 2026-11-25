@@ -296,12 +296,13 @@ A judgment's `unsupported_claim` quotes the claim when `claim_supported=false`.
 `_prior_keys` supplies at most `PRIOR_GOALS=30` earlier goals; `_links` discards links outside that list.
 `supervisor/families.py`, `families`, joins these links into chains over judged cycles only.
 Each family has cycle counts and dates, mean value, delivery count, last delivery and last novelty of at least 3.
-A family with a majority of valued cycles marked `own_capability` or `own_record` is read by kept changes and
-changes that passed probation instead of value to the operator.
+For a family with a majority of valued cycles marked `own_capability` or `own_record`, reports show kept changes,
+changes that passed probation, the number of cycles whose work was used later, delivery count and last delivery.
 `regular` requires `REGULAR_MIN_CYCLES=5`, a positive median interval and a gap spread no greater than
 `REGULAR_GAP_SPREAD=0.5` times that interval. Stats show the top three repeated families and other regular families.
-`no_yield_share` counts judged cycles in repeating families with no passed change for capability work,
-or no delivery and known mean value below 2 for other work. Nothing is removed from the instance's choices.
+`no_yield_share` counts judged cycles in repeating capability families with no change that passed probation,
+no delivery and no work used later. For other repeating families, it counts cycles when there is no delivery and
+the known mean value is below 2. Nothing is removed from the instance's choices.
 
 `metrics._probation_event` preserves starts and outcomes in `SUP_DIR/probation/<name>.jsonl` after windows close.
 `change_outcomes` reports `on probation`, `passed`, `kept, not judged`, `reverted`, `not on probation` or `unknown`.

@@ -87,6 +87,7 @@ def families(name: str, as_of: datetime | None = None) -> list[dict]:
             "cycles": len(members), "first": stamps[0], "latest": stamps[-1],
             "mean_value": sum(r["value"] for r in valued) / len(valued) if valued else None,
             "deliveries": len(deliveries), "last_delivery": deliveries[-1] if deliveries else None,
+            "used": sum(bool((r.get("use") or {}).get("used")) for r in members),
             "last_new": new[-1] if new else None,
             "capability": sum(r.get("value_for") in ("own_capability", "own_record") for r in valued)
                           > len(valued) / 2,
@@ -100,13 +101,18 @@ def families(name: str, as_of: datetime | None = None) -> list[dict]:
 
 
 def no_yield_share(name: str, since: datetime, until: datetime | None = None) -> dict:
-    """Count windowed judged cycles in repeating families with no yield on their own yardstick."""
+    """Count windowed judged cycles in repeating families without yield.
+
+    Capability families must lack passed probation, deliveries and later use.
+    Other families must lack deliveries and have a known mean value below 2.
+    """
     judged = no_yield = 0
     for group in families(name, as_of=until):
         count = sum(since <= metrics._ts(ts) for ts in group["members"])
         judged += count
-        empty = (group["changes_survived"] == 0 if group["capability"] else
-                 group["deliveries"] == 0 and group["mean_value"] is not None and group["mean_value"] < 2)
+        empty = group["deliveries"] == 0 and (
+            group["changes_survived"] == 0 and group["used"] == 0 if group["capability"] else
+            group["mean_value"] is not None and group["mean_value"] < 2)
         if group["cycles"] >= 2 and empty:
             no_yield += count
     return {"judged": judged, "in_no_yield_families": no_yield, "share": no_yield / judged if judged else None}
@@ -116,7 +122,8 @@ def _description(group: dict) -> str:
     text = f"{group['goal']} ({group['cycles']} cycles; {group['first']} to {group['latest']})"
     if group["capability"]:
         text += (f"; read on its own yardstick: {group['changes_kept']} changes kept / "
-                 f"{group['changes_survived']} survived probation")
+                 f"{group['changes_survived']} survived probation; work used later: {group['used']}; "
+                 f"deliveries: {group['deliveries']}; last delivery: {group['last_delivery'] or 'none'}")
     else:
         value = "unknown" if group["mean_value"] is None else f"{group['mean_value']:.1f}"
         text += (f"; mean value: {value}; deliveries: {group['deliveries']}; "

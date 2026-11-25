@@ -91,14 +91,15 @@ class FamiliesTest(unittest.TestCase):
             self.assertEqual(historical["changes_kept"], 1)
 
     def test_capability_text_uses_probation_not_mean_value(self):
-        """Both reports read capability work on its probation yardstick."""
-        self.chain([0, 10], value_for="own_capability", value=0)
+        """Both reports show probation, later use and deliveries for capability work."""
+        a = self.row(0, value_for="own_capability", value=0, use={"used": ["x", "y"]})
+        b = self.row(10, a[:16], value_for="own_capability", value=0, delivery_supported="yes")
         text = families.record_text("ember")
         stats = "\n".join(families.stats_lines("ember"))
         for report in (text, stats):
-            self.assertIn("read on its own yardstick: 0 changes kept / 0 survived probation", report)
+            self.assertIn("read on its own yardstick: 0 changes kept / 0 survived probation; "
+                          f"work used later: 1; deliveries: 1; last delivery: {b}", report)
             self.assertNotIn("mean value", report)
-            self.assertNotIn("deliveries:", report)
         self.assertIn("the judge samples cycles; unjudged ones are not here", text)
 
     def test_capability_requires_strict_majority_of_integer_ratings(self):
@@ -141,6 +142,16 @@ class FamiliesTest(unittest.TestCase):
         self.assertEqual(result, {"judged": 6, "in_no_yield_families": 4, "share": 4 / 6})
         self.assertEqual(families.no_yield_share("ember", datetime(2027, 1, 1)),
                          {"judged": 0, "in_no_yield_families": 0, "share": None})
+
+    def test_capability_family_that_delivers_or_is_used_is_not_no_yield_bug(self):
+        for fields, expected in [({"delivery_supported": "yes"}, 0), ({"use": {"used": ["x"]}}, 0),
+                                 ({"use": {"used": []}}, 2)]:
+            with self.subTest(fields=fields):
+                self.rows.clear()
+                a = self.row(0, value_for="own_capability")
+                self.row(10, a[:16], value_for="own_capability", **fields)
+                result = families.no_yield_share("ember", datetime(2026, 1, 1))
+                self.assertEqual(result["in_no_yield_families"], expected)
 
     def test_unknown_value_and_value_two_are_not_below_threshold(self):
         """Unknown value is not evidence of low yield, and two is the exclusive threshold."""
