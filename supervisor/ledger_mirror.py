@@ -13,8 +13,8 @@ later does not turn a recorded promise into one made to itself.
 The first sync backfills the copy from the instance's mind store history. A `commitments.backfilled` marker records
 completion. The next sync retries an interrupted backfill. Statistics use the copy and the current file.
 
-A promise copied during its run, or at the commit of a cycle paused for a conversation, is judged at the next mind
-commit that ends a run, once the run's episode (its source) is written: the copy is add-only, so the verdict is a second
+A promise copied during its run is judged at the next mind commit, once the run's episode (its source) is written (a
+commit while a cycle is paused records only the sources it finds): the copy is add-only, so the verdict is a second
 record of the same row, and a reader folds the two.
 
 <supervisor dir>/ledger_mirror/<name>/commitments.jsonl: {seen, row[, checked][, judge, strict][, judged]}, row being the
@@ -188,10 +188,11 @@ def holding(name: str, project: Path | None = None):
 def sync(name: str, root: Path, project: Path | None = None, now: datetime | None = None, judge: bool = True) -> int:
     """Copy new commitment rows and return their count. Backfill the mind store's history on the first sync.
 
-    `judge` (the mind commit at a run's end): judge each new promise's source now, and every promise waiting for it.
-    False (observe during a run, or the commit of a cycle paused for a conversation: the run's episode, which holds
-    a promise's source, is not written yet): copy without judging, marking each new promise to be judged at the next
-    judging sync. A promise not judged yet is read strictly (merged), and its verdict is a later record of the row."""
+    `judge` (a mind commit): judge each new promise's source now, and every promise waiting for it; while a cycle is
+    paused for a conversation (holding), only the promises whose source is found are recorded, the rest wait for the
+    commit that ends it. False (observe, during a run: the run's episode, which holds a promise's source, is not
+    written yet): copy without judging, marking each new promise to be judged at the next judging sync. A promise not
+    judged yet is read strictly (merged), and its verdict is a later record of the row."""
     from .commitments import FILE
     stamp = (now or datetime.now()).isoformat(timespec="seconds")
     p = path(name, "commitments", project)

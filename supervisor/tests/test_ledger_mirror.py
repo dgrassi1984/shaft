@@ -243,54 +243,43 @@ class WithinARunTest(IsolatedCase):
         items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
         self.assertEqual(items[made["id"]]["made_to"], "operator")
 
-    def test_a_pause_commit_leaves_the_promise_to_the_commit_that_ends_the_run(self):
+    def test_a_pause_commit_records_found_sources_and_defers_missing_ones(self):
         """Regression (#21 review): a cycle paused for a conversation is committed before its episode is written; its
-        promises were judged then, without their source, and recorded as the instance's own for good."""
-        from supervisor import ledger_mirror, mind
+        promises were judged then, without their source, and recorded as the instance's own for good. A promise whose
+        source is already there is recorded then: deferring it let a later removal of the episode relabel it."""
+        from supervisor import ledger_mirror, mind, runner
         mind.init("ember")
         ledger_mirror.sync("ember", self.root)
-        made, never = self.made(1), self.made(2, talk="never")
-        self.write(self.root / commitments.FILE, [made, never])
-        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
-            core.commit_state("ember", "live", [], root=self.root, judge_ledger=False)   # the pause: no episode yet
-        self.assertTrue(all("checked" not in r for r in ledger_mirror.records("ember", "commitments")))
-        self.write(self.root / commitments.FILE, [])
-        rows = commitments.recorded("ember")[0]
-        self.assertTrue(all(r.get("sourced") for r in rows))                       # read strictly meanwhile
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])         # the cycle ends: its episode
-        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
-            core.commit_state("ember", "live", [], root=self.root)
-        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
-        self.assertEqual((recs[made["id"]]["checked"]["made_to"], recs[never["id"]]["checked"]["made_to"]),
-                         ("operator", "self"))
-        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("never")])   # judged once: kept as judged
-        items = commitments.ledger("ember", NOW, commitments.recorded("ember")[0])
-        self.assertEqual(items[never["id"]]["made_to"], "self")
-
-    def test_a_pause_hands_its_commit_to_the_ledger_unjudged(self):
-        from supervisor import runner
+        cycles, talks = self.made(1, talk="later"), self.made(2)
+        self.write(self.root / commitments.FILE, [cycles, talks])
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk()])
         (self.root / ".tmp").mkdir(exist_ok=True)
         proc = mock.Mock(pid=4242)
         proc.poll.return_value = None
         (self.root / ".tmp/pausable-4242").write_text("")        # its code handles the pause
         (self.root / ".tmp/paused-4242").write_text("")          # and it acknowledged it
-        broker_ = mock.Mock(handoffs=[], config_writes=[])
-        run = {"before": {}, "seen": 0, "cseen": 0}
-        with mock.patch.object(runner, "_settle") as settle, mock.patch.object(runner, "replying", return_value=False), \
-                mock.patch.object(runner, "_reconcile"), mock.patch.object(runner, "_snapshot"), \
-                mock.patch("os.kill"), mock.patch.object(runner, "log"):
-            runner._pause("ember", self.root, "live", proc, mock.Mock(), run, broker_)
-        self.assertTrue(settle.call_args.kwargs["pausing"])
-        before = {"journal": None, "core": None, "code": None}
-        with mock.patch.object(runner, "commit_state", return_value=True) as commit, \
-                mock.patch.object(runner, "enforce_journal", return_value=""), \
-                mock.patch.object(runner, "enforce_core", return_value=""), \
-                mock.patch.object(runner.gate, "snapshot", return_value=None), \
-                mock.patch.object(runner, "_commit_outside_config"), mock.patch.object(runner, "_commit_outside_drive"), \
-                mock.patch.object(runner, "_check_kept"), mock.patch.object(runner, "log"):
-            for pausing in (True, False):
-                runner._settle("ember", self.root, "live", before, [], pausing=pausing)
-        self.assertEqual([c.kwargs["judge_ledger"] for c in commit.call_args_list], [False, True])
+
+        def settle(*a, **kw):   # the pause's own commit, under its hold
+            self.assertTrue(ledger_mirror._held("ember", None))
+            with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+                core.commit_state("ember", "live", [], root=self.root)
+        with mock.patch.object(runner, "_settle", side_effect=settle), \
+                mock.patch.object(runner, "replying", return_value=False), mock.patch.object(runner, "_reconcile"), \
+                mock.patch.object(runner, "_snapshot"), mock.patch("os.kill"), mock.patch.object(runner, "log"):
+            runner._pause("ember", self.root, "live", proc, mock.Mock(), {"before": {}, "seen": 0, "cseen": 0},
+                          mock.Mock(handoffs=[], config_writes=[]))
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual(recs[talks["id"]]["checked"]["made_to"], "operator")
+        self.assertNotIn("checked", recs[cycles["id"]])
+        self.assertFalse(ledger_mirror._held("ember", None))                       # released at the resume
+        self.write(self.root / commitments.FILE, [])
+        self.assertTrue(all(r.get("sourced") for r in commitments.recorded("ember")[0]))   # read strictly meanwhile
+        self.write(self.root / "memory/episodes/day.jsonl", [self.talk("later")])  # the cycle ends; the talk's gone
+        with mock.patch.object(core, "git_wt", return_value=mock.Mock(stdout="")):
+            core.commit_state("ember", "live", [], root=self.root)
+        recs = {r["row"]["id"]: r for r in ledger_mirror.records("ember", "commitments")}
+        self.assertEqual((recs[cycles["id"]]["checked"]["made_to"], recs[talks["id"]]["checked"]["made_to"]),
+                         ("operator", "operator"))
 
     def test_a_verdict_judged_later_is_not_read_by_an_earlier_replay(self):
         """Regression (#21 review): the verdict record kept the row's `seen`, so a replay as of a moment before the
