@@ -222,12 +222,14 @@ enum Budget {
     ]
 }
 
-/// What `shaft codex login --json` prints, one JSON object a line: the sign-in page (`url`, opened in the browser), the
-/// one-time code to enter there (`code`), then `{"ok": true}` or `{"ok": false, "error"}` with Codex's own words.
+/// JSON lines from `shaft codex login --json`: the executable path (`codex`), sign-in page (`url`), one-time code
+/// (`code`) and progress (`say`), ending with `{"ok": true}` or `{"ok": false, "error": …}`.
 enum CodexLogin {
     enum Event: Equatable {
         case url(URL)
         case code(String)
+        case say(String)
+        case codex(String)
         case ok
         case failed(String)
     }
@@ -242,6 +244,8 @@ enum CodexLogin {
         if let ok = object["ok"] as? Bool {
             return ok ? .ok : .failed((object["error"] as? String) ?? "Codex sign-in failed, without a reason.")
         }
+        if let text = object["say"] as? String { return .say(text) }
+        if let path = object["codex"] as? String { return .codex(path) }
         return nil
     }
 

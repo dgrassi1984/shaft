@@ -158,10 +158,11 @@ Codex, Grok and Antigravity menus use cached provider listings. Their `SHAFT_*_M
 settings restrict those listings when nonempty; empty settings offer every eligible listed model.
 See [plan channel settings](configuration.md#codex-plan-channel) for caching and failure behavior.
 
-`shaft codex login --json` signs in without a terminal (the Mac app's setup uses it). It runs `codex login
---device-auth` in SHAFT's private Codex home with stdin closed and prints one JSON line for each event: `{"url"}` (the
-page to open) and `{"code"}` (the one-time code to enter there) as soon as Codex prints them, then `{"ok": true}` once
-the login is saved, or `{"ok": false, "error"}` with Codex's own words. It opens no browser. Codex stops when the
+`shaft codex login --json` runs `codex login --device-auth` in SHAFT's private Codex home with stdin closed.
+It reports the absolute executable path in a `codex` JSON line before launch. It streams the sign-in page as `url`,
+the one-time code as `code`, and other output as `say` lines from both streams, with ANSI escapes stripped and a limit of
+200 lines of 300 characters, never repeating the page or the code. It ends with `{"ok": true}` when the login is saved or `{"ok": false, "error": …}` on
+failure. The Mac app opens the page. Codex stops when the
 command gets SIGTERM, when its parent exits, or after 10 minutes without the code entered. When Codex refuses a
 device-code sign-in, `shaft codex login` in a terminal (the browser sign-in) still works.
 `shaft codex where` prints the executable path. With `--json` it includes the source: `setting`,
