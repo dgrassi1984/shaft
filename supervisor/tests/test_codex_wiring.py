@@ -818,13 +818,37 @@ class AccountingTest(Case):
 
 
 class CLITest(Case):
+    def test_codex_where_json_reports_the_path_and_source(self):
+        binary = self.root / "codex"
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o700)
+        self.enterContext(mock.patch.object(codexcli, "_bin_cache", None))
+        out = io.StringIO()
+        with mock.patch.object(codexcli, "BIN_SETTING", str(binary)), redirect_stdout(out):
+            self.assertEqual(cli.main(["codex", "where", "--json"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {"path": str(binary), "source": "setting"})
+
+    def test_codex_where_and_login_json_report_missing_codex_without_starting_login(self):
+        message = ("Codex is not installed on this Mac: install ChatGPT for Mac (Codex comes with it) or the Codex CLI "
+                   "(`brew install codex` or `npm i -g @openai/codex`), or set SHAFT_CODEX_BIN.")
+        home = self.root / "codex-home"
+        with mock.patch.object(codexcli, "find_bin", return_value=None), \
+                mock.patch.object(codexcli, "HOME", home), \
+                mock.patch.object(codexcli, "device_login") as login:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(cli.main(["codex", "where", "--json"]), 1)
+            self.assertEqual(json.loads(out.getvalue()), {"path": None, "error": message})
+            self.assertEqual(self.login_json(), (1, [{"ok": False, "error": message}]))
+        login.assert_not_called()
+        self.assertFalse(home.exists())
+
     def test_login_inherits_terminal_and_uses_private_home_mode_700(self):
-        home = self.root / "private-home"
-        with mock.patch.object(codexcli, "HOME", home), \
-                mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+        home = self.fake_codex()
+        with mock.patch.object(cli.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             self.assertEqual(cli.main(["codex", "login"]), 0)
         self.assertEqual(home.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(run.call_args.args, ([codexcli.BIN, "login"],))
+        self.assertEqual(run.call_args.args, ([str(self.root / "fake-codex"), "login"],))
         self.assertEqual(set(run.call_args.kwargs), {"env"})
         self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(home.resolve()))
 
@@ -867,7 +891,7 @@ echo "Successfully logged in"
         binary.write_text(self.FAKE_CODEX)
         binary.chmod(0o755)
         home = self.root / "codex-home"
-        self.enterContext(mock.patch.object(codexcli, "BIN", str(binary)))
+        self.enterContext(mock.patch.object(codexcli, "find_bin", return_value=str(binary)))
         self.enterContext(mock.patch.object(codexcli, "HOME", home))
         self.enterContext(mock.patch.dict(os.environ, env))
         return home.resolve()

@@ -625,12 +625,16 @@ class ModelEffortsTest(OpConfigTest):
 
     def test_codex_catalog_reuses_launch_and_initialize_without_weekly_rate_check(self):
         from supervisor import codexcli
+        binary = self.dir / "codex"
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o700)
         home = self.dir / "codex-home"
         home.mkdir()
         (home / "auth.json").write_text("{}")
         channel = codexcli._CatalogChannel("effort-catalog", "effort-catalog", lambda message: None)
         channel.deadline = time.monotonic() + 15
         with mock.patch.object(codexcli, "HOME", home), \
+                mock.patch.object(codexcli, "find_bin", return_value=str(binary)), \
                 mock.patch.object(codexcli, "_prune_logs"), \
                 mock.patch.object(codexcli, "_seatbelt", side_effect=lambda argv, *args: argv), \
                 mock.patch.object(codexcli.subprocess, "Popen") as launch, \
@@ -639,7 +643,7 @@ class ModelEffortsTest(OpConfigTest):
                 mock.patch.object(channel, "_send") as send:
             channel._start_server()
             self.addCleanup(shutil.rmtree, channel._folder, True)
-            self.assertEqual(launch.call_args.args[0][0], codexcli.BIN)
+            self.assertEqual(launch.call_args.args[0][0], str(binary))
             self.assertEqual(launch.call_args.args[0][-1], "app-server")
             self.assertEqual(launch.call_args.kwargs["env"]["CODEX_HOME"], str(home))
             request.assert_called_once_with("initialize", {"clientInfo": {"name": "shaft", "version": "1"},

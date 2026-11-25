@@ -76,9 +76,9 @@ apart. The rules the supervisor enforces are in [safety](docs/safety.md).
 
 - macOS with `sandbox-exec` and a logged-in user session (the services are `launchd` agents). The Mac app needs macOS
   26 or later and installs everything else it needs (below).
-- One model provider. The Mac app offers three: an OpenRouter API key, a ChatGPT plan through the ChatGPT app for Mac
-  (Codex comes with it), or an OpenAI-compatible endpoint whose prices you know. The terminal path below uses an
-  Anthropic and an OpenRouter key; `bin/shaft provider` switches to the others.
+- One model provider. The Mac app offers three: an OpenRouter API key, a ChatGPT plan through Codex
+  (ChatGPT for Mac or the Codex CLI), or an OpenAI-compatible endpoint whose prices you know. The terminal path below
+  uses an Anthropic and an OpenRouter key; `bin/shaft provider` switches to the others.
 
 For the terminal path:
 
@@ -117,12 +117,12 @@ Settings lets you turn the check off.
    - `shaft install`: a git identity for that clone if you have none, the worktrees, and the API, web and scheduler
      services, installed for this Mac only (local mode: no Tailscale, nothing exposed);
    - the app paired with that server over `127.0.0.1` (`shaft web pair --local`), no link to paste.
-4. **Model**: choose a provider. OpenRouter takes its API key; ChatGPT signs in to your plan through Codex, which comes
-   with the ChatGPT app for Mac (a code shown in the app, entered on ChatGPT's page); a custom OpenAI-compatible
-   endpoint takes its URL, key, model name and its prices in dollars per million tokens (0 for a server of your own),
-   so the daily budgets can count it. The app points every model SHAFT uses at that provider (`shaft provider use`) and
-   tests each one; what the provider cannot serve, such as image descriptions on a model that cannot see, stays off
-   and the app says why.
+4. **Model**: choose a provider. OpenRouter takes its API key. ChatGPT signs in to your plan through
+   [Codex](docs/local-model.md#codex-plan-routing), with a code shown in the app and entered on ChatGPT's page.
+   A custom OpenAI-compatible endpoint takes its URL, key, model name and prices in dollars per million tokens
+   (0 for a server of your own), so the daily budgets can count it. The app points every model SHAFT uses at that
+   provider (`shaft provider use`) and tests each one. If the provider cannot serve a function such as image
+   descriptions, that function stays off and the app says why.
 5. **Your instance**: its name, your name, and its drive (what it is for), started from one of four presets you can
    edit. It is created paused.
 6. **Access**: what it may read, each optional: a folder, the browser, web search (a ScrapeBadger key), a Telegram bot,

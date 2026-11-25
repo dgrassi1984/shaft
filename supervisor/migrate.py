@@ -483,11 +483,13 @@ def _check_new_mac(mig: _Mig) -> None:
     elif not unreadable:
         print("ok   free disk")
 
-    if any(_uses_codex(n) for n in core.instance_names()) \
-            and not _remote_test(runner, host, "-d /Applications/ChatGPT.app"):
-        bad("an instance uses a codex/* model but ChatGPT.app is not on " + host)
-    elif any(_uses_codex(n) for n in core.instance_names()):
-        print("ok   ChatGPT.app present (a codex/* instance)")
+    if any(_uses_codex(n) for n in core.instance_names()):
+        if (_remote_test(runner, host, "-d /Applications/ChatGPT.app")
+                or _remote_test(runner, host, '-d "$HOME/Applications/ChatGPT.app"')
+                or runner.ssh("\"$SHELL\" -lc 'command -v codex'", host=host).returncode == 0):
+            print("ok   Codex present (a codex/* instance)")
+        else:
+            bad("no Codex (ChatGPT for Mac or the Codex CLI) on " + host)
 
     if problems:
         raise Stop("\n".join(problems))
@@ -856,7 +858,7 @@ def _source_steps(mig: _Mig) -> list[Step]:
              "each com.shaft.* plist must point at this folder, or this run would stop the live services", [],
              _check_live_checkout),
         Step("2", "Check the new Mac over SSH",
-             "python3 3.12+, uv and git as files, the same tailnet, free disk, ChatGPT.app if a codex/ instance, "
+             "python3 3.12+, uv and git as files, the same tailnet, free disk, Codex if a codex/ instance, "
              "no SHAFT there, target folder absent or left by this migration — before anything stops", [],
              lambda: _check_new_mac(mig)),
         Step("3", "List dirty worktrees and unpushed work",

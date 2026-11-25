@@ -41,9 +41,11 @@ class CatalogTest(unittest.TestCase):
             self.assertEqual(opconfig.base_url_for("codex/gpt-6.2-sol"), "broker")
             self.assertEqual(codexcli.efforts("codex/gpt-reserve"), (("high",), "high"))
             fetch.assert_called_once_with()
+            binary = self.root / "codex"
+            binary.touch(mode=0o700)
             with mock.patch.object(modelcall, "secrets_env", return_value={}), \
                     mock.patch.object(codexcli, "HOME", self.root), \
-                    mock.patch.object(modelcall.os, "access", return_value=True):
+                    mock.patch.object(codexcli, "find_bin", return_value=str(binary)):
                 (self.root / "auth.json").write_text("{}")
                 self.assertIsNone(modelcall.available("codex/gpt-6.2-sol"))
             preset, _ = provider._codex("codex/gpt-6.2-sol")
@@ -209,9 +211,11 @@ class CatalogTest(unittest.TestCase):
     def test_codex_restrictions_reject_models_when_catalog_overlap_is_empty(self):
         self.cache({"listed": effortcatalog.entry([], None)})
         (self.root / "auth.json").write_text("{}")
+        binary = self.root / "codex"
+        binary.touch(mode=0o700)
         with mock.patch.object(codexcli, "MODELS", ["codex/allowed"]), \
                 mock.patch.object(codexcli, "HOME", self.root), \
-                mock.patch.object(modelcall.os, "access", return_value=True):
+                mock.patch.object(codexcli, "find_bin", return_value=str(binary)):
             self.assertEqual(codexcli.models(), [])
             for model in ("codex/listed", "codex/other"):
                 with self.subTest(model=model):
@@ -219,13 +223,15 @@ class CatalogTest(unittest.TestCase):
                         core.any_model(model)
                     self.assertIn("SHAFT_CODEX_MODELS", modelcall.available(model, secrets={}))
 
-    def test_available_checks_codex_login_and_binary_before_listing(self):
+    def test_available_checks_codex_binary_and_login_before_listing(self):
+        binary = self.root / "codex"
         with mock.patch.object(codexcli, "HOME", self.root), \
                 mock.patch.object(codexcli, "models", return_value=[]) as listing, \
-                mock.patch.object(modelcall.os, "access", return_value=False):
+                mock.patch.object(codexcli, "find_bin", return_value=str(binary)):
+            self.assertEqual(modelcall.available("codex/new", secrets={}),
+                             f"no Codex CLI at {binary} (SHAFT_CODEX_BIN)")
+            binary.touch(mode=0o700)
             self.assertIn("Codex login missing", modelcall.available("codex/new", secrets={}))
-            (self.root / "auth.json").write_text("{}")
-            self.assertIn("no Codex CLI", modelcall.available("codex/new", secrets={}))
             listing.assert_not_called()
 
     def test_uniform_models_refresh_reaches_every_backend(self):
