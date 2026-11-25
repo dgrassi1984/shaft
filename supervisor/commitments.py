@@ -23,7 +23,7 @@ FIELDS = ("promise", "due", "criterion", "made_to")
 # Calls that record or report rather than do: commit_to's own "recorded" made any committing cycle its own evidence
 # (Grok's review). Evidence is a call that did something.
 BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_confidence", "finish_cycle",
-               "close_surprise")
+               "close_surprise", "plan_improvement", "close_improvement")
 
 
 def _at(value) -> datetime | None:
