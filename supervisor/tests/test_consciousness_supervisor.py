@@ -232,6 +232,7 @@ class TargetsTest(unittest.TestCase):
 
 class KnobChangeTest(unittest.TestCase):
     CONFIG = b'FIELDS = {\n    "WORKSPACE": (str, "competitive"),\n    "OUTCOME_CARDS": (str, "on"),\n}\n'
+    ENV = b'# model settings\r\nLLM_BASE_URL="broker"\r\nWORKSPACE="off"   # comment\r\nLLM_MODEL="example" # keep'
 
     def change(self, env=b""):
         with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": self.CONFIG,
@@ -243,12 +244,23 @@ class KnobChangeTest(unittest.TestCase):
         self.assertIn('"WORKSPACE": (str, "relevance")', out)
         self.assertIn('"OUTCOME_CARDS": (str, "on")', out)
 
-    def test_refuses_without_the_knob_or_when_config_env_sets_it(self):
+    def test_refuses_without_the_knob(self):
         with self.assertRaisesRegex(experiments.ExperimentError, "update it to the template"):
             with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": b"FIELDS = {}"}):
                 experiments.knob_change(Path("/nowhere"), "wisp", "WORKSPACE", "off")
+
+    def test_issue_3_workspace_arm_changes_only_the_knob(self):
+        code = {"shaft/config.py": self.CONFIG.replace(b'"competitive"', b'"off"'), "config.env": self.ENV}
+        with mock.patch.object(trial, "committed_code", return_value=code):
+            change = experiments.knob_change(Path("/nowhere"), "wisp", "WORKSPACE", "competitive", env_ok=True)
+        self.assertEqual(change, {"shaft/config.py": self.CONFIG,
+                                  "config.env": b'# model settings\r\nLLM_BASE_URL="broker"\r\n'
+                                                b'WORKSPACE="competitive"\r\nLLM_MODEL="example" # keep'})
+        self.assertEqual(trial.model_of({**code, **change}), trial.model_of(code))
+
+    def test_issue_3_generic_knob_trial_still_refuses_config_env_override(self):
         with self.assertRaisesRegex(experiments.ExperimentError, "config.env sets WORKSPACE"):
-            self.change(b"WORKSPACE=off\n")
+            self.change(self.ENV)
 
 
 def control_rows(n: int, acted: int, fp=None, shown: int | None = None) -> None:
@@ -429,10 +441,16 @@ class WorkspaceInstrumentTest(unittest.TestCase):
         """run_workspace on one past state with every expensive step replaced: replay_arm prepares a real copy (plant,
         `front`), lets the 'cycle' append the probe's line or not, and inspects it as the real one does."""
         calls = []
+        shipped_code = {"shaft/config.py": b'"WORKSPACE": (str, "competitive"),\n',
+                        "config.env": b'LLM_BASE_URL="broker"\nWORKSPACE="off" # operator\n'}
 
         def replay(project, name, st, code, *, prepare, inspect, **kw):
             arm = kw["billed"].rsplit(":", 1)[1]   # the arms of a state run at once: a copy each
             calls.append(arm)
+            if arm == experiments.CONTROL:
+                self.assertEqual(code, shipped_code)
+            else:
+                self.assertEqual(code["config.env"], f'LLM_BASE_URL="broker"\nWORKSPACE="{arm}"\n'.encode())
             dest = self.dir / f"replay-{arm}" / name
             for folder in ("memory", "notes", "inbox"):
                 (dest / folder).mkdir(parents=True)
@@ -452,8 +470,7 @@ class WorkspaceInstrumentTest(unittest.TestCase):
             return {"system": "", "inbox": inbox, "modes": {m: {"focus": ""} for m in experiments.WORKSPACE_ARMS}}
 
         st = {"ts": "2026-10-26T10:00:00", "t0": "2026-10-26T09:00:00", "start_commit": "x", "inbox": []}
-        config = b'"WORKSPACE": (str, "competitive"),\n'
-        with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": config, "config.env": b""}), \
+        with mock.patch.object(trial, "committed_code", return_value=shipped_code), \
                 mock.patch.object(trial, "live_episodes", return_value=[{"ts": st["ts"], "kind": "live"}]), \
                 mock.patch.object(trial, "state_of", return_value=st), mock.patch.object(trial, "_starts", return_value=[]), \
                 mock.patch.object(trial, "replay_arm", side_effect=replay), \
@@ -463,6 +480,7 @@ class WorkspaceInstrumentTest(unittest.TestCase):
                 mock.patch.object(experiments, "front", side_effect=shown), \
                 mock.patch("supervisor.core.instance_config", return_value={}):
             result = experiments.run_workspace("wisp", 1, project=self.dir)
+        self.assertEqual(result["fingerprint"], experiments.fingerprint(shipped_code, result["model"]))
         return result, calls
 
     def test_a_run_whose_control_fails_replays_no_arm(self):
@@ -528,7 +546,7 @@ class WorkspaceDryRunTest(unittest.TestCase):
     """The dry run on a fixture, through the template's real `shaft front` in the agent's sandbox: per state, where
     the probe is in front of each arm and of the control — no model call, no replay."""
 
-    def test_the_retrievability_table(self):
+    def check_retrievability_table(self, shipped_mode, override=b""):
         template = Path(__file__).resolve().parents[2] / "template"
         tmp = tempfile.TemporaryDirectory(prefix="shaft-ws-dry-")
         self.addCleanup(tmp.cleanup)
@@ -536,6 +554,9 @@ class WorkspaceDryRunTest(unittest.TestCase):
         mind = base / "mind"
         shutil.copytree(template / "shaft", mind / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy(template / "config.env", mind / "config.env")
+        if override:
+            with (mind / "config.env").open("ab") as f:
+                f.write(override)
         for folder in ("self", "memory", "notes", "inbox"):
             (mind / folder).mkdir()
         (mind / "self" / "goals.md").write_text("# Goals\n\n- Survey the orchard rows and count the apple trees\n")
@@ -549,7 +570,8 @@ class WorkspaceDryRunTest(unittest.TestCase):
             return dest
 
         st = {"ts": "2026-10-26T10:00:00", "t0": "2026-10-26T09:00:00", "start_commit": "x", "inbox": []}
-        code = {"shaft/config.py": (template / "shaft" / "config.py").read_bytes(), "config.env": b""}
+        code = {"shaft/config.py": (template / "shaft" / "config.py").read_bytes(),
+                "config.env": (mind / "config.env").read_bytes()}
         with tempfile.TemporaryDirectory() as sup, \
                 mock.patch.object(experiments, "workspace_path", return_value=Path(sup) / "w.jsonl"), \
                 mock.patch.object(trial, "committed_code", return_value=code), \
@@ -563,6 +585,7 @@ class WorkspaceDryRunTest(unittest.TestCase):
                 mock.patch("supervisor.core.EMBED_PORT", 9):   # no embedding service: words only, deterministic
             r = experiments.run_workspace("wisp", 1, dry_run=True, project=base)
         self.assertEqual(r["replays"], 4)   # the control and three arms, none run
+        self.assertEqual(r["fingerprint"], experiments.fingerprint(code, r["model"]))
         row = r["table"][0]
         self.assertEqual(row["place"], "notes/orchard.md")   # the one host the cycle's search ranks first
         self.assertEqual((row["rank"], row["rank_after"]), (0, 0))
@@ -571,9 +594,15 @@ class WorkspaceDryRunTest(unittest.TestCase):
         self.assertEqual(row["relevance"], "focus")    # the memory codelet's top hit keeps its rank: relevance 1.0
         text = experiments.workspace_dry_run_text("wisp", r)
         self.assertIn("notes/orchard.md (#1→#1)", text)
-        self.assertIn("in front: control 1/1 (shipped mode competitive), off 1/1, relevance 1/1", text)
+        self.assertIn(f"in front: control 1/1 (shipped mode {shipped_mode}), off 1/1, relevance 1/1", text)
         self.assertIn("memory search ran on words only here", text)
         self.assertIn("cost: unknown — no priced replay of wisp", text)
+
+    def test_the_retrievability_table(self):
+        self.check_retrievability_table("competitive")
+
+    def test_issue_3_retrievability_table_with_workspace_set_in_config_env(self):
+        self.check_retrievability_table("off", b'\nWORKSPACE="off"   # comment\n')
 
 
 class BlindHoldsTest(unittest.TestCase):

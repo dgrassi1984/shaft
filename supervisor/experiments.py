@@ -2,8 +2,8 @@
 
 Every agent-side mechanism of the plan ships on, behind a knob in the instance's shaft/config.py. A kill test replays
 past cycles of the instance with its committed code (the knob as shipped) against the same code with the knob flipped
-to its control — a code change, since a trial refuses to change config.env — and measures the item's own endpoint on
-the replays, beside the trial's pairwise verdict:
+to its control. The workspace harness can also flip the knob in its replay copies of config.env. Each test measures
+the item's own endpoint on the replays:
 
 - cards (B1): on vs off; on past cycles that repeated a failing kind of action, does the replay avoid failing at it
   again? (The shuffled and recall controls were removed by operator decision after #136, 2026-10-29.)
@@ -70,18 +70,31 @@ class ExperimentError(Exception):
     pass
 
 
-def knob_change(project: Path, name: str, knob: str, value: str) -> dict[str, bytes]:
-    """The instance's committed shaft/config.py with `knob`'s default set to `value`. Refused when its code has no such
-    knob (not updated to this template yet) or its config.env sets it (the default would change nothing)."""
+def knob_change(project: Path, name: str, knob: str, value: str, env_ok: bool = False) -> dict[str, bytes]:
+    """Set a knob's default in the committed shaft/config.py for a replay. Raise if the knob is missing.
+    If config.env sets the knob, include its updated copy when `env_ok` is true and raise otherwise."""
     code = trial.committed_code(project, name)
     src = (code.get("shaft/config.py") or b"").decode()
     pattern = re.compile(rf'("{knob}":\s*\(str,\s*)"[^"]*"')
     if not pattern.search(src):
         raise ExperimentError(f"{name}'s shaft/config.py has no {knob} knob: update it to the template first")
-    if knob in trial._env((code.get("config.env") or b"").decode()):
-        raise ExperimentError(f"{name}'s config.env sets {knob}: a trial cannot change config.env, so flipping the "
-                              f"default would compare the same code — remove it there first")
-    return {"shaft/config.py": pattern.sub(lambda m: f'{m.group(1)}"{value}"', src, count=1).encode()}
+    change = {"shaft/config.py": pattern.sub(lambda m: f'{m.group(1)}"{value}"', src, count=1).encode()}
+    env = (code.get("config.env") or b"").decode()
+    if knob in trial._env(env):
+        if not env_ok:
+            raise ExperimentError(f"{name}'s config.env sets {knob}: a trial cannot change config.env, so flipping the "
+                                  f"default would compare the same code — remove it there first")
+        lines = env.splitlines(keepends=True)
+        # The last assignment wins. Keep its line ending and every other line as shipped.
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            key, eq, _ = line.partition("=")
+            if eq and key.strip() == knob:
+                ending = line[len(line.splitlines()[0]):]
+                lines[i] = f'{knob}="{value}"{ending}'
+                break
+        change["config.env"] = "".join(lines).encode()
+    return change
 
 
 # -- which past cycles each test replays --------------------------------------------------------------------------
@@ -519,8 +532,10 @@ def reach(shown: dict, mode: str, nonce: str) -> str:
 
 
 def shipped_mode(code: dict[str, bytes]) -> str:
-    """The WORKSPACE mode the committed code ships with (its config.py default; config.env cannot set it here —
-    knob_change refuses that)."""
+    """The WORKSPACE mode selected by the replay code's config.env or config.py default."""
+    mode = trial._env((code.get("config.env") or b"").decode()).get("WORKSPACE")
+    if mode in WORKSPACE_ARMS:
+        return mode
     m = re.search(r'"WORKSPACE":\s*\(str,\s*"([^"]*)"', (code.get("shaft/config.py") or b"").decode())
     return m.group(1) if m else "off"
 
@@ -624,7 +639,7 @@ def run_workspace(name: str, n: int = 8, model: str = "", dry_run: bool = False,
     would have in front of the cycle (preview), and the cost of the replays."""
     from .core import instance_config
     code = trial.committed_code(project, name)
-    variants = {arm: {**code, **knob_change(project, name, "WORKSPACE", arm)} for arm in WORKSPACE_ARMS}
+    variants = {arm: {**code, **knob_change(project, name, "WORKSPACE", arm, env_ok=True)} for arm in WORKSPACE_ARMS}
     variants[CONTROL] = code
     use = model or (trial.cloud_fallback() if trial.model_of(code)["local"] else "local")
     if not use:

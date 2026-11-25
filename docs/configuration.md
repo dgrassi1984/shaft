@@ -375,8 +375,10 @@ cycle is held while the instance sees what comparable ones led to), `WORKSPACE` 
 `ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to for promises to
 the configured operator (`operator`) or peers from `list_instances`, settled in live cycles or sleep against the record; own plans belong in goals/notes)
 and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
-these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
-refuses an instance whose config.env sets that knob.
+these keeps the default with a warning. The cards, attention, commitments and forecast experiments flip the
+knob's default in code and refuse an instance whose `config.env` sets it. `shaft experiment workspace` also flips
+`WORKSPACE` in each comparison arm's copy of `config.env` if the file sets it. The positive control uses the
+shipped configuration.
 Outcome-card shell families and inspection exclusions are described in [architecture](architecture.md).
 Under the same COMMITMENTS setting, an operator promise needs the conversation open now or a message delivered
 to the operator in the same live cycle; unsourced ones become self records with a note. Self records expire 24 hours after due and remain in history
