@@ -576,7 +576,10 @@ def serve(poll_s: int = 30) -> int:
         if not (SUP_DIR / "paused").exists():
             st, now = _state(), datetime.now()
             _batteries(children, now, sleep_due(now, st))
-            _night_replays(children, now, sleep_due(now, st))
+            try:
+                _night_replays(children, now, sleep_due(now, st))
+            except Exception as e:   # an unreadable replay ledger never stops the scheduler's loop
+                log(f"scheduler: night replays skipped this tick: {type(e).__name__}: {e}")
             if sleep_due(now, st) and "sleep" not in children:
                 children["sleep"] = (_start(["sleep", "--all"]), time.monotonic())
             names = [n for n in instance_names() if not paused(n) and not updating(n, children)]   # not skipped:
@@ -923,8 +926,8 @@ def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[
     from . import battery
     _, end = battery.window(now)
     stop = [job for job in children if job.startswith("battery ") and (now >= end or sleeping_due)]
-    start = [] if sleeping_due else [n for n in names if f"battery {n}" not in children and due(n, now)
-                                     and not awake_of(n)]
+    start = [] if sleeping_due else [n for n in names if f"battery {n}" not in children
+                                     and f"night-replay {n}" not in children and due(n, now) and not awake_of(n)]
     return stop, start
 
 
