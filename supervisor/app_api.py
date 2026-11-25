@@ -159,6 +159,8 @@ N, CID = r"(?P<n>[A-Za-z0-9_-]+)", r"(?P<cid>web-[A-Za-z0-9]+)"
 
 def _route(req: Request) -> Response:
     path = req.path.removeprefix(PREFIX)
+    if path == "/local":
+        return _local_identity(req)
     if path == "/pair":
         if req.local:                               # a loopback request has no tailnet login to pair as
             log(f"app api refused a loopback pairing ({req.method} {req.path})")
@@ -1158,16 +1160,36 @@ def _services_response() -> Response:
                        "version": version.service_version(version.service("web", stale=False))})
 
 
+# Who this web process is, for the Mac app paired over the tailnet with the server on its own Mac: /version gives it to
+# a paired device with `local_port`, and GET /app/v1/local answers it on loopback with no bearer. The app sends its bearer
+# to the loopback port only once the two match, so a process that took that port (the server being on another Mac)
+# never receives it (Codex review 2026-11-25).
+LOCAL_ID = __import__("secrets").token_hex(16)
+
+
+def _local_identity(req: Request) -> Response:
+    """GET /app/v1/local, loopback only and without a bearer: LOCAL_ID, nothing else. A tailnet request gets 404."""
+    if not req.local:
+        raise Refusal(404, "not_found", f"Nothing at {req.path}.")
+    if req.method != "GET":
+        raise Refusal(405, "method", f"{req.method} is not supported here: GET")
+    return _json(200, {"local_id": LOCAL_ID})
+
+
 def _version(req: Request) -> Response:
     """§19: what the app checks before anything else. `server` is the release this web process runs: its own service
     record when launchd runs it, else (a web started by hand, a test) the checkout's describe. On loopback only (the
     Mac app on the same Mac), `project` is the checkout it runs from: the app updates the server only from there. A
-    tailnet client never learns a path on the Mac."""
+    tailnet client never learns a path on the Mac. With the loopback path on (SHAFT_WEB_LOCAL), every caller also gets
+    `local_port` and `local_id`: a Mac app paired over the tailnet checks that 127.0.0.1:<local_port>/app/v1/local
+    answers the same `local_id` before it sends its bearer there for the loopback-only routes (Server keys)."""
     from . import core, version
     rec = version.service("web", stale=False)
     server = (version.service_version(rec) if rec and rec.get("pid") == os.getpid()
               else version.commit_describe(version.supervisor_commit()))
     answer: dict = {"server": server, "api": API_VERSION}
+    if web.LOCAL:
+        answer.update(local_port=web.PORT, local_id=LOCAL_ID)
     if req.local:
         answer["project"] = str(core.PROJECT.resolve())
     return _json(200, answer)

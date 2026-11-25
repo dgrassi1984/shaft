@@ -48,6 +48,26 @@ class LoopbackAppTest(LocalTest):
         tailnet = self.get("/app/v1/version")
         self.assertNotIn("project", tailnet)
 
+    def test_version_names_the_loopback_port_to_every_caller_when_local_is_on(self):
+        """Bug 2026-11-25: a Mac app paired over the tailnet with the server on its own Mac never showed Server keys,
+        whose routes answer only loopback: /version tells it where the loopback path is, so it can reach it with the
+        same bearer."""
+        from supervisor import app_api
+        tailnet = self.get("/app/v1/version")
+        self.assertEqual((tailnet["local_port"], tailnet["local_id"]), (web.PORT, app_api.LOCAL_ID))
+        self.assertEqual(json.loads(self.local_api("/app/v1/version").body)["local_port"], web.PORT)
+        with mock.patch.object(web, "LOCAL", False):
+            self.assertFalse({"local_port", "local_id"} & set(self.get("/app/v1/version")))
+
+    def test_local_identity_answers_loopback_without_a_bearer_and_nothing_else(self):
+        """The app checks who listens on the loopback port before it sends its bearer there (Codex review 2026-11-25):
+        the answer needs no bearer, carries only the id, and the tailnet gets nothing at that path."""
+        from supervisor import app_api
+        r = self.local_api("/app/v1/local", bearer=False)
+        self.assertEqual((r.status, json.loads(r.body)), (200, {"local_id": app_api.LOCAL_ID}))
+        self.error(self.local_api("/app/v1/local", "POST", bearer=False), 405, "method")
+        self.error(self.api("/app/v1/local"), 404, "not_found")
+
     def test_localhost_name_is_a_local_host_too(self):
         self.assertEqual(web.local_hosts(), {f"127.0.0.1:{web.PORT}", f"localhost:{web.PORT}"})
         self.assertEqual(self.local_api("/app/v1/instances", host=f"localhost:{web.PORT}").status, 200)

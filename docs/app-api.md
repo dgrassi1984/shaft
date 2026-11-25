@@ -1235,7 +1235,8 @@ plugin grants or global settings.
 | POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now", "notes": []}` |
 | POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
 | POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
-| GET | `/version` | 200, `{"server": str, "api": int}`, plus `project` on loopback (§19) |
+| GET | `/version` | 200, `{"server": str, "api": int}`, plus `project` on loopback and `local_port`, `local_id` with `SHAFT_WEB_LOCAL` on (§19) |
+| GET | `/local` | 200, `{"local_id": str}`, loopback only, no bearer; 404 over the tailnet (§19) |
 | GET | `/services` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
 | POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>], "version": str}` |
@@ -1586,6 +1587,16 @@ An empty or multiline value gets `400 bad_request`. The answer never carries the
 Runs `secrets list --json` on loopback only. A tailnet device gets `403 local_only`. The response contains only
 names from §18.3 that are set, in that section's order. A verb refusal gets `409 refused`.
 
+#### 18.3.2 Server keys (Mac)
+
+The Mac app's Settings → Server keys lists §18.3's names as Set or Not set and saves a new value with §18.3. Both routes
+answer only loopback, so the section needs the server on this Mac, not `~/SHAFT`. A loopback pairing shows it at once. A
+pairing over the tailnet shows it when `/version` names `local_port` and `local_id` (§19) and
+`http://127.0.0.1:<local_port>/app/v1/local`, asked without a bearer, answers the same `local_id`: the app then sends
+both routes there with its bearer. The bearer never goes to that port before the ids match, so another process that
+took it (the server being on another Mac) never receives it. A server on another Mac, or this Mac's with
+`SHAFT_WEB_LOCAL` off, shows no section; the app asks again each time Settings opens.
+
 ### 18.4 `POST /setup/provider` and `/setup/provider/check`
 
 `/setup/provider` runs `provider use <provider> --json` (`openrouter`, `codex` or `custom`) with `actions.SLOW_S`; each
@@ -1721,7 +1732,11 @@ the verb's words and nothing is written. An unknown instance: `404 not_found`. S
 ### `GET /app/v1/version`
 
 `{"server": str, "api": int}`, plus `"project": str` on loopback only (§1.2: the Mac app on the same Mac; a tailnet
-client never gets a path on the Mac). `server` is the release the web process serving `/app/v1` runs, as git describes
+client never gets a path on the Mac), and `"local_port": int` and `"local_id": str` to every caller while
+`SHAFT_WEB_LOCAL` is on: the port of the loopback path and a random id the web process draws at start, which
+`GET /app/v1/local` (loopback only, no bearer, 404 over the tailnet) answers too. A Mac app paired over the tailnet
+compares the two before it sends its bearer to that port, and so reaches the loopback-only routes on its own Mac
+(§18.3.2). `server` is the release the web process serving `/app/v1` runs, as git describes
 it (`v0.60.0`, or `v0.60.0-3-gabc1234` past a tag): its own service record when launchd runs it, else the checkout's.
 `project` is the canonical path of the checkout it runs from.
 `api` is `app_api.API_VERSION`, bumped on every breaking change to `/app/v1` (a field removed or retyped, a route

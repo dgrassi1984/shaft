@@ -113,16 +113,22 @@ public struct SettingSave: Codable, Sendable, Equatable {
 }
 
 /// `GET /app/v1/version` (§19): the release the web service runs (git describe) and its `/app/v1` version; on loopback
-/// also the checkout it runs from (`project`), never over the tailnet.
+/// also the checkout it runs from (`project`), never over the tailnet; with the loopback path on (SHAFT_WEB_LOCAL), its
+/// port and its process's id (`localPort`, `localId`) to every caller.
 public struct ServerVersion: Codable, Sendable, Equatable {
     public var server: String
     public var api: Int
     public var project: String?
+    public var localPort: Int?          // `local_port` (SHAFTJSON converts snake case)
+    /// `local_id`: what `GET <loopback>/app/v1/local` answers when it is this same server.
+    public var localId: String?
 
-    public init(server: String, api: Int, project: String? = nil) {
+    public init(server: String, api: Int, project: String? = nil, localPort: Int? = nil, localId: String? = nil) {
         self.server = server
         self.api = api
         self.project = project
+        self.localPort = localPort
+        self.localId = localId
     }
 }
 
