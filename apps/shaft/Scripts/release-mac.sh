@@ -2,14 +2,14 @@
 # Builds the Mac app as a Developer ID signed, notarized, stapled DMG: build/release/SHAFT-<version>.dmg.
 # It never uploads anything. apps/shaft/README.md ("Release a signed build") has the one-time setup.
 #
-#   Scripts/release-mac.sh --notary-profile NAME [--team TEAMID] [--out DIR] [--allow-untagged] [--dry-run]
-#     [--feed-url URL] [--download-base URL]
+#   Scripts/release-mac.sh (--api-key-path PATH --api-key-id ID --api-issuer ID | --notary-profile NAME)
+#     [--team TEAMID] [--out DIR] [--allow-untagged] [--dry-run] [--feed-url URL] [--download-base URL]
 # --feed-url defaults to https://dgrassi1984.github.io/shaft-app/appcast.xml.
 # --download-base defaults to https://dgrassi1984.github.io/shaft-app/ when tagged; required when untagged.
 #   Scripts/release-mac.sh --self-test      (checks helpers on synthetic data; signs nothing)
 #
-# --dry-run checks every precondition and prints each command it would run; it signs, uploads and contacts Apple
-# for nothing, and exits 1 if a precondition fails.
+# --dry-run checks local preconditions and prints the plan without signing or contacting Apple.
+# It exits 1 if a precondition fails.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -18,6 +18,9 @@ scheme=SHAFT-macOS
 
 team=""
 notary_profile=""
+api_key_path=""
+api_key_id=""
+api_issuer=""
 out="$app_dir/build/release"
 allow_untagged=0
 dry=0
@@ -26,7 +29,7 @@ feed_url=https://dgrassi1984.github.io/shaft-app/appcast.xml
 download_base=""
 
 usage() {
-  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -36,6 +39,9 @@ while [ $# -gt 0 ]; do
     --download-base) download_base=${2?--download-base needs a value}; shift 2 ;;
     --team) team=${2:?--team needs a value}; shift 2 ;;
     --notary-profile) notary_profile=${2:?--notary-profile needs a value}; shift 2 ;;
+    --api-key-path) api_key_path=${2:?--api-key-path needs a value}; shift 2 ;;
+    --api-key-id) api_key_id=${2:?--api-key-id needs a value}; shift 2 ;;
+    --api-issuer) api_issuer=${2:?--api-issuer needs a value}; shift 2 ;;
     --out) out=${2:?--out needs a value}; shift 2 ;;
     --allow-untagged) allow_untagged=1; shift ;;
     --dry-run) dry=1; shift ;;
@@ -290,7 +296,22 @@ step "Preconditions"
 [ -n "$team" ] || problem "No team: pass --team TEAMID or set DEVELOPMENT_TEAM in Signing.local.yml."
 prefix=$(local_setting SHAFT_BUNDLE_PREFIX)
 [ -n "$prefix" ] || problem "SHAFT_BUNDLE_PREFIX is not set in Signing.local.yml."
-[ -n "$notary_profile" ] || problem "--notary-profile NAME is required (the 'xcrun notarytool store-credentials' profile; README.md)."
+notary_auth=()
+if [ -n "$api_key_path$api_key_id$api_issuer" ]; then
+  if [ -z "$api_key_path" ] || [ -z "$api_key_id" ] || [ -z "$api_issuer" ]; then
+    problem 'Pass --api-key-path, --api-key-id and --api-issuer together.'
+  elif [ -n "$notary_profile" ]; then
+    problem 'pass either --notary-profile or the API key, not both'
+  elif [ ! -f "$api_key_path" ]; then
+    problem 'API key path is not a file.'
+  else
+    notary_auth=(--key "$api_key_path" --key-id "$api_key_id" --issuer "$api_issuer")
+  fi
+elif [ -n "$notary_profile" ]; then
+  notary_auth=(--keychain-profile "$notary_profile")
+else
+  problem 'Pass --notary-profile NAME or --api-key-path PATH --api-key-id ID --api-issuer ID.'
+fi
 
 dirty=$(git -C "$app_dir" diff --name-only HEAD -- 2>/dev/null || true)
 if [ -n "$dirty" ]; then
@@ -344,11 +365,20 @@ for d in "${profile_dirs[@]}"; do
 done
 echo "local macOS provisioning profiles: $found_profiles (Xcode adds the Developer ID ones at export; checked after export)"
 
-if [ "$dry" -eq 0 ] && [ -n "$notary_profile" ]; then
-  nout=$(xcrun notarytool history --keychain-profile "$notary_profile" 2>&1) ||
-    problem "notarytool cannot use keychain profile '$notary_profile': $nout"
+if [ -n "${notary_auth[0]:-}" ]; then
+  if [ "$dry" -eq 1 ]; then
+    run xcrun notarytool history "${notary_auth[@]}"
+  elif ! nout=$(xcrun notarytool history "${notary_auth[@]}" 2>&1); then
+    if [ -n "$notary_profile" ]; then
+      problem "notarytool cannot use keychain profile '$notary_profile': $nout
+A profile stored by notarytool store-credentials is unreadable while this Mac's screen is locked. notarytool then reports it as missing.
+For unattended releases, pass the App Store Connect API key with --api-key-path, --api-key-id and --api-issuer."
+    else
+      problem "notarytool cannot use App Store Connect API key '$api_key_id': $nout"
+    fi
+  fi
 fi
-[ "$dry" -eq 1 ] && echo "(dry run: the notary profile '${notary_profile:-?}' is not contacted)"
+[ "$dry" -eq 1 ] && echo '(dry run: Apple is not contacted)'
 
 if [ "$problems" -gt 0 ]; then
   echo >&2
@@ -368,7 +398,6 @@ appex="$app/Contents/PlugIns/NotificationService.appex"
 stage="$out/dmg-stage"
 team=${team:-TEAMID}
 identity=${identity:-DEVELOPER-ID-IDENTITY}
-notary_profile=${notary_profile:-PROFILE}
 
 step "Clean output"
 run rm -rf "$out"
@@ -497,21 +526,25 @@ run codesign --verify --verbose=2 "$dmg"
 
 step "Notarize"
 if [ "$dry" -eq 1 ]; then
-  echo "[dry-run] would run: xcrun notarytool submit $dmg --keychain-profile $notary_profile --wait --output-format json"
-  echo "[dry-run] on failure: xcrun notarytool log <submission id> --keychain-profile $notary_profile"
+  if [ -n "${notary_auth[0]:-}" ]; then
+    run xcrun notarytool submit "$dmg" "${notary_auth[@]}" --wait --output-format json
+    printf '[dry-run] on failure: xcrun notarytool log <submission id>'
+    printf ' %q' "${notary_auth[@]}"
+    printf '\n'
+  fi
 else
   result="$out/notarytool-submit.json"
-  if ! xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --wait --output-format json >"$result"; then
+  if ! xcrun notarytool submit "$dmg" "${notary_auth[@]}" --wait --output-format json >"$result"; then
     cat "$result" >&2 || true
     sub=$(plutil -extract id raw -o - "$result" 2>/dev/null || true)
-    [ -z "$sub" ] || xcrun notarytool log "$sub" --keychain-profile "$notary_profile" >&2 || true
+    [ -z "$sub" ] || xcrun notarytool log "$sub" "${notary_auth[@]}" >&2 || true
     die "notarytool submit failed (output above)."
   fi
   sub=$(plutil -extract id raw -o - "$result")
   status=$(plutil -extract status raw -o - "$result")
   echo "notarization submission id: $sub, status: $status"
   if [ "$status" != "Accepted" ]; then
-    xcrun notarytool log "$sub" --keychain-profile "$notary_profile" >&2 || true
+    xcrun notarytool log "$sub" "${notary_auth[@]}" >&2 || true
     die "Notarization status is '$status' (log above)."
   fi
 fi

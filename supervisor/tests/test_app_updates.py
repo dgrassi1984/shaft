@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,37 @@ class AppUpdatesTest(unittest.TestCase):
             at = found
         done = subprocess.run([*args, "--feed-url", "http://example.com/a.xml"], capture_output=True, text=True)
         self.assertIn("PRECONDITION FAILED: --feed-url is not an allowed URL: 'http://example.com/a.xml'", done.stderr)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Release plan requires macOS tools")
+    def test_release_plan_notary_credentials(self):
+        # A stored notary profile is unreadable while the Mac's screen is locked.
+        args = ["bash", str(RELEASE), "--dry-run", "--allow-untagged",
+                "--download-base", "https://example.com/"]
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "AuthKey_KEYID.p8"
+            key_path.touch()
+            key = ["--api-key-path", str(key_path), "--api-key-id", "KEYID", "--api-issuer", "ISSUER"]
+            done = subprocess.run([*args, *key], capture_output=True, text=True)
+            for operation in ("history", "submit", "log"):
+                with self.subTest(operation=operation):
+                    lines = [line for line in done.stdout.splitlines() if f"xcrun notarytool {operation} " in line]
+                    self.assertEqual(len(lines), 1, done.stdout + done.stderr)
+                    command = shlex.split(lines[0])
+                    start = command.index("--key")
+                    self.assertEqual(command[start:start + 6],
+                                     ["--key", str(key_path), "--key-id", "KEYID", "--issuer", "ISSUER"])
+                    self.assertNotIn("--keychain-profile", lines[0])
+            cases = (
+                (["--notary-profile", "x", *key], "pass either --notary-profile or the API key, not both"),
+                (key[:-2], "Pass --api-key-path, --api-key-id and --api-issuer together."),
+                ([], "Pass --notary-profile NAME or --api-key-path PATH --api-key-id ID --api-issuer ID."),
+                (["--api-key-path", directory, *key[2:]], "API key path is not a file."),
+            )
+            for credentials, message in cases:
+                with self.subTest(message=message):
+                    done = subprocess.run([*args, *credentials], capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                    self.assertIn(f"PRECONDITION FAILED: {message}", done.stderr.splitlines())
 
     def test_publish_preserves_signed_feed_bytes_and_substitutes_pages(self):
         with tempfile.TemporaryDirectory(prefix="shaft-app-updates-") as directory:
