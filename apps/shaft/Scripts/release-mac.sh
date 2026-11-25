@@ -133,13 +133,42 @@ xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
 }
 
-# appcast_xml VERSION BUILD MINOS ENCLOSURE_URL LENGTH SIGNATURE NOTES_URL PUBDATE
+# notes_html BODY
+notes_html() {
+  xml_escape "$1"$'\n' | awk '
+    /^[-*] / {
+      printf "%s<li>%s", (in_list ? "</li>" : "<ul>"), substr($0, 3)
+      in_list = 1
+      next
+    }
+    in_list && /^[[:space:]]+[^[:space:]]/ {
+      sub(/^[[:space:]]+/, "")
+      printf " %s", $0
+      next
+    }
+    {
+      if (in_list) printf "</li></ul>"
+      in_list = 0
+      if ($0 !~ /^[[:space:]]*$/) printf "<p>%s</p>", $0
+    }
+    END { if (in_list) printf "</li></ul>" }
+  '
+}
+
+# appcast_xml VERSION BUILD MINOS ENCLOSURE_URL LENGTH SIGNATURE NOTES_URL NOTES_HTML PUBDATE
 appcast_xml() {
-  local version build minos enclosure length signature notes pubdate
+  local version build minos enclosure length signature pubdate link_label link description="$8"
   [[ $7 != *']]>'* ]] || { echo "release notes URL contains ]]>: $7" >&2; return 1; }
+  if [ -n "$7" ]; then
+    link_label='What changed'
+    [ -z "$description" ] || link_label='Full release notes'
+    link=$(printf '<p><a href="%s">%s</a></p>' "$(xml_escape "$7")" "$link_label")
+    description="$description$link"
+  fi
+  [[ $description != *']]>'* ]] || { echo 'release notes description contains ]]>' >&2; return 1; }
   version=$(xml_escape "$1"); build=$(xml_escape "$2"); minos=$(xml_escape "$3")
   enclosure=$(xml_escape "$4"); length=$(xml_escape "$5"); signature=$(xml_escape "$6")
-  notes=$(xml_escape "$7"); pubdate=$(xml_escape "$8")
+  pubdate=$(xml_escape "$9")
   cat <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -152,8 +181,8 @@ appcast_xml() {
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>$minos</sparkle:minimumSystemVersion>
 XML
-  if [ -n "$7" ]; then
-    printf '      <description><![CDATA[<p><a href="%s">What changed</a></p>]]></description>\n' "$notes"
+  if [ -n "$description" ]; then
+    printf '      <description><![CDATA[%s]]></description>\n' "$description"
   fi
   cat <<XML
       <enclosure url="$enclosure" length="$length" type="application/octet-stream" sparkle:edSignature="$signature"/>
@@ -164,7 +193,7 @@ XML
 }
 
 self_test() {
-  local t fails=0 d
+  local t fails=0 d notes
   t=$(mktemp -d)
   expect() { # name, expected, actual
     if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected '$2', got '$3'"; fails=$((fails + 1)); fi
@@ -227,15 +256,25 @@ P
   expect "matching keys" 0 "$(keys_match abc abc; echo $?)"
   expect "different keys" 1 "$(keys_match abc def; echo $?)"
   expect "empty keys" 1 "$(keys_match '' ''; echo $?)"
-  appcast_xml '1.2.3' 123 26.0 'https://example.com/a?x=1&y=2' 456 'Ab+/=' 'https://example.com/notes?a=1&b=2' 'Mon, 16 Nov 2026 12:00:00 +0000' >"$t/appcast.xml"
+  notes=$(notes_html $'- First\n* Second')
+  expect "notes group consecutive bullets" '<ul><li>First</li><li>Second</li></ul>' "$notes"
+  expect "notes escape HTML" '<ul><li>&lt;b&gt;&amp; &quot;text&quot;</li></ul>' "$(notes_html '- <b>& "text"')"
+  expect "notes render paragraph after list" '<ul><li>First</li></ul><p>A paragraph.</p>' "$(notes_html $'- First\nA paragraph.')"
+  expect "notes join indented continuation" '<ul><li>First continued</li></ul>' "$(notes_html $'- First\n  continued')"
+  expect "empty notes body produces empty HTML" '' "$(notes_html '')"
+  appcast_xml '1.2.3' 123 26.0 'https://example.com/a?x=1&y=2' 456 'Ab+/=' 'https://example.com/notes?a=1&b=2' "$notes" 'Mon, 16 Nov 2026 12:00:00 +0000' >"$t/appcast.xml"
   if command -v xmllint >/dev/null 2>&1; then
     expect "appcast is well-formed XML" 0 "$(xmllint --noout - <"$t/appcast.xml"; echo $?)"
   else
     echo "skip appcast XML well-formedness: xmllint is not installed."
   fi
   expect "exact enclosure attributes and escaped URL" 0 "$(grep -Fq '<enclosure url="https://example.com/a?x=1&amp;y=2" length="456" type="application/octet-stream" sparkle:edSignature="Ab+/="/>' "$t/appcast.xml"; echo $?)"
-  expect "empty notes omit description" 1 "$(appcast_xml 1 2 26 https://example.com/a 3 abc '' date | grep -q '<description>'; echo $?)"
-  expect "notes refuse CDATA terminator" 1 "$(appcast_xml 1 2 26 url 3 abc 'https://example.com/]]>' date >/dev/null 2>&1; echo $?)"
+  expect "description includes inline notes and full release notes link" 0 "$(grep -Fq '<description><![CDATA[<ul><li>First</li><li>Second</li></ul><p><a href="https://example.com/notes?a=1&amp;b=2">Full release notes</a></p>]]></description>' "$t/appcast.xml"; echo $?)"
+  expect "URL alone keeps What changed link" '      <description><![CDATA[<p><a href="https://example.com/notes">What changed</a></p>]]></description>' "$(appcast_xml 1 2 26 url 3 abc https://example.com/notes '' date | grep '<description>')"
+  expect "inline notes alone appear in description" "      <description><![CDATA[$notes]]></description>" "$(appcast_xml 1 2 26 url 3 abc '' "$notes" date | grep '<description>')"
+  expect "empty notes omit description" 1 "$(appcast_xml 1 2 26 https://example.com/a 3 abc '' '' date | grep -q '<description>'; echo $?)"
+  expect "notes URL refuses CDATA terminator" 1 "$(appcast_xml 1 2 26 url 3 abc 'https://example.com/]]>' '' date >/dev/null 2>&1; echo $?)"
+  expect "inline notes refuse CDATA terminator" 1 "$(appcast_xml 1 2 26 url 3 abc '' '<p>]]></p>' date >/dev/null 2>&1; echo $?)"
   d=$t; rm -rf "$d"
   if [ "$fails" -ne 0 ]; then echo "$fails self-test(s) failed." >&2; exit 1; fi
   echo "self-test passed."
@@ -490,7 +529,12 @@ fi
 
 step "Sparkle appcast"
 notes_url=""
-[ -z "$tag" ] || notes_url="https://github.com/dgrassi1984/shaft/releases/tag/$tag"
+release_notes_html=""
+if [ -n "$tag" ]; then
+  notes_url="https://github.com/dgrassi1984/shaft/releases/tag/$tag"
+  notes_body=$(git -C "$app_dir" tag -l --format='%(contents:body)' "$tag")
+  release_notes_html=$(notes_html "$notes_body")
+fi
 enclosure_url="${download_base}SHAFT-$version.dmg"
 appcast="$out/appcast.xml"
 if [ "$dry" -eq 1 ]; then
@@ -501,7 +545,8 @@ if [ "$dry" -eq 1 ]; then
     echo "[dry-run] would run: plist_value $app/Contents/Info.plist $key (required non-empty)"
   done
   echo "[dry-run] would run: LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000'"
-  echo "[dry-run] would write: appcast_xml $version <build> <minimum macOS> $enclosure_url <length> <signature> '$notes_url' <pubdate> > $appcast"
+  printf '[dry-run] would write: appcast_xml %q <build> <minimum macOS> %q <length> <signature> %q %q <pubdate> > %q\n' \
+    "$version" "$enclosure_url" "$notes_url" "$release_notes_html" "$appcast"
 else
   sig_line=$("$sparkle_bin/sign_update" "$dmg")
   parsed=$(parse_sign_output "$sig_line") || die "Cannot parse DMG signature (see message above)."
@@ -513,7 +558,7 @@ else
   minos=$(plist_value "$app/Contents/Info.plist" LSMinimumSystemVersion) || die "LSMinimumSystemVersion is absent or unreadable in $app/Contents/Info.plist."
   [ -n "$build" ] && [ -n "$version" ] && [ -n "$minos" ] || die "Empty app metadata: build='$build', version='$version', minimum macOS='$minos'."
   pubdate=$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')
-  appcast_xml "$version" "$build" "$minos" "$enclosure_url" "$length" "$signature" "$notes_url" "$pubdate" >"$appcast" || die "Cannot write $appcast."
+  appcast_xml "$version" "$build" "$minos" "$enclosure_url" "$length" "$signature" "$notes_url" "$release_notes_html" "$pubdate" >"$appcast" || die "Cannot write $appcast."
 fi
 run "$sparkle_bin/sign_update" "$appcast"
 run "$sparkle_bin/sign_update" --verify "$appcast"
