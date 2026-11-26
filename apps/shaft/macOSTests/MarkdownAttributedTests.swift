@@ -434,3 +434,19 @@ struct RenderCacheTests {
         #expect(renderedAgain)
     }
 }
+
+/// Review 2026-11-26: two messages whose sources differ only in how "é" is written must not share a rendering.
+struct RenderCacheBytesTests {
+    @Test @MainActor func canonicallyEqualSourcesAreRenderedApart() {
+        let composed = "```\nlet name = \"caf\u{E9}-\(UUID())\"\n```"
+        let decomposed = composed.replacingOccurrences(of: "\u{E9}", with: "e\u{301}")
+        #expect(composed == decomposed)          // String equality is canonical: the reason the key compares bytes
+        let one = RenderCache.Key(source: composed, markdown: false, scale: 1, appearance: .aqua)
+        let two = RenderCache.Key(source: decomposed, markdown: false, scale: 1, appearance: .aqua)
+        #expect(one != two)
+        let first = RenderCache.rendered(one) { MarkdownAttributed.operatorText(composed) }
+        let second = RenderCache.rendered(two) { MarkdownAttributed.operatorText(decomposed) }
+        #expect(first.codeBlocks.first?.code.unicodeScalars.contains("\u{301}") == false)
+        #expect(second.codeBlocks.first?.code.unicodeScalars.contains("\u{301}") == true)
+    }
+}

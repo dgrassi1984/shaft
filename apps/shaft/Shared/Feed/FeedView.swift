@@ -87,6 +87,9 @@ struct FeedView: View {
             interacting = phase == .interacting || phase == .tracking
             if phase == .idle || phase == .decelerating {
                 pinned = distance == .atEnd
+                // At the end, what arrived meanwhile has been seen: the band did not change, so the geometry action
+                // that clears it on reaching the end did not run.
+                if pinned { newBelow = false }
             } else if phase == .interacting {
                 pinned = false
             }

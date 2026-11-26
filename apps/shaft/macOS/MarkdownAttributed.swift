@@ -801,6 +801,20 @@ enum RenderCache {
         let markdown: Bool
         let scale: CGFloat
         let appearance: NSAppearance.Name
+
+        /// The source's exact bytes: String equality is canonical, so "é" written two ways would share one rendering
+        /// and Copy code would hand back the other message's characters.
+        static func == (lhs: Key, rhs: Key) -> Bool {
+            lhs.markdown == rhs.markdown && lhs.scale == rhs.scale && lhs.appearance == rhs.appearance
+                && lhs.source.utf8.elementsEqual(rhs.source.utf8)
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(markdown)
+            hasher.combine(scale)
+            hasher.combine(appearance)
+            for byte in source.utf8 { hasher.combine(byte) }
+        }
     }
 
     /// About two long chats' worth of messages (80 turns each), with room for a streaming reply's passing versions.

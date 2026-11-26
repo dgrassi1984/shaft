@@ -392,7 +392,7 @@ enum MacDevDriver {
             // Wheel events of <dy> points each, <n> of them a frame apart, straight to the feed's scroll view (the
             // tallest one in the window); logs how long they took and where the feed went.
             let parts = rest.split(separator: " ").compactMap { Int32($0) }
-            guard parts.count == 2, let root = window?.contentView else { return log("scrollfeed <dy> <n>") }
+            guard parts.count == 2, parts[1] > 0, let root = window?.contentView else { return log("scrollfeed <dy> <n>") }
             var views: [NSScrollView] = []
             walk(root) { view in if let scroll = view as? NSScrollView { views.append(scroll) } }
             guard let feed = views.max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })

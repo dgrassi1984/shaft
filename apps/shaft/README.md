@@ -176,6 +176,18 @@ the window takes no mouse moves (hover) and runs no animations (an inspector ope
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's, which also polls and marks seen) instead.
 
+To time the chat screen, grow an instance's Main with answers the size of real ones (`fixture_server.py act ...
+rich <name> 160`), run a Release build compiled with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` (a Debug build's
+Swift is several times slower) behind other windows (`open -g`), and drive it with `open`, `until`, `scrollfeed <dy> <n>`
+and `earlier`. Every build logs each main-thread stall of 100 ms or more (`Packages/SHAFTKit/.../HitchMonitor.swift`)
+with the transition under way; read them, with the transitions' own times, on any Mac or device:
+
+```bash
+/usr/bin/log show --last 1h --predicate 'subsystem == "SHAFT" AND (category == "Hitches" OR category == "Transitions")'
+```
+
+`SHAFT_DEV_FRAMES=<file>` adds a line per second of frames drawn and frames late (`Shared/Support/FrameMeter.swift`).
+
 To check the document-opening crash, seed a long chat with `fixture_server.py act ... long <name> 120`
 for the instance `mac-doc-open.drive` opens.
 Run the Release build with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` and Debug's
