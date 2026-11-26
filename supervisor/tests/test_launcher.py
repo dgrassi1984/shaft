@@ -45,13 +45,23 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(result.stdout, f"{marker}\n-E\n-s\n-m\nsupervisor\nstatus\ntwo words\n")
 
     def test_newest_executable_runtime_python_wins(self):
+        """Numeric, not glob order: 8 sorts before 9 and 20 before 3; a non-executable 30 is skipped."""
         self.env["SHAFT_PYTHON"] = ""
-        for patch in (9, 12, 13):
-            path = self.root / f".runtime/python/cpython-3.12.{patch}-macos-arm64-none/bin/python3.12"
-            self.fake_python(path, f"runtime {patch}")
-        path.chmod(0o644)
         self.fake_python(self.path / "python3.12", "path")
-        self.assert_launched("runtime 12")
+        for patches, newest in (((8, 9), 9), ((3, 20, 30), 20)):
+            runtime = self.root / ".runtime"
+            shutil.rmtree(runtime, ignore_errors=True)
+            for patch in patches:
+                path = runtime / f"python/cpython-3.12.{patch}-macos-arm64-none/bin/python3.12"
+                self.fake_python(path, f"runtime {patch}")
+                if patch == 30:
+                    path.chmod(0o644)
+            with self.subTest(patches=patches):
+                self.assert_launched(f"runtime {newest}")
+
+    def test_new_enough_python3_on_path_is_used(self):
+        self.fake_python(self.path / "python3", "python3", "3.13.1", 0)
+        self.assert_launched("python3")
 
     def test_versioned_python_on_path_wins_without_runtime(self):
         self.fake_python(self.path / "python3.12", "path")

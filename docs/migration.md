@@ -32,7 +32,7 @@ the environments and starts the services. Before starting, it asks you to confir
 that the old Mac is stopped and stays stopped. It removes instance environments;
 the first `talk` rebuilds them on this Mac. Run `target` in **Terminal on the new
 Mac**, logged in at its screen — not over SSH — because the services load into the
-logged-in session and `on` records that terminal's `python3`. Run `--check` first
+logged-in session and `on` records the Python that `bin/shaft` runs (below). Run `--check` first
 on either: it runs the read-only checks and changes nothing. Each step prints what
 it will do and why, and waits — Enter runs, `q` stops, and a rerun resumes at the
 first unfinished step. If `source` stops partway it prints how to bring the old
