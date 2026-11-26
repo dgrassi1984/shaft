@@ -15,6 +15,7 @@ never deliver, send or commit (trial.ReplayBroker), and a probe exists only in a
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import posixpath
 import random
@@ -405,6 +406,14 @@ def _monitor_endpoint(rec: dict, donor: dict | None) -> dict:
                 r"[a-z]{5,}", str(c.get("args", "")).lower()))) for c in checks),
             "partial": int(finish.get("criterion_met") == "partial"),
             "abstain": int(not finish), "no": int(finish.get("criterion_met") == "no")}
+
+
+def fingerprint(code: dict[str, bytes], model: str) -> str:
+    """The code and the model a run replays with: rows of different runs are never paired."""
+    h = hashlib.sha256(model.encode())
+    for rel in sorted(code):
+        h.update(rel.encode() + b"\0" + (code[rel] or b"") + b"\0")
+    return h.hexdigest()[:12]
 
 
 def run_monitors(name: str, n: int = 6, model: str = "", dry_run: bool = False, project: Path = PROJECT,
