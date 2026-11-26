@@ -46,10 +46,6 @@ fileprivate func inputBufferChannels(_ device: AudioObjectID) throws -> [Int] {
     return list.map { Int($0.mNumberChannels) }
 }
 
-fileprivate func defaultInputDevice() throws -> AudioDeviceID {
-    try getValue(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice, initial: AudioDeviceID(0))
-}
-
 /// This process's audio object, or 0 when Core Audio has none for it yet (then the tap excludes nothing — we play
 /// no audio anyway).
 fileprivate func ownProcessObject() -> AudioObjectID {
@@ -76,6 +72,8 @@ final class MeetingCapture: @unchecked Sendable {
     let online: Bool
     let url: URL
     let stallSeconds: Double
+    /// The microphone's UID, or nil for the system default input (MeetingMicrophones resolves the operator's choice).
+    let inputUID: String?
     let control = DispatchQueue(label: "shaft.meeting.control")
     let io = DispatchQueue(label: "shaft.meeting.io", qos: .userInteractive)
     private var timer: DispatchSourceTimer?
@@ -87,6 +85,11 @@ final class MeetingCapture: @unchecked Sendable {
     var channels: UInt32 { online ? 2 : 1 }
     var inputDevice: AudioDeviceID = 0
     var inputName = ""
+    /// The UID of the input actually recorded from, translated again on every rebuild (a USB microphone that
+    /// reconnects keeps its UID but gets a new device id).
+    var activeUID: String?
+    /// Set when the chosen microphone was not connected at start and the system default was used instead.
+    var inputFallback: String?
     var tap: AudioObjectID = 0
     var aggregate: AudioObjectID = 0
     var ioDevice: AudioObjectID = 0
@@ -116,16 +119,27 @@ final class MeetingCapture: @unchecked Sendable {
     var pendingGapReason = ""
     let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 2 * 65_536)
 
-    init(online: Bool, url: URL, stallSeconds: Double) {
+    init(online: Bool, url: URL, stallSeconds: Double, inputUID: String? = nil) {
         self.online = online
         self.url = url
         self.stallSeconds = stallSeconds
+        self.inputUID = inputUID
         self.stallThreshold = stallSeconds
         control.setSpecific(key: Self.onControl, value: true)
     }
 
+    deinit { scratch.deallocate() }      // here, not in stop(): a start that throws never reaches stop()
+
     func start() throws {
-        inputDevice = try defaultInputDevice()
+        // The chosen microphone is looked up here, at the start, not only when the menu was read: one unplugged in
+        // between still falls back to the default, and says so.
+        if let inputUID, let device = MeetingMicrophones.device(uid: inputUID) {
+            inputDevice = device
+        } else {
+            if inputUID != nil { inputFallback = "The chosen microphone is not connected: recording from the system default." }
+            inputDevice = try MeetingMicrophones.defaultInput()
+        }
+        activeUID = try? getString(inputDevice, kAudioDevicePropertyDeviceUID)
         inputName = (try? getString(inputDevice, kAudioObjectPropertyName)) ?? "?"
         try buildDevice()
         sampleRate = try getValue(ioDevice, kAudioDevicePropertyNominalSampleRate, initial: Float64(48_000))
@@ -183,7 +197,7 @@ final class MeetingCapture: @unchecked Sendable {
         let micUID = try getString(inputDevice, kAudioDevicePropertyDeviceUID)
         let agg: [String: Any] = [
             kAudioAggregateDeviceNameKey: "SHAFT meeting",
-            kAudioAggregateDeviceUIDKey: "shaft-meeting-" + UUID().uuidString,
+            kAudioAggregateDeviceUIDKey: MeetingMicrophones.aggregatePrefix + UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: micUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
@@ -336,6 +350,7 @@ final class MeetingCapture: @unchecked Sendable {
         // rebuild restarted the gap at its own start, so only 1 of 17 gaps was filled and the file came out short).
         let stoppedAt = lastAudio.load(ordering: .relaxed)
         teardownDevice()
+        if let activeUID, let device = MeetingMicrophones.device(uid: activeUID) { inputDevice = device }
         do {
             try buildDevice()
             pendingGapFromHost = stoppedAt
@@ -373,7 +388,7 @@ final class MeetingCapture: @unchecked Sendable {
         if !problems.isEmpty { log("stop: " + problems.joined(separator: "; ")) }
         let sidecar: [String: Any] = [
             "started": iso(started), "ended": iso(Date()), "mode": online ? "online" : "inperson",
-            "input_device": inputName, "sample_rate": sampleRate, "channels": Int(channels),
+            "input_device": inputName, "input_device_uid": activeUID ?? "?", "input_chosen": inputUID ?? "default", "sample_rate": sampleRate, "channels": Int(channels),
             "channel_map": online ? ["mic", "system"] : ["mic"], "seconds": seconds,
             "input_buffers": bufferChannels, "mic_buffers": micBuffers,
             "gaps": gaps.map { ["start": $0.start, "end": $0.end, "reason": $0.reason] }, "rebuilds": rebuilds,
@@ -384,7 +399,6 @@ final class MeetingCapture: @unchecked Sendable {
             try? data.write(to: side)
         }
         log(String(format: "stopped: %.1f s written, %d gap(s)", seconds, gaps.count))
-        scratch.deallocate()
         return sidecar
         }
     }

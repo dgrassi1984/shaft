@@ -15,19 +15,19 @@ is behind the code, regenerate it.**
 
 |  |  |
 |---|---|
-| Tracked files | 830 |
-| Languages | 427 Python, 226 Swift, 59 JSON, 28 Markdown, 5 Shell, 5 HTML, 3 YAML, 2 CSS, 2 JavaScript |
-| Tests | 335 |
-| Python files | 427 |
-| Python modules with public symbols | 423 |
+| Tracked files | 833 |
+| Languages | 430 Python, 228 Swift, 59 JSON, 26 Markdown, 5 Shell, 5 HTML, 3 YAML, 2 CSS, 2 JavaScript |
+| Tests | 337 |
+| Python files | 430 |
+| Python modules with public symbols | 426 |
 
 ## Layout
 
 | Path | Files |
 |---|---|
-| `supervisor/` | 473 |
-| `apps/` | 326 |
-| `docs/` | 17 |
+| `supervisor/` | 476 |
+| `apps/` | 328 |
+| `docs/` | 15 |
 | `(root)` | 9 |
 | `.github/` | 3 |
 | `.claude/` | 1 |
@@ -35,7 +35,7 @@ is behind the code, regenerate it.**
 
 ## Python
 
-423 modules expose a public class or function. Full list:
+426 modules expose a public class or function. Full list:
 [codemap/python.md](codemap/python.md).
 
 ## Tests
@@ -43,4 +43,4 @@ is behind the code, regenerate it.**
 | Path | Files |
 |---|---|
 | `apps/` | 5 |
-| `supervisor/` | 330 |
+| `supervisor/` | 332 |

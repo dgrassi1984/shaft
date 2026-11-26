@@ -23,6 +23,16 @@ final class MeetingRecorder {
     private(set) var warning: String?
     /// The upload under way, for its progress.
     private(set) var uploader: MeetingUploader?
+    /// The inputs connected now, and the system default's name, kept current as devices come and go.
+    private(set) var microphones: [MeetingMicrophone] = []
+    private(set) var defaultMicrophoneName: String?
+    /// The microphone the next recording uses, by UID; nil is the system default input. Kept across launches.
+    private(set) var microphoneUID: String?
+    @ObservationIgnored private(set) var microphoneName: String?
+    /// The input the current recording is from, and why it is not the chosen one (kept apart from `warning`, which
+    /// the capture may overwrite while recording).
+    private(set) var recordingFrom: String?
+    private(set) var inputNotice: String?
 
     @ObservationIgnored private var capture: MeetingCapture?
     @ObservationIgnored private var file: URL?
@@ -34,11 +44,46 @@ final class MeetingRecorder {
     /// (review 2026-11-25).
     @ObservationIgnored private var starting = false
 
+    @ObservationIgnored private let defaults: UserDefaults
+
     init(client: @escaping @MainActor () -> APIClient?,
-         folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory)) {
+         folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory),
+         defaults: UserDefaults = .standard) {
         self.client = client
         self.folder = folder
+        self.defaults = defaults
+        microphoneUID = defaults.string(forKey: Self.microphoneUIDKey)
+        microphoneName = defaults.string(forKey: Self.microphoneNameKey)
+        refreshMicrophones()
+        MeetingMicrophones.observe { [weak self] in Task { @MainActor in self?.refreshMicrophones() } }
     }
+
+    /// Choose the microphone for the next recording (nil: the system default).
+    func chooseMicrophone(_ uid: String?) {
+        microphoneUID = uid
+        if let uid, let mic = microphones.first(where: { $0.uid == uid }) { microphoneName = mic.name }
+        if uid == nil { microphoneName = nil }
+        defaults.set(microphoneUID, forKey: Self.microphoneUIDKey)
+        defaults.set(microphoneName, forKey: Self.microphoneNameKey)
+    }
+
+    /// The Meeting menu's microphone entries after System Default.
+    var microphoneEntries: [MeetingMicrophone] {
+        MeetingMicrophones.menuEntries(saved: microphoneUID, savedName: microphoneName, available: microphones)
+    }
+
+    func refreshMicrophones() {
+        microphones = MeetingMicrophones.connected()
+        defaultMicrophoneName = MeetingMicrophones.defaultName()
+        // A renamed input keeps its UID: keep the saved name current for when it is unplugged.
+        if let uid = microphoneUID, let mic = microphones.first(where: { $0.uid == uid }), mic.name != microphoneName {
+            microphoneName = mic.name
+            defaults.set(mic.name, forKey: Self.microphoneNameKey)
+        }
+    }
+
+    static let microphoneUIDKey = "meetings.microphoneUID"
+    static let microphoneNameKey = "meetings.microphoneName"
 
     /// Start recording: online (the microphone and every other app's sound) or in person (the microphone).
     func start(online: Bool) async {
@@ -56,11 +101,15 @@ final class MeetingRecorder {
             // record would then describe another file (review 2026-11-25).
             let stamp = Self.stamp.string(from: Date()) + "-" + UUID().uuidString.prefix(8).lowercased()
             let url = folder.appending(path: "\(stamp).m4a")
-            let capture = MeetingCapture(online: online, url: url, stallSeconds: 20)
+            refreshMicrophones()
+            let input = MeetingMicrophones.resolve(saved: microphoneUID, savedName: microphoneName, available: microphones)
+            let capture = MeetingCapture(online: online, url: url, stallSeconds: 20, inputUID: input.uid)
             capture.onWarning = { [weak self] message in Task { @MainActor in self?.warning = message } }
             try capture.start()
             self.capture = capture
             file = url
+            recordingFrom = capture.inputName
+            inputNotice = input.warning ?? capture.inputFallback
             phase = .recording(started: Date(), online: online)
         } catch {
             phase = .failed("Could not start recording: \(error.localizedDescription)")
@@ -73,6 +122,8 @@ final class MeetingRecorder {
         let sidecar = capture.stop()            // also writes <stamp>.json
         self.capture = nil
         self.file = nil
+        recordingFrom = nil
+        inputNotice = nil
         if let problems = sidecar["problems"] as? [String], !problems.isEmpty {
             warning = "The recording is incomplete: " + problems.joined(separator: "; ") + "."
         }
