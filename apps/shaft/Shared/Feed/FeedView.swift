@@ -60,7 +60,7 @@ struct FeedView: View {
                 }
                 // The foot: the feed's end is this view's end, so scrolling to it by id lands on the very end. At rest at
                 // either end nothing lies in the fades (`feedEdges`): the turn's spacing above counts towards the foot.
-                Color.clear.frame(height: metrics.fade - Design.Space.turn).id(Self.bottomID)
+                Color.clear.frame(height: metrics.fade - Design.Space.turn + 1).id(Self.bottomID)
             }
             .padding(.top, metrics.fade)
             .scrollTargetLayout()

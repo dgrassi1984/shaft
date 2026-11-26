@@ -411,8 +411,10 @@ enum MacDevDriver {
             guard let feed = feedScrollView() else { return log("no scroll view") }
             let clip = feed.contentView
             let drawn = inkedRows(clip)
-            log("feedgeom: y \(Int(clip.bounds.minY)) visible \(Int(clip.bounds.height)) of \(Int(feed.documentView?.frame.height ?? 0)), "
-                + "drawn rows \(drawn) of \(Int(clip.bounds.height)) -> \(drawn == 0 ? "BLANK" : "shown")")
+            let height = feed.documentView?.frame.height ?? 0
+            log("feedgeom: y \(Int(clip.bounds.minY)) visible \(Int(clip.bounds.height)) of \(Int(height)), "
+                + "end \(Int(height - clip.bounds.maxY)) pt below, drawn rows \(drawn) of \(Int(clip.bounds.height)) pt -> "
+                + (drawn == 0 ? "BLANK" : "shown"))
         case "quit":
             log("done")
             NSApp.terminate(nil)
@@ -518,20 +520,25 @@ enum MacDevDriver {
         return views.max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
     }
 
-    /// How many pixel rows of the view, as drawn now, differ from its first pixel (the canvas): 0 is a blank view.
+    /// How many points of the view's height, as drawn now, hold a pixel that differs from its first one (the canvas):
+    /// 0 only when no pixel row at all does, a blank view.
     private static func inkedRows(_ view: NSView) -> Int {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
         view.cacheDisplay(in: view.bounds, to: rep)
-        guard rep.pixelsHigh > 0, rep.pixelsWide > 0, let canvas = rep.colorAt(x: 0, y: 0) else { return 0 }
+        func rgba(_ x: Int, _ y: Int) -> [CGFloat]? {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
+            return [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
+        }
+        guard rep.pixelsHigh > 0, rep.pixelsWide > 0, let canvas = rgba(0, 0) else { return 0 }
         var rows = 0
         for y in 0..<rep.pixelsHigh {
             for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
-                guard let color = rep.colorAt(x: x, y: y) else { continue }
-                if abs(color.redComponent - canvas.redComponent) + abs(color.greenComponent - canvas.greenComponent)
-                    + abs(color.blueComponent - canvas.blueComponent) > 0.1 { rows += 1; break }
+                guard let pixel = rgba(x, y) else { continue }
+                if zip(pixel, canvas).map({ abs($0 - $1) }).reduce(0, +) > 0.1 { rows += 1; break }
             }
         }
-        return rows / max(1, rep.pixelsHigh / max(1, Int(view.bounds.height)))
+        guard rows > 0 else { return 0 }
+        return max(1, Int((Double(rows) * view.bounds.height / Double(rep.pixelsHigh)).rounded()))
     }
 
     private static func walk(_ view: NSView, _ visit: (NSView) -> Void) {

@@ -33,7 +33,7 @@ struct ChatPerformancePinTests {
         #expect(!feed.contains("scrollTo(edge: .bottom)"))
         #expect(feed.contains("@State private var position = ScrollPosition(id: Self.bottomID, anchor: .bottom)"))
         #expect(feed.contains("withTransaction(transaction) { position.scrollTo(id: Self.bottomID, anchor: .bottom) }"))
-        #expect(feed.contains("Color.clear.frame(height: metrics.fade - Design.Space.turn).id(Self.bottomID)"))
+        #expect(feed.contains("Color.clear.frame(height: metrics.fade - Design.Space.turn + 1).id(Self.bottomID)"))
         #expect(!feed.contains(".padding(.bottom, metrics.fade - Design.Space.turn)"))
     }
 
