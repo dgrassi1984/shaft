@@ -49,12 +49,10 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
         previousCategory = (session.category, session.mode, session.categoryOptions)
         try session.setCategory(.record, mode: .measurement)
         try session.setActive(true)
-        let audio = try AVAudioRecorder(url: url, settings: [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 96_000
-        ])
+        // IMA4 in CAF: fixed-size packets and no index written at the end, so a recording cut short by iOS ending the
+        // app stays readable up to its last packet. AAC in .m4a is unreadable without the index written on close
+        // (2026-11-26: "Recording damaged"). 24 kHz mono, about 0.7 MB a minute; transcription uses 16 kHz.
+        let audio = try AVAudioRecorder(url: url, settings: IOSMeetingRecorder.recordingSettings)
         audio.delegate = self
         recorder = audio
         guard audio.record() else { throw CaptureError.startFailed }

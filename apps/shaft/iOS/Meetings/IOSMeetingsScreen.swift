@@ -12,7 +12,9 @@ struct IOSMeetingsScreen: View {
                 MeetingsBrowser(client: client, refreshID: recorder.lastSent,
                                 clipPlaybackAllowed: recorder.started == nil && !recorder.starting,
                                 close: { dismiss() }) {
-                    EmptyView()
+                    // In the sidebar column, above the list: as an inset over the whole split view it covered the
+                    // list's first rows and the navigation title (2026-11-26, iPhone).
+                    controls
                 }
             } else {
                 NavigationStack {
@@ -21,10 +23,10 @@ struct IOSMeetingsScreen: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                         }
+                        .safeAreaInset(edge: .top, spacing: 0) { controls }
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { controls.background(.regularMaterial) }
     }
 
     private var controls: some View {
