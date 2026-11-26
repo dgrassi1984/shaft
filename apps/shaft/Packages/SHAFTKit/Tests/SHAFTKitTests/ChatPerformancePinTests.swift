@@ -24,6 +24,19 @@ struct ChatPerformancePinTests {
         #expect(!feed.contains("            VStack(alignment: .leading, spacing: Design.Space.turn)"))
     }
 
+    /// Regression (v0.80.0, chat blank until scrolled): with the lazy feed, a scroll to the bottom edge goes to the end
+    /// of an estimated height (19,004 pt for a feed that measured 7,805), past the last row, and nothing is built
+    /// there until a wheel event moves it: reopening a long chat showed an empty feed 3 times in 5. A scroll to the
+    /// foot by id builds and places the last rows; the foot carries the bottom margin, so its end is the feed's end.
+    @Test func theFeedLandsOnItsEndByIdNotOnAnEstimatedEdge() throws {
+        let feed = try source("Shared/Feed/FeedView.swift")
+        #expect(!feed.contains("scrollTo(edge: .bottom)"))
+        #expect(feed.contains("@State private var position = ScrollPosition(id: Self.bottomID, anchor: .bottom)"))
+        #expect(feed.contains("withTransaction(transaction) { position.scrollTo(id: Self.bottomID, anchor: .bottom) }"))
+        #expect(feed.contains("Color.clear.frame(height: metrics.fade - Design.Space.turn).id(Self.bottomID)"))
+        #expect(!feed.contains(".padding(.bottom, metrics.fade - Design.Space.turn)"))
+    }
+
     /// The distance to the end in points was view state: every wheel event re-evaluated the whole feed (28–34 fps
     /// scrolling a long chat at 75 Hz). Only a change of band may update the feed.
     @Test func scrollingUpdatesTheFeedOnlyWhenTheDistanceBandChanges() throws {

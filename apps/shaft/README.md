@@ -188,6 +188,9 @@ with the transition under way; read them, with the transitions' own times, on an
 
 `SHAFT_DEV_FRAMES=<file>` adds a line per second of frames drawn and frames late (`Shared/Support/FrameMeter.swift`).
 
+A chat that opens blank until scrolled: run `DevServer/mac-feed-blank.drive` on that seed; its `feedgeom` lines log
+where the feed is and whether what is on screen of it draws anything (`BLANK` when not).
+
 To check the document-opening crash, seed a long chat with `fixture_server.py act ... long <name> 120`
 for the instance `mac-doc-open.drive` opens.
 Run the Release build with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` and Debug's
