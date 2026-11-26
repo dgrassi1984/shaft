@@ -57,7 +57,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many follows a relevant outward surprise; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
     "OUTCOME_CARDS": (str, "on"),         # on/off: before a failing kind of action, what comparable ones led to
-    "WORKSPACE": (str, "competitive"),    # what wins a small space at the front of my live cycle
+    "WORKSPACE": (str, "relevance"),    # what wins a small space at the front of my live cycle
     "WORKSPACE_K": (int, 3),              # how many items it holds
     "ATTENTION_SCHEMA": (str, "on"),      # declare_intent asks where I expect to look
     "COMMITMENTS": (str, "on"),           # commit_to, kept against my record
@@ -125,7 +125,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high", "xhigh", "max", "ultra"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
            "DOUBTS": ("on", "off"), "LOOK_AHEAD": ("on", "off"),
-           "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
+           "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
            "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off"),
            "GOAL_SLATE": ("on", "off"), "FIRST_ERROR": ("on", "off"), "VOICE_MODE": ("on", "off")}
