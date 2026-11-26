@@ -397,3 +397,40 @@ struct MarkdownAttributedTests {
         #expect(rendered.text.string.hasSuffix("Below"))
     }
 }
+
+/// RenderCache (macOS/MessageTextView.swift): a message rendered once is not rendered again while it is kept, a
+/// different appearance or scale renders anew, and the oldest entries go first past the capacity.
+struct RenderCacheTests {
+    @Test @MainActor func aKeptMessageIsNotRenderedAgain() {
+        var renders = 0
+        let key = RenderCache.Key(source: "cache-\(UUID())", markdown: true, scale: 1, appearance: .aqua)
+        for _ in 0..<3 {
+            _ = RenderCache.rendered(key) {
+                renders += 1
+                return MarkdownAttributed.render(key.source)
+            }
+        }
+        #expect(renders == 1)
+        let dark = RenderCache.Key(source: key.source, markdown: true, scale: 1, appearance: .darkAqua)
+        _ = RenderCache.rendered(dark) {
+            renders += 1
+            return MarkdownAttributed.render(key.source)
+        }
+        #expect(renders == 2)
+    }
+
+    @Test @MainActor func theOldestGoFirstPastTheCapacity() {
+        let first = RenderCache.Key(source: "oldest-\(UUID())", markdown: false, scale: 1, appearance: .aqua)
+        _ = RenderCache.rendered(first) { .empty }
+        for index in 0..<RenderCache.capacity {
+            let key = RenderCache.Key(source: "filler-\(index)-\(UUID())", markdown: false, scale: 1, appearance: .aqua)
+            _ = RenderCache.rendered(key) { .empty }
+        }
+        var renderedAgain = false
+        _ = RenderCache.rendered(first) {
+            renderedAgain = true
+            return .empty
+        }
+        #expect(renderedAgain)
+    }
+}

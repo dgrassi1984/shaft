@@ -14,7 +14,9 @@ struct FeedView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var pinned = true
-    @State private var distance: CGFloat = 0
+    /// How far the end of the feed is below the visible part, in the bands the feed acts on: only a change of band
+    /// updates the view (a distance in points re-evaluated the whole feed on every scroll event).
+    @State private var distance = Distance.atEnd
     @State private var newBelow = false
     @State private var interacting = false
     /// Which row's end is on screen. Keyed by row, so a report from the row that was newest cannot speak for the new one,
@@ -30,7 +32,9 @@ struct FeedView: View {
     var body: some View {
         let newest = FeedRows.newestKey(feed)
         ScrollView {
-            VStack(alignment: .leading, spacing: Design.Space.turn) {
+            // Lazy: a chat opens with only the rows on screen built (each message's text is rendered and measured as
+            // it is built: 80 turns of real answers held the main thread 650 ms per switch when all were built).
+            LazyVStack(alignment: .leading, spacing: Design.Space.turn) {
                 if !screen.archived && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
                     EmptyChat(instance: feed.instance, main: screen.chat.ref.isFrom).padding(.horizontal, Design.Space.gutter)
                 }
@@ -65,11 +69,11 @@ struct FeedView: View {
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .scrollDismissesKeyboard(.interactively)
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY
+        .onScrollGeometryChange(for: Distance.self) { geometry in
+            Distance(geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY)
         } action: { _, new in
             distance = new
-            if new < 40 {
+            if new == .atEnd {
                 newBelow = false
                 if !pinned && !interacting { pinned = true }
             }
@@ -82,7 +86,7 @@ struct FeedView: View {
         .onScrollPhaseChange { _, phase in
             interacting = phase == .interacting || phase == .tracking
             if phase == .idle || phase == .decelerating {
-                pinned = distance < 40
+                pinned = distance == .atEnd
             } else if phase == .interacting {
                 pinned = false
             }
@@ -119,8 +123,17 @@ struct FeedView: View {
         }
     }
 
+    /// The end of the feed within 40 points of the visible part (pinned there), within 200 (no pill), or further.
+    enum Distance: Equatable {
+        case atEnd, near, far
+
+        init(_ points: CGFloat) {
+            self = points < 40 ? .atEnd : points > 200 ? .far : .near
+        }
+    }
+
     private var pill: ChatScreenModel.LatestPill? {
-        guard !pinned && distance > 200 else { return nil }
+        guard !pinned && distance == .far else { return nil }
         return newBelow ? .newBelow : .latest
     }
 

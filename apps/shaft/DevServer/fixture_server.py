@@ -44,7 +44,7 @@ account `google` signed in, as the app's local `shaft google login` would), `mes
 `question <instance> [text]` (the instance sends you one, with a push; `choice` and `choices` the same with
 single- and multiple-choice options), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
-window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
+window), `rich <instance> [turns]` (Main grows by turns with answers the size of real ones, for timing the chat screen). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
 `services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
 GET /app/v1/version answer as a server of that API version, `version missing` as one older than the route (404), and
 `version` alone the real answer again (docs/app-api.md §19).
@@ -1047,6 +1047,25 @@ def seed(base: Path, web, web_chat, messages) -> None:
     (base / "seeded").write_text(now.isoformat())
 
 
+def _rich_answer(k: int) -> str:
+    """An answer the size and shape of a real one (about 2 KB: a heading, paragraphs, a list, every fourth a code block,
+    every sixth a table), for `act rich`."""
+    parts = [f"## Step {k}", "The ledger was read again from the start, and the totals now match the bank's own "
+             f"statement for run {k}. **Two** rows had swapped dates; they are fixed in `notes/docs/ledger.md`, and the "
+             "[summary](notes/docs/summary.md) says what moved and why.",
+             "\n".join(f"- Item {i}: the {('first', 'second', 'third', 'fourth', 'fifth')[i]} check passed after the "
+                       "rounding moved to the end of the sum, where it belongs." for i in range(5)),
+             "What is left is the reserve account, which still rounds each month. That one waits for your word, since "
+             "it changes the numbers you already sent on. " * 2]
+    if k % 4 == 1:
+        parts.append("```python\n" + "\n".join(f"total_{i} = sum(row.amount for row in rows if row.day <= day_{i})"
+                                                for i in range(8)) + "\n```")
+    if k % 6 == 1:
+        parts.append("| Account | Before | After | Note |\n|---|---:|---:|---|\n" + "\n".join(
+            f"| acct-{i} | {1000 + i * 37:,}.00 | {1000 + i * 37 + 3:,}.00 | rounded once |" for i in range(6)))
+    return "\n\n".join(parts)
+
+
 # -- the commands -------------------------------------------------------------------------------------------------------
 def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]) -> None:
     name = args[0] if args else "tundra"
@@ -1117,6 +1136,14 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                   **({"mid": f"long-{k}"} if k % 2 == 0 else {})} for k in range(int(text or 90))]
         web_chat.save({"id": "web-" + os.urandom(8).hex(), "instance": name, "login": ME,
                        "created": turns[0]["ts"], "state": "idle", "reply": None, "turns": turns})
+    elif what == "rich":                               # Main grows by real-sized answers (timing the chat screen)
+        start = datetime.now().replace(microsecond=0) - timedelta(minutes=400)
+        turns = [{"role": "user" if k % 2 == 0 else "assistant", "ts": (start + timedelta(minutes=2 * k)).isoformat(),
+                  **({"content": f"Question {k}: what changed?", "shown": f"Question {k}: what changed?",
+                      "mid": f"rich-{k}"} if k % 2 == 0 else {"content": _rich_answer(k)})}
+                 for k in range(int(text or 160))]
+        chat = web_chat.from_chat(name, ME, create=True)     # Main, which the chat list opens first
+        web_chat.save({**chat, "turns": chat["turns"] + turns})
     elif what == "google":                             # the app's local `shaft google login`, which a fixture run has not
         from supervisor import google
         address = args[0] if args else ME
@@ -1124,7 +1151,7 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
                                         "scope": " ".join(google.SCOPES), "created": now})
         print(f"Google account google is {address} (fixture: every scope, a fake token)")
     else:
-        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long")
+        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long, rich")
 
 
 def main() -> int:
