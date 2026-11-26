@@ -80,11 +80,12 @@ CONTEXT_CHARS = 300
 SWITCH_COST = 2.0
 PAUSE_SECONDS = 0.25
 SEGMENT_GAP_SECONDS = 1.5
+LABEL_SECONDS = 0.4
 
 
 def chunk_spans(turns, limit: float = CHUNK_SECONDS, pad: float = PAD_SECONDS):
     """Speech regions from every channel's turns, padded, joined, and packed into chunks of at most `limit` seconds
-    that start and end in a pause (a stretch with no pause is cut at the limit)."""
+    that start and end in a pause (a longer stretch with no pause is cut into equal pieces)."""
     regions = []
     for start, end in sorted((max(0.0, start - pad), end + pad) for start, end, *_ in turns):
         if regions and start <= regions[-1][1]:
@@ -93,13 +94,12 @@ def chunk_spans(turns, limit: float = CHUNK_SECONDS, pad: float = PAD_SECONDS):
             regions.append([start, end])
     chunks = []
     for start, end in regions:
-        while end - start > limit:
-            chunks.append([start, start + limit])
-            start += limit
         if chunks and end - chunks[-1][0] <= limit:
             chunks[-1][1] = end
-        else:
-            chunks.append([start, end])
+            continue
+        pieces = math.ceil((end - start) / limit - 1e-9)  # a stretch with no pause: equal pieces, no sliver at the end
+        chunks.extend([start + (end - start) * i / pieces, start + (end - start) * (i + 1) / pieces]
+                      for i in range(pieces))
     return [tuple(chunk) for chunk in chunks]
 
 
@@ -146,10 +146,18 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
         prefix = "M" if channel == 1 else "S"
         diarised, vectors = engines.diarise(wav)
         original = getattr(diarised, "original", diarised)
-        for start, end, label in sorted(diarised):
-            if end > start:
-                turns.append((start, end, labels.setdefault(label, f"{prefix}{len(labels) + 1}"), channel))
-                intervals.append((start, end))
+        diarised = sorted((start, end, label) for start, end, label in diarised if end > start)
+        # Number labels by their first turn of LABEL_SECONDS or more, then the rest by first turn, so a label keeps
+        # its name (and a saved anonymisation) when a meeting is reprocessed.
+        first = {}
+        for start, end, label in diarised:
+            key = (end - start < LABEL_SECONDS, start)
+            first[label] = min(first.get(label, key), key)
+        for label in sorted(first, key=first.get):
+            labels[label] = f"{prefix}{len(labels) + 1}"
+        for start, end, label in diarised:
+            turns.append((start, end, labels[label], channel))
+            intervals.append((start, end))
         embeddings.update({speaker: vectors[label] for label, speaker in labels.items() if label in vectors})
         for start, end, label in _clean_turns(original):
             if label in labels:
@@ -179,7 +187,11 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
     for start, end in chunk_spans(turns):
         prompt = " ".join(part for part in (hints.strip(), context[-CONTEXT_CHARS:].strip()) if part)
         result = engines.transcribe(source, start, end, prompt or None)
-        words.extend({**word, "lang": result["lang"]} for word in result["words"] if word["w"])
+        # Whisper can place a word past the audio it was given; a word belongs to the chunk it starts in.
+        heard = [word for word in result["words"] if word["w"] and start <= word["start"] < end]
+        if heard:
+            heard[0] = {**heard[0], "raw": " " + heard[0].get("raw", heard[0]["w"]).lstrip()}
+        words.extend({**word, "lang": result["lang"]} for word in heard)
         context += " " + result["text"].strip()
 
     loud = {}
@@ -198,7 +210,8 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
         row = segments[-1] if segments else None
         entry = {"w": word["w"], "start": word["start"], "end": word["end"]}
         raw = word.get("raw", " " + word["w"])
-        if row and row["speaker"] == speaker and word["start"] - row["end"] < SEGMENT_GAP_SECONDS:
+        if (row and row["speaker"] == speaker and row["lang"] == word["lang"]
+                and word["start"] - row["end"] < SEGMENT_GAP_SECONDS):
             row["words"].append(entry)
             row["raw"].append(raw)
             row["end"] = max(row["end"], word["end"])
@@ -208,7 +221,7 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
     for row in segments:
         row["text"] = "".join(row.pop("raw")).strip()
 
-    count = sum(len(row["words"]) for row in segments)
+    count = sum(len(row["text"].split()) for row in segments)
     if speech >= 10 and count * 30 < speech:
         raise ValueError(f"ASR word count was {count} for {speech:.1f} seconds of detected speech "
                          "(expected at least 1 word per 30 seconds).")

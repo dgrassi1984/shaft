@@ -155,11 +155,11 @@ class ListenTest(unittest.TestCase):
         self.mock_decode()
         meeting_id = self.enqueue()
         folder = self.root / "meetings" / meeting_id
-        engine = FakeEngines({"ch1": [(0, 31, "A")]}, {("ch1", 0, 20): spoken("one two")})
+        engine = FakeEngines({"ch1": [(0, 31, "A")]}, {("ch1", 0, 15): spoken("one two")})
         self.assertTrue(listen_worker.process_next(engine))
         old = (folder / "transcript.json").read_bytes(), (folder / "transcript.md").read_bytes()
         meetings.reprocess(meeting_id)
-        engine.results["ch1", 0, 20] = spoken("one")
+        engine.results["ch1", 0, 15] = spoken("one")
         with self.assertLogs("supervisor.listen_worker", level="ERROR"):
             self.assertTrue(listen_worker.process_next(engine))
         row = meetings.get(meeting_id)
@@ -295,7 +295,12 @@ class ConversationTest(unittest.TestCase):
     def test_chunks_fit_one_whisper_window_and_end_in_pauses(self):
         turns = [(0, 20, "S1", 2), (21, 26, "M1", 1), (30, 40, "S1", 2), (45, 115, "S1", 2)]
         chunks = listen_pipeline.chunk_spans(turns)
-        self.assertEqual(chunks, [(0.0, 26.3), (29.7, 40.3), (44.7, 72.7), (72.7, 100.7), (100.7, 115.3)])
+        self.assertEqual(chunks[:2], [(0.0, 26.3), (29.7, 40.3)])
+        # 70 s with no pause: three equal pieces, never a sliver of a few frames at the end (review 2026-11-26: a
+        # 28.000000000000004 s region left a zero-frame chunk that failed the meeting).
+        self.assertEqual([round(end - start, 6) for start, end in chunks[2:]], [23.533333] * 3)
+        self.assertEqual((chunks[2][0], chunks[-1][1]), (44.7, 115.3))
+        self.assertEqual(len(listen_pipeline.chunk_spans([(0.36, 27.76, "M1", 1)])), 1)
         self.assertTrue(all(end - start <= listen_pipeline.CHUNK_SECONDS + 1e-9 for start, end in chunks))
 
     def test_a_stray_word_inside_a_phrase_keeps_its_speaker_and_a_pause_lets_it_change(self):
@@ -324,6 +329,46 @@ class ConversationTest(unittest.TestCase):
         self.assertEqual(engines.prompts, ["Patricia Navi, lead.", "Patricia Navi, lead. Allora, c'è il Foresight."])
         self.assertEqual([row["text"] for row in transcript["segments"]], ["Allora, c'è il Foresight.", "Ok."])
         self.assertNotIn("Thank you", " ".join(row["text"] for row in transcript["segments"]))
+
+
+class AttributionTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(mock.patch.object(listen_pipeline, "decode",
+                                            return_value=[Path("ch1.wav"), Path("ch2.wav")]))
+
+    def run_online(self, loudness):
+        # Both channels' diarisation claims 2-3 s; only loudness says who spoke "Va bene".
+        engines = FakeEngines({"ch1": [(0, 1, "A"), (2, 3, "A")], "ch2": [(2, 3, "A"), (5, 9, "A")]},
+                              {("ch1", 0, 1): spoken("Ciao."), ("ch1", 2, 3): spoken("Va bene", 2),
+                               ("ch2", 5, 9): spoken("Allora partiamo", 5)}, loudness=loudness)
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "online"}, Path("audio.m4a"), Path("work"), {}, engines)
+        return [(row["speaker"], row["text"]) for row in transcript["segments"]]
+
+    def test_the_louder_channel_against_its_own_speech_takes_the_word(self):
+        mic = lambda wav, start, end: (4.0 if 1.9 <= start < 3 else 1.0) if wav.stem == "ch1" else 1.0
+        far = lambda wav, start, end: (4.0 if 1.9 <= start < 3 else 1.0) if wav.stem == "ch2" else 1.0
+        self.assertEqual(self.run_online(mic), [("M1", "Ciao."), ("M1", "Va bene"), ("S1", "Allora partiamo")])
+        self.assertEqual(self.run_online(far), [("M1", "Ciao."), ("S1", "Va bene"), ("S1", "Allora partiamo")])
+
+    def test_labels_are_numbered_by_their_first_real_turn(self):
+        # Review 2026-11-26: a 0.2 s blip labelled B first must not take M1 from A, or a saved anonymisation of M1
+        # would land on someone else after reprocessing.
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        engines = FakeEngines({"ch1": [(0, 0.2, "B"), (1, 8, "A")]}, {("ch1", 1, 8): spoken("Buongiorno a tutti", 1)})
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "inperson"}, Path("audio.m4a"), Path("work"), {}, engines)
+        self.assertEqual([row["speaker"] for row in transcript["segments"]], ["M1"])
+
+    def test_chunks_join_cleanly_and_words_past_a_chunk_are_dropped(self):
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        late = {"text": "Yes", "lang": "en", "words": [{"w": "Yes", "raw": "Yes", "start": 0.5, "end": 0.8},
+                                                      {"w": "ghost", "raw": " ghost", "start": 40.0, "end": 40.2}]}
+        early = {"text": "Ciao", "lang": "it", "words": [{"w": "Ciao", "raw": "Ciao", "start": 40.0, "end": 40.3}]}
+        engines = FakeEngines({"ch1": [(0, 1, "A"), (40, 41, "A")]}, {("ch1", 0, 1): late, ("ch1", 40, 41): early})
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "inperson"}, Path("audio.m4a"), Path("work"), {}, engines)
+        self.assertEqual([(row["text"], row["lang"]) for row in transcript["segments"]], [("Yes", "en"), ("Ciao", "it")])
 
 
 class HintsTest(unittest.TestCase):

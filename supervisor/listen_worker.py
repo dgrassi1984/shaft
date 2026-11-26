@@ -20,7 +20,7 @@ ASR = "mlx-community/whisper-large-v3-turbo"
 POLL_SECONDS = 3
 LANGUAGES, _ = knob(
     "SHAFT_LISTEN_LANGUAGES", "it,en", lambda s: tuple(x.strip().lower() for x in s.split(",") if x.strip()),
-    "the languages meetings are spoken in, comma-separated (Whisper codes): a turn heard as another language is "
+    "the languages meetings are spoken in, comma-separated (Whisper codes): a chunk heard as another language is "
     "transcribed again in each of these and the likelier kept", group="Meetings", services=("listen",), web=False)
 VOCABULARY, _ = knob(
     "SHAFT_LISTEN_VOCABULARY", "", lambda s: tuple(x.strip() for x in s.split(",") if x.strip()),

@@ -234,7 +234,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest`, `WithinARunTest` | — |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
-| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest`, `ConversationTest`, `HintsTest` | `spoken`, `segment` |
+| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest`, `ConversationTest`, `AttributionTest`, `HintsTest` | `spoken`, `segment` |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_live_llm_failure_template.py` | `LiveModelFailureTest` | — |
 | `supervisor/tests/test_live_settle_template.py` | `LiveSettlementTest` | `call` |
