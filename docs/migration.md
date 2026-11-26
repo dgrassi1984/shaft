@@ -78,11 +78,9 @@ so do that instead.
   Homebrew does this. Services run under launchd with
   `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`. Installing `uv` in
   `~/.local/bin` works in a terminal but fails under launchd.
-  Check `python3 --version` first. `bin/shaft` runs whichever `python3` is on
-  your PATH, and the `on` commands record that interpreter in the plists.
-  Homebrew's plain `python3` may be newer than the one you used before.
-  To use `python@3.12`, put `/opt/homebrew/opt/python@3.12/libexec/bin` first
-  on your PATH.
+  Unless you set `SHAFT_PYTHON`, `bin/shaft` runs the newest app-installed
+  Python 3.12, then `python3.12` on your PATH, then `python3` if it is 3.12 or
+  later. The `on` commands record that interpreter in the plists.
 - On the old Mac, run `brew bundle dump --file=Brewfile` in the project
   folder to record your Homebrew packages. The file travels with the copy.
   On the new Mac, `brew bundle --file=Brewfile` installs them. This matters
