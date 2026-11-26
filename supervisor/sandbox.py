@@ -268,8 +268,16 @@ ENV_ALLOW_PREFIXES = ("LC_",)
 
 
 def agent_env(environ: dict[str, str], **extra: str) -> dict[str, str]:
+    """The inherited names in ENV_ALLOW, then `extra`. PATH starts with the folder of the Python that runs SHAFT, so a
+    plugin or test that starts `python3` gets that Python: on an app install the launchd PATH has only .runtime/bin
+    (uv) before the system's, whose python3 is the Command Line Tools' 3.9."""
+    from . import core
     env = {k: v for k, v in environ.items()
            if k in ENV_ALLOW or k.startswith(ENV_ALLOW_PREFIXES)}
+    bindir = str(Path(core.PYTHON).parent)
+    path = env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    if (Path(bindir) / "python3").exists() and path.split(":")[0] != bindir:
+        env["PATH"] = f"{bindir}:{path}"
     env.update(extra)
     return env
 

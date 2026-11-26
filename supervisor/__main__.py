@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from . import actions, autonomy, core, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import say as core_say
-from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
+from .core import (jsonl_lines, DEFAULT_INSTANCE, HOME, PYTHON, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_paused, set_update_queued, update_queued)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
@@ -2171,7 +2172,7 @@ def _dispatch(args, parser) -> int:
         if not args.plain and sys.stdin.isatty() and sys.stdout.isatty() and ui_python.exists():
             os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.talk_ui", args.name, *extra])
         if not args.plain and sys.stdin.isatty() and not ui_python.exists():
-            print(f"(plain mode: the terminal client needs {ui_python} — python3 -m venv .venv-ui && "
+            print(f"(plain mode: the terminal client needs {ui_python} — {shlex.quote(PYTHON)} -m venv .venv-ui && "
                   f".venv-ui/bin/pip install -r requirements-ui.txt)", file=sys.stderr)
         plain_args = ["talk"] + (["--show-thinking"] if args.show_thinking else []) + \
             (["--speaker", args.speaker] if args.speaker else [])
@@ -2249,7 +2250,7 @@ def _dispatch(args, parser) -> int:
         ui_python = PROJECT / ".venv-ui" / "bin" / "python"
         extra = ["--once"] if args.once else []
         if not ui_python.exists():
-            print(f"shaft top needs {ui_python} (python3 -m venv .venv-ui && .venv-ui/bin/pip install "
+            print(f"shaft top needs {ui_python} ({shlex.quote(PYTHON)} -m venv .venv-ui && .venv-ui/bin/pip install "
                   f"-r requirements-ui.txt)", file=sys.stderr)
             return 2
         os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.top", *extra])
