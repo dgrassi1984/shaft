@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import (actions, app_api, calendar, core, drive_presets, google, mail, mind, opconfig, setup, web_chat,
+from supervisor import (actions, app_api, calendar, core, drive_presets, google, mail, mind, opconfig, setup, shortcuts, web_chat,
                         web_config)
 from supervisor.tests.test_app_api import AppTest, write_or_check_fixtures
 from supervisor.tests.test_web import ME
@@ -600,7 +600,9 @@ class AccessTest(SetupTest):
         got = self.get("/app/v1/access/wisp")
         self.assertEqual(got, {"instance": "wisp", "folder": None, "browser": {"installed": "1.64.0", "run": True},
                                "web_search": False, "telegram": False, "mail": [], "calendar": [], "drive": [],
-                               "chat": [], "claude_notes": False, "google_accounts": []})
+                               "chat": [], "claude_notes": False, "shortcuts": [], "shortcuts_available": [],
+                               "shortcuts_problem": "Shortcuts is not on this computer (macOS only)",
+                               "google_accounts": []})
 
     def test_each_grant_runs_its_verb(self):
         folder = tempfile.mkdtemp(prefix="shaft-share-")
@@ -916,7 +918,11 @@ class SetupFixturesTest(SetupTest):
         core.set_gdrive_grants("wisp", [{"account": "work", "reach": "own"}])
         core.set_gchat_grants("wisp", [{"account": "work"}])
         core.set_claude_notes("wisp", True)
-        out["access"] = self.get("/app/v1/access/wisp")
+        reminder = {"id": "AAAAAAAA-0000-4000-8000-000000000001", "name": "Make reminder"}
+        core.set_shortcut_grants("wisp", [reminder])
+        with mock.patch.object(shortcuts, "available",
+                               return_value=[reminder, {"id": "BBBBBBBB-0000-4000-8000-000000000002", "name": "Lights"}]):
+            out["access"] = self.get("/app/v1/access/wisp")
         with mock.patch.object(mail, "labels", return_value={"Assistant": "L1", "Receipts": "L2"}):
             out["google-labels"] = self.get("/app/v1/google/work/labels")
         with mock.patch.object(calendar, "calendars", return_value=[

@@ -133,6 +133,16 @@ SHAFT and key stores are refused. A note never wakes the instance. See
 [integrations](integrations.md#notes-from-your-claude-sessions-shaft-mcp), `supervisor/claude_notes.py` and
 `supervisor/mcp_server.py`.
 
+### Shortcuts grants
+
+`shaft shortcuts <name> grant <shortcut>` lets an instance run that one shortcut on the server Mac through the broker
+(`shortcut_run`); the sandbox has no Shortcuts of its own. A shortcut runs as the operator, with whatever the Shortcuts
+app may reach, and SHAFT cannot see what it does: the grant, by identifier and read again on every call, is the only
+gate. Never in a trial replay; stopped after 90 s; 10 per run; input files read without following a link; output kept
+in the instance's `.tmp/shortcuts/`; `broker.log` keeps names and sizes, never contents. An irreversible action for
+conservative instances (#142). See [integrations](integrations.md#the-operators-shortcuts-shaft-shortcuts) and
+`supervisor/shortcuts.py`.
+
 ### Calendar grants
 
 `shaft calendar <name> grant <alias> <calendar>` enables `calendar_events` and

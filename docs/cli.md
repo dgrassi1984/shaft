@@ -221,6 +221,10 @@ shaft gchat <name> revoke <alias>
 shaft gchat <name> off
 shaft gchat [name]
 shaft claude-notes [<name> [on|off]]
+shaft shortcuts available
+shaft shortcuts <name> grant|revoke <shortcut>
+shaft shortcuts <name> off
+shaft shortcuts [name]
 shaft mcp [install|uninstall|serve|status]
 shaft share <name> [<folder>|off]
 shaft secret <name> set <key> --hosts <host> [--header H] [--scheme S]
@@ -255,6 +259,11 @@ See [operator Google Chat access](integrations.md#the-operators-google-chat-shaf
 default; alone it lists every instance). `shaft mcp install` registers SHAFT's local MCP server with Claude Code (user
 scope) and Claude Desktop (`claude_desktop_config.json`), `uninstall` removes both, `serve` is what they start. See
 [notes from your Claude sessions](integrations.md#notes-from-your-claude-sessions-shaft-mcp).
+
+`shaft shortcuts <name> grant <shortcut>` lets an instance run one of the operator's Shortcuts on this Mac
+(`shortcut_list`, `shortcut_run`), by name or identifier; the grant keeps the identifier, so a rename keeps it.
+`available` lists this Mac's shortcuts, `revoke` takes one back from the next call, `off` takes all. See
+[Shortcuts](integrations.md#the-operators-shortcuts-shaft-shortcuts).
 
 `shaft share` shows, grants, or revokes a read-only shared folder. `shaft secret set` prompts for a host-bound
 key. Its default header is `Authorization: Bearer <value>`; an empty `--scheme` sends the raw value. `list`

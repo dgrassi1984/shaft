@@ -671,6 +671,45 @@ shaft mcp install                 # Claude Code (user scope) and Claude Desktop;
   holding one of SHAFT's own secrets is refused. The count is logged, never the value.
 - **Off**: `shaft claude-notes <name> off` refuses the next note; `shaft mcp uninstall` removes the server.
 
+## The operator's Shortcuts (`shaft shortcuts`)
+
+An instance can run the Shortcuts you grant it, on the server Mac, as you: a shortcut that reads Apple Notes, turns
+on a light, makes a reminder, or anything else the Shortcuts app does.
+
+```bash
+shaft shortcuts available                 # this Mac's shortcuts, with their identifiers
+shaft shortcuts <name> grant "Make reminder"
+shaft shortcuts <name> revoke "Make reminder"
+shaft shortcuts <name> off                # every grant
+```
+
+The Access page and the instance's Access settings in the Mac app grant and revoke them too.
+
+- **Tools**: `shortcut_list` and `shortcut_run(shortcut, input?, input_file?)`, offered only with a grant and never in
+  a trial replay. The grant is read again on every call and names the shortcut's identifier: a rename keeps it, and a
+  new shortcut that takes a granted one's old name does not get it.
+- **Input and output**: text, or one file of the instance's folder (no link followed, nothing outside it). Text output
+  up to 5,000 characters comes back in the answer; longer text and any file are saved under `.tmp/shortcuts/` (git
+  ignores `.tmp/`).
+- **Limits**: 10 runs per run or conversation; a run is stopped after 90 seconds — a shortcut that shows a menu, asks
+  a question or waits for an Allow prompt is waiting for someone who is not there. Stopping the `shortcuts` command
+  may not stop an action already handed to the Shortcuts app.
+- **Log**: `broker.log` keeps the shortcut's name and the input's size, never the input or the output.
+- **Classes**: `shortcut_run` is an irreversible action (#142): an instance in `SHAFT_ACTION_INSTANCES` is refused.
+
+### The Shortcuts risks you accept
+
+A granted shortcut runs with everything you gave the Shortcuts app: your contacts, messages, files, Home and accounts.
+SHAFT cannot tell what a shortcut does; the grant is your judgment that its effects are acceptable whenever the
+instance chooses to run it. Grant ones whose worst case you accept; a shortcut that sends messages or deletes files
+sends and deletes. What it returns reaches the instance as data, which may carry prompt injection.
+
+### The other way: a Shortcut that talks to an instance
+
+The SHAFT app (iPhone, iPad and Mac) gives the Shortcuts app two actions: **Send to SHAFT instance** (text and files,
+sent as your message; its output is the confirmation) and **Open SHAFT chat**. Siri knows both. An iPhone cannot list
+or run your Shortcuts from an app; instances run them only on the server Mac.
+
 ## Meeting transcripts
 
 The broker offers `meeting_search`, `meeting_read`, and `meeting_propose_speaker` to instances with meeting
