@@ -20,6 +20,8 @@ goes into the background. A phone call or Siri can pause the recording. The app 
 resumes in the same file if iOS allows it. The transcript marks each gap at the point where audio
 paused and shows how long the gap lasted. If the microphone cannot resume, SHAFT keeps the partial
 recording and shows why it stopped.
+The iPhone records IMA4 audio in a `.caf` file (24 kHz, about 0.7 MB a minute): if iOS ends SHAFT during a
+recording, the file stays readable up to that moment and is sent at the next launch, marked as cut short.
 
 Tap **Stop** to save the recording and send it to the paired SHAFT server over the tailnet. Meetings
 shows upload progress and errors. Open SHAFT again to resume a pending upload. The app keeps a
