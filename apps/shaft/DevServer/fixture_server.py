@@ -44,7 +44,8 @@ account `google` signed in, as the app's local `shaft google login` would), `mes
 `question <instance> [text]` (the instance sends you one, with a push; `choice` and `choices` the same with
 single- and multiple-choice options), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
-window), `rich <instance> [turns]` (Main grows by turns with answers the size of real ones, for timing the chat screen). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
+window), `rich <instance> [turns]` (Main grows by turns with answers the size of real ones, for timing the chat
+screen). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
 `services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
 GET /app/v1/version answer as a server of that API version, `version missing` as one older than the route (404), and
 `version` alone the real answer again (docs/app-api.md §19).
