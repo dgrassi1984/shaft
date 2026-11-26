@@ -30,8 +30,9 @@ confirmed recording on the device for seven days and prunes it on a later foregr
 The Mac records from the system default input unless you choose another in **Meeting → Microphone** (in
 the menu bar and in the SHAFT menu bar icon). The choice applies to online and in-person recordings and is
 kept across launches. If the chosen microphone is not connected when you start, SHAFT records from the
-system default and says so while recording. The sidecar names the input as `input_device` and its Core
-Audio UID as `input_device_uid` (`default` when none was chosen).
+system default and says so while recording. The sidecar names the input recorded from as `input_device`, its
+Core Audio UID as `input_device_uid`, and the choice as `input_chosen` (`default` when none was chosen). A
+microphone unplugged and plugged back in during a recording is picked up again by its UID.
 
 ## Set up the Listen worker
 

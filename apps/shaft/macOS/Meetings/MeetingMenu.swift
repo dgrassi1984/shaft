@@ -22,6 +22,7 @@ struct MeetingMenuItems: View {
             Text(online ? "Recording the call" : "Recording in person")
             Text("Since \(started.formatted(date: .omitted, time: .shortened))")
             if let from = recorder.recordingFrom { Text("From \(from)") }
+            if let notice = recorder.inputNotice { Text(notice) }
             if let warning = recorder.warning { Text(warning) }
             Divider()
             Button("Stop Recording") { Task { await recorder.stop() } }

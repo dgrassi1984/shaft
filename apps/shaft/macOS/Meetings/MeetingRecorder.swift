@@ -29,8 +29,10 @@ final class MeetingRecorder {
     /// The microphone the next recording uses, by UID; nil is the system default input. Kept across launches.
     private(set) var microphoneUID: String?
     @ObservationIgnored private(set) var microphoneName: String?
-    /// The input the current recording is from.
+    /// The input the current recording is from, and why it is not the chosen one (kept apart from `warning`, which
+    /// the capture may overwrite while recording).
     private(set) var recordingFrom: String?
+    private(set) var inputNotice: String?
 
     @ObservationIgnored private var capture: MeetingCapture?
     @ObservationIgnored private var file: URL?
@@ -73,6 +75,11 @@ final class MeetingRecorder {
     func refreshMicrophones() {
         microphones = MeetingMicrophones.connected()
         defaultMicrophoneName = MeetingMicrophones.defaultName()
+        // A renamed input keeps its UID: keep the saved name current for when it is unplugged.
+        if let uid = microphoneUID, let mic = microphones.first(where: { $0.uid == uid }), mic.name != microphoneName {
+            microphoneName = mic.name
+            defaults.set(mic.name, forKey: Self.microphoneNameKey)
+        }
     }
 
     static let microphoneUIDKey = "meetings.microphoneUID"
@@ -102,7 +109,7 @@ final class MeetingRecorder {
             self.capture = capture
             file = url
             recordingFrom = capture.inputName
-            warning = input.warning
+            inputNotice = input.warning ?? capture.inputFallback
             phase = .recording(started: Date(), online: online)
         } catch {
             phase = .failed("Could not start recording: \(error.localizedDescription)")
@@ -116,6 +123,7 @@ final class MeetingRecorder {
         self.capture = nil
         self.file = nil
         recordingFrom = nil
+        inputNotice = nil
         if let problems = sidecar["problems"] as? [String], !problems.isEmpty {
             warning = "The recording is incomplete: " + problems.joined(separator: "; ") + "."
         }
