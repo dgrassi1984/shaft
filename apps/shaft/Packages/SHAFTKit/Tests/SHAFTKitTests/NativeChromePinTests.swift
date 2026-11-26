@@ -156,10 +156,10 @@ struct NativeChromePinTests {
         #expect(screen.contains(".feedFloor()"))
         let design = try shared("Shared/Design/Design.swift")
         #expect(design.contains("static let fade: CGFloat = 32"))
-        // At rest the last line stands clear of the fade.
+        // At rest the last line stands clear of the fade: the foot (the feed's end, scrolled to by id) is the margin.
         let feed = try shared("Shared/Feed/FeedView.swift")
         #expect(feed.contains(".padding(.top, metrics.fade)"))
-        #expect(feed.contains(".padding(.bottom, metrics.fade - Design.Space.turn)"))
+        #expect(feed.contains("Color.clear.frame(height: metrics.fade - Design.Space.turn + 1).id(Self.bottomID)"))
     }
 
     /// Bug: the 3 pt bar ran past the time and icons to the end of their 28 pt target.
