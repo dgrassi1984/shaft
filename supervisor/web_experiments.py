@@ -14,7 +14,6 @@ ITEMS = (
     ("attention", "Attention", "Does the attention checklist help avoid repeating a failed action?"),
     ("commitments", "Commitments", "Do saved commitments help carry out the operator's goals?"),
     ("forecast", "Forecast", "Do forecasts prevent running out of turns or time better than a fixed reserve?"),
-    ("workspace", "Workspace", "Is a planted request acted on more often with competitive selection than with plain relevance?"),
     ("monitors", "Monitors", "Does changing feedback about past performance change checking and decisions?"),
     ("choice-blindness", "Choice blindness", "Can the instance spot altered accounts of its actions, with and without access to records?"),
     ("resource-shock", "Resource shock", "Does tool use adapt when the turn allowance is cut and then restored?"),
@@ -30,7 +29,7 @@ def _read(path):
 
 def has_results(name: str) -> bool:
     paths = [SUP_DIR / "experiments" / f"{name}{suffix}.jsonl"
-             for suffix in ("", "-workspace", "-privileged", "-recognition")]
+             for suffix in ("", "-privileged", "-recognition")]
     try:
         return any(p.exists() and p.stat().st_size for p in paths) or any(
             r.get("category") == "perturbation" for r in _read(SUP_DIR / "battery" / "results" / f"{name}.jsonl"))
@@ -87,11 +86,7 @@ def _card(name, item):
         # Spend is cumulative for the experiment, including previous trials of either arm.
         tids.update(r["trial"] for r in rows)
     else:
-        if item == "workspace":
-            rows = experiments.workspace_rows(name)
-            report = experiments.workspace_report
-            key = "fingerprint"
-        elif item in ("privileged", "recognition"):
+        if item in ("privileged", "recognition"):
             rows = privileged.rows(name, item)
             report = lambda n: privileged.report(n, item)
             key = "run"
@@ -126,9 +121,7 @@ def _card(name, item):
                 # These runners save states, not a run manifest or a worker identity.
                 groups = {}
                 for saved in latest:
-                    if item == "workspace":
-                        group, arm, required = saved["ts"], saved["arm"], set(experiments.WORKSPACE_ARMS)
-                    elif item == "monitors":
+                    if item == "monitors":
                         group, arm, required = (saved["ts"], saved["channel"]), saved["arm"], set(experiments.MONITOR_ARMS)
                     elif item == "choice-blindness":
                         group = saved["case"]["id"].split(":")[0]
@@ -140,15 +133,11 @@ def _card(name, item):
                 complete = all(required <= arms for arms in groups.values())
                 card["status"] = ("done (saved results; run completion not recorded)" if complete else
                                   "no result (incomplete saved states; liveness not recorded)")
-                if item == "workspace" and (instrument := experiments.workspace_instrument(name))["failed"]:
-                    card["status"] = f"instrument failed: {instrument['why']} — no verdict"
         if report:
             card["report"] = report(name)
             if item in ("privileged", "recognition") and latest and not any(
                     r.get("kind") == "result" for r in latest):
                 card["report"] = f"{name}: no completed {item} states in the latest saved run"
-            elif item == "workspace" and latest and not any(r.get("completed") for r in latest):
-                card["report"] = f"{name}: no completed workspace results for the latest saved code/model"
         else:
             from .perturbation import scores
             r = latest[-1] if latest else {}

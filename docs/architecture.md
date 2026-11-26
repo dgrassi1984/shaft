@@ -706,18 +706,18 @@ Calendar writes remain unavailable in replays.
 
 **Self-knowledge measured against the record**. Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
-mechanism behind a knob its kill test flips (`shaft experiment`). `DOUBTS=off` removes `finish_cycle`'s optional
+mechanism behind a configuration knob (see `shaft experiment` for the knob trials). `DOUBTS=off` removes `finish_cycle`'s optional
 `doubts` parameter; it defaults to on. `LOOK_AHEAD=on` adds a live step 1 question about what the operator will
 need within 7 days, to prepare and offer in one line; it defaults to off. A live cycle's **workspace** (`shaft/workspace.py`)
-lets deterministic codelets, memory hits, open surprises, inbox, improvement plan, kinds of action still failing,
-due goals, open commitments, compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
-recorded in the episode and broadcast after every step (`python -m shaft front` prints, without a model call, what
-each mode would put in front of a cycle starting now: the kill test's dry run reads it in a replay's copy); after `declare_intent` they compete again for the declared
-goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
+ranks candidates from memory, open surprises, inbox, the improvement plan, unresolved failures, goals and open
+commitments by relevance to the cycle. It selects up to `WORKSPACE_K` items within automatic recall's
+1,800-character budget. It records the selections in the episode and broadcasts them after each step.
+After `declare_intent` it re-ranks the candidates using the declared goal and success criterion.
+The separate **attention** field (`attention`: up to four {source, why}) is scored against the tool
 log by `supervisor/attention.py`: a call touches its tool's source, mail, calendar, record, memory, web, or what a
 plugin's name says, the files in its arguments, in a run's command or in a script the cycle wrote and ran, a
 message's recipient and a plugin's code; free-text sources are split into paths and known sources, and one it cannot
-read is reported unreadable, not untouched). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
+read is reported unreadable, not untouched. **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
 action that has failed since it last worked, showing the comparable calls and their counts; calling again runs it.
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only

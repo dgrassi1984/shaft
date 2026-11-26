@@ -185,11 +185,6 @@ class EntryPointRefusalTest(unittest.TestCase):
         self.assertIn(MESSAGE, t['gate']['output'])
         deliver.assert_not_called()
 
-    def test_front_translates_refusal_to_experiment_error(self):
-        from supervisor import experiments
-        with self.assertRaisesRegex(experiments.ExperimentError, 'getconf.*lookup failed'):
-            experiments.front(self.root, 'example', self.root, {})
-
     def test_prediction_exam_returns_refused_exit(self):
         from supervisor import privileged
         with mock.patch.object(runner, 'agent_command', side_effect=lambda *a: sandbox.profile(self.root, self.root, [])):

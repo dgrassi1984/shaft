@@ -474,9 +474,9 @@ def replay_arm(project: Path, name: str, state: dict, code: dict[str, bytes | No
     model: 'local' (the code's own configuration) or a cloud model id (both runs of a pair get the same).
     Returns what the supervisor saw. `on_unit(record)` accounts for each cycle and sleep as it finishes.
     `prepare(dest)`: called on the reconstructed copy before the run, and before the diff's starting point — what it
-    writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`).
+    writes is part of the starting state.
     `inspect(dest)`: called on the copy after the run, before it is thrown away; what it returns is the record's
-    "inspected" — an endpoint read from the whole files, not from the judge's capped diff (`shaft experiment workspace`).
+    "inspected" field. It can read whole files in the copy.
     `env`: settings that win over the code's config.env for this replay (a bake-off's LLM_REASONING_EFFORT)."""
     replay_units(cycles, sleep_between)   # validate before reconstructing or spending
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-")).resolve()   # outside HOME: the sandbox allows only it

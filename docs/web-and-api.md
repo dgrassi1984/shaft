@@ -275,7 +275,7 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   Failed replies have no rating controls. The composer puts Send at the right edge, with its send menu on the
   left. Its tooltip lists keyboard shortcuts, which continue to work.
 - **Experiments** (`/experiments`, next to Trials) shows saved results for each instance: Cards (both controls),
-  Attention, Commitments, Forecast, Workspace, Monitors, Choice blindness, Resource shock, Privileged prediction,
+  Attention, Commitments, Forecast, Monitors, Choice blindness, Resource shock, Privileged prediction,
   Recognition, and Battery perturbation. It defaults to the first instance with saved experiment records; the
   instance links change the selection. Each card shows a description, status, last recorded run, recorded spend,
   escaped report text and a terminal report command. Knob experiments link to their latest trial for each arm.
