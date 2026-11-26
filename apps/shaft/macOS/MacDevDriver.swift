@@ -19,10 +19,12 @@ import SwiftUI
 ///     contextmenu <text>            log the right-click menu of a message, its selection kept
 ///     rightclick <text>             right-click on <text> (the window in front): logs the menu, then closes it
 ///     menu <title>                  pick the menu bar item with that title
-///     button <title>                click the button with that title (accessibility title) in the window
+///     button <title>                click the button with that title (accessibility title, or a toolbar item's tooltip)
 ///     pastefile <path>              paste that file into the composer, as a file copied in Finder
 ///     archived <cid>                open that earlier chat of the chat shown
 ///     windows / shotwindow <title>  log the visible windows / draw the one with that title
+///     menus                         log the menu bar's titles, in order
+///     tooltips                      log each titlebar/toolbar control's accessibility label and tooltip
 ///     docs                          show or hide the documents, without animation
 ///     doc <path>                    open that document in the documents
 ///     contextpick <text> | <item>   pick an item of the right-click menu on <text>
@@ -152,8 +154,12 @@ enum MacDevDriver {
             guard item.isEnabled else { return log("menu item \"\(rest)\" is off") }
             item.menu?.performActionForItem(at: item.menu?.index(of: item) ?? 0)
         case "button":
-            guard let window, let button = control(rest, in: window.contentView) else { return log("no button \"\(rest)\"") }
-            button.accessibilityPerformPress()
+            guard let window, let button = control(rest, in: window.contentView?.superview ?? window.contentView) else { return log("no button \"\(rest)\"") }
+            if button is NSButton { button.accessibilityPerformPress(); return }
+            // A SwiftUI toolbar item has no action AppKit can press: a click at its centre, as a person makes it.
+            let centre = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+            mouse(.leftMouseDown, at: centre)
+            mouse(.leftMouseUp, at: centre)
         case "state":
             let chat = state.screen?.chat
             log("chat=\(state.selection.map { [$0.instance, state.store?.resolve($0).seenID].compactMap { $0 }.joined(separator: "/") } ?? "-") archived=\(state.screen?.archived ?? false) draft=\(String(reflecting: chat?.draft.text ?? "")) quotes=\(chat?.draft.quotes.map(\.quote) ?? []) answers=\(chat?.draft.quotes.map(\.answer) ?? []) files=\(chat?.draft.attachments.map(\.name) ?? []) first=\(window?.firstResponder.map { String(describing: type(of: $0)) } ?? "-") said=\(chat?.said ?? "-") error=\(chat?.actionError?.message ?? "-") visibleChat=\(model.visibleChat.map { [$0.instance, $0.cid].compactMap { $0 }.joined(separator: "/") } ?? "-") docs=\(state.screen?.showDocuments ?? false) dock=\(NSApp.dockTile.badgeLabel ?? "-") window=[key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] replying=\(chat?.feed?.reply != nil) feed=\(chat?.feed != nil) polling=\(chat?.isPolling ?? false) connection=\(String(describing: chat?.connection)) queued=\(chat?.content?.queued.count ?? -1) unsent=\(chat?.unsent.count ?? -1)")
@@ -211,6 +217,15 @@ enum MacDevDriver {
             // An earlier chat of the chat shown, as Earlier chats opens it.
             guard let name = state.selection?.instance else { return }
             state.path.append(ArchivedRoute(instance: name, cid: rest))
+        case "menus":
+            log("menus: " + (NSApp.mainMenu?.items.map(\.title) ?? []).joined(separator: " | "))
+        case "tooltips":
+            // The toolbar is in the window's frame view, beside the content view.
+            for view in descendants(of: window?.contentView?.superview) {
+                let label = view.accessibilityLabel() ?? "", tip = view.toolTip ?? "", help = view.accessibilityHelp() ?? ""
+                guard !tip.isEmpty || !help.isEmpty || (view is NSControl && !label.isEmpty) else { continue }
+                log("control \(String(reflecting: label)) tooltip \(String(reflecting: tip)) help \(String(reflecting: help))")
+            }
         case "windows":
             log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) \(type(of: $0)) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))
             for other in NSApp.windows where other != window {
@@ -561,10 +576,17 @@ enum MacDevDriver {
         return nil
     }
 
+    private static func descendants(of view: NSView?) -> [NSView] {
+        guard let view else { return [] }
+        return [view] + view.subviews.flatMap { descendants(of: $0) }
+    }
+
     private static func control(_ title: String, in view: NSView?) -> NSView? {
         guard let view else { return nil }
         if let button = view as? NSButton,
            button.title.contains(title) || button.accessibilityLabel()?.contains(title) == true { return button }
+        // A toolbar item is no NSButton: found by its tooltip.
+        if view.toolTip?.contains(title) == true { return view }
         for sub in view.subviews { if let found = control(title, in: sub) { return found } }
         return nil
     }

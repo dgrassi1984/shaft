@@ -1,0 +1,12 @@
+# Meetings from the chat header: one Meeting menu, the header buttons' tooltips, and the toolbar button opening the
+# Meetings window. Runs behind other apps' windows (no activate, no float).
+wait 5
+open tundra
+wait 4
+menus
+tooltips
+button Meetings
+wait 3
+windows
+menus
+quit

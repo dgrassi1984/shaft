@@ -35,9 +35,6 @@ struct SHAFTApp: App {
             }
         }
         .defaultSize(width: 960, height: 700)
-        .commands {
-            CommandMenu("Meeting") { MeetingMenuItems(recorder: delegate.meetings) }
-        }
 
         // Meeting recording from the menu bar, also with the window closed (docs/meetings.md).
         MenuBarExtra {

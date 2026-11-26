@@ -11,6 +11,17 @@ struct NativeChromePinTests {
         return try String(contentsOf: app.appending(path: path), encoding: .utf8)
     }
 
+    @Test func theMeetingMenuAppearsOnce() throws {
+        let source = try shared("macOS/SHAFTApp.swift")
+        #expect(source.components(separatedBy: #"CommandMenu("Meeting")"#).count - 1 == 1)
+    }
+
+    @Test func meetingsOpenFromTheChatHeader() throws {
+        let source = try shared("Shared/Chat/ChatScreen.swift")
+        #expect(source.contains("openWindow(id: MeetingsWindow.windowID)"))
+        #expect(source.contains(#".help("Meetings (⌥⌘M)")"#))
+    }
+
     @Test func cycleConfidenceRemovesOnlyTheWholeNumbersDecimalSuffix() throws {
         let source = try shared("Shared/Cycles/CycleDetailView.swift")
         let format = ##"String($0).replacingOccurrences(of: #"\.0$"#, with: "", options: .regularExpression)"##

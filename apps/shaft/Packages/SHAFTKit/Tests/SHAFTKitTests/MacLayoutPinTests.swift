@@ -41,7 +41,11 @@ struct MacLayoutPinTests {
 
     /// Bug: at 780 the title stood 4 to 6 pt from the buttons beside it.
     @Test func theTitleKeepsItsGapFromTheToolbar() throws {
-        #expect(try source("macOS/MacChrome.swift").contains("column - 2 * (max(leading, trailingControls) + Design.Header.titleGap)"))
+        let chrome = try source("macOS/MacChrome.swift")
+        #expect(chrome.contains("column - 2 * (max(leading, trailing) + Design.Header.titleGap)"))
+        // Meetings and Talk widen the right end only: subtracted from the whole column, they also shrank the title when
+        // the collapsed sidebar's controls were the wider end (review of the Meetings button, 2026-11-26).
+        #expect(chrome.contains("let trailing = trailingControls + CGFloat(extraButtons) * Design.Header.height"))
         #expect(try source("Shared/Design/Design.swift").contains("static let titleGap: CGFloat = 8"))
     }
 

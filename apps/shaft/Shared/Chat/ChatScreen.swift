@@ -3,6 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(iOS)
 import GameController
+#elseif os(macOS)
+import AppKit
 #endif
 
 /// One chat on screen: the header (name and thread, state, Talk, Documents, New thread or New chat, ⋯), the feed and
@@ -26,6 +28,8 @@ struct ChatScreen: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var recordingBlocksTalk = false
+    #elseif os(macOS)
+    @Environment(\.openWindow) private var openWindow
     #endif
     /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
     /// or on a phone, this screen presents them as a sheet.
@@ -378,9 +382,9 @@ struct ChatScreen: View {
                 #if os(iOS)
                 .frame(maxWidth: compactTitleLimit)
                 #else
-                // Talk is one button more at the right: the title, centred, gives up its width at both ends.
-                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth - (showsTalk ? 2 * Design.Header.height : 0),
-                                                        sidebar: shell?.sidebarWidth ?? 0, earlier: chat.isEarlier))
+                // Meetings, and Talk when shown, are buttons more at the right.
+                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
+                                                        earlier: chat.isEarlier, extraButtons: showsTalk ? 2 : 1))
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
@@ -412,23 +416,37 @@ struct ChatScreen: View {
                 .disabled(!canTalk)
                 .accessibilityLabel("Talk")
                 .accessibilityHint("Talk with \(chat.instance) by voice")
+                .help("Talk with \(chat.instance) by voice")
         }
         Button { screen.togglePanel(.documents) } label: { Image(systemName: "doc.text") }
             .accessibilityLabel("Documents")
+            .help("Documents")
         if !cyclesInMenu {
             Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
                 .accessibilityLabel("Cycles")
+                .help("Cycles")
         }
+        #if os(macOS)
+        Button {
+            NSApp.activate()
+            openWindow(id: MeetingsWindow.windowID)
+        } label: { Image(systemName: "person.2.wave.2") }
+            .accessibilityLabel("Meetings")
+            .help("Meetings (⌥⌘M)")
+        #endif
         if hasThreads {
             // A thread more, beside this one: it ends nothing, so nothing to confirm.
             Button { newThread() } label: { NewThreadIcon(starting: store.creatingThread.contains(chat.instance)) }
                 .disabled(screen.archived || chat.isEarlier || store.creatingThread.contains(chat.instance))
                 .accessibilityLabel("New thread with \(chat.instance)")
                 .accessibilityHint("Starts another conversation with \(chat.instance); this one stays open")
+                .help("New thread with \(chat.instance)")
         } else {
+            let newChatLabel = store.threadsState(chat.instance) == .unsupported ? "New chat" : "New thread with \(chat.instance)"
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                 .disabled(chat.isEarlier || store.threadsState(chat.instance) == .unknown || chat.content?.canClear != true)
-                .accessibilityLabel(store.threadsState(chat.instance) == .unsupported ? "New chat" : "New thread with \(chat.instance)")
+                .accessibilityLabel(newChatLabel)
+                .help(newChatLabel)
                 .confirmationDialog("Start a new chat with \(chat.instance)?",
                                     isPresented: Bindable(screen).confirmingNewChat, titleVisibility: .visible) {
                     Button("New chat") { Task { await chat.clear() } }
@@ -468,6 +486,7 @@ struct ChatScreen: View {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("More")
+        .help("More")
         .confirmationDialog("End the conversation with \(chat.instance)?",
                             isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
             Button("End it", role: .destructive) { Task { await chat.end() } }
