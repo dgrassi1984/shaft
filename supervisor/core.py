@@ -979,6 +979,10 @@ def gchat_lock(name: str):
     return _grant_lock(name, "gchat")
 
 
+def shortcuts_lock(name: str):
+    return _grant_lock(name, "shortcuts")
+
+
 def _remove_google_copies(name: str, folder: str, alias: str) -> None:
     from . import google
     if alias and not google.ALIAS_RE.fullmatch(alias):
@@ -1029,6 +1033,29 @@ def set_meetings_grants(name: str, grants: list[dict]) -> list[dict]:
         raise ValueError("a meetings grant needs a Google account alias")
     result = [{"account": alias} for alias in dict.fromkeys(aliases)]
     _update_tool_settings(name, meetings=result or None)
+    return result
+
+
+# -- the operator's Shortcuts an instance may run (supervisor/shortcuts.py) ------------------------------------------
+def shortcut_grants(name: str) -> list[dict]:
+    """The shortcuts this instance may run (`shaft shortcuts <n> grant <shortcut>`): [{id, name (when granted)}]. By
+    identifier: a rename keeps the grant, and a new shortcut that takes a granted one's old name does not get it."""
+    from .shortcuts import ID_RE
+    raw = _tool_settings(name).get("shortcuts")
+    return [{"id": g["id"], "name": g.get("name") if isinstance(g.get("name"), str) else g["id"]}
+            for g in raw if isinstance(g, dict) and isinstance(g.get("id"), str)
+            and ID_RE.fullmatch(g["id"])] if isinstance(raw, list) else []
+
+
+def set_shortcut_grants(name: str, grants: list[dict]) -> list[dict]:
+    from .shortcuts import ID_RE
+    keep: dict[str, dict] = {}
+    for g in grants:
+        if not isinstance(g.get("id"), str) or not ID_RE.fullmatch(g["id"]):
+            raise ValueError("a shortcut grant needs the shortcut's identifier")
+        keep[g["id"]] = {"id": g["id"], "name": str(g.get("name") or g["id"])}
+    result = list(keep.values())
+    _update_tool_settings(name, shortcuts=result or None)
     return result
 
 

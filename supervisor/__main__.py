@@ -1074,6 +1074,57 @@ def cmd_claude_notes(target: str | None, action: str | None) -> int:
     return 0
 
 
+def cmd_shortcuts(target: str | None, action: str | None, shortcut: str | None, available: bool = False) -> int:
+    """Show or change which of the operator's Shortcuts an instance may run (supervisor/shortcuts.py)."""
+    from . import shortcuts
+    from .core import set_shortcut_grants, shortcut_grants, shortcuts_lock
+
+    if available:
+        for r in shortcuts.available():
+            print(f"{r['name']} ({r['id']})")
+        return 0
+    try:
+        current, problem = {r["id"]: r for r in shortcuts.available()}, ""
+    except shortcuts.ShortcutError as e:
+        if action == "grant":
+            raise SystemExit(f"not granted: {e}") from None
+        current, problem = {}, str(e)
+
+    def show(name: str) -> None:
+        rows = [current[g["id"]]["name"] if g["id"] in current
+                else g["name"] + (" (not listed: " + problem + ")" if problem else " (no longer on this Mac)")
+                for g in shortcut_grants(name)]
+        print(f"{name}: " + (", ".join(rows) if rows else "no shortcuts"))
+
+    if not target:
+        for name in instance_names():
+            show(name)
+        return 0
+    instance_root(target)
+    if action and action != "off" and not shortcut:
+        raise SystemExit(f"shaft shortcuts {target} {action} <shortcut name or identifier>")
+    with shortcuts_lock(target):   # read and write the grants as one step: a concurrent revoke is never undone
+        grants = shortcut_grants(target)
+        if action == "off":
+            set_shortcut_grants(target, [])
+            log(f"{target}: every shortcut grant revoked by the operator")
+        elif action == "grant":
+            hit = shortcuts.resolve(shortcut, list(current.values()))
+            if hit is None:
+                raise SystemExit(f"no single shortcut {shortcut!r} on this Mac: shaft shortcuts --available lists them")
+            set_shortcut_grants(target, [*grants, hit])
+            log(f"{target}: may run the shortcut {hit['name']} ({hit['id']}), granted by the operator")
+        elif action == "revoke":
+            rows = [{**g, "name": current[g["id"]]["name"]} if g["id"] in current else g for g in grants]
+            hit = shortcuts.resolve(shortcut, rows)
+            if hit is None:
+                raise SystemExit(f"{target} has no grant for {shortcut!r}")
+            set_shortcut_grants(target, [g for g in grants if g["id"] != hit["id"]])
+            log(f"{target}: may no longer run the shortcut {hit['name']} ({hit['id']}), revoked by the operator")
+    show(target)
+    return 0
+
+
 def cmd_gchat(target: str | None, action: str | None, alias: str | None) -> int:
     """Show or change the operator's read-only Google Chat grants."""
     from . import google
@@ -2087,6 +2138,13 @@ def main(argv: list[str]) -> int:
                                             "(shaft mcp): '<name> on|off'; alone lists them")
     p.add_argument("target", nargs="?", help="an instance")
     p.add_argument("action", nargs="?", choices=("on", "off"))
+    p = sub.add_parser("shortcuts", help="which of your Shortcuts (the macOS app) an instance may run: "
+                                         "'<name> grant|revoke <shortcut>', '<name> off'; --available lists this "
+                                         "Mac's; alone lists the grants")
+    p.add_argument("target", nargs="?", help="an instance")
+    p.add_argument("--available", action="store_true", help="list this Mac's shortcuts with their identifiers")
+    p.add_argument("action", nargs="?", choices=("grant", "revoke", "off"))
+    p.add_argument("shortcut", nargs="?", help="its name or identifier (shaft shortcuts available)")
     p = sub.add_parser("mcp", help="SHAFT's MCP server for your own Claude (Desktop, Code): 'install' registers it with "
                                    "both, 'uninstall' removes it, 'serve' is what they start; alone shows its state")
     p.add_argument("action", nargs="?", choices=("serve", "install", "uninstall", "status"), default="status")
@@ -2321,6 +2379,8 @@ def _dispatch(args, parser) -> int:
         return cmd_mail(args.target, args.action, args.alias, args.label)
     if args.cmd == "gchat":
         return cmd_gchat(args.target, args.action, args.alias)
+    if args.cmd == "shortcuts":
+        return cmd_shortcuts(args.target, args.action, args.shortcut, args.available)
     if args.cmd == "claude-notes":
         return cmd_claude_notes(args.target, args.action)
     if args.cmd == "mcp":

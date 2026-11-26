@@ -29,7 +29,11 @@ class ClassificationTest(unittest.TestCase):
 
     def test_table(self):
         self.assertEqual(set(actions.OPERATOR_TOOLS),
-                         set(broker.MAIL_ALL_TOOLS + broker.CALENDAR_TOOLS + broker.DRIVE_TOOLS + broker.GCHAT_TOOLS))
+                         set(broker.MAIL_ALL_TOOLS + broker.CALENDAR_TOOLS + broker.DRIVE_TOOLS + broker.GCHAT_TOOLS
+                             + broker.SHORTCUT_TOOLS))
+        # a shortcut runs as the operator and may send or delete: never direct for a conservative instance
+        self.assertEqual(actions.classify('shortcut_run', {}), 'irreversible')
+        self.assertIsNone(actions.classify('shortcut_list', {}))
         for tool in broker.MAIL_TOOLS + broker.DRIVE_TOOLS + broker.GCHAT_TOOLS + ('calendar_events', 'calendar_event'):
             self.assertIsNone(actions.classify(tool, {}))
         self.assertIsNone(actions.classify('send_message', {'to': 'operator'}))

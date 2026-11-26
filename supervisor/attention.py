@@ -36,7 +36,8 @@ TOOL_SOURCES = {
     "web_research": ("web",), "mail_search": ("mail",), "mail_read": ("mail",), "mail_attachment": ("mail",),
     "calendar_events": ("calendar",), "calendar_event": ("calendar",), "calendar_create": ("calendar",),
     "calendar_move": ("calendar",), "calendar_respond": ("calendar",), "record": ("record",), "history": ("record",),
-    "delegate_coding": ("coder",), **{t: ("memory",) for t in MEMORY_TOOLS}}
+    "delegate_coding": ("coder",),
+    "shortcut_list": ("shortcuts",), "shortcut_run": ("shortcuts",), **{t: ("memory",) for t in MEMORY_TOOLS}}
 PLUGIN_SOURCES = ((re.compile(r"mail"), "mail"), (re.compile(r"(?:^|[-_])cal(?:endar)?(?:$|[-_])"), "calendar"),
                   (re.compile(r"drive"), "drive"), (re.compile(r"notion"), "notion"))
 # The agent's own tools (a copy of shaft/tools.py's built-ins and the control and sleep tools): with the supervisor's
@@ -53,7 +54,8 @@ SYNONYMS = {"internet": ("web",), "email": ("mail",), "e-mail": ("mail",), "goog
             "google chat": ("gchat",),
             "history": ("record",), "code": ("shaft", "plugins", "tests", "run"), "another instance": ("instance",),
             "other instance": ("instance",), "instances": ("instance",), "the operator": ("operator",)}
-VOCAB = frozenset({"web", "memory", "mail", "calendar", "drive", "gchat", "notion", "record", "coder", "operator", "instance",
+VOCAB = frozenset({"web", "memory", "mail", "calendar", "drive", "gchat", "notion", "shortcuts",
+                   "record", "coder", "operator", "instance",
                    "plugin", "run", "notes", "self", "skills", "shaft", "plugins", "tests", "inbox", "attachments",
                    *SYNONYMS, *TOOL_SOURCES})
 _PATH = re.compile(r"(?:\.{1,2}/|/|~/)?[\w.@+~*-]+(?:(?:/[\w.@+~*-]+)+/?|/)")

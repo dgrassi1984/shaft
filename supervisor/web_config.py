@@ -21,7 +21,7 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar", "gdrive", "gchat",
-         "meetings", "claude-notes", "battery-switch", "channel", "orders-add", "orders-drop")
+         "meetings", "shortcuts", "claude-notes", "battery-switch", "channel", "orders-add", "orders-drop")
 DRIVE_MAX = 20000
 
 
@@ -100,6 +100,13 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if op not in ("grant", "revoke") or not alias:
             raise Refused("meetings grant or revoke needs an account")
         return _ran(["meetings", op, name, alias])
+    if verb == "shortcuts":
+        op, which = form.get("op", ""), form.get("shortcut", "").strip()
+        if op == "off":
+            return _ran(["shortcuts", name, "off"])
+        if op not in ("grant", "revoke") or not which:
+            raise Refused("shortcuts grant or revoke needs a shortcut")
+        return _ran(["shortcuts", name, op, which])
     if verb == "claude-notes":
         if form.get("op") not in ("on", "off"):
             raise Refused("notes from Claude on or off?")
@@ -418,6 +425,25 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
     meeting_access = join([h('<ul class="lines">{r}</ul>', r=join(meeting_rows)) if meeting_rows else
                            h('<p class="dim">none</p>'), meeting_grant])
 
+    shortcut_rows = [h('<li>{s}{gone} {b}</li>', s=g["name"],
+                       gone=" (no longer on this Mac)" if g["present"] is False else "",
+                       b=button("shortcuts", "Revoke", f"Stop {n} running the shortcut {g['name']}?",
+                                {"name": n, "op": "revoke", "shortcut": g["id"]}, cls="small"))
+                     for g in a.get("shortcuts", [])]
+    offer = [r for r in a.get("shortcuts_available", []) if r["id"] not in {g["id"] for g in a.get("shortcuts", [])}]
+    shortcut_grant = (h('<form class="act" data-post="/action/shortcuts" data-confirm="Let {n} run this shortcut on '
+                        'your Mac, as you? It can do whatever the shortcut does."{a}>'
+                        '<input type="hidden" name="name" value="{n}"><input type="hidden" name="op" value="grant">'
+                        '<select name="shortcut" aria-label="shortcut">{o}</select>'
+                        '<button type="submit" class="small">Grant</button></form>', n=n,
+                        o=join(h('<option value="{i}">{t}</option>', i=r["id"], t=r["name"]) for r in offer),
+                        a=post_attrs("Access", actions.RUN_NOW_S)) if offer else
+                      h('<p class="dim">{t}</p>', t=a.get("shortcuts_problem") or "No other shortcut on this Mac."))
+    shortcut_access = join([h('<ul class="lines">{r}</ul>', r=join(shortcut_rows)) if shortcut_rows else
+                            h('<p class="dim">none</p>'), shortcut_grant,
+                            h('<p class="dim">A shortcut runs on this Mac as you, with your apps and accounts, when '
+                              '{n} calls it (shortcut_run): grant only the ones whose effects you accept.</p>', n=n)])
+
     notes_on = a.get("claude_notes", False)
     claude_access = join([
         h('<p>Notes from your Claude sessions (Claude Desktop, Claude Code, through <code>shaft mcp</code>): <b>{s}</b>. '
@@ -453,6 +479,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                 ("gdrive", "Your Drive it may read (shaft gdrive)", drive_access),
                 ("gchat", "Your Google Chat it may read (shaft gchat)", chat_access),
                 ("meetings", "Meeting transcripts it may read (shaft meetings)", meeting_access),
+                ("shortcuts", "Your Shortcuts it may run (shaft shortcuts)", shortcut_access),
                 ("claude-notes", "Notes from your Claude sessions (shaft claude-notes)", claude_access),
                 ("", "Google accounts", google_accounts(n, a.get("google_accounts", {}))),
                 ("battery-switch", "Capability battery", battery),
@@ -461,6 +488,21 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                     '--hosts …</code>. A value never passes through this page.</p>', n=n)]))]
     return join(h('<section class="panel"{swap}><h2>{t}</h2>{b}</section>',
                   swap=Html(" data-row") if key else "", t=t, b=b) for key, t, b in sections if not row or key == row)
+
+
+def _shortcuts(name: str) -> dict:
+    """{shortcuts: its grants with their names now, shortcuts_available: this Mac's, shortcuts_problem: why none
+    could be listed (no Shortcuts here, or the list failed) or None}."""
+    from . import shortcuts
+    from .core import shortcut_grants
+    try:
+        rows, problem = shortcuts.available(), None
+    except shortcuts.ShortcutError as e:
+        rows, problem = [], str(e)
+    now = {r["id"]: r["name"] for r in rows}
+    return {"shortcuts": [{"id": g["id"], "name": now.get(g["id"], g["name"]),
+                           "present": (g["id"] in now) if problem is None else None} for g in shortcut_grants(name)],
+            "shortcuts_available": rows, "shortcuts_problem": problem}
 
 
 def access(name: str) -> dict:
@@ -479,7 +521,7 @@ def access(name: str) -> dict:
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
             "mail": mail_grants(name), "calendar": calendar_grants(name), "gdrive": gdrive_grants(name), "gchat": gchat_grants(name), "accounts": sorted(accounts),
-            "meetings": meetings_grants(name), "claude_notes": claude_notes(name),
+            "meetings": meetings_grants(name), "claude_notes": claude_notes(name), **_shortcuts(name),
             "google_accounts": {alias: {k: data.get(k) for k in ("address", "client", "scope", "created")}
                                 for alias, data in accounts.items()},
             "battery_off": battery.off_path(name).exists(),

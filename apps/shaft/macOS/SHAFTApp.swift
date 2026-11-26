@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import SHAFTKit
 import SwiftUI
@@ -66,6 +67,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                             ?? MeetingRecorder.defaultFolder)
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
+
+    override init() {
+        super.init()
+        let openChat: OpenInstanceChatIntent.ChatOpener = { [weak self] instance in
+            guard let self else { return }
+            model.notificationTapped(instance: instance)
+            state.bringForward()
+        }
+        AppDependencyManager.shared.add(dependency: openChat)
+    }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         AppTheme.stored(rawTheme).apply()

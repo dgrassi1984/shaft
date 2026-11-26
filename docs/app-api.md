@@ -1678,6 +1678,9 @@ yet: `409 refused`. An unknown instance: `404 not_found`.
 | `chat` | [{`account`}] | Google Chat accounts |
 | `meetings` | [{`account`}] (optional) | Accounts whose ready meeting transcripts the instance may read. Omitted when there are no meeting grants. |
 | `claude_notes` | bool | its inbox takes notes from the operator's Claude sessions (`shaft claude-notes`, integrations.md "Notes from your Claude sessions") |
+| `shortcuts` | [{`id`, `name`, `present`: bool or null}] | the operator's Shortcuts it may run (`shaft shortcuts`), by identifier, with their names now; `present` false: no longer on the Mac, null: the Mac's shortcuts could not be listed |
+| `shortcuts_available` | [{`id`, `name`}] | every shortcut on the server Mac, in the Shortcuts app's order (empty when they could not be listed) |
+| `shortcuts_problem` | str or null | why they could not be listed (no Shortcuts on this computer, or `shortcuts list` failed) |
 | `google_accounts` | [{`alias`, `address`, `scopes`: [str]}] | the operator's Google logins, with the scopes they granted (`gmail.readonly`, `calendar.readonly`, …) |
 
 `POST /access/<n>` takes `{"grant", "action": "grant"|"revoke", …}` and runs the verb, then answers the fresh access
@@ -1693,6 +1696,7 @@ object:
 | `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
 | `meetings` | `alias` | `meetings grant <n> <alias>` or `meetings revoke <n> <alias>` |
 | `claude` | | `claude-notes <n> on`; revoke: `claude-notes <n> off` |
+| `shortcut` | `what` (a shortcut's identifier or name) | `shortcuts <n> grant|revoke <what>`; a name not on the Mac: `409 refused` |
 
 `alias` is a Google account alias (`[a-z][a-z0-9-]{0,30}`); `all` and `writable` are booleans. A field another grant
 takes, or a missing one: `400 bad_request`. Web search and Telegram have no grant here: their key and token go

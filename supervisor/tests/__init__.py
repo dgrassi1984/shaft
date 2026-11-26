@@ -54,3 +54,9 @@ _import_the_supervisor()
 from supervisor import pushes   # noqa: E402
 
 pushes.PUSH_HOLD = 0
+
+# Nor the operator's real Shortcuts: rendering an Access page lists them (web_config._shortcuts), and a broker call
+# could run one. A test that needs Shortcuts patches shortcuts.CLI with its own fake (test_shortcuts).
+from supervisor import shortcuts   # noqa: E402
+
+shortcuts.CLI = "/nonexistent/shortcuts"

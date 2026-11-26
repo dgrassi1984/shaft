@@ -40,7 +40,8 @@ ACTION_INSTANCES, _ = core.knob(
     group='Runs and conversations', services=('runs', 'api', 'web', 'scheduler'))
 CLASSES = ('reversible', 'staged', 'irreversible')
 # #142: the complete operator-tool table. Reads retain their existing per-call grants. Mail writes only leave
-# drafts. There are no operator Notion writes, Docs writes or delete tools today. http_request uses instance-owned keys, not
+# drafts. There are no operator Notion writes, Docs writes or delete tools today; a granted shortcut may do
+# anything. http_request uses instance-owned keys, not
 # operator credentials. New operator write tools must be added here before being offered by the broker.
 OPERATOR_TOOLS = {
     'drive_search': 'read', 'drive_read': 'read', 'drive_download': 'read',
@@ -49,12 +50,14 @@ OPERATOR_TOOLS = {
     'mail_search': 'read', 'mail_read': 'read', 'mail_attachment': 'read',
     'calendar_events': 'read', 'calendar_event': 'read',
     'calendar_create': 'calendar', 'calendar_move': 'calendar', 'calendar_respond': 'staged',
+    # a shortcut runs as the operator and may send or delete: what it does is not known here
+    'shortcut_list': 'read', 'shortcut_run': 'irreversible',
 }
 
 
 def classify(tool, args, *, event=None, address=''):
     """#142: supplied attendees, incomplete lists and another organiser all retain calendar's approval rule.
-    Irreversible means sending as the operator or deleting; no existing operator tool does either."""
+    Irreversible means sending as the operator or deleting: a shortcut run may do either."""
     rule = OPERATOR_TOOLS.get(tool)
     if rule == 'calendar':
         if args.get('attendees'):

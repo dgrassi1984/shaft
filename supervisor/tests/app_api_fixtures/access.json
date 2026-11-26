@@ -34,6 +34,24 @@
     }
   ],
   "claude_notes": true,
+  "shortcuts": [
+    {
+      "id": "AAAAAAAA-0000-4000-8000-000000000001",
+      "name": "Make reminder",
+      "present": true
+    }
+  ],
+  "shortcuts_available": [
+    {
+      "id": "AAAAAAAA-0000-4000-8000-000000000001",
+      "name": "Make reminder"
+    },
+    {
+      "id": "BBBBBBBB-0000-4000-8000-000000000002",
+      "name": "Lights"
+    }
+  ],
+  "shortcuts_problem": null,
   "google_accounts": [
     {
       "alias": "work",

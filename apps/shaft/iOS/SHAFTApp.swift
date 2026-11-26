@@ -1,3 +1,4 @@
+import AppIntents
 import SHAFTKit
 import SwiftUI
 import UIKit
@@ -38,6 +39,15 @@ struct SHAFTApp: App {
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = AppModel()
+
+    override init() {
+        super.init()
+        let openChat: OpenInstanceChatIntent.ChatOpener = { [weak self] instance in
+            self?.model.notificationTapped(instance: instance)
+        }
+        AppDependencyManager.shared.add(dependency: openChat)
+    }
+
     lazy var meetings = IOSMeetingRecorder(audio: SystemMeetingAudio(), audioUse: .shared,
                                            device: { UIDevice.current.name })
     /// The Apple Watch app's way to the server (it has none of its own).
