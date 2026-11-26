@@ -246,6 +246,7 @@ def update(meeting_id: str, changes: dict) -> dict:
         metadata.update(changes)
         if "title" in changes:
             metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
+            metadata.pop("title_from", None)
         if account_changed and (metadata["state"] == "ready" or "notified" in metadata):
             if metadata["account"]:
                 metadata["notification_owed"] = True
@@ -353,10 +354,12 @@ def finish(meeting_id: str, *, size=None, sha256=None, chunks=None) -> dict:
         return metadata
 
 
-def name_from_calendar(meeting_id: str, title: str) -> None:
-    """Give an automatically titled meeting its calendar event's title (unless the operator titled it meanwhile)."""
+def name_from_calendar(meeting_id: str, title: str, account: str | None) -> None:
+    """Give an automatically titled meeting its calendar event's title, read while it was filed under `account`:
+    not if the operator titled it, or filed it elsewhere, meanwhile (a title from one account's calendar must not
+    reach the watchers of another)."""
     with _locked(meeting_id) as (folder, metadata):
-        if metadata.get("title_auto"):
+        if metadata.get("title_auto") and metadata.get("account") == account:
             metadata.update(title=title, title_auto=False, title_from="calendar")
             _save(folder, metadata)
 

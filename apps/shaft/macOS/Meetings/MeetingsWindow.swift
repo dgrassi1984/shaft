@@ -31,6 +31,8 @@ struct MeetingRecordControls: View {
                           systemImage: "record.circle")
                         .monospacedDigit()
                 }
+                if let from = recorder.recordingFrom { Text("From \(from)").font(.callout).foregroundStyle(.secondary) }
+                if let notice = recorder.inputNotice { Text(notice).font(.callout).foregroundStyle(.orange) }
                 if let warning = recorder.warning { Text(warning).font(.callout).foregroundStyle(.red) }
                 Button("Stop Recording", systemImage: "stop.fill") { Task { await recorder.stop() } }
                     .buttonStyle(.borderedProminent)
@@ -44,8 +46,18 @@ struct MeetingRecordControls: View {
                     Button("Record In Person", systemImage: "person.2") { Task { await recorder.start(online: false) } }
                 }
                 .disabled(recorder.phase == .uploading)
-                if case .failed(let message) = recorder.phase {
+                switch recorder.phase {
+                case .uploading:
+                    if let uploader = recorder.uploader, uploader.totalBytes > 0 {
+                        ProgressView("Sending to SHAFT…", value: Double(uploader.bytesSent), total: Double(uploader.totalBytes))
+                    } else {
+                        ProgressView("Sending to SHAFT…")
+                    }
+                case .failed(let message):
                     Text(message).font(.callout).foregroundStyle(.red)
+                    Button("Send Again") { Task { await recorder.sendPending() } }
+                default:
+                    EmptyView()
                 }
             }
         }

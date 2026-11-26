@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from importlib.metadata import version
 from pathlib import Path
 
@@ -33,37 +34,48 @@ LOG = logging.getLogger(__name__)
 
 
 def hints(people=()) -> str:
-    """The words the ASR is prompted with: the meeting's invitees, the gallery's people and SHAFT_LISTEN_VOCABULARY."""
-    terms = list(dict.fromkeys([*people, *speakers.known_names(), *VOCABULARY]))
+    """The words the ASR is prompted with: the meeting's invitees, the gallery's people and SHAFT_LISTEN_VOCABULARY.
+    Each is one line, without Whisper's special-token marks (an invitee's name is text someone else wrote)."""
+    clean = (" ".join(term.replace("<|", "").replace("|>", "").split()) for term in
+             [*people, *speakers.known_names(), *VOCABULARY])
+    terms = list(dict.fromkeys(term for term in clean if term))
     return ", ".join(terms) + "." if terms else ""
 
 
-def calendar_event(row: dict) -> dict | None:
-    """The calendar event the recording overlaps most (timed, not declined) on the primary calendar of the account the
-    meeting is filed under, or of every logged-in account when it is not filed yet; None when there is none. A
-    calendar that cannot be read is logged and the meeting keeps its own title."""
-    if not row.get("ended"):
+def _when(point: dict) -> datetime | None:
+    """A timed event's start or end as an aware datetime (an offset, else its named time zone), or None."""
+    try:
+        moment = datetime.fromisoformat(point["dateTime"])
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=ZoneInfo(point["timeZone"]))
+        return moment
+    except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
         return None
+
+
+def calendar_event(row: dict) -> tuple[dict | None, str | None]:
+    """The calendar event the recording overlaps most (timed, not declined) on the primary calendar of the account the
+    meeting is filed under, or of every logged-in account when it is not filed yet, with the account it came from;
+    (None, None) when there is none. The title is an extra: a calendar that cannot be read is logged, never fails the
+    meeting, and the meeting keeps its own title."""
+    if not row.get("ended"):
+        return None, None
     started, ended = (datetime.fromisoformat(row[key]) for key in ("started", "ended"))
-
-    def overlap(event):
-        if gcal.all_day(event) or gcal.own_response(event) == "declined":
-            return 0.0
-        start, end = (datetime.fromisoformat(event[key]["dateTime"]) for key in ("start", "end"))
-        return (min(end, ended) - max(start, started)).total_seconds()
-
-    timed = []
+    found = []
     for alias in [row["account"]] if row.get("account") else sorted(google.accounts()):
         try:
             account = google.Account(alias, core.secrets_env()).require(google.CALENDAR)
             items, _ = gcal.events(account, "primary", started, ended)
-        except (google.AccountError, google.ApiError, OSError) as error:
-            LOG.warning("%s: calendar of %s not read for the title: %s", row["id"], alias, error)
+        except Exception as error:  # noqa: BLE001 -- any failure here only costs the title
+            LOG.warning("%s: calendar of %s not read for the title: %s: %s", row["id"], alias,
+                        type(error).__name__, error)
             continue
-        timed += [event for event in items if event.get("summary")
-                  and (event.get("start") or {}).get("dateTime") and (event.get("end") or {}).get("dateTime")]
-    best = max(timed, key=overlap, default=None)
-    return best if best is not None and overlap(best) > 0 else None
+        for event in items:
+            start, end = _when(event.get("start") or {}), _when(event.get("end") or {})
+            if start and end and gcal.own_response(event) != "declined":
+                found.append(((min(end, ended) - max(start, started)).total_seconds(), alias, event))
+    seconds, alias, event = max(found, key=lambda item: item[0], default=(0, None, None))
+    return (event, alias) if seconds > 0 else (None, None)
 
 
 class Engines:
@@ -180,9 +192,10 @@ def process_next(engines) -> bool:
             LOG.info("%s processing", meeting_id)
             folder = meetings._root() / meeting_id
             sidecar = json.loads((folder / "sidecar.json").read_bytes())
-            event = calendar_event(row)
-            if event and row.get("title_auto"):
-                meetings.name_from_calendar(meeting_id, event["summary"].strip())
+            event, alias = calendar_event(row)
+            title = " ".join(str((event or {}).get("summary") or "").split())
+            if title and row.get("title_auto"):
+                meetings.name_from_calendar(meeting_id, title, row.get("account"))
             people = [person["displayName"] for person in (event or {}).get("attendees") or []
                       if person.get("displayName") and not person.get("resource")]
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:

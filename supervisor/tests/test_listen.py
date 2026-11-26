@@ -422,21 +422,37 @@ class CalendarTitleTest(unittest.TestCase):
     def test_the_most_overlapping_timed_event_not_declined_wins_across_accounts(self):
         declined = self.event("Declined", "09:30", "09:45", attendees=[{"self": True, "responseStatus": "declined"}])
         all_day = {"summary": "Holiday", "start": {"date": "2026-11-26"}, "end": {"date": "2026-11-27"}}
-        found, events = self.lookup(self.row(), [
+        (found, alias), events = self.lookup(self.row(), [
             ([declined, all_day, self.event("Standup", "09:00", "09:35")], False),
             ([self.event("Update MKT", "09:30", "10:00")], False)])
-        self.assertEqual(found["summary"], "Update MKT")
+        self.assertEqual((found["summary"], alias), ("Update MKT", "work"))
         self.assertEqual(events.call_count, 2)
 
+    def test_named_time_zones_count_and_a_broken_event_or_reply_never_fails_the_meeting(self):
+        # Review 2026-11-26: an event with a zone name and no offset, or an unparsable one, raised and failed
+        # transcription; so did any error from Google other than the two it names.
+        zoned = {"summary": "Zoned", "start": {"dateTime": "2026-11-26T09:30:00", "timeZone": "Europe/Rome"},
+                 "end": {"dateTime": "2026-11-26T10:00:00", "timeZone": "Europe/Rome"}}
+        broken = {"summary": "Broken", "start": {"dateTime": "oops"}, "end": {"dateTime": "2026-11-26T10:00:00+01:00"}}
+        with self.assertLogs("supervisor.listen_worker", level="WARNING"):
+            (found, _), _ = self.lookup(self.row(), [ValueError("bad JSON"), ([broken, zoned], False)])
+        self.assertEqual(found["summary"], "Zoned")
+
+    def test_the_longest_overlap_wins_even_untitled(self):
+        (found, _), _ = self.lookup(self.row(), [([{"start": {"dateTime": "2026-11-26T09:00:00+01:00"},
+                                                    "end": {"dateTime": "2026-11-26T10:00:00+01:00"}},
+                                                   self.event("Short", "09:41", "09:50")], False)], accounts=("home",))
+        self.assertNotIn("summary", found)
+
     def test_a_filed_meeting_reads_only_its_account_and_nothing_overlapping_is_none(self):
-        found, events = self.lookup(self.row(account="work"), [([self.event("Later", "11:00", "12:00")], False)])
-        self.assertIsNone(found)
+        (found, alias), events = self.lookup(self.row(account="work"), [([self.event("Later", "11:00", "12:00")], False)])
+        self.assertEqual((found, alias), (None, None))
         self.assertEqual(events.call_count, 1)
 
     def test_an_unreadable_calendar_is_logged_and_the_others_still_count(self):
         with self.assertLogs("supervisor.listen_worker", level="WARNING") as logs:
-            found, _ = self.lookup(self.row(), [listen_worker.google.ApiError(403, "quota"),
-                                                ([self.event("Update MKT", "09:30", "10:00")], False)])
+            (found, _), _ = self.lookup(self.row(), [listen_worker.google.ApiError(403, "quota"),
+                                                     ([self.event("Update MKT", "09:30", "10:00")], False)])
         self.assertEqual(found["summary"], "Update MKT")
         self.assertIn("calendar of home not read", logs.output[0])
 
@@ -444,13 +460,21 @@ class CalendarTitleTest(unittest.TestCase):
         auto = meetings.import_audio(self.audio, title="", mode="online")
         self.assertTrue(auto["title_auto"])
         self.assertRegex(auto["title"], r"^Meeting \d+ \w{3} \d{4} at \d\d:\d\d$")
-        meetings.name_from_calendar(auto["id"], "Update MKT")
+        meetings.name_from_calendar(auto["id"], "Update MKT", None)
         self.assertEqual((meetings.get(auto["id"])["title"], meetings.get(auto["id"])["title_from"]),
                          ("Update MKT", "calendar"))
+        meetings.update(auto["id"], {"title": "My notes"})
+        self.assertNotIn("title_from", meetings.get(auto["id"]))
         named = meetings.import_audio(self.audio, title="", mode="online")
         meetings.update(named["id"], {"title": "My title"})
-        meetings.name_from_calendar(named["id"], "Update MKT")
+        meetings.name_from_calendar(named["id"], "Update MKT", None)
         self.assertEqual(meetings.get(named["id"])["title"], "My title")
+        # Review 2026-11-26: read under one account, filed under another meanwhile: the title must not cross over.
+        moved = meetings.import_audio(self.audio, title="", mode="online")
+        with mock.patch.object(meetings, "_account_alias"):
+            meetings.update(moved["id"], {"account": "work"})
+        meetings.name_from_calendar(moved["id"], "Home event", "home")
+        self.assertTrue(meetings.get(moved["id"])["title"].startswith("Meeting "))
         self.assertFalse(meetings.import_audio(self.audio, title="Board call", mode="online")["title_auto"])
 
     def test_processing_names_the_meeting_and_prompts_with_its_invitees(self):
@@ -460,8 +484,10 @@ class CalendarTitleTest(unittest.TestCase):
                                       {"displayName": "Room 4", "resource": True}])
         self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
         engines = FakeEngines({"ch1": [(0, 5, "A")]}, {("ch1", 0, 5): spoken("Buongiorno a tutti")})
-        with mock.patch.object(listen_worker, "calendar_event", return_value=event), \
+        event["attendees"].append({"displayName": "<|startoftranscript|> Mallory"})
+        with mock.patch.object(listen_worker, "calendar_event", return_value=(event, "home")), \
                 mock.patch.object(listen_worker, "VOCABULARY", ("Foresight",)):
             self.assertTrue(listen_worker.process_next(engines))
         self.assertEqual(meetings.get(meeting_id)["title"], "Update MKT")
-        self.assertEqual(engines.prompts, ["Patricia Navi, Foresight."])
+        # Whisper's special-token marks never reach its prompt (tiktoken refuses them and the meeting would fail).
+        self.assertEqual(engines.prompts, ["Patricia Navi, startoftranscript Mallory, Foresight."])

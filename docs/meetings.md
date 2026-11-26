@@ -40,7 +40,9 @@ Record from the Meeting menu, the menu bar icon or the Meetings window (⌥⌘M)
 The apps send a recording without a title. Listen names it after the calendar event the recording overlaps most
 (timed, not declined) on the primary calendar of the Google account it is filed under, or of every logged-in
 account when it is not filed yet; until then, or when no event overlaps, it is called `Meeting <date> at <time>`.
-A title the operator sets is never replaced. The event's invitees' names join the prompt (below).
+A title the operator sets is never replaced, nor is a meeting filed under another account while Listen read the
+calendar. A calendar that cannot be read is logged in the Listen log and only costs the title. The event's
+invitees' names join the prompt (below).
 
 ## Set up the Listen worker
 
