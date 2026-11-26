@@ -76,8 +76,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
 | `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `holding`, `sync`, `observe`, `merged` |
-| `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `merge_turns`, `speech_seconds`, `drop_bleed`, `longest_clips`, `transcribe_meeting`, `render_markdown` |
-| `supervisor/listen_worker.py` | `Engines` | `recover`, `process_next`, `main` |
+| `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `speech_seconds`, `chunk_spans`, `attribute`, `longest_clips`, `transcribe_meeting`, `render_markdown` |
+| `supervisor/listen_worker.py` | `Engines` | `hints`, `recover`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible`, `HistoryExpired` | `labels`, `label_id`, `visible`, `get_thread`, `row`, `search`, `history_now`, `history`, `header`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `reply_defaults`, `build_message`, `create_draft`, `update_draft`, `label_message`, `draft_message_id` |
 | `supervisor/meeting_proposals.py` | — | `create`, `pending`, `decide` |
@@ -117,7 +117,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/served.py` | `Record` | `canonical_args`, `args_digest`, `episode_args`, `fingerprint`, `matches`, `begin`, `run_event`, `keep` |
 | `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
 | `supervisor/setup.py` | — | `access`, `telegram_status`, `opening_text` |
-| `supervisor/speakers.py` | — | `complete_processing`, `name_label`, `merge_labels`, `clip`, `list_people`, `rename`, `forget`, `delete_meeting`, `command` |
+| `supervisor/speakers.py` | — | `known_names`, `complete_processing`, `name_label`, `merge_labels`, `clip`, `list_people`, `rename`, `forget`, `delete_meeting`, `command` |
 | `supervisor/stats_head.py` | — | `since_sleep`, `model_change`, `verdicts`, `alerts`, `head` |
 | `supervisor/surprise.py` | — | `flag`, `kind_of`, `episodes`, `events`, `recurrence`, `cycles`, `baseline`, `report`, `command`, `inward`, `fold`, `ledger`, `disposition`, `disposition_text`, `p2_class`, `stats_lines`, `write_ledger`, `coin_comparison`, `m5_report`, `m5_command` |
 | `supervisor/talk_input.py` | `Draft` | `enter_sequences`, `other_modified_keys` |
@@ -234,7 +234,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest`, `WithinARunTest` | — |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
-| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest` | `spoken` |
+| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest`, `ConversationTest`, `HintsTest` | `spoken`, `segment` |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_live_llm_failure_template.py` | `LiveModelFailureTest` | — |
 | `supervisor/tests/test_live_settle_template.py` | `LiveSettlementTest` | `call` |
