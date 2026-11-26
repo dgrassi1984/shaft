@@ -8,10 +8,12 @@ import os
 import shutil
 import tempfile
 import time
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 
-from . import core, listen_pipeline, meetings, speakers
+from . import calendar as gcal
+from . import core, google, listen_pipeline, meetings, speakers
 from .core import knob
 from .version import record_service
 
@@ -30,10 +32,38 @@ VOCABULARY, _ = knob(
 LOG = logging.getLogger(__name__)
 
 
-def hints() -> str:
-    """The words the ASR is prompted with: the gallery's people and SHAFT_LISTEN_VOCABULARY."""
-    terms = list(dict.fromkeys([*speakers.known_names(), *VOCABULARY]))
+def hints(people=()) -> str:
+    """The words the ASR is prompted with: the meeting's invitees, the gallery's people and SHAFT_LISTEN_VOCABULARY."""
+    terms = list(dict.fromkeys([*people, *speakers.known_names(), *VOCABULARY]))
     return ", ".join(terms) + "." if terms else ""
+
+
+def calendar_event(row: dict) -> dict | None:
+    """The calendar event the recording overlaps most (timed, not declined) on the primary calendar of the account the
+    meeting is filed under, or of every logged-in account when it is not filed yet; None when there is none. A
+    calendar that cannot be read is logged and the meeting keeps its own title."""
+    if not row.get("ended"):
+        return None
+    started, ended = (datetime.fromisoformat(row[key]) for key in ("started", "ended"))
+
+    def overlap(event):
+        if gcal.all_day(event) or gcal.own_response(event) == "declined":
+            return 0.0
+        start, end = (datetime.fromisoformat(event[key]["dateTime"]) for key in ("start", "end"))
+        return (min(end, ended) - max(start, started)).total_seconds()
+
+    timed = []
+    for alias in [row["account"]] if row.get("account") else sorted(google.accounts()):
+        try:
+            account = google.Account(alias, core.secrets_env()).require(google.CALENDAR)
+            items, _ = gcal.events(account, "primary", started, ended)
+        except (google.AccountError, google.ApiError, OSError) as error:
+            LOG.warning("%s: calendar of %s not read for the title: %s", row["id"], alias, error)
+            continue
+        timed += [event for event in items if event.get("summary")
+                  and (event.get("start") or {}).get("dateTime") and (event.get("end") or {}).get("dateTime")]
+    best = max(timed, key=overlap, default=None)
+    return best if best is not None and overlap(best) > 0 else None
 
 
 class Engines:
@@ -150,9 +180,14 @@ def process_next(engines) -> bool:
             LOG.info("%s processing", meeting_id)
             folder = meetings._root() / meeting_id
             sidecar = json.loads((folder / "sidecar.json").read_bytes())
+            event = calendar_event(row)
+            if event and row.get("title_auto"):
+                meetings.name_from_calendar(meeting_id, event["summary"].strip())
+            people = [person["displayName"] for person in (event or {}).get("attendees") or []
+                      if person.get("displayName") and not person.get("resource")]
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
-                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines, hints())
+                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines, hints(people))
             speakers.complete_processing(meeting_id, transcript, transcript.pop("_embeddings"))
             LOG.info("%s ready", meeting_id)
         except meetings.Missing:

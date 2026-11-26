@@ -387,3 +387,81 @@ class HintsTest(unittest.TestCase):
         with mock.patch.object(core, "SUP_DIR", Path(temporary.name) / "empty"), \
                 mock.patch.object(listen_worker, "VOCABULARY", ()):
             self.assertEqual(listen_worker.hints(), "")
+
+
+class CalendarTitleTest(unittest.TestCase):
+    """2026-11-26: a recording was titled "Meeting 26 Nov 2026 at 9:31" while the calendar said "Update MKT". A meeting
+    sent without a title takes the title of the calendar event it overlaps most; the operator's title always wins."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.enterContext(mock.patch.object(core, "SUP_DIR", self.root))
+        self.audio = self.root / "call.wav"
+        self.audio.write_bytes(b"x")
+
+    def row(self, **fields):
+        return {"id": "m-1", "account": None, "started": "2026-11-26T09:31:00+01:00",
+                "ended": "2026-11-26T09:43:00+01:00", **fields}
+
+    @staticmethod
+    def event(summary, start, end, **extra):
+        return {"summary": summary, "start": {"dateTime": f"2026-11-26T{start}:00+01:00"},
+                "end": {"dateTime": f"2026-11-26T{end}:00+01:00"}, **extra}
+
+    def lookup(self, row, items, accounts=("home", "work")):
+        account = mock.MagicMock()
+        account.return_value.require.side_effect = lambda scope: account.return_value
+        with mock.patch.object(listen_worker.google, "Account", account), \
+                mock.patch.object(listen_worker.google, "accounts", return_value={a: {} for a in accounts}), \
+                mock.patch.object(listen_worker.core, "secrets_env", return_value={}), \
+                mock.patch.object(listen_worker.gcal, "events", side_effect=items) as events:
+            return listen_worker.calendar_event(row), events
+
+    def test_the_most_overlapping_timed_event_not_declined_wins_across_accounts(self):
+        declined = self.event("Declined", "09:30", "09:45", attendees=[{"self": True, "responseStatus": "declined"}])
+        all_day = {"summary": "Holiday", "start": {"date": "2026-11-26"}, "end": {"date": "2026-11-27"}}
+        found, events = self.lookup(self.row(), [
+            ([declined, all_day, self.event("Standup", "09:00", "09:35")], False),
+            ([self.event("Update MKT", "09:30", "10:00")], False)])
+        self.assertEqual(found["summary"], "Update MKT")
+        self.assertEqual(events.call_count, 2)
+
+    def test_a_filed_meeting_reads_only_its_account_and_nothing_overlapping_is_none(self):
+        found, events = self.lookup(self.row(account="work"), [([self.event("Later", "11:00", "12:00")], False)])
+        self.assertIsNone(found)
+        self.assertEqual(events.call_count, 1)
+
+    def test_an_unreadable_calendar_is_logged_and_the_others_still_count(self):
+        with self.assertLogs("supervisor.listen_worker", level="WARNING") as logs:
+            found, _ = self.lookup(self.row(), [listen_worker.google.ApiError(403, "quota"),
+                                                ([self.event("Update MKT", "09:30", "10:00")], False)])
+        self.assertEqual(found["summary"], "Update MKT")
+        self.assertIn("calendar of home not read", logs.output[0])
+
+    def test_untitled_meetings_get_a_dated_title_and_the_calendar_never_overrides_the_operator(self):
+        auto = meetings.import_audio(self.audio, title="", mode="online")
+        self.assertTrue(auto["title_auto"])
+        self.assertRegex(auto["title"], r"^Meeting \d+ \w{3} \d{4} at \d\d:\d\d$")
+        meetings.name_from_calendar(auto["id"], "Update MKT")
+        self.assertEqual((meetings.get(auto["id"])["title"], meetings.get(auto["id"])["title_from"]),
+                         ("Update MKT", "calendar"))
+        named = meetings.import_audio(self.audio, title="", mode="online")
+        meetings.update(named["id"], {"title": "My title"})
+        meetings.name_from_calendar(named["id"], "Update MKT")
+        self.assertEqual(meetings.get(named["id"])["title"], "My title")
+        self.assertFalse(meetings.import_audio(self.audio, title="Board call", mode="online")["title_auto"])
+
+    def test_processing_names_the_meeting_and_prompts_with_its_invitees(self):
+        meeting_id = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
+        event = self.event("Update MKT", "09:30", "10:00",
+                           attendees=[{"displayName": "Patricia Navi"}, {"email": "x@example.com"},
+                                      {"displayName": "Room 4", "resource": True}])
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        engines = FakeEngines({"ch1": [(0, 5, "A")]}, {("ch1", 0, 5): spoken("Buongiorno a tutti")})
+        with mock.patch.object(listen_worker, "calendar_event", return_value=event), \
+                mock.patch.object(listen_worker, "VOCABULARY", ("Foresight",)):
+            self.assertTrue(listen_worker.process_next(engines))
+        self.assertEqual(meetings.get(meeting_id)["title"], "Update MKT")
+        self.assertEqual(engines.prompts, ["Patricia Navi, Foresight."])

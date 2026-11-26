@@ -154,13 +154,13 @@ final class MeetingRecorder {
         let iso = ISO8601DateFormatter()
         let started = (fields["started"] as? String).flatMap(iso.date(from:)) ?? Date()
         let ended = (fields["ended"] as? String).flatMap(iso.date(from:))
-        let title = "Meeting " + started.formatted(date: .abbreviated, time: .shortened)
         let uploader = MeetingUploader(client: client, audioURL: file)
         self.uploader = uploader
         phase = .uploading
         let aliases = try? await client.meetingAccountAliases()
         let account = aliases?.count == 1 ? aliases?.first : nil
-        let create = MeetingCreate(title: title, mode: (fields["mode"] as? String) ?? "online", started: started,
+        let create = MeetingCreate(title: "",  // the server names it from the calendar, else by date
+                                   mode: (fields["mode"] as? String) ?? "online", started: started,
                                    ended: ended, device: Host.current().localizedName ?? "Mac", ext: "m4a",
                                    account: account)
         await uploader.upload(create, sidecarJSON: sidecar)

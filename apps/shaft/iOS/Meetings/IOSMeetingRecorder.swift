@@ -293,8 +293,8 @@ final class IOSMeetingRecorder {
         let aliases = try? await client.meetingAccountAliases()
         guard !Task.isCancelled else { return }
         let account = aliases?.count == 1 ? aliases?.first : nil
-        let title = "Meeting " + started.formatted(date: .abbreviated, time: .shortened)
-        let create = MeetingCreate(title: title, mode: "inperson", started: started, ended: sidecar.ended,
+        let create = MeetingCreate(title: "",  // the server names it from the calendar, else by date
+                                   mode: "inperson", started: started, ended: sidecar.ended,
                                    device: device(), ext: "m4a", account: account)
         do {
             try await uploader.upload(create, sidecarJSON: Data(contentsOf: Self.sidecarURL(file)))

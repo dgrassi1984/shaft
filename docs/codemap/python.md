@@ -78,12 +78,12 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
 | `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `holding`, `sync`, `observe`, `merged` |
 | `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `speech_seconds`, `chunk_spans`, `attribute`, `longest_clips`, `transcribe_meeting`, `render_markdown` |
-| `supervisor/listen_worker.py` | `Engines` | `hints`, `recover`, `process_next`, `main` |
+| `supervisor/listen_worker.py` | `Engines` | `hints`, `calendar_event`, `recover`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible`, `HistoryExpired` | `labels`, `label_id`, `visible`, `get_thread`, `row`, `search`, `history_now`, `history`, `header`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `reply_defaults`, `build_message`, `create_draft`, `update_draft`, `label_message`, `draft_message_id` |
 | `supervisor/mcp_server.py` | — | `handle`, `serve`, `install`, `uninstall`, `command` |
 | `supervisor/meeting_proposals.py` | — | `create`, `pending`, `decide` |
-| `supervisor/meetings.py` | `Error`, `Invalid`, `Missing`, `Conflict`, `TooLarge` | `create`, `get`, `list_meetings`, `update`, `change_grant`, `delete`, `upload_status`, `put_chunk`, `finish`, `set_state`, `reprocess`, `recover_processing`, `complete_processing`, `deliver_owed`, `detail`, `import_audio`, `command` |
+| `supervisor/meetings.py` | `Error`, `Invalid`, `Missing`, `Conflict`, `TooLarge` | `create`, `get`, `list_meetings`, `update`, `change_grant`, `delete`, `upload_status`, `put_chunk`, `finish`, `name_from_calendar`, `set_state`, `reprocess`, `recover_processing`, `complete_processing`, `deliver_owed`, `detail`, `import_audio`, `command` |
 | `supervisor/meetings_access.py` | `NotVisible` | `visible`, `search`, `render_page` |
 | `supervisor/messages.py` | — | `record`, `attachment_name`, `size_text`, `store_attachments`, `from_operator`, `attachment_lines`, `logged_rows`, `cancel`, `history`, `appended`, `pending`, `show_inbox`, `deliver_background`, `deliver_feedback`, `sent_mid`, `deliver_external`, `reply`, `answer_quoted`, `quoted_questions`, `send`, `clear_notes`, `dismissal` |
 | `supervisor/metacog.py` | — | `auroc`, `brier_decomposition`, `meta_i`, `cluster_ci`, `domain`, `claim_matrix`, `doubt_alignment`, `summary`, `weekly`, `paired_v3`, `section`, `review_line`, `report` |
@@ -238,7 +238,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest`, `WithinARunTest` | — |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
-| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest`, `ConversationTest`, `AttributionTest`, `HintsTest` | `spoken`, `segment` |
+| `supervisor/tests/test_listen.py` | `FakeEngines`, `ListenTest`, `ListenRouteTest`, `LanguageRetryTest`, `ConversationTest`, `AttributionTest`, `HintsTest`, `CalendarTitleTest` | `spoken`, `segment` |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_live_llm_failure_template.py` | `LiveModelFailureTest` | — |
 | `supervisor/tests/test_live_settle_template.py` | `LiveSettlementTest` | `call` |

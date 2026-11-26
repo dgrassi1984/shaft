@@ -34,6 +34,14 @@ system default and says so while recording. The sidecar names the input recorded
 Core Audio UID as `input_device_uid`, and the choice as `input_chosen` (`default` when none was chosen). A
 microphone unplugged and plugged back in during a recording is picked up again by its UID.
 
+Record from the Meeting menu, the menu bar icon or the Meetings window (⌥⌘M), which has **Record Online**,
+**Record In Person** and **Stop Recording** while one runs.
+
+The apps send a recording without a title. Listen names it after the calendar event the recording overlaps most
+(timed, not declined) on the primary calendar of the Google account it is filed under, or of every logged-in
+account when it is not filed yet; until then, or when no event overlaps, it is called `Meeting <date> at <time>`.
+A title the operator sets is never replaced. The event's invitees' names join the prompt (below).
+
 ## Set up the Listen worker
 
 On an Apple Silicon Mac with `uv`, run these commands from the SHAFT checkout.
@@ -67,7 +75,7 @@ system audio. It then transcribes the meeting as one conversation: it brings bot
 to the same speech loudness and mixes them, and cuts the speech into chunks of up to 28 seconds that start and end
 in pauses. A short turn is transcribed with the speech around it, not cut out on its own: Whisper invents phrases
 such as "Thank you" for a short clip padded with silence. Each chunk detects its language and is prompted with what was said just before it and with
-the names of the people in the speaker gallery and the terms in `SHAFT_LISTEN_VOCABULARY` (product names, jargon:
+the names of the event's invitees and of the people in the speaker gallery, and the terms in `SHAFT_LISTEN_VOCABULARY` (product names, jargon:
 anything Whisper should spell as written). Listen gives each word to the speaker whose diarised turn covers it
 and, online, whose channel carries it loudest against that channel's own speech; it changes speaker inside a
 phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
