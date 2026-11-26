@@ -665,7 +665,8 @@ shaft mcp install                 # Claude Code (user scope) and Claude Desktop;
   committed. Files inside SHAFT, `.env*`, keys and key stores (`.ssh`, `.gnupg`, `.aws`, `*.pem`, `id_*`, …) are
   refused.
 - **Secrets**: the supervisor's own secret values and the usual key shapes (bearer tokens, `key=…`, JWTs, GitHub and
-  `sk-` keys) are replaced by `[secret removed]` in the note and in text files; the count is logged, never the value.
+  `sk-` keys) are replaced by `[secret removed]` in the note, its title, file names and text files; a binary file
+  holding one of SHAFT's own secrets is refused. The count is logged, never the value.
 - **Off**: `shaft claude-notes <name> off` refuses the next note; `shaft mcp uninstall` removes the server.
 
 ## Meeting transcripts

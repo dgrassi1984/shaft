@@ -24,6 +24,7 @@ from .core import log
 
 NAME = "shaft"
 PROTOCOL = "2025-06-18"
+SUPPORTED = ("2025-06-18", "2025-03-26", "2024-11-05")   # what initialize may answer: the asked one if here
 DESKTOP_CONFIG = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
 
 TOOLS = [
@@ -66,6 +67,8 @@ def _call(name: str, args: dict) -> str:
             said += f" Attached: {', '.join(r['attachments'])}."
         if r["secrets_removed"]:
             said += f" {r['secrets_removed']} secret(s) were removed before it was written."
+        if r.get("logged"):
+            said += f" It is delivered, but SHAFT could not add it to its message log ({r['logged']})."
         return said
     raise KeyError(name)
 
@@ -75,13 +78,16 @@ def handle(msg: dict) -> dict | None:
     mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
     if mid is None:                                    # a notification (notifications/initialized, cancelled, …)
         return None
+    if not isinstance(params, dict):
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "params must be an object"}}
 
     def ok(result: dict) -> dict:
         return {"jsonrpc": "2.0", "id": mid, "result": result}
 
     if method == "initialize":
         from .version import supervisor_commit
-        return ok({"protocolVersion": params.get("protocolVersion") or PROTOCOL,
+        asked = params.get("protocolVersion")
+        return ok({"protocolVersion": asked if asked in SUPPORTED else PROTOCOL,
                    "capabilities": {"tools": {"listChanged": False}},
                    "serverInfo": {"name": NAME, "version": supervisor_commit()},
                    "instructions": "SHAFT runs the operator's own autonomous agents (instances) on this Mac. When he "
@@ -117,8 +123,12 @@ def serve(stdin=None, stdout=None) -> int:
         except ValueError:
             reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
         else:
-            reply = handle(msg) if isinstance(msg, dict) else \
-                {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}
+            try:
+                reply = handle(msg) if isinstance(msg, dict) else \
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}
+            except Exception as e:                     # one bad message never ends the server Claude talks to
+                reply = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
+                         "error": {"code": -32603, "message": f"{type(e).__name__}: {e}"}}
         if reply is not None:
             stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
             stdout.flush()
@@ -133,20 +143,39 @@ def _entry() -> dict:
 
 
 def _desktop(change) -> str:
+    """Change Claude Desktop's config (the rest of it kept): written only when it changes, through a private
+    temporary file that keeps the config's own permissions, and refused if the file changed while it was read."""
+    import tempfile
     path = DESKTOP_CONFIG
     if not path.parent.is_dir():
         return "Claude Desktop: not installed (no config folder)"
     try:
-        data = json.loads(path.read_text()) if path.exists() else {}
-    except ValueError as e:
-        return f"Claude Desktop: NOT changed, {path} is not valid JSON ({e})"
-    servers = data.setdefault("mcpServers", {})
+        raw = path.read_bytes() if path.exists() else b"{}"
+        data = json.loads(raw)
+    except (OSError, ValueError) as e:
+        return f"Claude Desktop: NOT changed, cannot read {path} ({e})"
+    if not isinstance(data, dict):
+        return f"Claude Desktop: NOT changed, {path} is not a JSON object"
+    servers = data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {}
+    before = json.dumps(servers, sort_keys=True)
     said = change(servers)
-    if not servers:
-        data.pop("mcpServers")
-    tmp = path.with_name(path.name + ".shaft-tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, path)
+    if json.dumps(servers, sort_keys=True) == before:
+        return f"Claude Desktop: {said} ({path})"
+    if servers:
+        data["mcpServers"] = servers
+    else:
+        data.pop("mcpServers", None)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), mode)
+            f.write(json.dumps(data, indent=2) + "\n")
+        if (path.read_bytes() if path.exists() else b"{}") != raw:
+            return f"Claude Desktop: NOT changed, {path} changed while SHAFT edited it; run it again"
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
     return f"Claude Desktop: {said} ({path}; restart Claude Desktop to load it)"
 
 
