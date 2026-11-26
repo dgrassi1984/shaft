@@ -195,7 +195,7 @@ struct IOSMeetingRecorderTests {
     /// 2026-11-26: a recording on the iPhone came back "Recording damaged": iOS ended the app mid-recording and AAC in
     /// .m4a cannot be read without the index written on close. The recorder's own format, read as the file stood
     /// before close, must still be playable, so the next launch sends it.
-    @Test func recordingFormatStaysReadableWhenCutShort() throws {
+    @Test func recordingFormatStaysReadableWhenCutShort() async throws {
         let fixture = Fixture()
         try FileManager.default.createDirectory(at: fixture.folder, withIntermediateDirectories: true)
         let live = fixture.folder.appending(path: "live.\(IOSMeetingRecorder.recordingExtension)")
@@ -206,10 +206,37 @@ struct IOSMeetingRecorderTests {
         for i in 0..<24_000 { buffer.floatChannelData?[0][i] = Float(sin(Double(i) * 0.1) * 0.3) }
         for _ in 0..<3 { try audio.write(from: buffer) }
         try FileManager.default.copyItem(at: live, to: cut)  // the bytes on disk as an ended app leaves them
+        _ = audio
+        // An ended app can leave half a packet at the end, which the server's decoder (ffmpeg -xerror) refuses.
+        let handle = try FileHandle(forWritingTo: cut)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(repeating: 7, count: 17))
+        try handle.close()
+        let before = try #require(try FileManager.default.attributesOfItem(atPath: cut.path)[.size] as? Int)
+
+        // The launch scan's own recovery: trimmed to whole packets, playable, sent and marked as cut short.
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("POST", "/app/v1/meetings"):
+                return .json(201, #"{"id":"m-example","chunk_size":1048576,"received":[]}"#)
+            case ("PUT", "/app/v1/meetings/m-example/chunk/0"):
+                return .json(200, #"{"received":[0]}"#)
+            default:
+                return Self.answer(request, retry: true)
+            }
+        }
+        try FileManager.default.removeItem(at: live)
+        fixture.recorder.updateUploadContext(foreground: true, client: server.client)
+        await fixture.recorder.uploadTask?.value
+        #expect(fixture.recorder.damagedRecordings.isEmpty)
+        let after = try #require(try FileManager.default.attributesOfItem(atPath: cut.path)[.size] as? Int)
+        #expect(before - after == 17)
         let read = try AVAudioFile(forReading: cut)
         let seconds = Double(read.length) / read.processingFormat.sampleRate
         #expect(seconds > 2.5, "a cut-short recording kept only \(seconds) s")
-        _ = audio
+        let create = try #require(server.requests.first { $0.method == "POST" && $0.path == "/app/v1/meetings" }?.json)
+        #expect(create["ext"] as? String == "caf")
+        #expect((create["sidecar"] as? [String: Any])?["problems"] as? [String] == ["The app stopped before the recording ended."])
     }
 
     @Test func launchSendsPlayableOrphansAndKeepsDamagedAudio() async throws {
