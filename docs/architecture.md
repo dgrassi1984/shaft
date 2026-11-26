@@ -713,11 +713,11 @@ ranks candidates from memory, open surprises, inbox, the improvement plan, unres
 commitments by relevance to the cycle. It selects up to `WORKSPACE_K` items within automatic recall's
 1,800-character budget. It records the selections in the episode and broadcasts them after each step.
 After `declare_intent` it re-ranks the candidates using the declared goal and success criterion.
-The separate **attention** field (`attention`: up to four {source, why}, scored against the tool
+The separate **attention** field (`attention`: up to four {source, why}) is scored against the tool
 log by `supervisor/attention.py`: a call touches its tool's source, mail, calendar, record, memory, web, or what a
 plugin's name says, the files in its arguments, in a run's command or in a script the cycle wrote and ran, a
 message's recipient and a plugin's code; free-text sources are split into paths and known sources, and one it cannot
-read is reported unreadable, not untouched). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
+read is reported unreadable, not untouched. **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
 action that has failed since it last worked, showing the comparable calls and their counts; calling again runs it.
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only

@@ -1,8 +1,7 @@
 """The attention schema, scored against the tool log.
 
 A live cycle may declare in `declare_intent` where it expects to look: up to four {source, why}. Graziano's attention
-schema theory says a model of one's own attention is for controlling it; the agent uses the declaration as a top-down
-prior for its workspace. Here the supervisor checks the declaration against what the cycle then did — the share of its
+schema theory says a model of one's own attention is for controlling it. Here the supervisor checks the declaration against what the cycle then did — the share of its
 calls that went to a source it named, and the named sources it never touched. The score feeds nothing: no probation,
 no reward. Only the knob trial (`shaft experiment attention`) decides whether the field stays.
 

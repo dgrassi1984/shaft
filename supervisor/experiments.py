@@ -197,7 +197,7 @@ def targets(name: str, item: str, project: Path = PROJECT) -> dict[str, str]:
         return {e["ts"]: "operator" for e in eps if (e.get("intent") or {}).get("origin") == "operator"}
     if item == "forecast":
         return {e["ts"]: "ran out" for e in eps if e.get("intent") and _ran_out(e)}
-    raise ExperimentError(f"unknown experiment {item!r}: one of {', '.join([*KNOBS, 'workspace'])}")
+    raise ExperimentError(f"unknown experiment {item!r}: one of {', '.join(KNOBS)}")
 
 
 # -- knob trials ------------------------------------------------------------------------------------------------
@@ -715,7 +715,7 @@ def resource_shock(name: str, cycles: int = 6, dry_run: bool = False, project: P
         raise ExperimentError("MAX_STEPS_LIVE must be an integer") from None
     if steps < 2 or cfg.get("FORECAST", "on") != "on":
         raise ExperimentError("resource-shock needs at least 2 turns and FORECAST=on")
-    # Like workspace probes, use cloud for a local instance: no competition for its model and no fallback.
+    # Use cloud for a local instance: no competition for its model and no fallback.
     from . import planchannel, selfhosted
     own = trial.model_of(code)
     if planchannel.prefix(own["model"]):
