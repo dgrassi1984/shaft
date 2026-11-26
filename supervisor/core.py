@@ -32,7 +32,20 @@ INSTANCES = PROJECT / "instances"
 # The Mac app's install keeps its own tools here: uv in bin/, the Python 3.12 that runs SHAFT in python/ (uv's
 # UV_PYTHON_INSTALL_DIR), uv's cache in cache/. A Homebrew install has no such folder. Instances read bin/ and python/
 # (sandbox._runtime_reads): their agent, plugins and tests run on that Python, and `run` uses that uv.
-RUNTIME = PROJECT / ".runtime"
+
+
+def _runtime_root() -> Path:
+    """The .runtime folder that holds the interpreter running SHAFT, when the Mac app installed it; else PROJECT's.
+    A gate's copy of the project (gate.committed_tree) has no .runtime of its own but runs on the install's Python:
+    until 2026-11-26 its sandbox profiles then gave that Python no read rule, and every instance test and plugin check
+    of an app install failed at interpreter start ("No module named 'encodings'")."""
+    for parent in Path(PYTHON).absolute().parents:   # unresolved: a link never takes it out of the install
+        if parent.name == "python" and parent.parent.name == ".runtime":
+            return parent.parent
+    return PROJECT / ".runtime"
+
+
+RUNTIME = _runtime_root()
 RUNTIME_READABLE = ("bin", "python")
 
 

@@ -326,7 +326,9 @@ class RunToolTest(unittest.TestCase):
         self.assertNotIn("exit 0", r.splitlines()[0])
         plan = Path(__file__).resolve().parents[2] / "README.md"   # in the home folder, outside the instance
         r = self.run_cmd(f"head -c 200 {plan}")
-        self.assertNotIn("SHAFT", r)
+        # The file's own text, not the word "SHAFT": an app install lives in ~/SHAFT, so the refusal itself names it
+        # (on such an install this test failed every gate until 2026-11-26).
+        self.assertNotIn(next(line for line in plan.read_text().splitlines() if len(line) > 40)[:40], r)
         self.assertIn("Operation not permitted", r)
 
     def test_runaway_is_killed(self):
@@ -347,6 +349,33 @@ class AgentEnvironmentTest(unittest.TestCase):
         self.assertNotIn("sk-leaked-canary", json.dumps(env))
         self.assertEqual(env["LLM_MODEL"], "the-trial-arm")        # given by name (trial.py): still passed
         self.assertEqual(env["LC_ALL"], "en_US.UTF-8")
+
+
+class AgentPythonOnPathTest(unittest.TestCase):
+    def test_python3_in_agent_path_is_the_python_running_shaft(self):
+        """2026-11-26: on an app install the launchd PATH put the Command Line Tools' Python 3.9 first, so a plugin
+        that ran `python3` got 3.9 while the plugin itself ran on 3.12."""
+        from supervisor import core, sandbox
+        with tempfile.TemporaryDirectory() as d:
+            bindir = Path(d) / ".runtime/python/cpython-3.12.14-macos-aarch64-none/bin"
+            bindir.mkdir(parents=True)
+            for name in ("python3", "python3.12"):
+                (bindir / name).touch()
+            with mock.patch.object(core, "PYTHON", str(bindir / "python3.12")):
+                env = sandbox.agent_env({"PATH": "/x/.runtime/bin:/usr/bin:/bin"})
+                self.assertEqual(env["PATH"], f"{bindir}:/x/.runtime/bin:/usr/bin:/bin")
+                self.assertEqual(sandbox.agent_env(env)["PATH"], env["PATH"])   # not added twice
+
+    def test_gate_copy_reads_the_installs_runtime(self):
+        """2026-11-26: a gate's copy of the project has no .runtime, so its profiles gave the app-installed Python no
+        read rule and every instance test failed at interpreter start. RUNTIME follows the Python running SHAFT."""
+        from supervisor import core
+        with tempfile.TemporaryDirectory() as d:
+            python = Path(d) / "SHAFT/.runtime/python/cpython-3.12.14-macos-aarch64-none/bin/python3.12"
+            with mock.patch.object(core, "PYTHON", str(python)):
+                self.assertEqual(core._runtime_root(), Path(d) / "SHAFT/.runtime")
+            with mock.patch.object(core, "PYTHON", "/opt/homebrew/opt/python@3.12/bin/python3.12"):
+                self.assertEqual(core._runtime_root(), core.PROJECT / ".runtime")   # a Homebrew install: unchanged
 
 
 class SymlinkEscapeTest(unittest.TestCase):
