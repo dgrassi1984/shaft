@@ -106,7 +106,9 @@ until a release carries one, use the [terminal quickstart](#quickstart-cloud-onl
 The downloaded app checks for updates once a day and installs them when you click Install;
 Settings lets you turn the check off.
 
-1. Download `SHAFT-<version>.dmg` from a release that has one, open it and drag SHAFT to Applications.
+1. Download `SHAFT-<version>.dmg` from a release that has one, open it and drag SHAFT to Applications. Without
+   administrator rights, put it in the Applications folder of your home folder instead (`~/Applications`; create it
+   if it is missing): SHAFT needs no admin rights, and finds ChatGPT.app or Tailscale.app there too.
 2. Open SHAFT. With no SHAFT installed in `~/SHAFT`, it opens its setup wizard. Read the Welcome page: it states what
    the agents can do and the risks above.
 3. **Install** runs and shows each step:

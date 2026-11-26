@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import random
+import shlex
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import feedback, judge
-from .core import jsonl_lines, PROJECT, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
+from .core import jsonl_lines, PROJECT, PYTHON, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
 from .evolution import PROBES
 from . import metrics
 
@@ -168,7 +169,7 @@ def _prereqs() -> list[str]:
                             f"(pip install -r {BONSAI_PACK}/runtime/requirements.txt)")
         return problems
     if not Path(FT_PYTHON).exists():
-        problems.append(f"no fine-tuning Python at {FT_PYTHON} (python3 -m venv .venv-ft && .venv-ft/bin/pip install mlx-lm)")
+        problems.append(f"no fine-tuning Python at {FT_PYTHON} ({shlex.quote(PYTHON)} -m venv .venv-ft && .venv-ft/bin/pip install mlx-lm)")
     elif subprocess.run([FT_PYTHON, "-c", "import mlx_lm"], capture_output=True).returncode != 0:
         problems.append(f"mlx_lm is not installed for {FT_PYTHON} (pip install mlx-lm)")
     return problems
