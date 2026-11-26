@@ -209,6 +209,8 @@ class McpTest(NotesTest):
                                        "clientInfo": {"name": "claude", "version": "x"}})["result"]
         self.assertEqual(init["protocolVersion"], "2025-06-18")
         self.assertIn("tools", init["capabilities"])
+        self.assertIn("No instance accepts notes from Claude yet", init["instructions"])
+        self.assertIn("shaft claude-notes <instance> on", init["instructions"])
         self.assertIsNone(mcp_server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["shaft_instances", "shaft_send"])
@@ -217,6 +219,24 @@ class McpTest(NotesTest):
         self.assertEqual(odd["protocolVersion"], mcp_server.PROTOCOL)
         bad = mcp_server.handle({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": ["x"]})
         self.assertEqual(bad["error"]["code"], -32602)
+
+    def test_claude_asked_who_the_instance_was(self):
+        core.set_claude_notes("example", True)
+        instructions = self.rpc("initialize")["result"]["instructions"]
+        self.assertIn("Instances that accept notes: example.", instructions)
+        tools = self.rpc("tools/list")["result"]["tools"]
+        send = next(tool for tool in tools if tool["name"] == "shaft_send")
+        self.assertIn("example", send["inputSchema"]["properties"]["instance"]["description"])
+
+    def test_discovery_survives_instance_lookup_failure(self):
+        with mock.patch.object(claude_notes, "instances", side_effect=OSError("unavailable")), \
+                mock.patch.object(mcp_server, "log") as log:
+            instructions = self.rpc("initialize")["result"]["instructions"]
+            self.assertIn("Call shaft_instances to list them", instructions)
+            tools = self.rpc("tools/list")["result"]["tools"]
+            send = next(tool for tool in tools if tool["name"] == "shaft_send")
+            self.assertIn("shaft_instances", send["inputSchema"]["properties"]["instance"]["description"])
+        self.assertEqual(log.call_count, 2)
 
     def test_send_through_the_tool(self):
         call = lambda **a: self.rpc("tools/call", {"name": "shaft_send", "arguments": a})["result"]

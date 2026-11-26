@@ -658,6 +658,8 @@ shaft mcp install                 # Claude Code (user scope) and Claude Desktop;
   public HTTPS server, which SHAFT never is.
 - **Tools**: `shaft_instances` (who takes notes) and `shaft_send(instance, title?, summary, files?)`. The server runs
   as you, on stdio, started by Claude; it only writes and never reads anything of an instance back.
+  The server names the instances that accept notes in the connection instructions it sends each time Claude starts
+  or restarts the server.
 - **The note**: `inbox/<time>-from-claude.md`, `Kind: claude`, with a Trust line saying Claude wrote it, not you:
   information about your work, not your orders. It never wakes the instance. Logged in `messages.jsonl` as `claude`.
   At most 20,000 characters, 30 notes an hour per instance.

@@ -1,8 +1,9 @@
 """SHAFT's local MCP server for the operator's own Claude (`shaft mcp serve`; docs/integrations.md "Notes from Claude").
 
 Claude Desktop and Claude Code start it as a stdio child on this Mac (`shaft mcp install` registers it with both), so
-it runs as the operator and reaches nothing over a network. Its tools only write: a note into an instance's inbox
-(claude_notes.send). It never reads anything of an instance back, and never wakes one.
+it runs as the operator and reaches nothing over a network. It names the instances that accept notes when Claude
+connects. Its only write is a note into an instance's inbox (claude_notes.send). It never reads an instance's inbox
+or wakes an instance.
 
   serve()      JSON-RPC 2.0 over stdin/stdout, one message per line (the MCP stdio transport); stdout carries only
                protocol messages.
@@ -16,6 +17,8 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
+from copy import deepcopy
 from pathlib import Path
 
 from . import claude_notes
@@ -50,12 +53,25 @@ TOOLS = [
 ]
 
 
+def _describe_note_instances(names: list[str]) -> str:
+    if names:
+        return f"Instances that accept notes: {', '.join(names)}."
+    return ("No instance accepts notes from Claude yet: the operator turns it on per instance (Access page in the SHAFT "
+            "app, or `shaft claude-notes <instance> on`).")
+
+
+def _note_instances_for_discovery() -> list[str] | None:
+    try:
+        return claude_notes.instances()
+    except Exception as e:
+        with suppress(OSError):  # An unavailable log must not break discovery either.
+            log(f"mcp: listing note recipients failed: {type(e).__name__}: {e}")
+        return None
+
+
 def _call(name: str, args: dict) -> str:
     if name == "shaft_instances":
-        names = claude_notes.instances()
-        return ("Instances that accept notes: " + ", ".join(names)) if names else \
-            "No instance accepts notes from Claude yet: the operator turns it on per instance (Access page in the SHAFT " \
-            "app, or `shaft claude-notes <instance> on`)."
+        return _describe_note_instances(claude_notes.instances())
     if name == "shaft_send":
         files = args.get("files") or []
         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
@@ -87,16 +103,31 @@ def handle(msg: dict) -> dict | None:
     if method == "initialize":
         from .version import supervisor_commit
         asked = params.get("protocolVersion")
+        instructions = ("SHAFT runs the operator's own autonomous agents (instances) on this Mac. When he "
+                        "asks you to let one of them know about work done here, write it a self-contained "
+                        "note with shaft_send.")
+        names = _note_instances_for_discovery()
+        if names is None:
+            instructions += " Call shaft_instances to list them."
+        else:
+            instructions += " " + _describe_note_instances(names)
+            if names:
+                instructions += (" When the operator asks you to send or tell something to one of them by name, "
+                                 "use shaft_send.")
         return ok({"protocolVersion": asked if asked in SUPPORTED else PROTOCOL,
                    "capabilities": {"tools": {"listChanged": False}},
                    "serverInfo": {"name": NAME, "version": supervisor_commit()},
-                   "instructions": "SHAFT runs the operator's own autonomous agents (instances) on this Mac. When he "
-                                   "asks you to let one of them know about work done here, write it a self-contained "
-                                   "note with shaft_send."})
+                   "instructions": instructions})
     if method == "ping":
         return ok({})
     if method == "tools/list":
-        return ok({"tools": TOOLS})
+        tools = deepcopy(TOOLS)
+        names = _note_instances_for_discovery()
+        if names is not None:
+            send = next(tool for tool in tools if tool["name"] == "shaft_send")
+            send["inputSchema"]["properties"]["instance"]["description"] = (
+                "The instance's name. " + _describe_note_instances(names))
+        return ok({"tools": tools})
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
         try:
