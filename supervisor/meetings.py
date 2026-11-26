@@ -93,9 +93,14 @@ def _metadata(*, mode, started, device, ext, title="", ended=None, sidecar=None,
         raise Invalid("title must be a string.")
     if account is not None and (not isinstance(account, str) or not account.strip()):
         raise Invalid("account must be a non-empty alias or null.")
+    started = _timestamp(started, "started")
+    automatic = not title.strip()
+    if automatic:
+        # Named from the calendar event the recording overlaps when Listen takes it (listen_worker.calendar_event).
+        title = "Meeting " + datetime.fromisoformat(started).astimezone().strftime("%-d %b %Y at %H:%M")
     return {
-        "title": title, "created": datetime.now().astimezone().isoformat(timespec="microseconds"),
-        "started": _timestamp(started, "started"), "ended": None if ended is None else _timestamp(ended, "ended"),
+        "title": title, "title_auto": automatic, "created": datetime.now().astimezone().isoformat(timespec="microseconds"),
+        "started": started, "ended": None if ended is None else _timestamp(ended, "ended"),
         "mode": mode, "device": device, "channels": sidecar.get("channels"), "account": account,
         "state": "uploading", "error": None, "size": None, "sha256": None, "ext": ext,
         "chunk_size": CHUNK_SIZE, "chunks_received": [], "processed_with": None,
@@ -239,6 +244,9 @@ def update(meeting_id: str, changes: dict) -> dict:
     with _locked(meeting_id) as (folder, metadata):
         account_changed = "account" in changes and changes["account"] != metadata["account"]
         metadata.update(changes)
+        if "title" in changes:
+            metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
+            metadata.pop("title_from", None)
         if account_changed and (metadata["state"] == "ready" or "notified" in metadata):
             if metadata["account"]:
                 metadata["notification_owed"] = True
@@ -344,6 +352,16 @@ def finish(meeting_id: str, *, size=None, sha256=None, chunks=None) -> dict:
         if upload.exists():
             shutil.rmtree(upload)
         return metadata
+
+
+def name_from_calendar(meeting_id: str, title: str, account: str | None) -> None:
+    """Give an automatically titled meeting its calendar event's title, read while it was filed under `account`:
+    not if the operator titled it, or filed it elsewhere, meanwhile (a title from one account's calendar must not
+    reach the watchers of another)."""
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata.get("title_auto") and metadata.get("account") == account:
+            metadata.update(title=title, title_auto=False, title_from="calendar")
+            _save(folder, metadata)
 
 
 def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> None:

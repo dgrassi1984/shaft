@@ -1812,7 +1812,9 @@ See [meeting storage and CLI](meetings.md).
 
 The server assigns an ID of the form `m-YYYYMMDD-HHMM-<4 lowercase hex digits>` using its local time. `mode` is
 `online` or `inperson`. `device` is a non-empty string. `ext` is `m4a`, `caf`, or `wav`. `started` is an ISO 8601
-date and time. `ended` uses the same format and defaults to `null`. `title` defaults to an empty string. `account`
+date and time. `ended` uses the same format and defaults to `null`. `title` defaults to an empty string, which
+makes it automatic: the meeting is called `Meeting <date> at <time>` and `title_auto` is `true` until Listen names
+it after the overlapping calendar event (`title_from` becomes `calendar`) or the operator sets a title. `account`
 is a non-empty account alias or `null` for an unfiled meeting.
 
 `sidecar` defaults to `{}` and must be a JSON object. The server stores its fields as supplied, including nested
@@ -1853,7 +1855,8 @@ Use `?page=N` to fetch up to 200 segments at a time. The default is page 1. A pa
 empty `segments` array. An invalid page number returns `400 bad_request`.
 
 `POST /meetings/<id>` updates at least one of `account` and `title`. The other field keeps its current value.
-`account` must be a configured Google account alias or `null` to unfile the meeting. `title` must be a string.
+`account` must be a configured Google account alias or `null` to unfile the meeting. `title` must be a string;
+setting it turns `title_auto` off, so the calendar never replaces it.
 Changing the account on a ready meeting sends a watch note to eligible instances that have yet to receive it.
 
 `POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
