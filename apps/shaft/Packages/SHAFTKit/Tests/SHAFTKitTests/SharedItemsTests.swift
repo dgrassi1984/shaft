@@ -45,6 +45,14 @@ struct SharedItemsTests {
         #expect(SharedItems([], note: "A note").isSendable)
     }
 
+    @Test func attachmentWithoutMessageTextCanSend() {
+        let file = OutgoingFile(name: "report.pdf", mimeType: "application/pdf", fileURL: URL(filePath: "/tmp/report.pdf"))
+        let content = SharedItems([.file(file)], note: " \n")
+        #expect(content.isSendable)
+        #expect(content.text.isEmpty)
+        #expect(content.files == [file])
+    }
+
     @Test func unsupportedItemsHaveAMessageAndCannotSendAlone() {
         let content = SharedItems([.unsupported("item 1 (unsupported type)")])
         #expect(content.unsupportedMessages == ["Could not share item 1 (unsupported type)."])
