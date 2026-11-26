@@ -12,7 +12,9 @@ struct FeedView: View {
     var newestVisible: (Bool) -> Void
     @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var position = ScrollPosition(edge: .bottom)
+    /// Lands on the end by `bottomID`, never by the bottom edge: the lazy feed's height is an estimate until its rows are
+    /// measured, and its bottom edge can lie past the last row, where nothing is built until a scroll (a blank chat).
+    @State private var position = ScrollPosition(id: Self.bottomID, anchor: .bottom)
     @State private var pinned = true
     /// How far the end of the feed is below the visible part, in the bands the feed acts on: only a change of band
     /// updates the view (a distance in points re-evaluated the whole feed on every scroll event).
@@ -27,7 +29,8 @@ struct FeedView: View {
 
     private var metrics = FeedMetrics()
 
-    private let bottomID = "feed-bottom"
+    /// The foot of the feed: its end is the feed's end.
+    private static let bottomID = "feed-bottom"
 
     var body: some View {
         let newest = FeedRows.newestKey(feed)
@@ -55,12 +58,11 @@ struct FeedView: View {
                             }
                         }
                 }
-                Color.clear.frame(height: 1).id(bottomID)
+                // The foot: the feed's end is this view's end, so scrolling to it by id lands on the very end. At rest at
+                // either end nothing lies in the fades (`feedEdges`): the turn's spacing above counts towards the foot.
+                Color.clear.frame(height: metrics.fade - Design.Space.turn + 1).id(Self.bottomID)
             }
-            // At rest at either end nothing lies in the fades (`feedEdges`): the turn's spacing and the 1 pt of
-            // `bottomID` count towards the foot.
             .padding(.top, metrics.fade)
-            .padding(.bottom, metrics.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
         .readingTextSize()
@@ -122,7 +124,7 @@ struct FeedView: View {
         .onChange(of: screen.jumpToLatest) {
             pinned = true
             newBelow = false
-            withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
+            withAnimation(reduceMotion ? nil : .default) { position.scrollTo(id: Self.bottomID, anchor: .bottom) }
         }
     }
 
@@ -143,7 +145,7 @@ struct FeedView: View {
     private func stickToBottom() {
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { position.scrollTo(edge: .bottom) }
+        withTransaction(transaction) { position.scrollTo(id: Self.bottomID, anchor: .bottom) }
     }
 }
 

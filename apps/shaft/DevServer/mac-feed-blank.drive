@@ -1,0 +1,17 @@
+# A long chat opened, left and opened again must show its last messages, not an empty feed (the lazy feed landing past
+# its last row on an estimated height, v0.80.0). Seed it with `fixture_server.py act ... rich ada 160`; every
+# `feedgeom` line must end in "shown", never "BLANK". Repeat a few runs: it failed 3 times in 5 before the fix.
+open ada
+until
+wait 2
+feedgeom
+open tundra
+until
+wait 1
+open ada
+until
+wait 2
+feedgeom
+scrollfeed -300 3
+feedgeom
+quit

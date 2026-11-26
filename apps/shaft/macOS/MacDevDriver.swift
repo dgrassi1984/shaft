@@ -51,6 +51,8 @@ import SwiftUI
 ///     wheelblock <n> <dx> <dy>      a wheel gesture over the n-th block's text; logs where the block and the feed went
 ///     earlier                       what "Show the N earlier messages" does in the chat shown
 ///     scrollfeed <dy> <n>           <n> wheel events of <dy> points, a frame apart, on the feed; logs the time taken
+///     feedgeom                      log where the feed is scrolled, how tall it is, and whether what is on screen of it
+///                                   draws anything (a chat that opens blank until scrolled draws nothing)
 ///     voicestate                    log the voice session on screen (VoiceDebug.current): state, transcript, the
 ///                                   sentence spoken, status line, substitution, last delay, muted
 ///     voicewait <state> <seconds>   wait up to <seconds> for the voice session to reach <state> (listening,
@@ -393,10 +395,7 @@ enum MacDevDriver {
             // tallest one in the window); logs how long they took and where the feed went.
             let parts = rest.split(separator: " ").compactMap { Int32($0) }
             guard parts.count == 2, parts[1] > 0, let root = window?.contentView else { return log("scrollfeed <dy> <n>") }
-            var views: [NSScrollView] = []
-            walk(root) { view in if let scroll = view as? NSScrollView { views.append(scroll) } }
-            guard let feed = views.max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
-            else { return log("no scroll view") }
+            guard let feed = feedScrollView(in: root) else { return log("no scroll view") }
             let before = feed.contentView.bounds.minY
             let start = ContinuousClock.now
             for _ in 0..<parts[1] {
@@ -408,6 +407,14 @@ enum MacDevDriver {
             let (seconds, attoseconds) = (ContinuousClock.now - start).components
             log("scrollfeed: \(parts[1]) events in \(seconds * 1000 + attoseconds / 1_000_000_000_000_000) ms, "
                 + "feed \(Int(before)) -> \(Int(feed.contentView.bounds.minY)) of \(Int(feed.documentView?.frame.height ?? 0))")
+        case "feedgeom":
+            guard let feed = feedScrollView() else { return log("no scroll view") }
+            let clip = feed.contentView
+            let drawn = inkedRows(clip)
+            let height = feed.documentView?.frame.height ?? 0
+            log("feedgeom: y \(Int(clip.bounds.minY)) visible \(Int(clip.bounds.height)) of \(Int(height)), "
+                + "end \(Int(height - clip.bounds.maxY)) pt below, drawn rows \(drawn) of \(Int(clip.bounds.height)) pt -> "
+                + (drawn == 0 ? "BLANK" : "shown"))
         case "quit":
             log("done")
             NSApp.terminate(nil)
@@ -503,6 +510,35 @@ enum MacDevDriver {
 
     private static func describe(_ view: NSView) -> String {
         "\(type(of: view))" + (view.subviews.isEmpty ? "" : "[" + view.subviews.map(describe).joined(separator: ", ") + "]")
+    }
+
+    /// The feed's scroll view: the one with the tallest document in the window.
+    private static func feedScrollView(in root: NSView? = nil) -> NSScrollView? {
+        guard let root = root ?? window?.contentView else { return nil }
+        var views: [NSScrollView] = []
+        walk(root) { view in if let scroll = view as? NSScrollView { views.append(scroll) } }
+        return views.max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+    }
+
+    /// How many points of the view's height, as drawn now, hold a pixel that differs from its first one (the canvas):
+    /// 0 only when no pixel row at all does, a blank view.
+    private static func inkedRows(_ view: NSView) -> Int {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        func rgba(_ x: Int, _ y: Int) -> [CGFloat]? {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
+            return [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
+        }
+        guard rep.pixelsHigh > 0, rep.pixelsWide > 0, let canvas = rgba(0, 0) else { return 0 }
+        var rows = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                guard let pixel = rgba(x, y) else { continue }
+                if zip(pixel, canvas).map({ abs($0 - $1) }).reduce(0, +) > 0.1 { rows += 1; break }
+            }
+        }
+        guard rows > 0 else { return 0 }
+        return max(1, Int((Double(rows) * view.bounds.height / Double(rep.pixelsHigh)).rounded()))
     }
 
     private static func walk(_ view: NSView, _ visit: (NSView) -> Void) {
