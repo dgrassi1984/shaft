@@ -789,3 +789,49 @@ extension MarkdownAttributed {
         }
     }
 }
+
+/// Messages rendered lately, kept across the views that show them (macOS/MessageTextView.swift): the feed builds a
+/// message's view as it scrolls into sight (LazyVStack) and builds them all again when a chat is opened again, and the
+/// same source at the same scale and appearance renders the same. A rendered message is immutable (its text is copied
+/// into each view's storage).
+@MainActor
+enum RenderCache {
+    struct Key: Hashable {
+        let source: String
+        let markdown: Bool
+        let scale: CGFloat
+        let appearance: NSAppearance.Name
+
+        /// The source's exact bytes: String equality is canonical, so "é" written two ways would share one rendering
+        /// and Copy code would hand back the other message's characters.
+        static func == (lhs: Key, rhs: Key) -> Bool {
+            lhs.markdown == rhs.markdown && lhs.scale == rhs.scale && lhs.appearance == rhs.appearance
+                && lhs.source.utf8.elementsEqual(rhs.source.utf8)
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(markdown)
+            hasher.combine(scale)
+            hasher.combine(appearance)
+            for byte in source.utf8 { hasher.combine(byte) }
+        }
+    }
+
+    /// About two long chats' worth of messages (80 turns each), with room for a streaming reply's passing versions.
+    static let capacity = 400
+    private static var entries: [Key: MarkdownAttributed.Rendered] = [:]
+    private static var order: [Key] = []
+
+    static func rendered(_ key: Key, _ make: () -> MarkdownAttributed.Rendered) -> MarkdownAttributed.Rendered {
+        if let hit = entries[key] { return hit }
+        let made = make()
+        entries[key] = made
+        order.append(key)
+        if order.count > capacity {
+            let dropped = order.prefix(order.count - capacity)
+            for old in dropped { entries[old] = nil }
+            order.removeFirst(dropped.count)
+        }
+        return made
+    }
+}

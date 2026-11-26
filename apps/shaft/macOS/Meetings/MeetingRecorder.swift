@@ -46,8 +46,11 @@ final class MeetingRecorder {
 
     @ObservationIgnored private let defaults: UserDefaults
 
+    /// Where recordings wait until the server has them.
+    static let defaultFolder = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory)
+
     init(client: @escaping @MainActor () -> APIClient?,
-         folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory),
+         folder: URL = MeetingRecorder.defaultFolder,
          defaults: UserDefaults = .standard) {
         self.client = client
         self.folder = folder
