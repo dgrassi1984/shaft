@@ -122,6 +122,17 @@ memories remain. Content reaches the instance's model and may reach judges. See
 `Broker.gchat_grants`, `Broker._gchat_read`, `supervisor/gchat.py`, `marking`, and
 `supervisor/__main__.py`, `cmd_gchat`.
 
+### Notes from Claude
+
+`shaft claude-notes <name> on` lets the operator's own Claude sessions leave notes in that instance's inbox through
+`shaft mcp serve`, a stdio MCP server Claude Desktop and Claude Code start as the operator on this Mac: it listens on
+no port and reads nothing of an instance back. Off by default; checked on every note. A note's Trust line says Claude
+wrote it, not the operator, so its instructions carry no authority; this marking cannot prevent prompt injection.
+The supervisor's own secret values and common key shapes are scrubbed from the note and its text files; files inside
+SHAFT and key stores are refused. A note never wakes the instance. See
+[integrations](integrations.md#notes-from-your-claude-sessions-shaft-mcp), `supervisor/claude_notes.py` and
+`supervisor/mcp_server.py`.
+
 ### Calendar grants
 
 `shaft calendar <name> grant <alias> <calendar>` enables `calendar_events` and

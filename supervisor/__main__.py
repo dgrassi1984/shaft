@@ -528,6 +528,9 @@ def cmd_status(names: list[str]) -> int:
             print(f"  gchat       {', '.join(g['account'] for g in grants)} (shaft gchat {name} off)")
         if (grants := calendar_grants(name)):
             print(f"  calendar    {'; '.join(g['account'] + '/' + g['name'] for g in grants)} (shaft calendar {name} off)")
+        from .core import claude_notes
+        if claude_notes(name):
+            print(f"  claude      takes notes from your Claude sessions (shaft claude-notes {name} off)")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -1049,6 +1052,25 @@ def cmd_gdrive(target: str | None, action: str | None, alias: str | None, all_re
     if all_reach:
         print("everything the account can reach, including files strangers share with it, reaches the instance")
     print(f"(from {target}'s next Drive call; the prompt line changes from its next run)")
+    return 0
+
+
+def cmd_claude_notes(target: str | None, action: str | None) -> int:
+    """Show or change which instances take notes from the operator's Claude sessions (claude_notes.py)."""
+    from .core import claude_notes, set_claude_notes
+
+    def show(name: str) -> None:
+        print(f"{name}: " + ("takes notes from Claude" if claude_notes(name) else "no notes from Claude"))
+
+    if not target:
+        for name in instance_names():
+            show(name)
+        return 0
+    instance_root(target)
+    if action:
+        set_claude_notes(target, action == "on")
+        log(f"{target}: claude notes {action} by the operator")
+    show(target)
     return 0
 
 
@@ -2061,6 +2083,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("target", nargs="?", help="an instance")
     p.add_argument("action", nargs="?", choices=("grant", "revoke", "off"))
     p.add_argument("alias", nargs="?", help="the Google account alias")
+    p = sub.add_parser("claude-notes", help="whether your Claude sessions may leave notes in an instance's inbox "
+                                            "(shaft mcp): '<name> on|off'; alone lists them")
+    p.add_argument("target", nargs="?", help="an instance")
+    p.add_argument("action", nargs="?", choices=("on", "off"))
+    p = sub.add_parser("mcp", help="SHAFT's MCP server for your own Claude (Desktop, Code): 'install' registers it with "
+                                   "both, 'uninstall' removes it, 'serve' is what they start; alone shows its state")
+    p.add_argument("action", nargs="?", choices=("serve", "install", "uninstall", "status"), default="status")
     p = sub.add_parser("calendar", help="your calendars an instance may read, one per grant: "
                                         "'<name> grant|revoke|grant-write|revoke-write <alias> primary|<title>|<id>', '<name> off', '<name>' "
                                         "shows; 'calendars <alias>' lists an account's; alone lists all grants")
@@ -2292,6 +2321,11 @@ def _dispatch(args, parser) -> int:
         return cmd_mail(args.target, args.action, args.alias, args.label)
     if args.cmd == "gchat":
         return cmd_gchat(args.target, args.action, args.alias)
+    if args.cmd == "claude-notes":
+        return cmd_claude_notes(args.target, args.action)
+    if args.cmd == "mcp":
+        from . import mcp_server
+        return mcp_server.command(args.action)
     if args.cmd == "gdrive":
         return cmd_gdrive(args.target, args.action, args.alias, args.all_reach)
     if args.cmd == "calendar":

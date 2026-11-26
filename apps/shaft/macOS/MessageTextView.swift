@@ -72,9 +72,13 @@ struct MessageTextView: NSViewRepresentable {
                 return
             }
             shown = (source, markdown, scale)
-            view.effectiveAppearance.performAsCurrentDrawingAppearance {
-                view.show(markdown ? MarkdownAttributed.render(source, scale: scale)
-                                   : MarkdownAttributed.operatorText(source, scale: scale))
+            let appearance = view.effectiveAppearance
+            let key = RenderCache.Key(source: source, markdown: markdown, scale: scale, appearance: appearance.name)
+            appearance.performAsCurrentDrawingAppearance {
+                view.show(RenderCache.rendered(key) {
+                    markdown ? MarkdownAttributed.render(source, scale: scale)
+                             : MarkdownAttributed.operatorText(source, scale: scale)
+                })
             }
         }
 

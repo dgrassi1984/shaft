@@ -33,6 +33,7 @@
       "account": "work"
     }
   ],
+  "claude_notes": true,
   "google_accounts": [
     {
       "alias": "work",

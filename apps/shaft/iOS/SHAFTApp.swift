@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        HitchMonitor.start()
         #if DEBUG
         FrameMeter.startIfAsked()
         // SHAFT_START_DEMO=1 (SIMCTL_CHILD_SHAFT_START_DEMO through simctl): open the demo at launch, so the watch app

@@ -59,7 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Self-update, in the Developer ID download only (`AppUpdates`, `UpdateFeed`).
     let updates = AppUpdates()
     /// Meeting recording: the capture, and sending each recording to the paired server.
-    lazy var meetings = MeetingRecorder { [weak self] in self?.model.session?.store?.client }
+    /// A dev run (`SHAFT_DEV_DIR`) keeps its recordings in that folder: at launch the recorder sends every pending one to
+    /// the paired server, and a dev run's server is a fixture, never the place for the operator's real recordings.
+    lazy var meetings = MeetingRecorder(client: { [weak self] in self?.model.session?.store?.client },
+                                        folder: MacDevSession.directory?.appending(path: "Meetings", directoryHint: .isDirectory)
+                                            ?? MeetingRecorder.defaultFolder)
     private var keyMonitor: Any?
     @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
 
@@ -73,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             try? await Task.sleep(for: .seconds(15))
             await self?.meetings.sendPending()
         }
+        HitchMonitor.start()
         #if DEBUG
         FrameMeter.startIfAsked()
         #endif

@@ -15,7 +15,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `apps/shaft/DevServer/test_fixture_threads.py` | `FixtureThreadRepliesTest` | — |
 | `apps/shaft/DevServer/test_fixture_voice.py` | `FixtureVoiceTest` | — |
 | `apps/shaft/Shared/make_icons.py` | — | `main` |
-| `supervisor/__main__.py` | — | `cmd_first_reply`, `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_gchat`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_night_replay`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `cmd_claude`, `cmd_antigravity`, `main` |
+| `supervisor/__main__.py` | — | `cmd_first_reply`, `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_gdrive`, `cmd_claude_notes`, `cmd_gchat`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_night_replay`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `cmd_claude`, `cmd_antigravity`, `main` |
 | `supervisor/actions.py` | — | `restart_lock`, `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_json`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/agycli.py` | `Channel` | `serves`, `models`, `home`, `child_env`, `logged_in`, `efforts` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
@@ -34,6 +34,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/calendar.py` | `NotVisible`, `SyncExpired` | `cal_hash`, `handle`, `calendars`, `resolve`, `grant_id`, `parse_when`, `window`, `start_key`, `all_day`, `span`, `events`, `event`, `series`, `sync_now`, `changes`, `by_operator`, `own_response`, `written_by`, `recurrence_text`, `render_row`, `render_event`, `write_times`, `direct_only` |
 | `supervisor/calendar_proposals.py` | — | `create`, `listing`, `expire`, `decide`, `reject` |
 | `supervisor/channel.py` | — | `preference`, `set_preference`, `talks`, `can_alert`, `route`, `describe` |
+| `supervisor/claude_notes.py` | `Refused` | `granted`, `instances`, `secret_values`, `scrub`, `send` |
 | `supervisor/claudecli.py` | `Channel` | `serves`, `models`, `home`, `child_env`, `login_status`, `efforts` |
 | `supervisor/cloudllm.py` | `CloudError` | `fallback_label`, `custom_price`, `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `claude_thinking`, `from_anthropic`, `complete`, `openrouter_reasoning`, `decide`, `openrouter_stream`, `custom_stream`, `as_sse`, `efforts` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
@@ -42,7 +43,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `worst_price`, `envelope`, `complete` |
 | `supervisor/consultstats.py` | — | `rows`, `vendor`, `cycle_of`, `submitted`, `models_in`, `section`, `review_line`, `report` |
-| `supervisor/core.py` | `RuntimeLayoutError`, `Knob`, `Restarting`, `StaleSetting`, `KeyStoreUnreadable`, `UnsafePath`, `TooBig`, `TreeTooBig`, `Budget` | `runtime_dir`, `say`, `app_wording`, `settings_file`, `resolve`, `knob`, `positive_int`, `on_off`, `whole`, `dollars`, `hours`, `port`, `temperature`, `gigabytes`, `ports`, `model_name`, `model_names`, `custom_model`, `cloud_model`, `instance_model`, `any_model`, `fallback_model`, `channel_fallback`, `any_models`, `claude_model`, `openrouter_model`, `cloud_models`, `http_url`, `custom_prices`, `json_object`, `admitting`, `restart_barrier`, `describe_knobs`, `log`, `secrets_env`, `set_secret_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `paused_alone`, `long_pauses`, `set_paused`, `update_queued`, `set_update_queued`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `limit_value`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `gdrive_grants`, `set_gdrive_grants`, `first_reply_lock`, `gdrive_lock`, `gchat_lock`, `remove_gdrive_copies`, `gchat_grants`, `set_gchat_grants`, `meetings_grants`, `set_meetings_grants`, `remove_gchat_copies`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `open_beneath`, `dir_beneath`, `read_beneath`, `safe_read_bytes`, `safe_read`, `list_beneath`, `set_aside`, `unlink_beneath`, `walk_beneath`, `read_tree`, `reserved`, `link_stays_inside`, `copy_beneath`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `err_text`, `changed_vs_head`, `commit_state` |
+| `supervisor/core.py` | `RuntimeLayoutError`, `Knob`, `Restarting`, `StaleSetting`, `KeyStoreUnreadable`, `UnsafePath`, `TooBig`, `TreeTooBig`, `Budget` | `runtime_dir`, `say`, `app_wording`, `settings_file`, `resolve`, `knob`, `positive_int`, `on_off`, `whole`, `dollars`, `hours`, `port`, `temperature`, `gigabytes`, `ports`, `model_name`, `model_names`, `custom_model`, `cloud_model`, `instance_model`, `any_model`, `fallback_model`, `channel_fallback`, `any_models`, `claude_model`, `openrouter_model`, `cloud_models`, `http_url`, `custom_prices`, `json_object`, `admitting`, `restart_barrier`, `describe_knobs`, `log`, `secrets_env`, `set_secret_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `paused_alone`, `long_pauses`, `set_paused`, `update_queued`, `set_update_queued`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `limit_value`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `gdrive_grants`, `set_gdrive_grants`, `first_reply_lock`, `gdrive_lock`, `gchat_lock`, `remove_gdrive_copies`, `gchat_grants`, `set_gchat_grants`, `meetings_grants`, `set_meetings_grants`, `claude_notes`, `set_claude_notes`, `remove_gchat_copies`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `open_beneath`, `dir_beneath`, `read_beneath`, `safe_read_bytes`, `safe_read`, `list_beneath`, `set_aside`, `unlink_beneath`, `walk_beneath`, `read_tree`, `reserved`, `link_stays_inside`, `copy_beneath`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `err_text`, `changed_vs_head`, `commit_state` |
 | `supervisor/corrections.py` | — | `alerts` |
 | `supervisor/cycles.py` | — | `note_lines`, `days`, `cycle`, `plan` |
 | `supervisor/dashboard.py` | — | `clean`, `event_tone`, `activity`, `live_state`, `instance_state`, `services`, `events`, `snapshot` |
@@ -80,6 +81,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/listen_worker.py` | `Engines` | `hints`, `recover`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible`, `HistoryExpired` | `labels`, `label_id`, `visible`, `get_thread`, `row`, `search`, `history_now`, `history`, `header`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `reply_defaults`, `build_message`, `create_draft`, `update_draft`, `label_message`, `draft_message_id` |
+| `supervisor/mcp_server.py` | — | `handle`, `serve`, `install`, `uninstall`, `command` |
 | `supervisor/meeting_proposals.py` | — | `create`, `pending`, `decide` |
 | `supervisor/meetings.py` | `Error`, `Invalid`, `Missing`, `Conflict`, `TooLarge` | `create`, `get`, `list_meetings`, `update`, `change_grant`, `delete`, `upload_status`, `put_chunk`, `finish`, `set_state`, `reprocess`, `recover_processing`, `complete_processing`, `deliver_owed`, `detail`, `import_audio`, `command` |
 | `supervisor/meetings_access.py` | `NotVisible` | `visible`, `search`, `render_page` |
@@ -164,6 +166,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_chat_threads.py` | `ThreadsTest` | — |
 | `supervisor/tests/test_chat_threads_appapi.py` | `ThreadsAppTest` | — |
 | `supervisor/tests/test_chat_threads_server.py` | `ServerThreadsTest` | — |
+| `supervisor/tests/test_claude_notes.py` | `NotesTest`, `McpTest` | — |
 | `supervisor/tests/test_claudecli.py` | `DummyBridge`, `ChannelTest`, `MappingTest`, `WiringTest` | `body` |
 | `supervisor/tests/test_coder_providers.py` | `Loopback`, `Case`, `OpenAIToolsTest`, `CodexTest`, `CredentialTest` | `openai_reply` |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
@@ -231,6 +234,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_keys_and_http.py` | `FakeAPI`, `KeysAndHttpTest`, `TailnetGrantTest`, `KeyStoreDurabilityTest`, `ThroughTheInstancesClientTest`, `KeysOutOfReachTest`, `InstanceSideTest`, `OperatorCommandTest` | — |
 | `supervisor/tests/test_kill_delete.py` | `TargetsTest`, `ProcessesTest`, `KillTest`, `TrialsOfAPausedOrDeletedInstance`, `NothingWritesIntoADeletedInstance`, `DeleteTest` | `git` |
 | `supervisor/tests/test_kill_stuck_process.py` | `StuckProcessTest` | — |
+| `supervisor/tests/test_launcher.py` | `LauncherTest` | — |
 | `supervisor/tests/test_ledger.py` | `LedgerTest` | `whole_file` |
 | `supervisor/tests/test_ledger_mirror.py` | `LedgerMirrorTest`, `WithinARunTest` | — |
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
@@ -324,7 +328,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_speakers.py` | `SpeakerTest` | — |
 | `supervisor/tests/test_stats_head.py` | `StatsHeadTest`, `BatteryTopicsTest`, `StatsHeadRecordsTest` | — |
 | `supervisor/tests/test_stats_rebuild.py` | `Clock`, `StatsRebuildTest` | `fixture`, `benchmark` |
-| `supervisor/tests/test_supervision.py` | `BrokerTest`, `DnsRebindingTest`, `EnforcementTest`, `StatsTest`, `CloudTranslationTest`, `RunToolTest`, `AgentEnvironmentTest`, `SymlinkEscapeTest`, `FinetuneGuardTest`, `ProbationTest` | — |
+| `supervisor/tests/test_supervision.py` | `BrokerTest`, `DnsRebindingTest`, `EnforcementTest`, `StatsTest`, `CloudTranslationTest`, `RunToolTest`, `AgentEnvironmentTest`, `AgentPythonOnPathTest`, `SymlinkEscapeTest`, `FinetuneGuardTest`, `ProbationTest` | — |
 | `supervisor/tests/test_surprise.py` | `Fixture`, `RuleAndFoldContractTest`, `PredictionLoopTest`, `QueueGuardTest`, `CuriosityDrawTest`, `SleepDispositionTest` | — |
 | `supervisor/tests/test_surprise_judge.py` | `SurpriseJudgeTest` | — |
 | `supervisor/tests/test_surprise_ledger.py` | `LedgerTest` | — |

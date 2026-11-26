@@ -49,6 +49,8 @@ import SwiftUI
 ///     blocks                        log each code block and table: its frame and how wide its text is
 ///     scrollblock <n> <x>           scroll the n-th block sideways to x
 ///     wheelblock <n> <dx> <dy>      a wheel gesture over the n-th block's text; logs where the block and the feed went
+///     earlier                       what "Show the N earlier messages" does in the chat shown
+///     scrollfeed <dy> <n>           <n> wheel events of <dy> points, a frame apart, on the feed; logs the time taken
 ///     voicestate                    log the voice session on screen (VoiceDebug.current): state, transcript, the
 ///                                   sentence spoken, status line, substitution, last delay, muted
 ///     voicewait <state> <seconds>   wait up to <seconds> for the voice session to reach <state> (listening,
@@ -383,6 +385,29 @@ enum MacDevDriver {
             }
             try? await Task.sleep(for: .milliseconds(300))
             log("wheel: block \(before.0) -> \(block.driveDescription); feed \(Int(before.1)) -> \(Int(feedY()))")
+        case "earlier":
+            // What "Show the N earlier messages" does (a SwiftUI button in the feed, which a script cannot press).
+            state.screen?.chat.showEarlier()
+        case "scrollfeed":
+            // Wheel events of <dy> points each, <n> of them a frame apart, straight to the feed's scroll view (the
+            // tallest one in the window); logs how long they took and where the feed went.
+            let parts = rest.split(separator: " ").compactMap { Int32($0) }
+            guard parts.count == 2, parts[1] > 0, let root = window?.contentView else { return log("scrollfeed <dy> <n>") }
+            var views: [NSScrollView] = []
+            walk(root) { view in if let scroll = view as? NSScrollView { views.append(scroll) } }
+            guard let feed = views.max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+            else { return log("no scroll view") }
+            let before = feed.contentView.bounds.minY
+            let start = ContinuousClock.now
+            for _ in 0..<parts[1] {
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: parts[0],
+                                       wheel2: 0, wheel3: 0), let event = NSEvent(cgEvent: cg) else { continue }
+                feed.scrollWheel(with: event)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            let (seconds, attoseconds) = (ContinuousClock.now - start).components
+            log("scrollfeed: \(parts[1]) events in \(seconds * 1000 + attoseconds / 1_000_000_000_000_000) ms, "
+                + "feed \(Int(before)) -> \(Int(feed.contentView.bounds.minY)) of \(Int(feed.documentView?.frame.height ?? 0))")
         case "quit":
             log("done")
             NSApp.terminate(nil)

@@ -12,6 +12,9 @@ public enum TransitionClock {
     private static var started: (name: String, at: ContinuousClock.Instant, marks: Set<String>,
                                  state: OSSignpostIntervalState)?
 
+    /// The transition under way, if any (HitchMonitor names it beside a stall).
+    public static var current: String? { started?.name }
+
     /// A transition starts now (it replaces one still going: the last tap is the one being waited on).
     public static func begin(_ name: String) {
         if let started { signposter.endInterval("transition", started.state) }

@@ -107,6 +107,8 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     public var drive: [DriveGrant]
     public var chat: [ChatGrant]
     public var meetings: [MeetingGrant]?
+    /// Whether the operator's Claude sessions may leave notes, nil on older servers.
+    public var claudeNotes: Bool?
     public var googleAccounts: [GoogleAccount]
 
     public struct Browser: Codable, Sendable, Equatable {
