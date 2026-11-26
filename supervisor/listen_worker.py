@@ -20,9 +20,20 @@ ASR = "mlx-community/whisper-large-v3-turbo"
 POLL_SECONDS = 3
 LANGUAGES, _ = knob(
     "SHAFT_LISTEN_LANGUAGES", "it,en", lambda s: tuple(x.strip().lower() for x in s.split(",") if x.strip()),
-    "the languages meetings are spoken in, comma-separated (Whisper codes): a turn heard as another language is "
+    "the languages meetings are spoken in, comma-separated (Whisper codes): a chunk heard as another language is "
     "transcribed again in each of these and the likelier kept", group="Meetings", services=("listen",), web=False)
+VOCABULARY, _ = knob(
+    "SHAFT_LISTEN_VOCABULARY", "", lambda s: tuple(x.strip() for x in s.split(",") if x.strip()),
+    "names and terms meetings use that speech recognition should spell as written (product names, jargon, "
+    "places), comma-separated; the speaker gallery's names are added on their own", group="Meetings",
+    services=("listen",), web=False)
 LOG = logging.getLogger(__name__)
+
+
+def hints() -> str:
+    """The words the ASR is prompted with: the gallery's people and SHAFT_LISTEN_VOCABULARY."""
+    terms = list(dict.fromkeys([*speakers.known_names(), *VOCABULARY]))
+    return ", ".join(terms) + "." if terms else ""
 
 
 class Engines:
@@ -64,7 +75,31 @@ class Engines:
         vectors = result.speaker_embeddings if labels else ()
         return turns, dict(zip(labels, vectors, strict=True))
 
-    def transcribe(self, wav: Path, start: float, end: float) -> dict:
+    def loudness(self, wav: Path, spans) -> list[float]:
+        """Root-mean-square level of each (start, end) span of a channel."""
+        import numpy
+        import soundfile
+
+        samples, rate = soundfile.read(wav, dtype="float32")
+        levels = []
+        for start, end in spans:
+            piece = samples[round(start * rate):round(end * rate)]
+            levels.append(float(numpy.sqrt(numpy.mean(piece * piece))) if len(piece) else 0.0)
+        return levels
+
+    def mix(self, wavs, weights, out: Path) -> None:
+        """Sum the channels, each scaled by its weight, peak-normalised, into one mono file."""
+        import numpy
+        import soundfile
+
+        channels = [soundfile.read(wav, dtype="float32") for wav in wavs]
+        length = min(len(samples) for samples, _ in channels)
+        mixed = sum(samples[:length] * weight for (samples, _), weight in zip(channels, weights, strict=True))
+        peak = float(numpy.abs(mixed).max()) if length else 0.0
+        soundfile.write(out, (mixed * (0.9 / peak) if peak else mixed).astype("float32"), channels[0][1],
+                        subtype="PCM_16")
+
+    def transcribe(self, wav: Path, start: float, end: float, prompt: str | None = None) -> dict:
         import mlx_whisper
         import soundfile
 
@@ -73,17 +108,19 @@ class Engines:
             source.seek(min(first, len(source)))
             samples = source.read(last - first, dtype="float32")
         if not len(samples):
-            raise ValueError("A diarised turn lies outside the decoded audio.")
-        result = mlx_whisper.transcribe(samples, path_or_hf_repo=ASR, word_timestamps=True, verbose=None)
+            raise ValueError("A speech chunk lies outside the decoded audio.")
+        options = {"path_or_hf_repo": ASR, "word_timestamps": True, "verbose": None, "initial_prompt": prompt,
+                   "condition_on_previous_text": False}
+        result = mlx_whisper.transcribe(samples, **options)
         if LANGUAGES and result["language"] not in LANGUAGES:
-            # Short turns are often heard as a third language (a spoken "Allora." as Portuguese): ask in each of the
+            # A chunk is sometimes heard as a third language (a spoken "Allora." as Portuguese): ask in each of the
             # meeting's languages and keep the likeliest reading.
-            tries = [mlx_whisper.transcribe(samples, path_or_hf_repo=ASR, word_timestamps=True, verbose=None,
-                                            language=code) for code in LANGUAGES]
+            tries = [mlx_whisper.transcribe(samples, **options, language=code) for code in LANGUAGES]
             result = max(tries, key=_likelihood)
         offset = first / listen_pipeline.SAMPLE_RATE
-        words = [{"w": word["word"].strip(), "start": offset + word["start"], "end": offset + word["end"]}
-                 for segment in result["segments"] for word in segment.get("words", [])]
+        # "raw" keeps Whisper's own spacing ("c'" + "è" is one word on the page); the transcript stores "w".
+        words = [{"w": word["word"].strip(), "raw": word["word"], "start": offset + word["start"],
+                  "end": offset + word["end"]} for segment in result["segments"] for word in segment.get("words", [])]
         return {"text": result["text"], "lang": result["language"], "words": words}
 
 
@@ -115,7 +152,7 @@ def process_next(engines) -> bool:
             sidecar = json.loads((folder / "sidecar.json").read_bytes())
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
-                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines)
+                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines, hints())
             speakers.complete_processing(meeting_id, transcript, transcript.pop("_embeddings"))
             LOG.info("%s ready", meeting_id)
         except meetings.Missing:

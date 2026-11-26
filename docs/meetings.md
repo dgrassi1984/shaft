@@ -62,8 +62,16 @@ It marks the meeting `processing` before decoding the audio. After an interrupti
 once on restart. A second interruption marks the meeting `failed`.
 
 Online recordings use channel 1 for the microphone and channel 2 for system audio. In-person recordings use one
-channel. Listen diarises each channel separately, detects the language of each turn, and removes microphone
-turns that match overlapping system turns. Speaker labels begin with `M` for the microphone and `S` for system audio.
+channel. Listen diarises each channel separately; speaker labels begin with `M` for the microphone and `S` for
+system audio. It then transcribes the meeting as one conversation: it brings both channels of an online recording
+to the same speech loudness and mixes them, and cuts the speech into chunks of up to 28 seconds that start and end
+in pauses. A short turn is transcribed with the speech around it, not cut out on its own: Whisper invents phrases
+such as "Thank you" for a short clip padded with silence. Each chunk detects its language and is prompted with what was said just before it and with
+the names of the people in the speaker gallery and the terms in `SHAFT_LISTEN_VOCABULARY` (product names, jargon:
+anything Whisper should spell as written). Listen gives each word to the speaker whose diarised turn covers it
+and, online, whose channel carries it loudest against that channel's own speech; it changes speaker inside a
+phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
+are numbered by their first turn of at least 0.4 seconds, so a label keeps its number when the meeting is reprocessed.
 
 A ready meeting has `transcript.json` and `transcript.md` in its folder. Segment and word times are seconds from
 the start of the recording. To mark an interruption, the recorder can add a `gaps` array to `sidecar.json` with

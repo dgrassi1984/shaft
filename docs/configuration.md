@@ -151,7 +151,8 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_LLM_PORTS` | `8780` | the local model servers' ports a run's sandbox may reach (the first is SHAFT's own server) | [core.py](../supervisor/core.py) |
 | `SHAFT_CORE_MIN_HOURS` | `72` | hours an instance's core personality must stay unchanged before it may change it again | [core.py](../supervisor/core.py) |
 | `SHAFT_EMBED_PORT` | `8782` | the embedding service's port (memory search), which every run may reach | [core.py](../supervisor/core.py) |
-| `SHAFT_LISTEN_LANGUAGES` | `it,en` | the languages meetings are spoken in (Whisper codes): a turn heard as another language is transcribed again in each and the likeliest kept | [listen_worker.py](../supervisor/listen_worker.py) |
+| `SHAFT_LISTEN_LANGUAGES` | `it,en` | the languages meetings are spoken in (Whisper codes): a chunk heard as another language is transcribed again in each and the likeliest kept | [listen_worker.py](../supervisor/listen_worker.py) |
+| `SHAFT_LISTEN_VOCABULARY` | (empty) | names and terms meetings use that speech recognition should spell as written (product names, jargon, places), comma-separated; the speaker gallery's names are added on their own | [listen_worker.py](../supervisor/listen_worker.py) |
 | `SHAFT_LISTEN_MATCH` | `0.6` | minimum cosine similarity for automatic speaker matching. Uncalibrated until measured on real meetings. | [speakers.py](../supervisor/speakers.py) |
 | `SHAFT_BROKER_MAX_CALLS` | `60` | supervisor tool calls (broker) one run may make | [core.py](../supervisor/core.py) |
 | `SHAFT_IDLE_MINUTES` | `30` | minutes a conversation (terminal, web, Telegram, API) may stay quiet before it is closed and written up into the journal | [core.py](../supervisor/core.py) |

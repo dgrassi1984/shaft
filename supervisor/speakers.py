@@ -150,6 +150,13 @@ def _assign(speaker: dict, person: dict) -> None:
     speaker.update(person=person["id"], name=person["name"])
 
 
+def known_names() -> list[str]:
+    """The names of the people in the gallery, oldest first (forgotten people left out)."""
+    with _gallery() as root:
+        tombstones = _read_json(root / "tombstones.json", {})
+        return [person["name"] for person in _read_json(root / "people.json", []) if person["id"] not in tombstones]
+
+
 def complete_processing(meeting_id: str, transcript: dict, vectors: dict) -> None:
     with _gallery() as root, meetings._locked(meeting_id) as (folder, metadata):
         if metadata["state"] != "processing":

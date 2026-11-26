@@ -17,28 +17,56 @@ from supervisor.tests import test_app_api
 
 
 class FakeEngines:
+    """Diarisation turns per channel file, and a reading per turn: `results[(channel, start, end)]`. Transcribing a
+    chunk returns, in time order, the readings of every turn that lies inside it, whatever the channel (the chunk is
+    cut from the mixed conversation)."""
     processed_with = {"diarisation": "fake", "asr": "fake", "versions": {"fake": "1"}}
 
-    def __init__(self, turns, results, embeddings=None):
+    def __init__(self, turns, results, embeddings=None, loudness=None):
         self.turns = turns
         self.results = results
         self.embeddings = embeddings or {}
+        self.levels = loudness or (lambda wav, start, end: 1.0)
         self.calls = []
+        self.prompts = []
+        self.mixed = []
 
     def diarise(self, wav):
         return self.turns.get(wav.stem, []), self.embeddings.get(wav.stem, {})
 
-    def transcribe(self, wav, start, end):
-        key = (wav.stem, start, end)
-        self.calls.append(key)
-        return self.results[key]
+    def loudness(self, wav, spans):
+        return [self.levels(wav, start, end) for start, end in spans]
+
+    def mix(self, wavs, weights, out):
+        self.mixed.append(([wav.stem for wav in wavs], weights, out.name))
+
+    def transcribe(self, wav, start, end, prompt=None):
+        self.calls.append((wav.stem, start, end))
+        self.prompts.append(prompt)
+        inside = sorted(((key, result) for key, result in self.results.items()
+                         if start <= key[1] and key[2] <= end), key=lambda item: item[0][1])
+        texts = [result["text"] for _, result in inside]
+        return {"text": " ".join(texts), "lang": inside[0][1]["lang"] if inside else "en",
+                "words": [word for _, result in inside for word in result["words"]]}
 
 
 def spoken(text, start=0, lang="en"):
-    return {"text": text, "lang": lang, "words": [{"w": text.split()[0], "start": start, "end": start + 0.3}]}
+    """A reading whose words follow each other every quarter second from `start`."""
+    return {"text": text, "lang": lang,
+            "words": [{"w": word, "raw": " " + word, "start": start + 0.25 * i, "end": start + 0.25 * (i + 1)}
+                      for i, word in enumerate(text.split())]}
+
+
+def segment(speaker, channel, text, start=0, lang="en"):
+    """The transcript segment `spoken(text, start)` becomes when every word goes to one speaker."""
+    words = [{"w": w["w"], "start": w["start"], "end": w["end"]} for w in spoken(text, start)["words"]]
+    return {"start": start, "end": words[-1]["end"], "channel": channel, "speaker": speaker, "lang": lang,
+            "words": words, "text": text}
 
 
 class ListenTest(unittest.TestCase):
+    maxDiff = None
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -54,7 +82,7 @@ class ListenTest(unittest.TestCase):
         self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is unavailable")
-    def test_online_worker_splits_audio_and_removes_only_echo(self):
+    def test_online_worker_mixes_channels_and_gives_each_word_to_its_speaker(self):
         with wave.open(str(self.audio), "wb") as wav:
             wav.setparams((2, 2, 8000, 0, "NONE", ""))
             wav.writeframes(struct.pack("<hh", 1000, -2000) * 8000 * 11)
@@ -74,30 +102,40 @@ class ListenTest(unittest.TestCase):
                     self.assertEqual(sample, 1000 if path.stem == "ch1" else -2000)
                 return super().diarise(path)
 
+        def loudness(wav, start, end):
+            # The microphone is loud from 4 s, where the system channel only carries the far side's fading voice.
+            if start >= 3.9:
+                return 3.0 if wav.stem == "ch1" else 0.5
+            return 1.0
+
         engines = Engines(
-            {"ch1": [(4, 5, "B"), (0, 1, "A"), (1.5, 2, "A"), (7, 7.2, "C")], "ch2": [(1, 5, "A")]},
-            {("ch1", 0, 2): spoken("WHAT IS THE NEXT STEP?"),
-             ("ch1", 4, 5): spoken("Sono d'accordo.", 4, "it"),
-             ("ch2", 1, 5): spoken("What is the next step?", 1)},
+            {"ch1": [(4, 5, "B"), (0, 0.8, "A"), (7, 7.2, "C")], "ch2": [(1, 5, "A")]},
+            {("ch1", 0, 0.8): spoken("Ciao."),
+             ("ch2", 1, 5): spoken("What is the next step?", 1),
+             ("ch1", 4, 5): spoken("Sono d'accordo.", 4, "it")},
+            loudness=loudness,
         )
         self.assertTrue(listen_worker.process_next(engines))
-        self.assertEqual(engines.calls, [("ch1", 0, 2), ("ch1", 4, 5), ("ch2", 1, 5)])
+        # One chunk for the whole conversation, cut from the mix of both channels levelled by their own speech.
+        self.assertEqual(engines.calls, [("mix", 0.0, 7.5)])
+        self.assertEqual(engines.mixed, [(["ch1", "ch2"], [1 / 3, 1.0], "mix.wav")])
+        self.assertEqual(engines.prompts, [None])
         self.assertEqual([row["state"] for row in meetings.list_meetings()], ["queued", "ready"])
         row = meetings.get(meeting_id)
         self.assertEqual(row["processed_with"], FakeEngines.processed_with)
         transcript = json.loads((folder / "transcript.json").read_bytes())
         self.assertEqual(transcript, {
             "meeting": meeting_id,
-            "segments": [
-                {"start": 1, "end": 5, "channel": 2, "speaker": "S1", **spoken("What is the next step?", 1)},
-                {"start": 4, "end": 5, "channel": 1, "speaker": "M2", **spoken("Sono d'accordo.", 4, "it")},
-            ],
+            "segments": [segment("M1", 1, "Ciao."), segment("S1", 2, "What is the next step?", 1),
+                         segment("M2", 1, "Sono d'accordo.", 4)],
             "gaps": [{"start": 5, "end": 6, "reason": "interruption"}],
-            "speakers": {"S1": {"channel": 2, "seconds": 4, "clips": []},
+            "speakers": {"M1": {"channel": 1, "seconds": 0.8, "clips": []},
+                         "S1": {"channel": 2, "seconds": 4, "clips": []},
                          "M2": {"channel": 1, "seconds": 1, "clips": []}},
             "processed_with": FakeEngines.processed_with,
         })
         self.assertEqual((folder / "transcript.md").read_text(),
+                         "00:00:00 Speaker M1 (unknown): Ciao.\n"
                          "00:00:01 Speaker S1 (unknown): What is the next step?\n"
                          "00:00:04 Speaker M2 (unknown): Sono d'accordo.\n"
                          "[gap 00:00:05-00:00:06: interruption]\n")
@@ -117,11 +155,11 @@ class ListenTest(unittest.TestCase):
         self.mock_decode()
         meeting_id = self.enqueue()
         folder = self.root / "meetings" / meeting_id
-        engine = FakeEngines({"ch1": [(0, 31, "A")]}, {("ch1", 0, 31): spoken("one two")})
+        engine = FakeEngines({"ch1": [(0, 31, "A")]}, {("ch1", 0, 15): spoken("one two")})
         self.assertTrue(listen_worker.process_next(engine))
         old = (folder / "transcript.json").read_bytes(), (folder / "transcript.md").read_bytes()
         meetings.reprocess(meeting_id)
-        engine.results["ch1", 0, 31] = spoken("one")
+        engine.results["ch1", 0, 15] = spoken("one")
         with self.assertLogs("supervisor.listen_worker", level="ERROR"):
             self.assertTrue(listen_worker.process_next(engine))
         row = meetings.get(meeting_id)
@@ -225,6 +263,7 @@ class LanguageRetryTest(unittest.TestCase):
 
         def transcribe(samples, **kw):
             calls.append(kw.get("language"))
+            self.assertEqual((kw["initial_prompt"], kw["condition_on_previous_text"]), ("Allora, Foresight.", False))
             seg = lambda p: [{"start": 0.0, "end": 1.0, "avg_logprob": p, "words": []}]
             if kw.get("language") is None:
                 return {"text": "Alora.", "language": "pt", "segments": seg(-0.5)}
@@ -237,7 +276,114 @@ class LanguageRetryTest(unittest.TestCase):
         sound.SoundFile.return_value.__enter__.return_value.read.return_value = [0.0] * 16_000
         with mock.patch.dict(sys.modules, {"mlx_whisper": fake, "soundfile": sound}), \
                 mock.patch.object(listen_worker, "LANGUAGES", ("it", "en")):
-            out = listen_worker.Engines().transcribe(Path("x.wav"), 0.0, 1.0)
+            out = listen_worker.Engines().transcribe(Path("x.wav"), 0.0, 1.0, "Allora, Foresight.")
         self.assertEqual((out["text"], out["lang"]), ("Allora.", "it"))
         self.assertEqual(calls, [None, "it", "en"])
         self.assertNotEqual(out["lang"], "pt")
+
+
+class ConversationTest(unittest.TestCase):
+    """Bugs 2026-11-26 (a real meeting compared with another transcriber): every diarised turn was decoded alone, so
+    sub-second turns came back as invented "Thank you", "Bye-bye", "See you soon"; turns lost the conversation
+    around them, so "Foresight" was heard as "forse" and "lead" as "l'id"; and words were joined with spaces, so
+    Whisper's "c'" + "è" read as "c' è"."""
+
+    def test_a_short_turn_is_decoded_inside_the_conversation_not_alone(self):
+        turns = [(0, 10, "S1", 2), (4, 4.6, "M1", 1), (11, 11.5, "M1", 1)]
+        self.assertEqual(listen_pipeline.chunk_spans(turns), [(0.0, 11.8)])
+
+    def test_chunks_fit_one_whisper_window_and_end_in_pauses(self):
+        turns = [(0, 20, "S1", 2), (21, 26, "M1", 1), (30, 40, "S1", 2), (45, 115, "S1", 2)]
+        chunks = listen_pipeline.chunk_spans(turns)
+        self.assertEqual(chunks[:2], [(0.0, 26.3), (29.7, 40.3)])
+        # 70 s with no pause: three equal pieces, never a sliver of a few frames at the end (review 2026-11-26: a
+        # 28.000000000000004 s region left a zero-frame chunk that failed the meeting).
+        self.assertEqual([round(end - start, 6) for start, end in chunks[2:]], [23.533333] * 3)
+        self.assertEqual((chunks[2][0], chunks[-1][1]), (44.7, 115.3))
+        self.assertEqual(len(listen_pipeline.chunk_spans([(0.36, 27.76, "M1", 1)])), 1)
+        self.assertTrue(all(end - start <= listen_pipeline.CHUNK_SECONDS + 1e-9 for start, end in chunks))
+
+    def test_a_stray_word_inside_a_phrase_keeps_its_speaker_and_a_pause_lets_it_change(self):
+        words = [{"start": 0.0, "end": 0.3}, {"start": 0.3, "end": 0.6}, {"start": 0.6, "end": 0.9},
+                 {"start": 1.5, "end": 1.8}]
+        favours = {0: "A", 1: "B", 2: "A", 3: "B"}
+
+        def evidence(index, speaker):
+            return 1.0 if favours[index] == speaker else 0.0
+
+        self.assertEqual(listen_pipeline.attribute(words, ["A", "B"], evidence), ["A", "A", "A", "B"])
+
+    def test_each_chunk_is_prompted_with_the_hints_and_what_was_just_said(self):
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        first = {"text": " Allora, c'è il Foresight.", "lang": "it", "words": [
+            {"w": "Allora,", "raw": " Allora,", "start": 1.0, "end": 1.4},
+            {"w": "c'", "raw": " c'", "start": 1.4, "end": 1.6},
+            {"w": "è", "raw": "è", "start": 1.6, "end": 1.7},
+            {"w": "il", "raw": " il", "start": 1.7, "end": 1.8},
+            {"w": "Foresight.", "raw": " Foresight.", "start": 1.8, "end": 2.4}]}
+        engines = FakeEngines({"ch1": [(1, 20, "A"), (40, 50, "A")]},
+                              {("ch1", 1, 20): first, ("ch1", 40, 50): spoken("Ok.", 40)})
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "inperson"}, Path("audio.m4a"), Path("work"), {}, engines, "Patricia Navi, lead.")
+        self.assertEqual(engines.calls, [("ch1", 0.7, 20.3), ("ch1", 39.7, 50.3)])
+        self.assertEqual(engines.prompts, ["Patricia Navi, lead.", "Patricia Navi, lead. Allora, c'è il Foresight."])
+        self.assertEqual([row["text"] for row in transcript["segments"]], ["Allora, c'è il Foresight.", "Ok."])
+        self.assertNotIn("Thank you", " ".join(row["text"] for row in transcript["segments"]))
+
+
+class AttributionTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(mock.patch.object(listen_pipeline, "decode",
+                                            return_value=[Path("ch1.wav"), Path("ch2.wav")]))
+
+    def run_online(self, loudness):
+        # Both channels' diarisation claims 2-3 s; only loudness says who spoke "Va bene".
+        engines = FakeEngines({"ch1": [(0, 1, "A"), (2, 3, "A")], "ch2": [(2, 3, "A"), (5, 9, "A")]},
+                              {("ch1", 0, 1): spoken("Ciao."), ("ch1", 2, 3): spoken("Va bene", 2),
+                               ("ch2", 5, 9): spoken("Allora partiamo", 5)}, loudness=loudness)
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "online"}, Path("audio.m4a"), Path("work"), {}, engines)
+        return [(row["speaker"], row["text"]) for row in transcript["segments"]]
+
+    def test_the_louder_channel_against_its_own_speech_takes_the_word(self):
+        mic = lambda wav, start, end: (4.0 if 1.9 <= start < 3 else 1.0) if wav.stem == "ch1" else 1.0
+        far = lambda wav, start, end: (4.0 if 1.9 <= start < 3 else 1.0) if wav.stem == "ch2" else 1.0
+        self.assertEqual(self.run_online(mic), [("M1", "Ciao."), ("M1", "Va bene"), ("S1", "Allora partiamo")])
+        self.assertEqual(self.run_online(far), [("M1", "Ciao."), ("S1", "Va bene"), ("S1", "Allora partiamo")])
+
+    def test_labels_are_numbered_by_their_first_real_turn(self):
+        # Review 2026-11-26: a 0.2 s blip labelled B first must not take M1 from A, or a saved anonymisation of M1
+        # would land on someone else after reprocessing.
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        engines = FakeEngines({"ch1": [(0, 0.2, "B"), (1, 8, "A")]}, {("ch1", 1, 8): spoken("Buongiorno a tutti", 1)})
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "inperson"}, Path("audio.m4a"), Path("work"), {}, engines)
+        self.assertEqual([row["speaker"] for row in transcript["segments"]], ["M1"])
+
+    def test_chunks_join_cleanly_and_words_past_a_chunk_are_dropped(self):
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        late = {"text": "Yes", "lang": "en", "words": [{"w": "Yes", "raw": "Yes", "start": 0.5, "end": 0.8},
+                                                      {"w": "ghost", "raw": " ghost", "start": 40.0, "end": 40.2}]}
+        early = {"text": "Ciao", "lang": "it", "words": [{"w": "Ciao", "raw": "Ciao", "start": 40.0, "end": 40.3}]}
+        engines = FakeEngines({"ch1": [(0, 1, "A"), (40, 41, "A")]}, {("ch1", 0, 1): late, ("ch1", 40, 41): early})
+        transcript = listen_pipeline.transcribe_meeting(
+            {"id": "m-1", "mode": "inperson"}, Path("audio.m4a"), Path("work"), {}, engines)
+        self.assertEqual([(row["text"], row["lang"]) for row in transcript["segments"]], [("Yes", "en"), ("Ciao", "it")])
+
+
+class HintsTest(unittest.TestCase):
+    def test_gallery_names_and_vocabulary_without_forgotten_people_or_repeats(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        gallery = Path(temporary.name) / "speakers"
+        gallery.mkdir()
+        (gallery / "people.json").write_text(json.dumps([
+            {"id": "p-00000001", "name": "Patricia Navi"}, {"id": "p-00000002", "name": "Forgotten Person"},
+            {"id": "p-00000003", "name": "Daniele Grassi"}]))
+        (gallery / "tombstones.json").write_text(json.dumps({"p-00000002": {"sources": {}, "anonymise": False}}))
+        with mock.patch.object(core, "SUP_DIR", Path(temporary.name)), \
+                mock.patch.object(listen_worker, "VOCABULARY", ("Foresight", "Patricia Navi", "lead")):
+            self.assertEqual(listen_worker.hints(), "Patricia Navi, Daniele Grassi, Foresight, lead.")
+        with mock.patch.object(core, "SUP_DIR", Path(temporary.name) / "empty"), \
+                mock.patch.object(listen_worker, "VOCABULARY", ()):
+            self.assertEqual(listen_worker.hints(), "")
