@@ -81,7 +81,7 @@ struct IOSMeetingRecorderTests {
         fixture.time.addTimeInterval(1)
         recorder.stop()
 
-        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "beforeafterafter")
+        #expect(try String(contentsOf: fixture.file("caf"), encoding: .utf8) == "beforeafterafter")
         let sidecar = try fixture.sidecar()
         #expect(sidecar["started"] as? String == "1970-01-01T00:00:00Z")
         #expect(sidecar["ended"] as? String == "1970-01-01T00:00:22Z")
@@ -102,7 +102,7 @@ struct IOSMeetingRecorderTests {
 
         #expect(!recorder.interrupted)
         recorder.stop()
-        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "beforeafter")
+        #expect(try String(contentsOf: fixture.file("caf"), encoding: .utf8) == "beforeafter")
     }
 
     @Test func timerFinalisesAnInterruptionThatCannotResume() async throws {
@@ -119,7 +119,7 @@ struct IOSMeetingRecorderTests {
         #expect(recorder.started == nil)
         #expect(recorder.problem == "Recording stopped early. \(reason)")
         #expect(try fixture.sidecar()["problems"] as? [String] == [reason])
-        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "before")
+        #expect(try String(contentsOf: fixture.file("caf"), encoding: .utf8) == "before")
         #expect(fixture.audioUse.claim(.voice))
     }
 
@@ -151,7 +151,7 @@ struct IOSMeetingRecorderTests {
 
         #expect(recorder.started == nil)
         #expect(try fixture.sidecar()["problems"] as? [String] == ["The microphone stopped recording unexpectedly."])
-        #expect(try String(contentsOf: fixture.file("m4a"), encoding: .utf8) == "before")
+        #expect(try String(contentsOf: fixture.file("caf"), encoding: .utf8) == "before")
     }
 
     @Test func readAloudAndMeetingTakeTurnsOwningAudio() async {
@@ -190,6 +190,26 @@ struct IOSMeetingRecorderTests {
         }
         #expect(audioUse.claim(.meeting))
         audioUse.release(.meeting)
+    }
+
+    /// 2026-11-26: a recording on the iPhone came back "Recording damaged": iOS ended the app mid-recording and AAC in
+    /// .m4a cannot be read without the index written on close. The recorder's own format, read as the file stood
+    /// before close, must still be playable, so the next launch sends it.
+    @Test func recordingFormatStaysReadableWhenCutShort() throws {
+        let fixture = Fixture()
+        try FileManager.default.createDirectory(at: fixture.folder, withIntermediateDirectories: true)
+        let live = fixture.folder.appending(path: "live.\(IOSMeetingRecorder.recordingExtension)")
+        let cut = fixture.folder.appending(path: "cut.\(IOSMeetingRecorder.recordingExtension)")
+        let audio = try AVAudioFile(forWriting: live, settings: IOSMeetingRecorder.recordingSettings)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 24_000))
+        buffer.frameLength = 24_000
+        for i in 0..<24_000 { buffer.floatChannelData?[0][i] = Float(sin(Double(i) * 0.1) * 0.3) }
+        for _ in 0..<3 { try audio.write(from: buffer) }
+        try FileManager.default.copyItem(at: live, to: cut)  // the bytes on disk as an ended app leaves them
+        let read = try AVAudioFile(forReading: cut)
+        let seconds = Double(read.length) / read.processingFormat.sampleRate
+        #expect(seconds > 2.5, "a cut-short recording kept only \(seconds) s")
+        _ = audio
     }
 
     @Test func launchSendsPlayableOrphansAndKeepsDamagedAudio() async throws {
@@ -268,7 +288,7 @@ struct IOSMeetingRecorderTests {
         let create = try #require(server.requests.first { $0.method == "POST" && $0.path == "/app/v1/meetings" }?.json)
         #expect(create["mode"] as? String == "inperson")
         #expect(create["device"] as? String == "Example device")
-        #expect(create["ext"] as? String == "m4a")
+        #expect(create["ext"] as? String == "caf")
         #expect(create["account"] as? String == "work")
         #expect((create["sidecar"] as? [String: Any])?["input_device"] as? String == "Example microphone")
         let resumed = server.requests.dropFirst(requestCount)

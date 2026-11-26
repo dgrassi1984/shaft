@@ -52,6 +52,14 @@ final class IOSMeetingRecorder {
     private(set) var lastSent: String?
     private(set) var damagedRecordings: [URL] = []
 
+    /// Recordings are IMA4 in CAF, which survives the app being ended mid-recording; .m4a files from older builds
+    /// are still sent.
+    static let recordingExtension = "caf"
+    static let audioExtensions: Set<String> = ["caf", "m4a"]
+    static let recordingSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatAppleIMA4, AVSampleRateKey: 24_000, AVNumberOfChannelsKey: 1
+    ]
+
     @ObservationIgnored private let audio: any IOSMeetingAudio
     @ObservationIgnored private let audioUse: IOSAudioUse
     @ObservationIgnored private let folder: URL
@@ -97,7 +105,7 @@ final class IOSMeetingRecorder {
             problem = "Microphone access is off. Allow SHAFT to use the microphone in Settings."
             return
         }
-        let file = folder.appendingPathComponent("\(Self.stamp.string(from: now()))-\(UUID().uuidString.prefix(8).lowercased()).m4a")
+        let file = folder.appendingPathComponent("\(Self.stamp.string(from: now()))-\(UUID().uuidString.prefix(8).lowercased()).\(Self.recordingExtension)")
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let input = try audio.start(at: file)
@@ -216,7 +224,7 @@ final class IOSMeetingRecorder {
         }
         do {
             let files = try manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.creationDateKey])
-                .filter { $0.pathExtension == "m4a" }
+                .filter { Self.audioExtensions.contains($0.pathExtension) }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
             try? MeetingUploader.pruneUploaded(in: folder)
             if client != nil { uploadProblem = nil }
@@ -295,7 +303,7 @@ final class IOSMeetingRecorder {
         let account = aliases?.count == 1 ? aliases?.first : nil
         let create = MeetingCreate(title: "",  // the server names it from the calendar, else by date
                                    mode: "inperson", started: started, ended: sidecar.ended,
-                                   device: device(), ext: "m4a", account: account)
+                                   device: device(), ext: file.pathExtension, account: account)
         do {
             try await uploader.upload(create, sidecarJSON: Data(contentsOf: Self.sidecarURL(file)))
         } catch {
