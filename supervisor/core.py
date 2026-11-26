@@ -979,6 +979,10 @@ def gchat_lock(name: str):
     return _grant_lock(name, "gchat")
 
 
+def shortcuts_lock(name: str):
+    return _grant_lock(name, "shortcuts")
+
+
 def _remove_google_copies(name: str, folder: str, alias: str) -> None:
     from . import google
     if alias and not google.ALIAS_RE.fullmatch(alias):

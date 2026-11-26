@@ -15,8 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import (actions, app_api, calendar, core, drive_presets, google, mail, mind, opconfig, setup, shortcuts, web_chat,
-                        web_config)
+from supervisor import (actions, app_api, calendar, core, drive_presets, google, mail, mind, opconfig, setup, shortcuts,
+                        web_chat, web_config)
 from supervisor.tests.test_app_api import AppTest, write_or_check_fixtures
 from supervisor.tests.test_web import ME
 from supervisor.tests.test_web_local import LocalTest
@@ -920,8 +920,8 @@ class SetupFixturesTest(SetupTest):
         core.set_claude_notes("wisp", True)
         reminder = {"id": "AAAAAAAA-0000-4000-8000-000000000001", "name": "Make reminder"}
         core.set_shortcut_grants("wisp", [reminder])
-        with mock.patch.object(shortcuts, "available",
-                               return_value=[reminder, {"id": "BBBBBBBB-0000-4000-8000-000000000002", "name": "Lights"}]):
+        lights = {"id": "BBBBBBBB-0000-4000-8000-000000000002", "name": "Lights"}
+        with mock.patch.object(shortcuts, "available", return_value=[reminder, lights]):
             out["access"] = self.get("/app/v1/access/wisp")
         with mock.patch.object(mail, "labels", return_value={"Assistant": "L1", "Receipts": "L2"}):
             out["google-labels"] = self.get("/app/v1/google/work/labels")

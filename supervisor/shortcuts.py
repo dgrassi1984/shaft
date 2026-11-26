@@ -65,15 +65,19 @@ def available() -> list[dict]:
 
 
 def resolve(what: str, rows: list[dict]) -> dict | None:
-    """The row `what` names: its identifier, its exact name, or its name in any case when only one matches."""
+    """The row `what` names. Identifier-shaped: that identifier only, never a shortcut that happens to carry it as its
+    name (a stale selection must not grant another shortcut). Otherwise its name, exactly or in any case, when only one
+    row matches."""
     what = str(what or "").strip()
     if not what:
         return None
-    for key in ("id", "name"):
-        if (hit := next((r for r in rows if r[key] == what), None)):
-            return hit
-    folded = [r for r in rows if r["name"].casefold() == what.casefold()]
-    return folded[0] if len(folded) == 1 else None
+    if ID_RE.fullmatch(what.upper()):
+        return next((r for r in rows if r["id"] == what.upper()), None)
+    for same in (lambda r: r["name"] == what, lambda r: r["name"].casefold() == what.casefold()):
+        hits = [r for r in rows if same(r)]
+        if hits:
+            return hits[0] if len(hits) == 1 else None
+    return None
 
 
 def run(identifier: str, input_path: Path | None = None, timeout: float | None = None) -> tuple[bytes, float]:
@@ -99,7 +103,12 @@ def run(identifier: str, input_path: Path | None = None, timeout: float | None =
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            proc.communicate()
+            try:   # bounded: a process outside the group holding a pipe open must not hold the call
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                for stream in (proc.stdout, proc.stderr):
+                    stream.close()
+                proc.wait(timeout=5)
             raise ShortcutError(f"stopped after {timeout:.0f} s: it may be waiting for someone to answer it on the Mac "
                                 "(a menu, a question or an Allow prompt)") from None
         took = time.monotonic() - started

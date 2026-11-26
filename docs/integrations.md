@@ -677,7 +677,7 @@ An instance can run the Shortcuts you grant it, on the server Mac, as you: a sho
 on a light, makes a reminder, or anything else the Shortcuts app does.
 
 ```bash
-shaft shortcuts available                 # this Mac's shortcuts, with their identifiers
+shaft shortcuts --available                 # this Mac's shortcuts, with their identifiers
 shaft shortcuts <name> grant "Make reminder"
 shaft shortcuts <name> revoke "Make reminder"
 shaft shortcuts <name> off                # every grant

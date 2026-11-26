@@ -177,6 +177,49 @@ class ShortcutsTest(test_app_api.AppTest):
                 self.assertFalse(r["ok"], r)
         self.assertEqual(self.runs(), [ECHO])
 
+    def test_its_keys_git_and_logs_are_never_given_to_a_shortcut(self):
+        """Review finding 1: secrets/ is inside the instance's folder, and an echoing shortcut would hand its keys back."""
+        self.cli(INSTANCE, "grant", "Echo")
+        for rel in ("secrets/secrets.json", "Secrets/secrets.json", ".git/config", "logs/run.log"):
+            path = self.inst / INSTANCE / rel.replace("Secrets", "secrets")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("KEY=sk-test-placeholder")
+            with self.subTest(rel=rel):
+                r = self.broker.call("shortcut_run", {"shortcut": "Echo", "input_file": rel})
+                self.assertFalse(r["ok"], r)
+                self.assertIn("never given to a shortcut", r["error"])
+        self.assertEqual(self.runs(), [])
+
+    def test_a_failure_logs_its_class_never_the_shortcuts_words(self):
+        """Review finding 4: stderr can quote the input or the output."""
+        self.list_names({"EEEEEEEE-0000-4000-8000-000000000005": "Broken"})
+        self.cli(INSTANCE, "grant", "Broken")
+        r = self.broker.call("shortcut_run", {"shortcut": "Broken", "input": "private words"})
+        self.assertIn("couldn't be completed", r["error"])           # the instance hears why
+        log = (self.sup / "broker.log").read_text()
+        self.assertIn("-> ERROR ShortcutError", log)
+        self.assertNotIn("couldn't be completed", log)
+        self.assertNotIn("private words", log)
+
+    def test_two_file_results_in_one_second_never_overwrite_each_other(self):
+        """Review finding 6."""
+        self.cli(INSTANCE, "grant", "Picture")
+        fixed = datetime(2026, 11, 26, 22, 0, 0)
+        with mock.patch.object(broker, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = fixed
+            first = self.broker.call("shortcut_run", {"shortcut": "Picture"})["result"]
+            second = self.broker.call("shortcut_run", {"shortcut": "Picture"})["result"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(list((self.inst / INSTANCE / ".tmp/shortcuts").glob("*-Picture.png"))), 2)
+
+    def test_an_instance_named_available_gets_its_grants(self):
+        """Review finding 5: `available` was the catalog query, so a grant for an instance of that name did nothing."""
+        for d in ("shaft", ".git"):   # an instance folder, as the base gives wisp
+            (self.inst / "available" / d).mkdir(parents=True)
+        self.cli("available", "grant", "Echo")
+        self.assertEqual(core.shortcut_grants("available"), [{"id": ECHO, "name": "Echo"}])
+        self.assertIn(f"Echo ({ECHO})", self.cli("--available"))
+
     def test_runs_per_run_are_capped(self):
         self.cli(INSTANCE, "grant", "Echo")
         for _ in range(broker.SHORTCUT_RUNS_PER_RUN):
@@ -205,6 +248,13 @@ class ParseTest(unittest.TestCase):
     def test_list_lines_with_parentheses_in_the_name(self):
         rows = shortcuts.parse(f"Plain ({ECHO})\nWith (paren) here ({OTHER})\nno identifier\n")
         self.assertEqual(rows, [{"id": ECHO, "name": "Plain"}, {"id": OTHER, "name": "With (paren) here"}])
+
+    def test_an_identifier_never_resolves_to_a_shortcut_named_like_it(self):
+        """Review finding 3: a stale selection (the shortcut deleted) must not grant another one carrying its id as name."""
+        rows = [{"id": OTHER, "name": ECHO}]
+        self.assertIsNone(shortcuts.resolve(ECHO, rows))
+        self.assertEqual(shortcuts.resolve(OTHER.lower(), rows)["id"], OTHER)
+        self.assertIsNone(shortcuts.resolve("Same", [{"id": ECHO, "name": "Same"}, {"id": OTHER, "name": "Same"}]))
 
     def test_resolve_prefers_exact_then_a_single_case_match(self):
         rows = [{"id": ECHO, "name": "Echo"}, {"id": OTHER, "name": "ECHO"}]

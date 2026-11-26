@@ -131,6 +131,22 @@ struct FixtureTests {
         #expect(old.claudeNotes == nil)
     }
 
+    @Test func shortcutsDecodeFromAccessAndAreOptionalForOlderServers() throws {
+        let data = try DecodingTests.fixture("access")
+        let decoder = SHAFTJSON.decoder()
+        let current = try decoder.decode(AccessResponse.self, from: data)
+        #expect(current.shortcuts?.map(\.name) == ["Make reminder"])
+        #expect(current.shortcuts?.first?.present == true)
+        #expect(current.shortcutsAvailable?.map(\.name) == ["Make reminder", "Lights"])
+        #expect(current.shortcutsProblem == nil)
+
+        var access = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for key in ["shortcuts", "shortcuts_available", "shortcuts_problem"] { access.removeValue(forKey: key) }
+        let old = try decoder.decode(AccessResponse.self, from: JSONSerialization.data(withJSONObject: access))
+        #expect(old.shortcuts == nil && old.shortcutsAvailable == nil)
+        #expect(AccessGrant.shortcut(id: "A", action: "revoke") == AccessGrant(grant: "shortcut", action: "revoke", what: "A"))
+    }
+
     @Test func cycleFieldsKeepTheirWireMeaning() throws {
         let planData = try DecodingTests.fixture("plan")
         var object = try #require(JSONSerialization.jsonObject(with: planData) as? [String: Any])

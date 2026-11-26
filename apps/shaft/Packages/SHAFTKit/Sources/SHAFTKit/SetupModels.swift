@@ -109,6 +109,12 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     public var meetings: [MeetingGrant]?
     /// Whether the operator's Claude sessions may leave notes, nil on older servers.
     public var claudeNotes: Bool?
+    /// The operator's Shortcuts it may run on the server Mac, nil on older servers.
+    public var shortcuts: [ShortcutGrant]?
+    /// Every shortcut on the server Mac (empty when they could not be listed), nil on older servers.
+    public var shortcutsAvailable: [Shortcut]?
+    /// Why the server Mac's shortcuts could not be listed, nil when they were.
+    public var shortcutsProblem: String?
     public var googleAccounts: [GoogleAccount]
 
     public struct Browser: Codable, Sendable, Equatable {
@@ -143,6 +149,19 @@ public struct AccessResponse: Codable, Sendable, Equatable {
 
     public struct MeetingGrant: Codable, Sendable, Equatable {
         public var account: String
+    }
+
+    public struct ShortcutGrant: Codable, Sendable, Equatable {
+        /// The shortcut's identifier: a grant survives a rename.
+        public var id: String
+        public var name: String
+        /// False: no longer on the Mac; nil: the Mac's shortcuts could not be listed.
+        public var present: Bool?
+    }
+
+    public struct Shortcut: Codable, Sendable, Equatable {
+        public var id: String
+        public var name: String
     }
 
     public struct GoogleAccount: Codable, Sendable, Equatable {
@@ -201,6 +220,11 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     /// `gchat <n> grant|revoke <alias>`.
     public static func chat(alias: String, action: String = "grant") -> AccessGrant {
         AccessGrant(grant: "chat", action: action, alias: alias)
+    }
+
+    /// `shortcuts <n> grant|revoke <id>`: the instance may run that one shortcut on the server Mac.
+    public static func shortcut(id: String, action: String = "grant") -> AccessGrant {
+        AccessGrant(grant: "shortcut", action: action, what: id)
     }
 
     /// `meetings grant|revoke <n> <alias>`.

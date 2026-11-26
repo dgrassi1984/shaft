@@ -221,7 +221,7 @@ shaft gchat <name> revoke <alias>
 shaft gchat <name> off
 shaft gchat [name]
 shaft claude-notes [<name> [on|off]]
-shaft shortcuts available
+shaft shortcuts --available
 shaft shortcuts <name> grant|revoke <shortcut>
 shaft shortcuts <name> off
 shaft shortcuts [name]
@@ -262,7 +262,7 @@ scope) and Claude Desktop (`claude_desktop_config.json`), `uninstall` removes bo
 
 `shaft shortcuts <name> grant <shortcut>` lets an instance run one of the operator's Shortcuts on this Mac
 (`shortcut_list`, `shortcut_run`), by name or identifier; the grant keeps the identifier, so a rename keeps it.
-`available` lists this Mac's shortcuts, `revoke` takes one back from the next call, `off` takes all. See
+`--available` lists this Mac's shortcuts, `revoke` takes one back from the next call, `off` takes all. See
 [Shortcuts](integrations.md#the-operators-shortcuts-shaft-shortcuts).
 
 `shaft share` shows, grants, or revokes a read-only shared folder. `shaft secret set` prompts for a host-bound

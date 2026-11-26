@@ -40,7 +40,8 @@ ACTION_INSTANCES, _ = core.knob(
     group='Runs and conversations', services=('runs', 'api', 'web', 'scheduler'))
 CLASSES = ('reversible', 'staged', 'irreversible')
 # #142: the complete operator-tool table. Reads retain their existing per-call grants. Mail writes only leave
-# drafts. There are no operator Notion writes, Docs writes or delete tools today; a granted shortcut may do anything. http_request uses instance-owned keys, not
+# drafts. There are no operator Notion writes, Docs writes or delete tools today; a granted shortcut may do
+# anything. http_request uses instance-owned keys, not
 # operator credentials. New operator write tools must be added here before being offered by the broker.
 OPERATOR_TOOLS = {
     'drive_search': 'read', 'drive_read': 'read', 'drive_download': 'read',
