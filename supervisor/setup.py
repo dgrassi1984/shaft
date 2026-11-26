@@ -15,7 +15,8 @@ from . import core
 
 def access(name: str) -> dict:
     """{instance, folder, browser: {installed, run}, web_search, telegram, mail, calendar, drive, chat, meetings,
-    google_accounts}: meetings is present when granted (§18.6)."""
+    claude_notes, google_accounts}: meetings is present when granted; claude_notes is whether its inbox takes notes
+    from the operator's Claude sessions (§18.6)."""
     from . import browser, google, telegram, web_config
     a = web_config.access(name)
     env = core.secrets_env()
@@ -30,6 +31,7 @@ def access(name: str) -> dict:
             "drive": [{"account": g["account"], "reach": g["reach"]} for g in a["gdrive"]],
             "chat": [{"account": g["account"]} for g in a["gchat"]],
             **({"meetings": a["meetings"]} if a["meetings"] else {}),
+            "claude_notes": a["claude_notes"],
             "google_accounts": [{"alias": alias, "address": data.get("address") or "",
                                  "scopes": [google.SCOPE_NAMES[s] for s in google.SCOPES
                                             if s in google.scopes({"scope": data.get("scope")})]}
@@ -76,6 +78,9 @@ def _granted(a: dict) -> list[str]:
     lines += [f"the Drive of {g['account']}: " + ("its own files and those shared with it" if g["reach"] == "all"
                                                   else "its own files") for g in a["drive"]]
     lines += [f"the Google Chat of {g['account']}" for g in a["chat"]]
+    if a.get("claude_notes"):
+        lines.append("notes from their own Claude sessions in your inbox (Kind: claude): what they worked on with Claude, "
+                     "written by Claude for you")
     if a["telegram"]:
         lines.append("a Telegram bot of your own, through which they can talk with you")
     return lines

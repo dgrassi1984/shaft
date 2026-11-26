@@ -641,6 +641,34 @@ Both tools use the normal broker call budget and tool switches. `shaft tools <na
 `shaft tools <name> off propose_voice` hide and refuse them from the next run or conversation; use `on` to restore
 one. Trial proposals are simulated and recorded without changing the store.
 
+## Notes from your Claude sessions (`shaft mcp`)
+
+When you finish a piece of work with Claude and want an instance to know about it, tell Claude "send this to
+<instance>". Claude writes the instance a note through SHAFT's local MCP server; the instance reads it at its next
+wake. Nothing is read from Claude: your claude.ai chats are not stored on this Mac and no API reads them, so Claude
+writes what the instance should know.
+
+```bash
+shaft claude-notes <name> on      # or the Access page, or the instance's Access settings in the app
+shaft mcp install                 # Claude Code (user scope) and Claude Desktop; restart Claude Desktop
+```
+
+- **Where it works**: Claude Desktop (chats and Cowork on this Mac) and Claude Code (terminal, the desktop app's Code
+  tab, project threads running on this Mac). Not claude.ai on the web or the phone apps: a connector there must be a
+  public HTTPS server, which SHAFT never is.
+- **Tools**: `shaft_instances` (who takes notes) and `shaft_send(instance, title?, summary, files?)`. The server runs
+  as you, on stdio, started by Claude; it only writes and never reads anything of an instance back.
+- **The note**: `inbox/<time>-from-claude.md`, `Kind: claude`, with a Trust line saying Claude wrote it, not you:
+  information about your work, not your orders. It never wakes the instance. Logged in `messages.jsonl` as `claude`.
+  At most 20,000 characters, 30 notes an hour per instance.
+- **Files**: up to 10 by absolute path (20 MB each, 50 MB in all), copied under `inbox/from-claude/<time>/`, never
+  committed. Files inside SHAFT, `.env*`, keys and key stores (`.ssh`, `.gnupg`, `.aws`, `*.pem`, `id_*`, …) are
+  refused.
+- **Secrets**: the supervisor's own secret values and the usual key shapes (bearer tokens, `key=…`, JWTs, GitHub and
+  `sk-` keys) are replaced by `[secret removed]` in the note, its title, file names and text files; a binary file
+  holding one of SHAFT's own secrets is refused. The count is logged, never the value.
+- **Off**: `shaft claude-notes <name> off` refuses the next note; `shaft mcp uninstall` removes the server.
+
 ## Meeting transcripts
 
 The broker offers `meeting_search`, `meeting_read`, and `meeting_propose_speaker` to instances with meeting

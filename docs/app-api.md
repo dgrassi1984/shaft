@@ -1677,6 +1677,7 @@ yet: `409 refused`. An unknown instance: `404 not_found`.
 | `drive` | [{`account`, `reach`}] | `reach` `own` or `all` |
 | `chat` | [{`account`}] | Google Chat accounts |
 | `meetings` | [{`account`}] (optional) | Accounts whose ready meeting transcripts the instance may read. Omitted when there are no meeting grants. |
+| `claude_notes` | bool | its inbox takes notes from the operator's Claude sessions (`shaft claude-notes`, integrations.md "Notes from your Claude sessions") |
 | `google_accounts` | [{`alias`, `address`, `scopes`: [str]}] | the operator's Google logins, with the scopes they granted (`gmail.readonly`, `calendar.readonly`, …) |
 
 `POST /access/<n>` takes `{"grant", "action": "grant"|"revoke", …}` and runs the verb, then answers the fresh access
@@ -1691,6 +1692,7 @@ object:
 | `drive` | `alias`, `all` | `gdrive <n> grant <alias> [--all]` / `revoke <alias>` |
 | `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
 | `meetings` | `alias` | `meetings grant <n> <alias>` or `meetings revoke <n> <alias>` |
+| `claude` | | `claude-notes <n> on`; revoke: `claude-notes <n> off` |
 
 `alias` is a Google account alias (`[a-z][a-z0-9-]{0,30}`); `all` and `writable` are booleans. A field another grant
 takes, or a missing one: `400 bad_request`. Web search and Telegram have no grant here: their key and token go

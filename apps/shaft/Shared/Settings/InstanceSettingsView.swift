@@ -89,9 +89,7 @@ struct InstanceSettingsView: View {
             }
             .listRowBackground(Color.elevated)
             VoiceSettingsSection(store: store, client: instances.client, settings: settings)
-            #if os(macOS)
-            MeetingAccessSection(client: instances.client, instance: store.instance)
-            #endif
+            InstanceAccessSection(client: instances.client, instance: store.instance)
             Section {
                 HStack {
                     Toggle("Paused", isOn: Binding(
@@ -164,8 +162,7 @@ struct InstanceSettingsView: View {
     }
 }
 
-#if os(macOS)
-private struct MeetingAccessSection: View {
+private struct InstanceAccessSection: View {
     let client: APIClient
     let instance: String
     @State private var access: AccessResponse?
@@ -173,18 +170,39 @@ private struct MeetingAccessSection: View {
     @State private var saving = false
 
     var body: some View {
+        Group {
+            #if os(macOS)
+            accessSection
+            #else
+            if access == nil || access?.claudeNotes != nil { accessSection }
+            #endif
+        }
+        .task { await load() }
+    }
+
+    private var accessSection: some View {
         Section {
             if let access {
+                if access.claudeNotes != nil {
+                    Toggle("Notes from Claude", isOn: Binding(
+                        get: { self.access?.claudeNotes == true },
+                        set: { setGrant(AccessGrant(grant: "claude", action: $0 ? "grant" : "revoke")) }
+                    ))
+                    .disabled(saving)
+                }
+                #if os(macOS)
                 ForEach(access.googleAccounts, id: \.alias) { account in
                     Toggle("Meetings (\(account.alias))", isOn: Binding(
                         get: { self.access?.meetings?.contains { $0.account == account.alias } == true },
-                        set: { setGrant(account.alias, enabled: $0) }
+                        set: { setGrant(.meetings(alias: account.alias, action: $0 ? "grant" : "revoke")) }
                     ))
                     .disabled(saving)
                 }
                 if access.googleAccounts.isEmpty {
                     Text("No Google accounts configured.").foregroundStyle(Color.textSecondary)
                 }
+                #endif
+                if saving { ProgressView().controlSize(.small) }
             } else if error == nil {
                 ProgressView("Loading access…")
             }
@@ -197,11 +215,17 @@ private struct MeetingAccessSection: View {
         } header: {
             Text("Access")
         } footer: {
-            Text("A Meetings grant lets the instance read all ready transcripts filed under that account.")
-                .foregroundStyle(Color.textSecondary)
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
+                if access?.claudeNotes != nil {
+                    Text("Your Claude sessions (Claude Desktop, Claude Code) can leave notes in its inbox; it reads them at its next wake.")
+                }
+                #if os(macOS)
+                Text("A Meetings grant lets the instance read all ready transcripts filed under that account.")
+                #endif
+            }
+            .foregroundStyle(Color.textSecondary)
         }
         .listRowBackground(Color.elevated)
-        .task { await load() }
     }
 
     private func load() async {
@@ -213,21 +237,20 @@ private struct MeetingAccessSection: View {
         }
     }
 
-    private func setGrant(_ alias: String, enabled: Bool) {
+    private func setGrant(_ grant: AccessGrant) {
         guard !saving else { return }
         saving = true
         error = nil
         Task {
             defer { saving = false }
             do {
-                access = try await client.grantAccess(instance, .meetings(alias: alias, action: enabled ? "grant" : "revoke"))
+                access = try await client.grantAccess(instance, grant)
             } catch {
                 self.error = APIError.from(error)?.message
             }
         }
     }
 }
-#endif
 
 /// Keep unfinished edits until the server accepts them.
 private struct SettingTextRow: View {

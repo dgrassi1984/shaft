@@ -116,6 +116,21 @@ struct FixtureTests {
         }
     }
 
+    @Test func claudeNotesDecodeFromAccessAndAreOptionalForOlderServers() throws {
+        let data = try DecodingTests.fixture("access")
+        let decoder = SHAFTJSON.decoder()
+        let current = try decoder.decode(AccessResponse.self, from: data)
+        #expect(current.claudeNotes == true)
+
+        var access = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        access["claude_notes"] = false
+        let disabled = try decoder.decode(AccessResponse.self, from: JSONSerialization.data(withJSONObject: access))
+        #expect(disabled.claudeNotes == false)
+        access.removeValue(forKey: "claude_notes")
+        let old = try decoder.decode(AccessResponse.self, from: JSONSerialization.data(withJSONObject: access))
+        #expect(old.claudeNotes == nil)
+    }
+
     @Test func cycleFieldsKeepTheirWireMeaning() throws {
         let planData = try DecodingTests.fixture("plan")
         var object = try #require(JSONSerialization.jsonObject(with: planData) as? [String: Any])

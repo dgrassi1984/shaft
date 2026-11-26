@@ -134,6 +134,8 @@ class SetupTest(LocalTest):
             if self.during_grant and args[2] == "grant":
                 hook, self.during_grant = self.during_grant, None
                 hook()
+        if args[0] == "claude-notes":
+            core.set_claude_notes(args[1], args[2] == "on")
         if args[0] == "gdrive" and args[2] == "grant":
             core.set_gdrive_grants(args[1], [{"account": args[3], "reach": "all" if "--all" in args else "own"}])
         return True, "done"
@@ -598,7 +600,7 @@ class AccessTest(SetupTest):
         got = self.get("/app/v1/access/wisp")
         self.assertEqual(got, {"instance": "wisp", "folder": None, "browser": {"installed": "1.64.0", "run": True},
                                "web_search": False, "telegram": False, "mail": [], "calendar": [], "drive": [],
-                               "chat": [], "google_accounts": []})
+                               "chat": [], "claude_notes": False, "google_accounts": []})
 
     def test_each_grant_runs_its_verb(self):
         folder = tempfile.mkdtemp(prefix="shaft-share-")
@@ -618,7 +620,9 @@ class AccessTest(SetupTest):
                   [["gdrive", "wisp", "grant", "work", "--all"]]),
                  ({"grant": "drive", "action": "revoke", "alias": "work"}, [["gdrive", "wisp", "revoke", "work"]]),
                  ({"grant": "chat", "action": "grant", "alias": "work"}, [["gchat", "wisp", "grant", "work"]]),
-                 ({"grant": "chat", "action": "revoke", "alias": "work"}, [["gchat", "wisp", "revoke", "work"]])]
+                 ({"grant": "chat", "action": "revoke", "alias": "work"}, [["gchat", "wisp", "revoke", "work"]]),
+                 ({"grant": "claude", "action": "grant"}, [["claude-notes", "wisp", "on"]]),
+                 ({"grant": "claude", "action": "revoke"}, [["claude-notes", "wisp", "off"]])]
         for body, want in cases:
             with self.subTest(body=body):
                 self.calls.clear()
@@ -680,6 +684,11 @@ class AccessTest(SetupTest):
         got = self.get("/app/v1/access/wisp")
         self.assertEqual(got["mail"], [{"account": "work", "label": "Assistant", "draft": True}])
         self.assertEqual(got["drive"], [{"account": "work", "reach": "all"}])
+        self.assertFalse(got["claude_notes"])
+        self.grant(grant="claude", action="grant")
+        self.assertTrue(self.get("/app/v1/access/wisp")["claude_notes"])
+        self.grant(grant="claude", action="revoke")
+        self.assertFalse(self.get("/app/v1/access/wisp")["claude_notes"])
 
     def test_browser_installs_once_and_needs_run(self):
         self.browser_version = None
@@ -707,7 +716,8 @@ class AccessTest(SetupTest):
                      {"grant": {}, "action": "grant"}, {"grant": "drive", "action": [], "alias": "work"}, {"grant": "mail", "action": "grant", "alias": "work"},
                      {"grant": "mail", "action": "grant", "alias": "Bad Alias", "what": "x"},
                      {"grant": "folder", "action": "grant"}, {"grant": "drive", "action": "maybe", "alias": "work"},
-                     {"grant": "drive", "action": "grant", "alias": "work", "all": "yes"}):
+                     {"grant": "drive", "action": "grant", "alias": "work", "all": "yes"},
+                     {"grant": "claude", "action": "grant", "alias": "work"}):
             with self.subTest(body=body):
                 self.error(self.grant(**body), 400, "bad_request")
         self.assertEqual(self.calls, [])
@@ -905,6 +915,7 @@ class SetupFixturesTest(SetupTest):
                                            "write": True}])
         core.set_gdrive_grants("wisp", [{"account": "work", "reach": "own"}])
         core.set_gchat_grants("wisp", [{"account": "work"}])
+        core.set_claude_notes("wisp", True)
         out["access"] = self.get("/app/v1/access/wisp")
         with mock.patch.object(mail, "labels", return_value={"Assistant": "L1", "Receipts": "L2"}):
             out["google-labels"] = self.get("/app/v1/google/work/labels")
