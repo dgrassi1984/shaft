@@ -258,7 +258,10 @@ struct GoogleSetupSheet: View {
     private var clientCard: some View {
         VStack(alignment: .leading, spacing: Design.Space.s8) {
             sentence("In Google Auth Platform → Clients, click Create client, choose Application type Desktop app, "
-                     + "name it SHAFT and click Create. Then click Download JSON: the next card takes that file.")
+                     + "name it SHAFT and click Create. In the OAuth client created window that opens, click "
+                     + "Download JSON before you close it: the next card takes that file, and Google shows the secret "
+                     + "only in that window. If you already closed it, delete the client in Clients and create it "
+                     + "again.")
             link("Clients", "https://console.cloud.google.com/auth/clients")
             markButton(.client)
         }
