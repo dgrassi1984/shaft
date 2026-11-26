@@ -382,11 +382,9 @@ struct ChatScreen: View {
                 #if os(iOS)
                 .frame(maxWidth: compactTitleLimit)
                 #else
-                // The centred title gives up space at both ends for Meetings and, when shown, Talk.
-                .titleWidth(limit: MacChrome.titleLimit(
-                    column: columnWidth - (showsTalk ? 2 : 1) * 2 * Design.Header.height,
-                    sidebar: shell?.sidebarWidth ?? 0, earlier: chat.isEarlier
-                ))
+                // Meetings, and Talk when shown, are buttons more at the right.
+                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
+                                                        earlier: chat.isEarlier, extraButtons: showsTalk ? 2 : 1))
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle

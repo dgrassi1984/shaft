@@ -18,10 +18,12 @@ enum MacChrome {
     private static let backButton: CGFloat = 44
 
     /// How wide the title may be in a chat column: it is centred, so the wider end counts twice, and `titleGap` stays
-    /// clear at each end. Past this the toolbar hides the buttons behind its overflow.
-    static func titleLimit(column: CGFloat, sidebar: CGFloat, earlier: Bool) -> CGFloat {
+    /// clear at each end. `extraButtons` are the right end's buttons past those three (Meetings; Talk when shown). Past
+    /// this the toolbar hides the buttons behind its overflow.
+    static func titleLimit(column: CGFloat, sidebar: CGFloat, earlier: Bool, extraButtons: Int) -> CGFloat {
         let leading = (sidebar > 0 ? 0 : collapsedLeadingControls) + (earlier ? backButton : 0)
-        return column - 2 * (max(leading, trailingControls) + Design.Header.titleGap)
+        let trailing = trailingControls + CGFloat(extraButtons) * Design.Header.height
+        return column - 2 * (max(leading, trailing) + Design.Header.titleGap)
     }
 
     // writingToolsAffordance: an `NSTextView` that takes Writing Tools draws AppKit's floating Siri tile for it
