@@ -78,19 +78,19 @@ def failing_write(path="self/stats.md"):
 
 
 class WorkspaceUnitTest(Fixture, unittest.TestCase):
-    def build(self, mode="competitive", inbox=(), plan="", goals="", k=3):
+    def build(self, mode="relevance", inbox=(), plan="", goals="", k=3):
         return workspace.build(self.root, mode, about="orchard survey rows", shown="", now=datetime(2026, 10, 26, 10),
                                inbox=list(inbox), plan=plan, goals=goals, k=k)
 
-    def test_competition_caps_each_source_and_fits_the_budget(self):
+    def test_workspace_can_fill_every_place_from_one_source(self):
         inbox = [(f"20261026-0{i}0000-000000-from-operator.md", f"From: operator\n\nplease check orchard row {i}")
                  for i in range(4)]
-        ws = self.build(inbox=inbox, plan="From my sleep of x:\n\n- survey the orchard rows again with care")
+        ws = self.build(inbox=inbox)
         self.assertEqual(len(ws.winners), 3)
-        self.assertLessEqual(sum(1 for w in ws.winners if w.source == "inbox"), workspace.PER_SOURCE)
+        self.assertEqual([w.source for w in ws.winners], ["inbox"] * 3)
         self.assertTrue(all(len(w.text) <= workspace.BUDGET // 3 for w in ws.winners))
         rec = ws.record()
-        self.assertEqual(rec["mode"], "competitive")
+        self.assertEqual(rec["mode"], "relevance")
         self.assertEqual(len(rec["candidates"]), len(ws.pool))
         self.assertIn("## In focus now", ws.block())
         self.assertTrue(ws.broadcast().startswith("[runtime] In focus: "))
@@ -102,38 +102,20 @@ class WorkspaceUnitTest(Fixture, unittest.TestCase):
         self.assertEqual(ws.winners[0].source, "plan")   # the only item sharing words with the cycle
         self.assertEqual(ws.winners, sorted(ws.winners, key=lambda it: -it.relevance))
 
-    def test_habituation_lowers_an_item_that_kept_winning(self):
-        plan = "From my sleep of x:\n\n- survey the orchard rows again with care"
-        first = self.build(plan=plan)
-        top = first.winners[0]
-        for i in range(3):
-            self.episode(f"2026-10-2{i}T09:00:00", "g", [], )
-            self.state.append_episode({"ts": f"2026-10-2{i}T09:30:00", "kind": "live", "intent": None, "finish": None,
-                                       "tools": [], "workspace": {"winners": [top.key()]}})
-        again = self.build(plan=plan)
-        same = next(it for it in again.pool if it.key() == top.key())
-        self.assertAlmostEqual(same.habituation, 0.9)
-        self.assertLess(same.salience, top.salience)
-
     def test_a_codelet_that_fails_is_recorded_and_the_rest_compete(self):
         with mock.patch.object(workspace, "_goals", side_effect=OSError("unreadable")):
             ws = self.build(plan="From my sleep of x:\n\n- survey the orchard rows again with care")
         self.assertEqual(ws.record()["errors"], ["goal: OSError: unreadable"])
         self.assertTrue(ws.winners)
 
-    def test_refocus_competes_for_the_declared_goal_and_attention_in_competition_only(self):
-        inbox = [("20261026-010000-000000-from-wisp.md", "From: wisp\n\nthe greenhouse sensor log is ready"),
-                 ("20261026-010000-000001-from-tundra.md", "From: tundra\n\nthe kiln temperature chart is ready")]
+    def test_refocus_ranks_by_the_declared_goal(self):
+        inbox = [("20261026-010000-000000-from-peer.md", "From: peer\n\nthe greenhouse sensor log is ready"),
+                 ("20261026-010000-000001-from-peer.md", "From: peer\n\nthe kiln temperature chart is ready")]
         ws = self.build(inbox=inbox, k=1)
-        ws.refocus("tidy my notes", [{"source": "kiln temperature chart", "why": "tundra's message"}])
-        self.assertEqual(ws.winners[0].ref, inbox[1][0])            # attention broke the tie between two messages
-        self.assertEqual(ws.record()["refocused"], [ws.winners[0].key()])
-        rel = self.build("relevance", inbox=inbox, k=1)
-        before = [w.key() for w in rel.winners]
-        rel.refocus("tidy my notes", [{"source": "kiln temperature chart", "why": ""}])
-        self.assertEqual([w.key() for w in rel.winners], before)   # the control has no top-down prior
-        rel.refocus("read the greenhouse sensor log", [])
-        self.assertEqual(rel.winners[0].ref, inbox[0][0])           # but it knows the declared goal, as competition does
+        self.assertEqual(ws.winners[0].ref, inbox[0][0])
+        ws.refocus("read the kiln temperature chart")
+        self.assertEqual(ws.winners[0].ref, inbox[1][0])
+        self.assertEqual(ws.record()["refocused"], [f"inbox:{inbox[1][0]}"])
 
     def test_off_builds_nothing(self):
         ws = self.build("off")
@@ -180,10 +162,10 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         self.assertIn("1 failed, 0 succeeded", results[1][1])
         self.assertTrue(results[2][1].startswith("ERROR: PermissionError"))
         self.assertEqual(ep["cards"]["held"][0]["family"], "write_file self/")
-        # B3: the attention schema is recorded and re-focused the workspace
+        # B3: the attention schema is recorded
         self.assertEqual(ep["intent"]["attention"], attention)
         # B2: the workspace replaced recall, its winners are recorded and broadcast after the steps
-        self.assertEqual(ep["workspace"]["mode"], "competitive")
+        self.assertEqual(ep["workspace"]["mode"], "relevance")
         self.assertTrue(ep["workspace"]["winners"])
         first_user = fake.requests[0]["messages"][1]["content"]
         self.assertIn("## In focus now", first_user if isinstance(first_user, str) else json.dumps(first_user))
@@ -221,28 +203,6 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         self.assertNotIn("commitments", offered["finish_cycle"]["function"]["parameters"]["properties"])
         self.assertNotIn("## In focus now", fake.requests[0]["messages"][1]["content"])
         self.assertNotIn("## My open commitments", fake.requests[0]["messages"][0]["content"])
-
-    def test_front_is_what_the_cycle_puts_in_front_of_me_without_a_model(self):
-        """`python -m shaft front` (the dry run of `shaft experiment workspace`) must show what the live cycle's first
-        prompt holds, mode by mode, or the dry run measures something other than the replays."""
-        message = self.root / "inbox" / "20261026-095000-000000-from-operator.md"
-        (self.root / "notes" / "orchard.md").write_text("# Orchard\n\nThe orchard rows, counted by survey.\n")
-        for mode in workspace.MODES:
-            with self.subTest(mode):
-                message.write_text("From: operator\nTo: wisp\nKind: note\nDate: 2026-10-26 09:50\n\n"
-                                   "please survey the orchard rows")
-                self.cfg.values["WORKSPACE"] = mode
-                out = live.fronts(self.cfg, self.state)
-                self.assertTrue(message.exists())   # it only reads
-                self.assertEqual(set(out["modes"]), set(workspace.MODES))
-                self.assertIn("please survey the orchard rows", out["inbox"])
-                self.assertIn("## In focus now", out["modes"]["competitive"]["focus"])
-                self.assertIn("Recalled automatically", out["modes"]["off"]["focus"])
-                self.assertTrue(any(h["source"] == "notes/orchard.md" and not h["shown"] for h in out["hits"]))
-                fake = self.live([{"content": "nothing"}])
-                first = fake.requests[0]["messages"]
-                self.assertIn(out["modes"][mode]["focus"], first[1]["content"])
-                self.assertEqual(out["system"], first[0]["content"])
 
     def test_a_broken_workspace_falls_back_to_recall(self):
         with mock.patch.object(workspace, "build", side_effect=RuntimeError("boom")):
@@ -388,23 +348,26 @@ class ReviewRegressionTest(Fixture, unittest.TestCase):
         self.assertIn("overdue since 09:00", commitments.block(self.root, datetime(2026, 10, 26, 10)))
         self.assertIn("overdue by 2 days", commitments.block(self.root, datetime(2026, 10, 28, 10)))
 
-    def test_the_rendered_block_fits_recalls_budget(self):
-        ws = workspace.Workspace("competitive", k=3)
+    def test_the_candidate_rows_fit_recalls_budget(self):
+        ws = workspace.Workspace("relevance", k=3)
         ws.pool = [workspace.Item("memory", "journal " + "a very long heading " * 10 + str(i), "word " * 400,
                                   relevance=1.0) for i in range(3)]
-        ws.score()
         ws.winners = ws.select()
-        rows = ws.block().split("\n", 3)[3]   # after the separator and the heading
-        self.assertLessEqual(len(rows), workspace.BUDGET)
+        rows = ws.block().split("\n", 4)[4]   # after the separator and the heading
+        self.assertLessEqual(sum(map(len, rows.splitlines())), workspace.BUDGET)
         self.assertLessEqual(len(ws.broadcast()), 3 * (workspace.BROADCAST_CHARS + 60) + 30)
 
 
 class KnobTest(unittest.TestCase):
-    def test_a_bad_knob_value_keeps_the_default(self):
+    def test_issue_3_removed_workspace_mode_warns_and_keeps_the_default(self):
+        self.assertEqual(config.CHOICES["WORKSPACE"], ("relevance", "off"))
+        self.assertEqual(workspace.MODES, ("relevance", "off"))
         with tempfile.TemporaryDirectory() as d, mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-            cfg = config.load(Path(d), environ={"LLM_BASE_URL": "x", "LLM_MODEL": "m", "WORKSPACE": "global"})
-        self.assertEqual((cfg.WORKSPACE, cfg.sources["WORKSPACE"]), ("competitive", "default"))
-        self.assertIn("must be one of competitive, relevance, off", err.getvalue())
+            with mock.patch.object(config, "parse_env_file", return_value={"WORKSPACE": "competitive"}):
+                cfg = config.load(Path(d), environ={"LLM_BASE_URL": "x", "LLM_MODEL": "m"})
+        self.assertEqual((cfg.WORKSPACE, cfg.sources["WORKSPACE"]), ("relevance", "default"))
+        self.assertIn("warning: WORKSPACE='competitive' from config.env: must be one of relevance, off; "
+                      "keeping 'relevance' [default]", err.getvalue())
 
 
 if __name__ == "__main__":

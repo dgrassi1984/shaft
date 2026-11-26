@@ -56,7 +56,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
-| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `hosts`, `plant`, `acts`, `front`, `reach`, `shipped_mode`, `state_hosts`, `preview`, `workspace_path`, `workspace_rows`, `run_workspace`, `control_verdict`, `fingerprint`, `workspace_report`, `workspace_instrument`, `workspace_dry_run_text`, `verification_calls`, `prepare_monitor`, `run_monitors`, `monitor_direction`, `monitors_report`, `choice_cases`, `detection_stats`, `run_choice_blindness`, `choice_blindness_report`, `shock_steps`, `shock_measures`, `resource_shock`, `resource_shock_report` |
+| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `verification_calls`, `prepare_monitor`, `run_monitors`, `monitor_direction`, `monitors_report`, `choice_cases`, `detection_stats`, `run_choice_blindness`, `choice_blindness_report`, `shock_steps`, `shock_measures`, `resource_shock`, `resource_shock_report` |
 | `supervisor/families.py` | — | `families`, `no_yield_share`, `record_text`, `stats_lines` |
 | `supervisor/feedback.py` | — | `reply_sha`, `key`, `rate`, `clear`, `mark_sent`, `items`, `by_target`, `down_shas`, `note`, `deliver` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
@@ -172,7 +172,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |
 | `supervisor/tests/test_compression.py` | `CompressionTest` | `noise` |
 | `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only`, `committed_copy` |
-| `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `AttentionMissedTouchesTest`, `TargetsTest`, `KnobChangeTest`, `ProbeTest`, `WorkspaceInstrumentTest`, `WorkspaceDryRunTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call`, `control_rows` |
+| `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `AttentionMissedTouchesTest`, `TargetsTest`, `KnobChangeTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call` |
 | `supervisor/tests/test_consciousness_template.py` | `Fixture`, `WorkspaceUnitTest`, `LiveCycleTest`, `CommitmentsElsewhereTest`, `ReviewRegressionTest`, `KnobTest` | `failing_write` |
 | `supervisor/tests/test_consult.py` | `ConsultTest`, `ConsultLimitsTest` | — |
 | `supervisor/tests/test_consult_template.py` | `EnvelopeLineTest`, `TransportTest`, `EpisodeRunStartedTest`, `SkillTest` | — |

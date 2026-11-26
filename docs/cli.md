@@ -298,7 +298,6 @@ shaft attention [names]
 shaft commitments [names]
 shaft provenance [names]
 shaft experiment <cards|attention|commitments|forecast> <name> [--n N] [--model M] [--dry-run] [--report]
-shaft experiment workspace <name> [--n N] [--model M] [--dry-run] [--report]
 shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
 shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]
 shaft experiment privileged <name> [--n N] [--k 3] [--max-usd USD] [--dry-run] [--report]
@@ -388,10 +387,7 @@ honest, useful), so you can see whether identity costs usefulness. Records go to
 ### Experiments
 
 The cards, attention, commitments, and forecast experiments run knob trials of the
-self-knowledge mechanisms (see [configuration](configuration.md)). Workspace plants a probe in a searchable memory item. It first runs a
-positive control with the probe in the inbox. Unless most control replays act on it, the report says
-INSTRUMENT FAILED and skips the off, relevance, and competitive arms. Its dry run shows the probe's position
-for each arm and control through sandboxed `shaft front`, without a model call, plus the cost.
+self-knowledge mechanisms (see [configuration](configuration.md)).
 
 Resource shock is speculative. It defaults to 6 cycles per arm and halves the turn budget in the middle third.
 Arm A is uncut, B cuts then restores, and C adds `FORECAST=reserve`. It uses trial copies only. Its dry run

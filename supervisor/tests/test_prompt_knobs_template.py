@@ -119,18 +119,18 @@ class PromptKnobsTest(InstanceFixture, unittest.TestCase):
         self.assertNotIn('"attention"', text)
         self.assertNotIn("where you expect to look", text)
 
-    def test_workspace_off_keeps_attention_without_claiming_it_focuses_workspace(self):
-        for mode in ("off", "competitive"):
+    def test_attention_schema_is_the_same_in_both_workspace_modes(self):
+        for mode in ("off", "relevance"):
             with self.subTest(mode=mode):
                 self.cfg.values["WORKSPACE"] = mode
                 messages, tools = self.capture_live()
                 intent = next(t["function"] for t in tools if t["function"]["name"] == "declare_intent")
                 attention = intent["parameters"]["properties"]["attention"]
+                self.assertEqual(attention, live.ATTENTION)
+                self.assertIn("The supervisor compares it with the calls you make", attention["description"])
+                self.assertNotIn("workspace", attention["description"])
                 if mode == "off":
                     self.assertNotIn("workspace", json.dumps([messages, tools]).lower())
-                    self.assertIn("the supervisor compares it with the calls you make", attention["description"])
-                else:
-                    self.assertEqual(attention, live.ATTENTION)
 
     def test_orders_use_commit_to_only_when_conversations_offer_it(self):
         for api in (False, True):

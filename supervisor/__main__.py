@@ -1879,9 +1879,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("provenance", help="where each instance's facts come from, checked against its tool results (C3)")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("experiment", help="kill tests of the self-knowledge mechanisms: cards, attention, commitments, forecast "
-                       "(knob trials), workspace, monitors, choice-blindness, privileged, recognition and "
+                       "(knob trials), monitors, choice-blindness, privileged, recognition and "
                        "resource-shock; --report shows results")
-    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "monitors",
+    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "monitors",
                                    "choice-blindness", "privileged", "recognition", "resource-shock"])
     p.add_argument("name")
     p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; choice-blindness: four "
@@ -1890,8 +1890,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--max-usd", type=float, default=5.0, help="privileged/recognition: dollars this run may spend "
                    "(default 5; charged as the operator's, not to the instance's trial budget)")
     p.add_argument("--cycles", type=int, default=6, help="resource-shock: consecutive cycles per arm (minimum 3)")
-    p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
-                   "fallback for an instance on the local model; monitors/choice-blindness: cloud fallback)")
+    p.add_argument("--model", default="", help="replays' model (default: the trial default; "
+                   "monitors/choice-blindness: cloud fallback)")
     p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
     p.add_argument("--report", action="store_true", help="only print the result so far")
     p.add_argument("--channel", choices=["base_rate", "surprises", "envelope"],
@@ -2489,15 +2489,6 @@ def _dispatch(args, parser) -> int:
                           + (" (dry run: nothing spent)" if args.dry_run else ""))
                     if not args.dry_run:
                         print(experiments.resource_shock_report(args.name))
-                return 0
-            if args.item == "workspace":
-                if not args.report:
-                    r = experiments.run_workspace(args.name, args.n, model=args.model, dry_run=args.dry_run)
-                    print(experiments.workspace_dry_run_text(args.name, r) if args.dry_run else
-                          f"{args.name}: {r['states']} state(s), {r['replays']} replay(s) on {r['model']}, "
-                          f"{r['done']} done")
-                if args.report or not args.dry_run:
-                    print(experiments.workspace_report(args.name))
                 return 0
             if not args.report:
                 print("\n".join(experiments.queue(args.name, args.item, args.n, model=args.model or "auto",

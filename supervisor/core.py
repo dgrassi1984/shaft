@@ -96,7 +96,7 @@ SKILL_PATHS = ("skills",)
 DOCS_COPY = "shaft-docs"
 # The agent's memory-search vectors, a cache keyed by chunk hash (template shaft/memory.py INDEX and BINARY_INDEX):
 # the JSON of an instance whose code predates the vector log, the log of one whose code has it. A copy of an
-# instance (trial, exam, workspace experiment) carries whichever exist, so it never embeds its whole mind again.
+# instance (trial or exam) carries whichever exist, so it never embeds its whole mind again.
 MEMORY_CACHES = (".tmp/memory-index.json", ".tmp/memory-index.bin")
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
