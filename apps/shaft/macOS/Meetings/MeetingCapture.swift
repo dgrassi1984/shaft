@@ -46,10 +46,6 @@ fileprivate func inputBufferChannels(_ device: AudioObjectID) throws -> [Int] {
     return list.map { Int($0.mNumberChannels) }
 }
 
-fileprivate func defaultInputDevice() throws -> AudioDeviceID {
-    try getValue(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice, initial: AudioDeviceID(0))
-}
-
 /// This process's audio object, or 0 when Core Audio has none for it yet (then the tap excludes nothing — we play
 /// no audio anyway).
 fileprivate func ownProcessObject() -> AudioObjectID {
@@ -76,6 +72,8 @@ final class MeetingCapture: @unchecked Sendable {
     let online: Bool
     let url: URL
     let stallSeconds: Double
+    /// The microphone's UID, or nil for the system default input (MeetingMicrophones resolves the operator's choice).
+    let inputUID: String?
     let control = DispatchQueue(label: "shaft.meeting.control")
     let io = DispatchQueue(label: "shaft.meeting.io", qos: .userInteractive)
     private var timer: DispatchSourceTimer?
@@ -116,16 +114,25 @@ final class MeetingCapture: @unchecked Sendable {
     var pendingGapReason = ""
     let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 2 * 65_536)
 
-    init(online: Bool, url: URL, stallSeconds: Double) {
+    init(online: Bool, url: URL, stallSeconds: Double, inputUID: String? = nil) {
         self.online = online
         self.url = url
         self.stallSeconds = stallSeconds
+        self.inputUID = inputUID
         self.stallThreshold = stallSeconds
         control.setSpecific(key: Self.onControl, value: true)
     }
 
     func start() throws {
-        inputDevice = try defaultInputDevice()
+        if let inputUID {
+            guard let device = MeetingMicrophones.device(uid: inputUID) else {
+                throw NSError(domain: "MeetingCapture", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                    "the chosen microphone is no longer connected"])
+            }
+            inputDevice = device
+        } else {
+            inputDevice = try MeetingMicrophones.defaultInput()
+        }
         inputName = (try? getString(inputDevice, kAudioObjectPropertyName)) ?? "?"
         try buildDevice()
         sampleRate = try getValue(ioDevice, kAudioDevicePropertyNominalSampleRate, initial: Float64(48_000))
@@ -183,7 +190,7 @@ final class MeetingCapture: @unchecked Sendable {
         let micUID = try getString(inputDevice, kAudioDevicePropertyDeviceUID)
         let agg: [String: Any] = [
             kAudioAggregateDeviceNameKey: "SHAFT meeting",
-            kAudioAggregateDeviceUIDKey: "shaft-meeting-" + UUID().uuidString,
+            kAudioAggregateDeviceUIDKey: MeetingMicrophones.aggregatePrefix + UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: micUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
@@ -373,7 +380,7 @@ final class MeetingCapture: @unchecked Sendable {
         if !problems.isEmpty { log("stop: " + problems.joined(separator: "; ")) }
         let sidecar: [String: Any] = [
             "started": iso(started), "ended": iso(Date()), "mode": online ? "online" : "inperson",
-            "input_device": inputName, "sample_rate": sampleRate, "channels": Int(channels),
+            "input_device": inputName, "input_device_uid": inputUID ?? "default", "sample_rate": sampleRate, "channels": Int(channels),
             "channel_map": online ? ["mic", "system"] : ["mic"], "seconds": seconds,
             "input_buffers": bufferChannels, "mic_buffers": micBuffers,
             "gaps": gaps.map { ["start": $0.start, "end": $0.end, "reason": $0.reason] }, "rebuilds": rebuilds,

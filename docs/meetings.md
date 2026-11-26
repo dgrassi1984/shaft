@@ -25,6 +25,14 @@ Tap **Stop** to save the recording and send it to the paired SHAFT server over t
 shows upload progress and errors. Open SHAFT again to resume a pending upload. The app keeps a
 confirmed recording on the device for seven days and prunes it on a later foreground pass.
 
+## Choose the microphone on the Mac
+
+The Mac records from the system default input unless you choose another in **Meeting → Microphone** (in
+the menu bar and in the SHAFT menu bar icon). The choice applies to online and in-person recordings and is
+kept across launches. If the chosen microphone is not connected when you start, SHAFT records from the
+system default and says so while recording. The sidecar names the input as `input_device` and its Core
+Audio UID as `input_device_uid` (`default` when none was chosen).
+
 ## Set up the Listen worker
 
 On an Apple Silicon Mac with `uv`, run these commands from the SHAFT checkout.
