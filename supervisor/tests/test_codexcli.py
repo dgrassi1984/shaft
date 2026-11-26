@@ -119,7 +119,9 @@ class CodexDiscoveryTest(unittest.TestCase):
             app_rules = profile.read_text().splitlines()
             self.assertFalse(any(line.startswith("(allow file-read* (") for line in app_rules))
             codex._seatbelt([str(wrapper)], folder, home, auth, str(node))
-        self.assertEqual(profile.read_text().splitlines(), app_rules + [
+        ancestors = sorted({p for path in (home, folder, auth, package, prefix) for p in path.parents})
+        self.assertEqual(profile.read_text().splitlines(), app_rules[:-1] + [
+            "(allow file-read-metadata " + " ".join(f"(literal {json.dumps(str(p))})" for p in ancestors) + ")",
             f"(allow file-read* (subpath {json.dumps(str(package))}))",
             f"(allow file-read* (subpath {json.dumps(str(prefix))}))",
         ])
@@ -147,6 +149,11 @@ class CodexDiscoveryTest(unittest.TestCase):
         read_allows = [line for line in rules if line.startswith("(allow file-read* ")]
         for path in (app, self.home):
             self.assertFalse(any(json.dumps(str(path)) in line for line in read_allows), read_allows)
+        # Codex stats the folders above its install to find codex-package.json and bin/codex-code-mode-host; without
+        # this, every dynamic tool call failed with "failed to spawn code-mode host … host executable was not found".
+        metadata = next(line for line in rules if line.startswith("(allow file-read-metadata "))
+        for path in (package.parent, app, self.apps[1], self.home):
+            self.assertIn(f"(literal {json.dumps(str(path))})", metadata)
 
     def test_seatbelt_does_not_allow_relative_executable(self):
         folder = self.root / "run"

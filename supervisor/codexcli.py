@@ -295,22 +295,25 @@ def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path, node: str |
     for allowed in (home, folder):
         profile.append(f"(allow file-read* file-write* (subpath {quote(str(allowed))}))")
     profile.append(f"(allow file-read* file-write* (literal {quote(str(auth))}))")
-    ancestors = sorted({p for allowed in (home, folder, auth) for p in allowed.parents})
-    profile.append("(allow file-read-metadata " + " ".join(f"(literal {quote(str(p))})" for p in ancestors) + ")")
+    reads = []   # (scope, path) of the Codex install and its node, when they live in the operator's home
     binary = Path(os.path.realpath(argv[0])) if os.path.isabs(argv[0]) else None
     if binary is not None and operator_home in binary.parents:
         package = next((p for p in binary.parents if p != operator_home and p.is_relative_to(operator_home)
                         and any((p / marker).is_file() for marker in PACKAGE_MARKERS)), binary.parent)
         # An executable placed directly in ~ gets a literal allow, never a subpath allow on ~.
-        scope, allowed = ("literal", binary) if package == operator_home else ("subpath", package)
-        profile.append(f"(allow file-read* ({scope} {quote(str(allowed))}))")
+        reads.append(("literal", binary) if package == operator_home else ("subpath", package))
     if node:
         real_node = Path(os.path.realpath(node))
         if operator_home in real_node.parents:
             root = real_node.parent.parent if real_node.parent.name == "bin" else real_node.parent
-            scope, allowed = ("subpath", root) if root.is_relative_to(operator_home) and root != operator_home else (
-                "literal", real_node)
-            profile.append(f"(allow file-read* ({scope} {quote(str(allowed))}))")
+            reads.append(("subpath", root) if root.is_relative_to(operator_home) and root != operator_home else (
+                "literal", real_node))
+    # Codex resolves its own path (to find codex-package.json and, from it, bin/codex-code-mode-host): that stats
+    # every folder above the install. Without these, a ChatGPT.app in ~/Applications ran every dynamic tool call into
+    # "failed to spawn code-mode host … host executable was not found". Metadata only, each folder literally.
+    ancestors = sorted({p for allowed in (home, folder, auth, *(path for _, path in reads)) for p in allowed.parents})
+    profile.append("(allow file-read-metadata " + " ".join(f"(literal {quote(str(p))})" for p in ancestors) + ")")
+    profile += [f"(allow file-read* ({scope} {quote(str(path))}))" for scope, path in reads]
     path = folder / "seatbelt.sb"
     path.write_text("\n".join(profile) + "\n")
     return sandbox.wrap(path, argv)
