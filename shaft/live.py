@@ -7,7 +7,7 @@ the band of the confidence I declare, I see that base rate and confirm or change
 acting (base_rate.py); a confirmed intent keeps both numbers (v3), one never confirmed stays v2.
 
 PLAN-consciousness, each behind its knob in config.py: my workspace picks what is in front of me for the whole cycle
-(workspace.py); declare_intent asks where I expect to look (the attention schema, which re-focuses the workspace) and
+(workspace.py); declare_intent asks where I expect to look (the attention schema) and
 answers with what goals like this one have cost me (forecast.py); before a kind of action that has been failing, the
 first such call is held while I see what comparable ones led to (cards.py); finish_cycle and commit_to record the
 promises I make (commitments.py).
@@ -32,7 +32,6 @@ from .tools import MAX_RESULT_CHARS, Toolbox, _spec, completed, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
-FRONT_HITS = 40   # `shaft front`: how much of the memory search behind recall and the workspace it shows
 # What my confidence is a probability of. It was asked as "success" but scored against yes=1/partial=0.5; the
 # supervisor now scores it against criterion_met == yes, and only for intents that carry this (A4).
 CONFIDENCE_OF = "criterion_met=yes"
@@ -47,8 +46,8 @@ MAX_PREDICTIONS = 3
 # declare_intent's attention schema (PLAN-consciousness B3), and finish_cycle's promises (C2)
 ATTENTION = {"type": "array", "description": "optional, up to 4: where you expect to look this cycle — a source "
              "(web, memory, mail, calendar, drive, notes/…, shaft/…, operator or another instance = a message to them, "
-             "coder, record = the record tool) and why; it focuses your "
-             "workspace, and the supervisor compares it with the calls you make",
+             "coder, record = the record tool) and why. The supervisor "
+             "compares it with the calls you make",
              "items": {"type": "object", "properties": {"source": S, "why": S}, "required": ["source"]}}
 PROMISES = {"type": "array", "description": "promises to the operator or another agent you made this cycle "
             "and will keep later: "
@@ -240,7 +239,7 @@ def sources(state: State, inbox: list[tuple[str, str]]) -> tuple[str, str, str]:
 
 def front(cfg, state: State, inbox: list[tuple[str, str]], system: str) -> tuple[workspace.Workspace, str]:
     """What is put in front of me at a live cycle's start beyond my context — what my memory holds about my goals, my
-    improvement plan and my messages: my workspace's winners (WORKSPACE competitive or relevance), which replace
+    improvement plan and my messages: my workspace's winners (WORKSPACE=relevance), which replace
     automatic recall in the same room (workspace.BUDGET), or automatic recall itself (off). No model call."""
     plan, goals, about = sources(state, inbox)
     ws = workspace.Workspace("off")
@@ -251,28 +250,6 @@ def front(cfg, state: State, inbox: list[tuple[str, str]], system: str) -> tuple
         except Exception as e:   # a workspace that cannot be built falls back to recall: it must never stop a cycle
             ws = workspace.Workspace("off", errors=[f"{type(e).__name__}: {e}"[:200]])
     return ws, ws.block() if ws.mode != "off" else memory.recall(state.root, about, shown=system)
-
-
-def fronts(cfg, state: State) -> dict:
-    """`python -m shaft front`: what a live cycle starting now would have in front of it under each WORKSPACE mode —
-    the system prompt, the inbox, briefing and hand-off as the cycle shows them, each mode's focus block with its
-    workspace record, and the memory search those start from (its first FRONT_HITS hits, best first; `shown`: already
-    in my context, so neither recall nor the workspace offers it). Reads only; no model call. The supervisor's `shaft
-    experiment workspace` runs it on a replay's copy: to plant its probe at a place this search reaches, and to see
-    which arm it reaches before any replay is paid for."""
-    from dataclasses import replace
-    inbox = read_inbox(state)
-    system = opening(cfg, state, cycle_toolbox(cfg, state))
-    hits = memory.search(state.root, sources(state, inbox)[2], k=FRONT_HITS)
-    shown, listed = inbox_view(inbox, cfg.INBOX_CHARS)
-    out = {"system": system, "inbox": shown, "briefing": prompts.briefing(state.root, cfg),
-           "handoff": prompts.handoff(state.root, cfg),
-           "slate": goal_slate(cfg, state, [m for m in inbox if m[0] in listed]), "modes": {},
-           "hits": [{"source": h.source, "text": h.text, "shown": h.text.strip()[:120] in system} for h in hits]}
-    for mode in workspace.MODES:
-        ws, focus = front(replace(cfg, values={**cfg.values, "WORKSPACE": mode}), state, inbox, system)
-        out["modes"][mode] = {"focus": focus, "workspace": ws.record(), "memory": memory.mode}
-    return out
 
 
 def goal_slate(cfg, state: State, inbox: list[tuple[str, str]]) -> str:
@@ -347,7 +324,7 @@ def run(cfg, state: State, client: Client) -> str:
             record["intent"]["clauses"] = [{"clause": c["clause"], "confidence": c["confidence"]} for c in clauses]
         if attention_on:
             record["intent"]["attention"] = workspace.attention(args.get("attention"))
-        ws.refocus(f"{args['goal']}\n{args['success_criterion']}", record["intent"].get("attention") or [])
+        ws.refocus(f"{args['goal']}\n{args['success_criterion']}")
         if rate_error:
             record["intent"]["base_rate_error"] = rate_error
         cost = costs(args["goal"], origin) + lesson(args["goal"])
@@ -456,9 +433,7 @@ def run(cfg, state: State, client: Client) -> str:
              "predictions": {"type": "array", "items": S, "description": "1-3 short, specific things you expect "
                              "your work to find that could turn out wrong (e.g. 'the watch finds no new primary "
                              "source since 11:57'); optional"},
-             **({"attention": ATTENTION if cfg.WORKSPACE != "off" else {
-                 **ATTENTION, "description": ATTENTION["description"].replace(
-                     "; it focuses your workspace, and", ";")}} if attention_on else {})},
+             **({"attention": ATTENTION} if attention_on else {})},
             ["goal", "success_criterion", "confidence", "origin"]),
             declare),
         "finish_cycle": Control(_spec(

@@ -31,8 +31,6 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("question")
     sub.add_parser("exam", help="one task of the supervisor's capability battery: JSON on stdin, JSON out; "
                                 "nothing is kept")
-    sub.add_parser("front", help="what a live cycle starting now would have in front of it under each WORKSPACE "
-                                 "mode, as JSON; no model call (the dry run of `shaft experiment workspace`)")
     args = parser.parse_args(argv)
 
     try:
@@ -49,11 +47,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "config":
         print(cfg.describe().replace(" ", "\n"))
         return 0
-    if args.cmd == "front":   # reads only: no model client, no recovery of unwritten conversations
-        import json as _json
-        print(_json.dumps(live.fronts(cfg, State(cfg.root)), ensure_ascii=False))
-        return 0
-
     state, client = State(cfg.root), Client.from_config(cfg)
     if args.cmd in ("live", "sleep", "reflect"):   # autonomous: paused at once when the operator opens a conversation
         pausing.install()
