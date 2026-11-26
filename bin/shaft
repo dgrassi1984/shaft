@@ -1,8 +1,37 @@
 #!/bin/bash
-# SHAFT launcher — every run goes through the supervisor.
+# SHAFT launcher — runs the supervisor with SHAFT_PYTHON, the installed runtime, or Python on PATH.
 # Symlink it onto your PATH:  ln -s "$PWD/bin/shaft" ~/.local/bin/shaft
 set -o pipefail
 SELF="$(readlink -f "$0")"
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$ROOT" || exit 1
-exec "${SHAFT_PYTHON:-python3}" -E -s -m supervisor "$@"
+python="${SHAFT_PYTHON:-}"
+if [[ -z "$python" ]]; then
+    newest_patch=-1
+    for candidate in "$ROOT"/.runtime/python/cpython-3.12*/bin/python3.12; do
+        [[ -f "$candidate" && -x "$candidate" ]] || continue
+        runtime="${candidate%/bin/python3.12}"
+        patch=0
+        if [[ "${runtime##*/}" =~ ^cpython-3\.12\.([0-9]+) ]]; then
+            patch=$((10#${BASH_REMATCH[1]}))
+        fi
+        if (( patch > newest_patch )); then
+            newest_patch=$patch
+            python="$candidate"
+        fi
+    done
+
+    if [[ -z "$python" ]] && ! python="$(command -v python3.12)"; then
+        requirement="SHAFT needs Python 3.12 or later. Set SHAFT_PYTHON or install Python 3.12."
+        if ! python="$(command -v python3)"; then
+            printf 'No Python interpreter found on PATH. %s\n' "$requirement" >&2
+            exit 1
+        fi
+        if ! version="$("$python" -E -s -c \
+            'import sys; print(sys.version.split()[0]); sys.exit(sys.version_info < (3, 12))' 2>/dev/null)"; then
+            printf '%s (Python %s). %s\n' "$python" "${version:-version unknown}" "$requirement" >&2
+            exit 1
+        fi
+    fi
+fi
+exec "$python" -E -s -m supervisor "$@"

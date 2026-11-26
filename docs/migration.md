@@ -32,7 +32,7 @@ the environments and starts the services. Before starting, it asks you to confir
 that the old Mac is stopped and stays stopped. It removes instance environments;
 the first `talk` rebuilds them on this Mac. Run `target` in **Terminal on the new
 Mac**, logged in at its screen — not over SSH — because the services load into the
-logged-in session and `on` records that terminal's `python3`. Run `--check` first
+logged-in session and `on` records the Python that `bin/shaft` runs (below). Run `--check` first
 on either: it runs the read-only checks and changes nothing. Each step prints what
 it will do and why, and waits — Enter runs, `q` stops, and a rerun resumes at the
 first unfinished step. If `source` stops partway it prints how to bring the old
@@ -78,11 +78,9 @@ so do that instead.
   Homebrew does this. Services run under launchd with
   `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`. Installing `uv` in
   `~/.local/bin` works in a terminal but fails under launchd.
-  Check `python3 --version` first. `bin/shaft` runs whichever `python3` is on
-  your PATH, and the `on` commands record that interpreter in the plists.
-  Homebrew's plain `python3` may be newer than the one you used before.
-  To use `python@3.12`, put `/opt/homebrew/opt/python@3.12/libexec/bin` first
-  on your PATH.
+  Unless you set `SHAFT_PYTHON`, `bin/shaft` runs the newest app-installed
+  Python 3.12, then `python3.12` on your PATH, then `python3` if it is 3.12 or
+  later. The `on` commands record that interpreter in the plists.
 - On the old Mac, run `brew bundle dump --file=Brewfile` in the project
   folder to record your Homebrew packages. The file travels with the copy.
   On the new Mac, `brew bundle --file=Brewfile` installs them. This matters
