@@ -34,7 +34,7 @@ TOOLS = [
     {"name": "shaft_send",
      "description": (
          "Leave a note in a SHAFT instance's inbox, which it reads at its next wake. Use it only when the operator asks "
-         "you to send or tell something to an instance (\"send this to Thelos\", \"let Thelos know\"). Write the note "
+         "you to send or tell something to an instance (\"send this to <instance>\", \"let <instance> know\"). Write the note "
          "for a reader who saw none of this conversation: what was done and why, what was decided, what is still open, "
          "and where the results are (file paths, branches, PRs, links). Facts, not instructions — the instance treats "
          "the note as information written by Claude, not as the operator's orders. Optionally attach files on this "
@@ -129,7 +129,7 @@ def serve(stdin=None, stdout=None) -> int:
 def _entry() -> dict:
     """How Claude starts it: the primary checkout's launcher, with this Python (a GUI app's PATH may have none)."""
     return {"command": str(core.PROJECT / "bin" / "shaft"), "args": ["mcp", "serve"],
-            "env": {"SHAFT_PYTHON": os.environ.get("SHAFT_PYTHON") or sys.executable}}
+            "env": {"SHAFT_PYTHON": sys.executable}}
 
 
 def _desktop(change) -> str:

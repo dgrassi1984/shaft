@@ -220,6 +220,8 @@ shaft gchat <name> grant <alias>
 shaft gchat <name> revoke <alias>
 shaft gchat <name> off
 shaft gchat [name]
+shaft claude-notes [<name> [on|off]]
+shaft mcp [install|uninstall|serve|status]
 shaft share <name> [<folder>|off]
 shaft secret <name> set <key> --hosts <host> [--header H] [--scheme S]
 shaft secret <name> list|delete [<key>]
@@ -248,6 +250,11 @@ Google Chat grants cover every conversation on the account, read-only. Grant che
 Revoking an account deletes its local `gchat/<alias>/` downloads; `off` revokes all Chat grants and deletes `gchat/`.
 Both take effect on the next Chat call and report deletion failures. Memories remain.
 See [operator Google Chat access](integrations.md#the-operators-google-chat-shaft-gchat) for setup, tools, watch, and risks.
+
+`shaft claude-notes <name> on|off` lets the operator's own Claude sessions leave notes in an instance's inbox (off by
+default; alone it lists every instance). `shaft mcp install` registers SHAFT's local MCP server with Claude Code (user
+scope) and Claude Desktop (`claude_desktop_config.json`), `uninstall` removes both, `serve` is what they start. See
+[notes from your Claude sessions](integrations.md#notes-from-your-claude-sessions-shaft-mcp).
 
 `shaft share` shows, grants, or revokes a read-only shared folder. `shaft secret set` prompts for a host-bound
 key. Its default header is `Authorization: Bearer <value>`; an empty `--scheme` sends the raw value. `list`
