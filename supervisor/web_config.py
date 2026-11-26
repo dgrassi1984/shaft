@@ -21,7 +21,7 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar", "gdrive", "gchat",
-         "meetings", "battery-switch", "channel", "orders-add", "orders-drop")
+         "meetings", "claude-notes", "battery-switch", "channel", "orders-add", "orders-drop")
 DRIVE_MAX = 20000
 
 
@@ -100,6 +100,10 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if op not in ("grant", "revoke") or not alias:
             raise Refused("meetings grant or revoke needs an account")
         return _ran(["meetings", op, name, alias])
+    if verb == "claude-notes":
+        if form.get("op") not in ("on", "off"):
+            raise Refused("notes from Claude on or off?")
+        return _ran(["claude-notes", name, form["op"]])
     if verb == "gchat":
         for field in form:
             if field not in ("op", "alias", "name"):
@@ -414,6 +418,14 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
     meeting_access = join([h('<ul class="lines">{r}</ul>', r=join(meeting_rows)) if meeting_rows else
                            h('<p class="dim">none</p>'), meeting_grant])
 
+    notes_on = a.get("claude_notes", False)
+    claude_access = join([
+        h('<p>Notes from your Claude sessions (Claude Desktop, Claude Code, through <code>shaft mcp</code>): <b>{s}</b>. '
+          'A note lands in its inbox and is read at its next wake; it never wakes it.</p>', s="on" if notes_on else "off"),
+        button("claude-notes", "Turn off" if notes_on else "Turn on",
+               f"{'Stop' if notes_on else 'Let'} your Claude sessions {'leaving' if notes_on else 'leave'} notes in {n}'s inbox?",
+               {"name": n, "op": "off" if notes_on else "on"}, cls="small")])
+
     bat_op = "on" if a["battery_off"] else "off"
     battery = join([h('<p>The capability battery is <b>{s}</b> for {n}.</p>', s="off" if a["battery_off"] else "on",
                       n=n),
@@ -441,6 +453,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                 ("gdrive", "Your Drive it may read (shaft gdrive)", drive_access),
                 ("gchat", "Your Google Chat it may read (shaft gchat)", chat_access),
                 ("meetings", "Meeting transcripts it may read (shaft meetings)", meeting_access),
+                ("claude-notes", "Notes from your Claude sessions (shaft claude-notes)", claude_access),
                 ("", "Google accounts", google_accounts(n, a.get("google_accounts", {}))),
                 ("battery-switch", "Capability battery", battery),
                 ("", "Its own keys (shaft secret): names only", join([keys, h(
@@ -453,8 +466,8 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
 def access(name: str) -> dict:
     """What the Access page shows, from the readers the CLI verbs use."""
     from . import autonomy, battery, cloudllm, google, jobs
-    from .core import (calendar_grants, gdrive_grants, gchat_grants, describe_key, disabled_tools, instance_root, mail_grants, read_secrets,
-                       meetings_grants, shared_folder)
+    from .core import (calendar_grants, claude_notes, gdrive_grants, gchat_grants, describe_key, disabled_tools, instance_root,
+                       mail_grants, read_secrets, meetings_grants, shared_folder)
     from . import channel
     floor = autonomy.wake_floor(name)
     cap = cloudllm.daily_cap(name)
@@ -466,7 +479,7 @@ def access(name: str) -> dict:
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
             "mail": mail_grants(name), "calendar": calendar_grants(name), "gdrive": gdrive_grants(name), "gchat": gchat_grants(name), "accounts": sorted(accounts),
-            "meetings": meetings_grants(name),
+            "meetings": meetings_grants(name), "claude_notes": claude_notes(name),
             "google_accounts": {alias: {k: data.get(k) for k in ("address", "client", "scope", "created")}
                                 for alias, data in accounts.items()},
             "battery_off": battery.off_path(name).exists(),

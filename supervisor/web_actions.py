@@ -191,7 +191,7 @@ CHECK = {"calendar-approve": "Action approvals", "calendar-decline": "Action app
          "recap": "Overview", "dismiss": "Overview", "tool": "Access", "aa-trial": "Trials", "service": "Services",
          "autonomy": "Services", "config-set": "Config", "config-unset": "Config", "drive-set": "Drive",
          "drive-remove": "Drive", "limit": "Access", "jobs": "Access", "share": "Access", "mail": "Access",
-         "calendar": "Access", "gdrive": "Access", "gchat": "Access", "battery": "Access", "battery-switch": "Access", "settings-set": "Settings",
+         "calendar": "Access", "gdrive": "Access", "gchat": "Access", "meetings": "Access", "claude-notes": "Access", "battery": "Access", "battery-switch": "Access", "settings-set": "Settings",
          "settings-unset": "Settings", "chat-stop": "this chat", "chat-end": "this chat", "orders-add": "Config",
          "orders-drop": "Config"}
 

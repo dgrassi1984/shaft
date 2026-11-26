@@ -1516,7 +1516,7 @@ def _setup_hello(req: Request, n: str) -> Response:
 # -- access (§18.6) ---------------------------------------------------------------------------------------------------
 GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
                 "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"},
-                "meetings": {"alias"}}
+                "meetings": {"alias"}, "claude": set()}
 GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat", "meetings": "meetings"}
 
 
@@ -1540,6 +1540,8 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
         return [["share", n, "off" if action == "revoke" else _text(data, "what", 4096)]]
     if grant == "browser":
         return []
+    if grant == "claude":
+        return [["claude-notes", n, "on" if action == "grant" else "off"]]
     alias = _text(data, "alias", 31)
     if not google.ALIAS_RE.fullmatch(alias):
         raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")

@@ -1019,6 +1019,15 @@ def set_meetings_grants(name: str, grants: list[dict]) -> list[dict]:
     return result
 
 
+def claude_notes(name: str) -> bool:
+    """Whether the operator lets his Claude sessions leave notes in this instance's inbox (claude_notes.py)."""
+    return _tool_settings(name).get("claude_notes") is True
+
+
+def set_claude_notes(name: str, on: bool) -> None:
+    _update_tool_settings(name, claude_notes=True if on else None)
+
+
 def remove_gchat_copies(name: str, alias: str = "") -> None:
     _remove_google_copies(name, "gchat", alias)
 
