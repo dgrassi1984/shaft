@@ -194,8 +194,9 @@ struct GoogleSetupSheet: View {
             }
             if chosen.contains(.chat) {
                 sentence("Google Chat also needs its Chat app described: on the Chat API's Configuration tab, enter an "
-                         + "app name, an avatar URL and a description, and save. Chat works only with a Google "
-                         + "Workspace account.")
+                         + "app name, an avatar URL and a description, turn off Enable interactive features (SHAFT "
+                         + "only reads, so it needs no HTTP endpoint URL or other connection settings), and save. "
+                         + "Chat works only with a Google Workspace account.")
                 link("Chat API configuration", "https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat")
             }
             markButton(.apis)

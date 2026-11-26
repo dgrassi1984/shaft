@@ -431,7 +431,9 @@ hide list. The supervisor holds the credential and checks the account grant on e
 See [Chat tools](../supervisor/broker.py), [Chat reads](../supervisor/gchat.py), and the
 plan.
 
-Enable the **Google Chat API** in the account's Google Cloud project. In Google Auth Platform → **Data Access**, add:
+Enable the **Google Chat API** in the account's Google Cloud project. On its **Configuration** tab, enter an app name,
+an avatar URL and a description, turn **Enable interactive features** off (SHAFT only reads, so it needs no HTTP
+endpoint URL), and save. In Google Auth Platform → **Data Access**, add:
 
 - `https://www.googleapis.com/auth/chat.spaces.readonly`
 - `https://www.googleapis.com/auth/chat.messages.readonly`
