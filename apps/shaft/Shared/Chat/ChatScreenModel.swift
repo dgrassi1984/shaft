@@ -65,6 +65,7 @@ final class ChatScreenModel {
     /// New chat asks first (the header's button, the Mac's menu).
     var confirmingNewChat = false
     var confirmingEnd = false
+    var confirmingClear = false
     /// Voice mode is open (Talk, the Mac's Talk command). Closing it ends the session. Not closed by
     /// `dismissPresentations`: a notification for this chat keeps the conversation going, and one for another chat
     /// replaces this screen, which ends it.
@@ -99,6 +100,7 @@ final class ChatScreenModel {
         confirmRetry = nil
         confirmingNewChat = false
         confirmingEnd = false
+        confirmingClear = false
         preview.close()
         preview.error = nil
         dismissRequest += 1

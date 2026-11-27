@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "af48a7debb70a2a2",
+  "version": "ba91c5d3f16e0b6f",
   "live": "",
   "reply": null,
   "chat": {
@@ -9,7 +9,8 @@
     "title": "> Ship the ledger fix today?",
     "state": "idle",
     "created": "2026-11-03T13:58:40+01:00",
-    "ended": null
+    "ended": null,
+    "cleared": null
   },
   "archived": false,
   "earlier": 0,

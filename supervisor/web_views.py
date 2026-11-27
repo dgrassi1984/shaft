@@ -190,7 +190,7 @@ def _thread_title(name: str, chat: dict | None, read_only: bool, from_feed: bool
         return Html("")
     if not chat:
         return Html("")
-    if read_only or chat.get("state") == "ended" or chat.get("cleared"):
+    if read_only or chat.get("state") == "ended":
         return h('<span class="threadtitle">{t}</span>', t=title(chat))
     return h('<details class="menu renamemenu" data-key="rename"><summary class="threadtitle" data-focus="rename" '
              'title="Rename this thread" aria-label="Thread: {t}. Rename it"><span class="ttl">{t}</span>{pen}</summary>'
@@ -274,15 +274,16 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     switcher = join(switch_rows) + h('<hr><button type="button" data-switch-new>New thread</button>{rename}{close}',
                                    close=close, rename=h('<button type="button" data-switch-rename{disabled}>Rename…</button>',
                                             disabled=Html(" disabled") if read_only else "") if chat and not from_feed else Html(""))
-    # Clear: this thread out of view (ended first). It sat in the header as New chat; New thread there now ends
-    # nothing, so Clear moved into ⋯. Its confirm says what is kept.
+    # Clear: this conversation starts fresh where it is (web_chat.clear) — Main or a thread. Its confirm says what is
+    # kept.
     clear = (h('<div class="actions menuthread"><form class="act clearbtn" data-post="/chat/{n}/clear" '
-               'data-after="thread-cleared" '
-               'data-confirm="Clear this thread? It is kept in Earlier chats and Transcripts. An open conversation is '
-               'ended first, and a journal write-up is requested. Your other threads stay open."{a}>'
+               'data-after="cleared" data-confirm="Clear this conversation? {name} starts fresh: it no longer reads what was said so far, '
+               'and a journal write-up is requested. Nothing is deleted: the earlier messages stay under Show earlier '
+               'messages."{a}>'
                '<input type="hidden" name="cid" value="{cid}"><button type="submit" data-focus="clear">'
-               'Clear this thread</button></form></div>', n=q(name), cid=chat["id"], a=post_attrs("this chat"))
-             if chat and not read_only and not from_feed else Html(""))
+               'Clear conversation</button></form></div>', n=q(name), name=name,
+               cid="from" if from_feed else chat["id"], a=post_attrs("this chat"))
+             if chat and not read_only else Html(""))
     notes = pending_notes_html(name)
     if notes:
         sub = join([sub, h('<span class="subsep"> · </span>{notes}', notes=notes)])
@@ -1761,7 +1762,7 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
         feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="?all=1">Show the {n} earlier '
                       'messages</a></p>', n=model["earlier"]))
     elif model["earlier"]:
-        more = f"?id={q(chat['id'])}&all=1" if archived else "?all=1"
+        more = f"?id={q(chat['id'])}&all=1"         # a thread's page: "?all=1" alone opened Main
         feed.append(h('<p class="earliermsgs" data-k="more"><a class="button" href="{u}">Show the {n} earlier '
                       'messages</a></p>', u=more, n=model["earlier"]))
     day_separator = _day_separators(feed)
@@ -1775,6 +1776,9 @@ def feed_html(model: dict, from_feed: bool = False) -> Html:
         elif kind == "retried":
             feed.append(h('<p class="dim retried" data-k="{key}">The first try failed and was sent again '
                           '<span class="dim">({ts})</span>.</p>', key=it["key"], ts=_turn_time(it["ts"])))
+        elif kind == "cleared":                  # the conversation started fresh here (web_chat.clear)
+            feed.append(h('<p class="dim ended cleared" data-k="{key}">Cleared {e}: {n} starts fresh from here.</p>',
+                          key=it["key"], e=it["ts"][:16].replace("T", " "), n=name))
         elif kind == "ended":                    # a past chat: when it ended, nothing about a next message
             when = it["ts"][:16].replace("T", " ")
             feed.append(h('<p class="dim ended" data-k="ended">This conversation ended on {e}.</p>', e=when)

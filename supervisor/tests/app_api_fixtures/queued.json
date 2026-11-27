@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "c1ffeacc1470f9ea",
+  "version": "3feba5a1d67e4283",
   "live": "fb7597261efc6cb5",
   "reply": {
     "started": "2026-11-03T14:07:02+01:00",
@@ -17,7 +17,8 @@
     "title": "> Ship the ledger fix today?",
     "state": "replying",
     "created": "2026-11-03T13:58:40+01:00",
-    "ended": null
+    "ended": null,
+    "cleared": null
   },
   "archived": false,
   "earlier": 0,
@@ -148,5 +149,5 @@
   "last": "2026-11-03T14:02:30+01:00",
   "can_stop": true,
   "can_end": false,
-  "can_clear": true
+  "can_clear": false
 }

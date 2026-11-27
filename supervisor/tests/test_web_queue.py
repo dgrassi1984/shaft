@@ -132,7 +132,9 @@ class QueueTest(unittest.TestCase):
         c = web_chat.load(c["id"])
         self.assertEqual(c["turns"][-1]["attachments"], [attachment, attachment])
         self.assertEqual(c["turns"][-1]["content"], "one\nfile a.txt\n\ntwo\nfile a.txt")
-        for closed in ({"cleared": "now"}, {"state": "ended"}):
+        # ({"cleared": …} was a closed chat too until 2026-11-27: the old Clear ended a chat and hid it, so a record
+        # with it is always ended; Clear now leaves the chat open and starts it fresh, refused while it replies.)
+        for closed in ({"state": "ended"},):
             c.update(closed)
             web_chat.save(c)
             before = len(self.started)

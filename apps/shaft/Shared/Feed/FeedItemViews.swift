@@ -18,6 +18,7 @@ struct FeedItemView: View {
         case .sent(let message): SentItemView(message: message)
         case .later(let message): LaterItemView(message: message)
         case .ended(let ended): EndedView(ended: ended, archived: archived)
+        case .cleared(let cleared): ClearedView(cleared: cleared)
         case .unknown(_, let type):
             Text("This app does not show “\(type)” items yet: update it.")
                 .font(.footnote).foregroundStyle(Color.textSecondary)
@@ -804,6 +805,20 @@ struct EndedView: View {
     var body: some View {
         Text(archived ? "This conversation ended on \(Stamp.full(ended.ts))."
                       : "Ended \(Stamp.short(ended.ts)): journal write-up requested. Your next message starts a new conversation.")
+            .font(.footnote)
+            .foregroundStyle(Color.textSecondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Design.Space.s4)
+    }
+}
+
+/// Clear conversation (§7.4): the conversation started fresh here; what came before is under Show earlier messages.
+struct ClearedView: View {
+    let cleared: ClearedItem
+
+    var body: some View {
+        Text("Cleared \(Stamp.short(cleared.ts)): the conversation starts fresh from here.")
             .font(.footnote)
             .foregroundStyle(Color.textSecondary)
             .multilineTextAlignment(.center)

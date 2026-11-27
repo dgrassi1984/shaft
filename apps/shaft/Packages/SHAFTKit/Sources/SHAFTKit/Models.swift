@@ -295,6 +295,7 @@ public struct ChatInfo: Codable, Sendable, Equatable {
     public var state: String
     public var created: Date
     public var ended: Date?
+    public var cleared: Date?
 }
 
 /// The reply running now (§4.6). `activity` and `answer` move `live`, `started` moves `version`.
@@ -336,6 +337,7 @@ public enum FeedItem: Codable, Sendable, Equatable, Identifiable {
     case sent(SentItem)
     case later(LaterItem)
     case ended(EndedItem)
+    case cleared(ClearedItem)
     case unknown(key: String, type: String)
 
     public var key: String {
@@ -346,6 +348,7 @@ public enum FeedItem: Codable, Sendable, Equatable, Identifiable {
         case .sent(let item): item.key
         case .later(let item): item.key
         case .ended(let item): item.key
+        case .cleared(let item): item.key
         case .unknown(let key, _): key
         }
     }
@@ -360,6 +363,7 @@ public enum FeedItem: Codable, Sendable, Equatable, Identifiable {
         case .sent(let item): item.ts
         case .later(let item): item.ts
         case .ended(let item): item.ts
+        case .cleared(let item): item.ts
         case .unknown: nil
         }
     }
@@ -376,6 +380,7 @@ public enum FeedItem: Codable, Sendable, Equatable, Identifiable {
         case "sent": self = .sent(try SentItem(from: decoder))
         case "later": self = .later(try LaterItem(from: decoder))
         case "ended": self = .ended(try EndedItem(from: decoder))
+        case "cleared": self = .cleared(try ClearedItem(from: decoder))
         default: self = .unknown(key: try container.decode(String.self, forKey: .key), type: type)
         }
     }
@@ -400,6 +405,9 @@ public enum FeedItem: Codable, Sendable, Equatable, Identifiable {
             try item.encode(to: encoder)
         case .ended(let item):
             try container.encode("ended", forKey: .type)
+            try item.encode(to: encoder)
+        case .cleared(let item):
+            try container.encode("cleared", forKey: .type)
             try item.encode(to: encoder)
         case .unknown(let key, let type):
             try container.encode(type, forKey: .type)
@@ -512,6 +520,12 @@ public struct LaterItem: Codable, Sendable, Equatable {
 
 /// The chat ended (key `ended`).
 public struct EndedItem: Codable, Sendable, Equatable {
+    public var key: String
+    public var ts: Date
+}
+
+/// The conversation started fresh here (key `cleared-<i>`).
+public struct ClearedItem: Codable, Sendable, Equatable {
     public var key: String
     public var ts: Date
 }

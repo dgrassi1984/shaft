@@ -1,7 +1,7 @@
 {
   "instance": "wisp",
   "partial": false,
-  "version": "b66913aebe6d9b95",
+  "version": "6736b58da79621eb",
   "live": "",
   "reply": null,
   "chat": {
@@ -9,7 +9,8 @@
     "title": "Message 0.",
     "state": "idle",
     "created": "2026-11-02T09:00:00+01:00",
-    "ended": null
+    "ended": null,
+    "cleared": null
   },
   "archived": false,
   "earlier": 4,

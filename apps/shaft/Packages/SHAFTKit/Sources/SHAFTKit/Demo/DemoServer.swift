@@ -197,6 +197,7 @@ private final class DemoState: @unchecked Sendable {
             if name == "ada" {
                 from["items"] = [DemoData.assistant("This week's field notes are in Documents, and the weekly review has its own thread.", k: 0, at: now.addingTimeInterval(-180))]
             }
+            from["can_clear"] = (from["items"] as? [Any])?.isEmpty == false
             feeds["\(name)-from"] = from
         }
     }
@@ -221,6 +222,7 @@ private final class DemoState: @unchecked Sendable {
                 feeds[cid]?["items"] = items
                 feeds[cid]?["reply"] = NSNull()
                 feeds[cid]?["live"] = ""
+                feeds[cid]?["can_clear"] = true
                 if var info = feeds[cid]?["chat"] as? [String: Any] {
                     info["state"] = "idle"
                     feeds[cid]?["chat"] = info
@@ -310,7 +312,14 @@ private final class DemoState: @unchecked Sendable {
             case ("GET", "chat") where parts.count <= 3,
                  ("GET", "from") where parts.count == 2:
                 let id = parts[0] == "from" ? "\(name)-from" : action.isEmpty ? cid : key(name, action)
-                guard let feed = feeds[id], feed["instance"] as? String == name else { return .unavailable }
+                guard var feed = feeds[id], feed["instance"] as? String == name else { return .unavailable }
+                if let earlier = feed["earlier"] as? Int, earlier > 0 {
+                    if value("all") == "1" {
+                        feed["earlier"] = 0
+                    } else if let items = feed["items"] as? [[String: Any]] {
+                        feed["items"] = Array(items.dropFirst(earlier))
+                    }
+                }
                 return .json(feed)
             case ("POST", "chat"):
                 guard feeds[cid]?["instance"] as? String == name else { return .unavailable }
@@ -330,6 +339,7 @@ private final class DemoState: @unchecked Sendable {
                     pending[target] = (mid, started.addingTimeInterval(1.5))
                     feeds[target]?["reply"] = ["started": DemoData.stamp(started), "activity": [], "answer": ""]
                     feeds[target]?["live"] = mid
+                    feeds[target]?["can_clear"] = false
                     if var info = feeds[target]?["chat"] as? [String: Any] {
                         info["state"] = "replying"
                         feeds[target]?["chat"] = info
@@ -368,6 +378,7 @@ private final class DemoState: @unchecked Sendable {
                     var feed = DemoData.feed(name, cid: id, title: title, at: Date())
                     feed["items"] = []
                     feed["mids"] = []
+                    feed["can_clear"] = false
                     feeds[id] = feed
                     order[name]?.insert(id, at: 0)
                     revision += 1
@@ -379,6 +390,24 @@ private final class DemoState: @unchecked Sendable {
                     feeds[cid]?["chat"] = info
                     touch(cid)
                     return .json(["said": "renamed"])
+                case "clear":
+                    guard feeds[cid]?["can_clear"] as? Bool == true,
+                          var items = feeds[cid]?["items"] as? [[String: Any]] else {
+                        return .error(409, code: "refused", message: "There is nothing to clear or a reply is running.")
+                    }
+                    let index = items.count { $0["type"] as? String == "cleared" }
+                    let stamp = DemoData.stamp(Date())
+                    feeds[cid]?["earlier"] = items.count
+                    items.append(["key": "cleared-\(index)", "type": "cleared", "ts": stamp])
+                    feeds[cid]?["items"] = items
+                    feeds[cid]?["can_clear"] = false
+                    if var info = feeds[cid]?["chat"] as? [String: Any] {
+                        info["cleared"] = stamp
+                        feeds[cid]?["chat"] = info
+                    }
+                    revision += 1
+                    feeds[cid]?["version"] = String(revision)
+                    return .json(["said": "cleared"])
                 default: return .unavailable
                 }
             case ("GET", "docs") where parts.count == 2:

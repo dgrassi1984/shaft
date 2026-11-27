@@ -1,0 +1,136 @@
+{
+  "instance": "wisp",
+  "partial": false,
+  "version": "5d261c0630bd5711",
+  "live": "",
+  "reply": null,
+  "chat": {
+    "id": "web-3f9a1c0d7e2b4a65",
+    "title": "> Ship the ledger fix today?",
+    "state": "idle",
+    "created": "2026-11-03T13:58:40+01:00",
+    "ended": null,
+    "cleared": "2026-11-03T14:10:00+01:00"
+  },
+  "archived": false,
+  "earlier": 6,
+  "items": [
+    {
+      "key": "cleared-0",
+      "type": "cleared",
+      "ts": "2026-11-03T14:10:00+01:00"
+    },
+    {
+      "key": "s20261103-141100-000001-from-wisp.md",
+      "type": "sent",
+      "file": "20261103-141100-000001-from-wisp.md",
+      "ts": "2026-11-03T14:11:00+01:00",
+      "kind": "message",
+      "read": true,
+      "text": "The chart and the data.",
+      "attachments": [
+        {
+          "name": "chart.png",
+          "bytes": 20480,
+          "image": true,
+          "text": false,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/0"
+        },
+        {
+          "name": "data.csv",
+          "bytes": 512,
+          "image": false,
+          "text": true,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/1"
+        },
+        {
+          "name": "report.pdf",
+          "bytes": 90000,
+          "image": false,
+          "text": false,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wisp.md/2"
+        }
+      ],
+      "choices": null,
+      "answer": null,
+      "open": false,
+      "from_cycle": false,
+      "re": null,
+      "rating": null
+    },
+    {
+      "key": "s20261103-141200-000001-from-wisp.md",
+      "type": "sent",
+      "file": "20261103-141200-000001-from-wisp.md",
+      "ts": "2026-11-03T14:12:00+01:00",
+      "kind": "question",
+      "read": true,
+      "text": "Answered question?",
+      "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": false,
+      "from_cycle": false,
+      "re": null,
+      "rating": null
+    },
+    {
+      "key": "s20261103-141300-000001-from-wisp.md",
+      "type": "sent",
+      "file": "20261103-141300-000001-from-wisp.md",
+      "ts": "2026-11-03T14:13:00+01:00",
+      "kind": "message",
+      "read": true,
+      "text": "March reconciles: 3 lines moved.",
+      "attachments": [],
+      "choices": null,
+      "answer": null,
+      "open": false,
+      "from_cycle": true,
+      "re": null,
+      "rating": null
+    },
+    {
+      "key": "u4",
+      "type": "user",
+      "k": 4,
+      "ts": "2026-11-03T14:20:00+01:00",
+      "text": "New topic.",
+      "mid": null,
+      "interjected": false,
+      "via": null,
+      "attachments": [],
+      "edits": [],
+      "deleted": [],
+      "comments": [],
+      "feedback": []
+    },
+    {
+      "key": "a5",
+      "type": "assistant",
+      "k": 5,
+      "ts": "2026-11-03T14:20:30+01:00",
+      "content": "Fresh answer.",
+      "activity": [],
+      "incomplete": false,
+      "failure": null,
+      "docs": [],
+      "answered": [],
+      "opened": [],
+      "rating": null,
+      "last": true
+    }
+  ],
+  "queued": [],
+  "pending_feedback": [],
+  "pending_edits": [],
+  "mids": [
+    "0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b",
+    "a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13",
+    "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54"
+  ],
+  "last": "2026-11-03T14:20:30+01:00",
+  "can_stop": false,
+  "can_end": true,
+  "can_clear": true
+}

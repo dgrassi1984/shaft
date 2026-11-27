@@ -311,8 +311,12 @@ def reply_event(chat: dict) -> dict:
 
 
 def _instance_stamps(chat: dict | None, sent: list[dict]) -> list[str]:
-    return ([t["ts"] for t in (chat or {}).get("turns") or [] if t["role"] == "assistant"]
-            + [m["ts"] for m in sent if m.get("to") == "operator"])
+    """The times of what the instance said in `chat` since its last clear (what came before is no longer on screen:
+    an answer unread when the chat was cleared must not keep it unread with nothing to read)."""
+    mark = _last_clear(chat)
+    return ([t["ts"] for k, t in enumerate((chat or {}).get("turns") or [])
+             if t["role"] == "assistant" and not _turn_cleared(chat, k)]
+            + [m["ts"] for m in sent if m.get("to") == "operator" and (not mark or _after(m, mark))])
 
 
 def last_count(chat: dict | None, sent: list[dict]) -> int:
@@ -410,7 +414,10 @@ def from_feed(name: str, whole: bool = False) -> dict:
     """The From <instance> page: From's messages (from_rows) and the From conversation's turns, in time order, the
     last CHAT_WINDOW of them unless `whole` ("Show the N earlier messages": its turns are in no other page), with
     revisions over the whole feed."""
-    model = build(name, from_chat(name), from_rows(name), whole=True)
+    chat = from_chat(name)
+    if chat and chat.get("clears"):              # build windows it from its last clear
+        return build(name, chat, from_rows(name), whole=whole)
+    model = build(name, chat, from_rows(name), whole=True)
     if not whole:
         model["earlier"] = max(0, len(model["items"]) - CHAT_WINDOW)
         model["items"] = model["items"][-CHAT_WINDOW:]
@@ -456,7 +463,9 @@ RETRY_CONFIRM = "Actions may already have run. Send it again anyway?"
 
 def failed(chat: dict | None) -> bool:
     """The latest assistant turn failed, excluding a stopped or retried reply."""
-    turn = next((t for t in reversed((chat or {}).get("turns") or []) if t.get("role") == "assistant"), {})
+    turns = (chat or {}).get("turns") or []
+    turn = next((t for k, t in reversed(list(enumerate(turns)))
+                 if t.get("role") == "assistant" and not _turn_cleared(chat, k)), {})
     return bool(turn.get("note") and not turn.get("retried")
                 and turn.get("note_kind", "stopped" if turn.get("note") == "stopped by you" else "unknown") != "stopped")
 
@@ -600,7 +609,7 @@ def _turn_items(name: str, chat: dict, archived: bool, ratings: dict, pending: s
             continue
         items.append({"key": f"a{k}", "type": "assistant", "k": k, "ts": t["ts"], "content": t.get("content") or "",
                       "activity": list(t.get("activity") or []), "incomplete": bool(t.get("content") and t.get("note")),
-                      "failure": failure(name, t, archived, k, turns[k - 1] if k else None),
+                      "failure": failure(name, t, archived or _turn_cleared(chat, k), k, turns[k - 1] if k else None),
                       "docs": [{"path": d["path"], "created": bool(d.get("created"))} for d in t.get("docs") or []],
                       "answered": [{"id": c["id"], "doc": c["doc"]} for c in t.get("answered") or []],
                       "opened": [{"id": c["id"], "doc": c["doc"]} for c in t.get("opened") or []],
@@ -664,7 +673,8 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
         items = in_time(turns, items, lambda i: i["ts"])
     model = {"instance": name, "partial": False, "version": "", "live": "", "reply": reply,
              "chat": {"id": chat["id"], "title": title(chat), "state": chat["state"], "created": chat.get("created", ""),
-                      "ended": chat.get("ended") or None} if chat else None,
+                      "ended": chat.get("ended") or None,
+                      "cleared": (chat.get("clears") or [{}])[-1].get("at")} if chat else None,
              "archived": archived, "earlier": 0, "items": items,
              "queued": [{"key": f"queue-{t['mid']}", "mid": t["mid"], "text": t.get("shown", ""),
                          "attachments": [{"name": a["name"], "bytes": a.get("bytes", 0)} for a in t.get("attachments", [])]}
@@ -675,11 +685,14 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
              "can_stop": reply is not None and not archived,
              "can_end": bool(chat and not archived and not is_from(chat) and chat["state"] not in ("replying", "ended")
                              and chat["turns"]),
-             "can_clear": bool(chat) and not archived and not is_from(chat)}
+             "can_clear": bool(chat and not archived and chat["state"] not in ("replying", "ended")
+                               and _clearable(items, chat))}
     model["version"] = _rev({**model, "reply": reply and {"started": reply["started"]}})
     model["live"] = _rev({"activity": reply["activity"], "answer": reply["answer"]}) if reply else ""
     # Internal seen tie-breaker, over the whole feed; keep it out of the public JSON and its revisions.
     model["last_count"] = last_count(chat, sent)
+    if chat and chat.get("clears"):
+        return _window_cleared(model, chat, whole)
     first = 0 if whole or not chat else max(0, len(chat["turns"]) - CHAT_WINDOW)
     if first:
         # from the window's first turn on, in the feed's order (in_time): by time, a clock set back kept a message
@@ -688,6 +701,13 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
         model["earlier"] = first
         model["items"] = [i for j, i in enumerate(items) if j >= start or i["type"] == "ended"]
     return model
+
+
+def _clearable(items: list[dict], chat: dict) -> bool:
+    """Something said since the chat's last clear (or ever): a turn, or a message from or for the instance."""
+    mark = (chat.get("clears") or [None])[-1]
+    return any(it["type"] in ("user", "assistant", "sent", "later") and (mark is None or _after(it, mark))
+               for it in items)
 
 
 def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
@@ -701,6 +721,52 @@ def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
             return None
         archived = chat.get("state") == "ended"
     return build(name, chat, sent_during(name, chat, archived), archived, whole)
+
+
+def _after(item: dict, mark: dict) -> bool:
+    """`item` (a feed item, or a message row) came after the clear `mark`: a turn by its index (the turns the chat held
+    then), a message by its time — one stamped in the clear's own second by whether it was already there (`same`: the
+    message files of that second the clear saw; times are to the second, so a note delivered just after a clear has
+    its time)."""
+    k = item.get("k")
+    if isinstance(k, int):
+        return k >= mark["turn"]
+    ts = item.get("ts", "")
+    return ts > mark["at"] or (ts == mark["at"] and item.get("file") not in mark.get("same", ()))
+
+
+def _last_clear(chat: dict | None) -> dict | None:
+    return ((chat or {}).get("clears") or [None])[-1]
+
+
+def _turn_cleared(chat: dict | None, k: int) -> bool:
+    """Turn `k` of `chat` came before its last clear: no longer part of the conversation."""
+    mark = _last_clear(chat)
+    return bool(mark) and k < mark["turn"]
+
+
+def _cleared_item(k: int, mark: dict) -> dict:
+    return {"key": f"cleared-{k}", "type": "cleared", "ts": mark["at"]}
+
+
+def _window_cleared(model: dict, chat: dict, whole: bool) -> dict:
+    """A conversation cleared (clear): the feed starts at its last clear, a "cleared" line first, then at most
+    CHAT_WINDOW items; what came before is behind "Show the N earlier messages" (`whole`: all of it, a "cleared" line
+    where each clear was). `model`: build's, its items not windowed yet."""
+    marks, items = chat["clears"], model["items"]
+    if whole:
+        out, pending = [], list(enumerate(marks))
+        for it in items:
+            while pending and (it["type"] == "ended" or _after(it, pending[0][1])):
+                out.append(_cleared_item(*pending.pop(0)))
+            out.append(it)
+        model["items"], model["earlier"] = out + [_cleared_item(*p) for p in pending], 0
+        return model
+    kept = [it for it in items if it["type"] == "ended" or _after(it, marks[-1])]
+    window = kept[-CHAT_WINDOW:]
+    model["earlier"] = len(items) - len(window)
+    model["items"] = [_cleared_item(len(marks) - 1, marks[-1])] + window
+    return model
 
 
 def new_thread(name: str, login: str, title: str = "") -> dict:
@@ -717,11 +783,11 @@ def new_thread(name: str, login: str, title: str = "") -> dict:
 
 
 def _adopt_edits(name: str, chat: dict) -> None:
-    """Edits to its documents saved but not yet sent, left on a chat that was ended or cleared since: the new chat
+    """Edits to its documents saved but not yet sent, left on a chat that was ended since: the new chat
     takes them, so the instance still hears of them with the next message (they were lost with the old chat)."""
     for old in chats(name):
         if (old["id"] == chat["id"] or not old.get("pending_edits")
-                or (old.get("state") != "ended" and not old.get("cleared"))):
+                or old.get("state") != "ended"):
             continue
         with _lock(old["id"]):
             o = load(old["id"])
@@ -745,7 +811,7 @@ def send_feedback(name: str, item: dict, text: str) -> str:
     chat = load(target["chat"]) if target["kind"] == "chat" else None   # a chat gone or not this instance's: delivered
     if item["sent"]:
         raise ValueError("That feedback was already delivered.")
-    if chat and chat.get("instance") == name and chat.get("state") != "ended" and not chat.get("cleared"):
+    if chat and chat.get("instance") == name and chat.get("state") != "ended":
         with _lock(chat["id"]):
             chat = load(chat["id"])
             if any(p["id"] == item["id"] for p in pending_feedback(chat)):
@@ -883,6 +949,8 @@ def spoken(chat: dict) -> bool:
 FROM_NOTE = ("This is your main conversation with the operator. It also holds what you sent them from your cycles "
              "outside any thread, and what they left for your next cycle. Its earliest part may be cut: read_thread "
              "reads more of it.")
+CLEARED_NOTE = ("The operator cleared this conversation at {at}: it starts fresh here. What was said before is no "
+                "longer part of it; read_thread still reads it, if they refer to it.")
 FROM_ITEM_CHARS = 3000      # one From message in a From reply's request: a cycle's report can be long
 FROM_CHARS = 60000          # a From reply's request: From never ends, and every cycle message is in it
 
@@ -913,7 +981,9 @@ def _api_messages(chat: dict) -> list[dict]:
                       f"you: {last['user']} / me: {last['assistant']}")
     prefix = [{"role": "system", "content": "Other open threads:\n" + "\n".join(digest)
                + "\nread_thread reads any of them."}] if digest else []
-    items = _dialogue(chat)
+    items = _dialogue(chat, fresh=True)
+    if clears := chat.get("clears"):
+        prefix += [{"role": "system", "content": CLEARED_NOTE.format(at=clears[-1]["at"][:16].replace("T", " "))}]
     if is_from(chat):
         items = _from_window(items)
         if any(it[3] for it in items):        # said only when something from outside its replies is in it
@@ -971,14 +1041,18 @@ def _turn_sender(name: str, t: dict) -> dict:
     return _sender(INSTANCE, name) if t["role"] != "user" else _sender(SETUP) if t.get("hidden") else _sender(OPERATOR)
 
 
-def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, str, str, bool, str]]:
+def _dialogue(chat: dict, history: list[dict] | None = None, *,
+              fresh: bool = False) -> list[tuple[str, str, str, bool, str]]:
     """dialogue(), each item also saying whether it was routed in (True) or is a turn of the thread (False), and who
-    wrote it."""
+    wrote it. `fresh`: only what came after the chat's last clear (clear) — what a reply's request carries."""
     name = chat["instance"]
     turns = chat.get("turns") or []
+    mark = (chat.get("clears") or [None])[-1] if fresh else None
     own = []
     for k, t in enumerate(turns):
         if t.get("retried") or not (t.get("content") or t["role"] == "user"):
+            continue
+        if mark and k < mark["turn"]:
             continue
         # A message the reply running when it was sent did not hear (_finish: `after`) comes after that reply's answer,
         # though sent before it ended: the reply after answers it, and a request must end with the operator (api.py;
@@ -990,6 +1064,8 @@ def _dialogue(chat: dict, history: list[dict] | None = None) -> list[tuple[str, 
     own.sort(key=lambda x: x[1])                       # in the order written, never the clock's (in_time, #16)
     items = []
     for m in routed(name, chat["id"], history):
+        if mark and not _after(m, mark):
+            continue
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
             role, who = "assistant", _sender(INSTANCE, name)
             text = f"[sent at {m['ts'][11:16]} in another conversation, shown in From]\n{m['text']}"
@@ -1274,7 +1350,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
     with _lock(cid):
         chat = load(cid)
         # an old relay finishing twice, or after a newer one took the chat over, changes nothing (#70)
-        if not chat or chat.get("cleared") or chat["state"] != "replying" or _relays.get(cid) not in (None, relay):
+        if not chat or chat["state"] != "replying" or _relays.get(cid) not in (None, relay):
             return docs_to_sync
         reply = chat["reply"]
         sent = reply.get("interjections", 0)
@@ -1640,7 +1716,11 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
         if retry_of.isdigit() and c and c.get("state") != "replying" and not files:
             with _lock(c["id"]):
                 c = load(c["id"])
-                if reopened := _reopen(c, int(retry_of), text, mid):
+                if _turn_cleared(c, int(retry_of)):    # its Retry was drawn before the clear: sent as typed
+                    retry_of = ""
+                if not retry_of:
+                    pass
+                elif reopened := _reopen(c, int(retry_of), text, mid):
                     save(c)
                 elif folded := mark_retried(c, int(retry_of), text):
                     save(c)
@@ -1974,31 +2054,41 @@ def _end(cid: str, if_empty: bool = False) -> str:
     return "ended: journal write-up requested" if status == 202 else "ended"
 
 
-def clear(name: str, cid: str = "") -> str:
-    """Clear one thread from view. It stays in Earlier web chats and Transcripts. An open conversation is ended
-    first, requesting a journal write-up. A thread that is replying cannot be cleared.
-    `cid`: only this thread is cleared. An ended chat must still be the one shown."""
-    if cid == FROM or (cid and is_from(load(cid))):
-        raise Refused("From is not cleared: what it holds is the record of what was sent")
+def clear(name: str, cid: str) -> str:
+    """Clear a conversation — Main ("from") or an open thread — so it starts fresh where it is: the conversation so far
+    is over for the instance (ended at the API, which requests its journal write-up), the next reply's request carries
+    only what comes after (_dialogue's `fresh`), and its feed starts at a "cleared" line, what came before behind "Show
+    the N earlier messages". Nothing is deleted: read_thread, Earlier messages and the transcripts keep all of it. Not
+    while it replies; not twice with nothing said between."""
     with _inst_lock(name):
-        return _clear(name, cid)
-
-
-def _clear(name: str, cid: str) -> str:
-    chat = thread_of(name, cid, writing=False)
-    if chat.get("cleared"):
-        raise Refused("there is nothing to clear")
-    if chat.get("state") == "ended":         # no page shows it but Earlier chats: there is nothing on screen to clear
-        raise Refused("that thread has ended: it is in Earlier chats")
-    if replying(chat["id"]) or chat.get("state") == "replying":
-        raise Refused("it is still replying: stop the reply first")
-    said = end(chat["id"]) if chat.get("state") != "ended" else ""
-    with _lock(chat["id"]):
-        c = load(chat["id"])
-        c["cleared"] = _now()                 # edits still unsent stay: the next chat takes them (_adopt_edits)
-        save(c)
+        chat = thread_of(name, cid, writing=False)
+        if chat.get("state") == "ended":
+            raise Refused("that thread has ended: it is in Earlier chats")
+        if replying(chat["id"]) or chat.get("state") == "replying":
+            raise Refused("it is still replying: stop the reply first")
+        model = build(name, chat, sent_during(name, chat), whole=True)
+        if not _clearable(model["items"], chat):
+            raise Refused("there is nothing to clear")
+        status, body = _post(chat, "end", {"model": name})
+        err = body.get("error") or {}
+        if status == 404 and err.get("type") != "not_found":   # "no route": an API older than the web UI
+            raise Refused("the running API is older than the web UI and cannot end a conversation: restart it "
+                          "(shaft api on)")
+        if status not in (202, 404):                # 404 not_found: no conversation open at the API (idle wrote it up)
+            raise Refused(err.get("message") or f"API HTTP {status}")
+        with _lock(chat["id"]):
+            c = load(chat["id"])
+            if c.get("state") == "replying":        # a reply began meanwhile (a message heard too late)
+                raise Refused("a reply began meanwhile: clear it once that reply ends")
+            _deliver_pending_feedback(c)
+            at = _now()
+            same = [m["file"] for m in sent_during(name, c) if m.get("ts") == at and m.get("file")]
+            c.setdefault("clears", []).append({"at": at, "turn": len(c.get("turns") or []),
+                                               **({"same": same} if same else {})})
+            save(c)
     log(f"web: chat {chat['id']} with {name} cleared by the operator")
-    return "cleared" + (f" · {said}" if said else "") + " · it is kept in Earlier web chats"
+    return "cleared" + (": journal write-up requested" if status == 202 else "") + \
+        " · it starts fresh; what came before is under Show earlier messages"
 
 
 def parse_multipart(content_type: str, body: bytes) -> tuple[dict, list[tuple[str, bytes]]]:

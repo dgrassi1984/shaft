@@ -160,6 +160,37 @@ struct DemoTests {
         #expect(WatchTurn.lastWritten(in: done) == DemoData.reply)
     }
 
+    @Test func DemoClearStartsFreshAndKeepsEarlierMessages() async throws {
+        let (session, root) = try session()
+        defer { session.leaveDemo(); try? FileManager.default.removeItem(at: root) }
+        let client = try #require(session.store?.client)
+        for ref in [ChatRef.thread("wisp-chat"), .from] {
+            let cid = try #require(ref.seenID)
+            guard case .value(let before, _) = try await client.feed("wisp", ref: ref) else {
+                Issue.record("Missing original feed"); return
+            }
+            #expect(before.content?.canClear == true)
+            #expect(try await client.clear("wisp", cid: cid).said == "cleared")
+            guard case .value(let cleared, _) = try await client.feed("wisp", ref: ref),
+                  case .value(let full, _) = try await client.feed("wisp", ref: ref, all: true) else {
+                Issue.record("Missing cleared feed or full history"); return
+            }
+            let content = try #require(cleared.content)
+            guard case .cleared(let marker) = try #require(content.items.first) else {
+                Issue.record("Missing clear marker"); return
+            }
+            #expect(marker.key == "cleared-0")
+            #expect(content.items.count == 1)
+            #expect(content.canClear == false)
+            #expect(content.archived == false)
+            let original = try #require(before.content?.items)
+            #expect(content.earlier == original.count)
+            #expect(cleared.version != before.version)
+            #expect(full.content?.earlier == 0)
+            #expect(full.content?.items == original + [.cleared(marker)])
+        }
+    }
+
     @Test func DemoChoiceAnswerClosesCardAndRecordsAnswer() async throws {
         let (session, root) = try session()
         defer { session.leaveDemo(); try? FileManager.default.removeItem(at: root) }
