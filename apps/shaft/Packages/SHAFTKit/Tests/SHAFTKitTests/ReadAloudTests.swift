@@ -50,7 +50,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
     @Test func speechThatNeverStartsClearsPlayingAfterTheStallTimeout_20261114() async throws {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.05)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         #expect(player.playing == "a")
         let before = synth.stops
         try await waitUntil { player.playing == nil }
@@ -64,7 +64,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         let synth = FakeReadAloudSynth()
         synth.startsImmediately = true
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.05)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         #expect(player.playing == "a")
         let before = synth.stops
         try await waitUntil { player.playing == nil }
@@ -76,7 +76,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         let synth = FakeReadAloudSynth()
         synth.startsImmediately = true
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         let before = synth.stops
         for _ in 0..<10 {                     // 0.3 s of speech, three times the stall timeout
             try await Task.sleep(for: .seconds(0.03))
@@ -89,9 +89,9 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
     @Test func staleWatchdogDoesNotStopANewerMessage() async throws {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         synth.startsImmediately = true
-        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, language: .en)
         let before = synth.stops
         for _ in 0..<10 {
             try await Task.sleep(for: .seconds(0.03))
@@ -105,9 +105,9 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         let synth = FakeReadAloudSynth()
         synth.startsImmediately = true
         let player = ReadAloudPlayer(synth: synth, stallTimeout: 0.1)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         let first = try #require(synth.progress.last)
-        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, language: .en)
         for _ in 0..<10 {
             try await Task.sleep(for: .seconds(0.03))
             first()                            // late words of the reading that was replaced
@@ -122,7 +122,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         var chunker = SpeechChunker(language: .en)
         let expected = chunker.feed(markdown) + chunker.finish()
         #expect(expected == ["This is bold.", "Read the next sentence.", "There's some code in the chat.", "There's a table in the chat."])
-        player.toggle(id: "example/a1", markdown: markdown, voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "example/a1", markdown: markdown, voiceIdentifier: nil, language: .en)
         #expect(synth.batches == [expected])
         #expect(player.playing == "example/a1")
     }
@@ -132,31 +132,38 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
         let installed = try #require(AVSpeechSynthesisVoice.speechVoices().first)
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
-        player.toggle(id: "a", markdown: "The message is ready to read.", voiceIdentifier: installed.identifier, fallback: .en)
+        player.toggle(id: "a", markdown: "The message is ready to read.", voiceIdentifier: installed.identifier, language: .en)
         #expect(synth.voices.count == 1)
         #expect(synth.voices[0]?.identifier == installed.identifier)
     }
 
-    @Test(.enabled(if: AVSpeechSynthesisVoice(language: VoiceLanguage.it.bcp47) != nil,
-                   "No Italian system speech voice is installed on this device."))
-    func missingAndNilIdentifiersUseDetectedLanguageSystemVoice() {
+    /// The bug (2026-11-27): ▶ read a message in the voice of the language the text was detected in, so an Italian
+    /// reply to an instance whose voice mode speaks English (or the reverse) came out in another voice than voice mode's.
+    /// Voice mode's language wins over the text's: a missing or nil identifier falls back to that language's system
+    /// voice, never to the detected one's.
+    @Test(.enabled(if: AVSpeechSynthesisVoice(language: VoiceLanguage.en.bcp47) != nil
+                       && AVSpeechSynthesisVoice(language: VoiceLanguage.it.bcp47) != nil,
+                   "English and Italian system speech voices are needed on this device."))
+    func voiceModeLanguageWinsOverTheTextsLanguage_20261127() {
+        let english = AVSpeechSynthesisVoice(language: VoiceLanguage.en.bcp47)?.identifier
+        #expect(english != AVSpeechSynthesisVoice(language: VoiceLanguage.it.bcp47)?.identifier)
         let identifiers: [String?] = ["example.voice.does-not-exist", nil]
         for identifier in identifiers {
             let synth = FakeReadAloudSynth()
             let player = ReadAloudPlayer(synth: synth)
             player.toggle(id: "a", markdown: "La luce del mattino illuminava la cucina. Ho aperto la finestra per guardare il giardino.",
-                          voiceIdentifier: identifier, fallback: .en)
+                          voiceIdentifier: identifier, language: .en)
             #expect(synth.voices.count == 1)
-            #expect(synth.voices[0]?.identifier == AVSpeechSynthesisVoice(language: VoiceLanguage.it.bcp47)?.identifier)
+            #expect(synth.voices[0]?.identifier == english)
         }
     }
 
     @Test func sameIDStopsAndDoesNotSpeakAgain() {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
-        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, language: .en)
         let before = synth.stops
-        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, language: .en)
         #expect(synth.stops == before + 1)
         #expect(synth.batches == [["Hello there."]])
         #expect(player.playing == nil)
@@ -165,9 +172,9 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
     @Test func anotherIDStopsFirstAndStaleFinishCannotClearSecond() {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
-        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "First message.", voiceIdentifier: nil, language: .en)
         let before = synth.stops
-        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "b", markdown: "Second message.", voiceIdentifier: nil, language: .en)
         #expect(synth.stops == before + 1)
         #expect(synth.batches == [["First message."], ["Second message."]])
         synth.completions[0]()
@@ -179,7 +186,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
     @Test func explicitStopClearsPlayingAndInvalidatesFinish() {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
-        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, fallback: .en)
+        player.toggle(id: "a", markdown: "Hello there.", voiceIdentifier: nil, language: .en)
         player.stop()
         #expect(player.playing == nil)
         synth.completions[0]()
@@ -189,7 +196,7 @@ private final class FakeReadAloudSynth: ReadAloudSynth {
     @Test func unspokenMarkupDoesNotStartPlayback() {
         let synth = FakeReadAloudSynth()
         let player = ReadAloudPlayer(synth: synth)
-        player.toggle(id: "a", markdown: "---\n\n", voiceIdentifier: nil, fallback: .it)
+        player.toggle(id: "a", markdown: "---\n\n", voiceIdentifier: nil, language: .it)
         #expect(synth.batches.isEmpty)
         #expect(player.playing == nil)
     }

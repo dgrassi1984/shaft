@@ -209,11 +209,13 @@ public final class ReadAloudPlayer {
         self.stallTimeout = stallTimeout
     }
 
-    public func toggle(id: String, markdown: String, voiceIdentifier: String?, fallback: VoiceLanguage) {
+    /// Read `markdown` in `language` with the voice `voiceIdentifier` (the system voice for `language` when it is nil
+    /// or not installed here). The caller passes voice mode's language and voice for the instance, so a message is read
+    /// in the voice the instance speaks with in voice mode, whatever language the message itself is in.
+    public func toggle(id: String, markdown: String, voiceIdentifier: String?, language: VoiceLanguage) {
         let wasPlaying = playing == id
         stop()
         guard !wasPlaying else { return }
-        let language = ReadAloudLanguage.detect(markdown) ?? fallback
         var chunker = SpeechChunker(language: language)
         let utterances = chunker.feed(markdown) + chunker.finish()
         guard !utterances.isEmpty else { return }

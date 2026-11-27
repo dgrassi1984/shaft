@@ -1504,6 +1504,11 @@ The voices object:
 The app reports its voices at launch and when the voice settings open. When the chosen voice is not installed on
 the device, the app says so on screen and speaks with the system voice for that language.
 
+A message's ▶ (read aloud) speaks with voice mode's voice for the instance: the language voice mode uses with it on
+this device and the voice chosen for that language, whatever language the message is in. Like voice mode it asks
+`GET /voices/<n>` first; when no answer comes within 2 s it reads with the voice the client last heard for the instance
+from any of these routes (answers kept in the order their requests were sent), or the system voice for that language.
+
 ## 18. Setup
 
 The Mac app's setup wizard creates an instance, stores the provider keys, switches the provider, grants access and
