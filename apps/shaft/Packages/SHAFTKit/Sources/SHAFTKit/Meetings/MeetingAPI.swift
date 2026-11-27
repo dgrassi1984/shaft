@@ -40,6 +40,10 @@ public extension APIClient {
         return try await post("/app/v1/meetings/\(id)", json: fields)
     }
 
+    func dismissMeetingAccountSuggestion(_ id: String) async throws -> Meeting {
+        try await post("/app/v1/meetings/\(id)", json: ["dismiss_account_suggestion": true])
+    }
+
     /// Words this meeting's transcription should spell as written; they apply when it is (re)processed.
     /// `others`: the people besides the operator, which caps the speakers found (nil: any number).
     func setMeetingHints(_ id: String, vocabulary: String, others: Int?) async throws -> Meeting {

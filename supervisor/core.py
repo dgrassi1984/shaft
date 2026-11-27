@@ -1023,13 +1023,18 @@ def meetings_grants(name: str) -> list[dict]:
     from . import google
     raw = _tool_settings(name).get("meetings")
     return [{"account": g["account"]} for g in raw if isinstance(g, dict)
-            and isinstance(g.get("account"), str) and google.ALIAS_RE.fullmatch(g["account"])] if isinstance(raw, list) else []
+            and (g == {"account": None} or isinstance(g.get("account"), str)
+                 and google.ALIAS_RE.fullmatch(g["account"]))] if isinstance(raw, list) else []
 
 
 def set_meetings_grants(name: str, grants: list[dict]) -> list[dict]:
     from . import google
+    if any(not isinstance(g, dict) or "account" not in g or (g["account"] is None and len(g) != 1) for g in grants):
+        raise ValueError("a meetings grant needs an account or explicit null")
     aliases = [g["account"] for g in grants]
-    if any(not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias) for alias in aliases):
+    if aliases.count(None) > 1:
+        raise ValueError("only one unfiled meetings grant is allowed")
+    if any(not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias) for alias in aliases if alias is not None):
         raise ValueError("a meetings grant needs a Google account alias")
     result = [{"account": alias} for alias in dict.fromkeys(aliases)]
     _update_tool_settings(name, meetings=result or None)

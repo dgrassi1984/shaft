@@ -56,6 +56,49 @@ struct MeetingsStoreTests {
         #expect(unfiled.chatReference(timeZone: utc) == nil)
     }
 
+    @Test func dismissingAccountSuggestionClearsItFromListAndDetail() async throws {
+        let without = Self.metadata("ready")
+        let with = String(without.dropLast()) + """
+        , "account_suggestion": {"account":"work","people":[{"name":"Guest","meetings":2}],"share":1.0}}
+        """
+        let dismissed = Mutex(false)
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("GET", Self.base):
+                return .json(200, "{\"meetings\":[\(with)]}")
+            case ("GET", Self.detail):
+                return .json(200, dismissed.withLock { $0 } ? without : with)
+            case ("POST", Self.detail):
+                guard request.json as? [String: Bool] == ["dismiss_account_suggestion": true] else {
+                    return Self.unexpected
+                }
+                dismissed.withLock { $0 = true }
+                return .json(200, without)
+            default:
+                return Self.unexpected
+            }
+        }
+        let store = MeetingsStore(client: server.client)
+        await store.refresh()
+        await store.load(Self.id)
+        let meeting = try #require(store.detail)
+        let suggestion = try #require(meeting.accountSuggestion)
+        #expect(meeting.account == nil)
+        #expect(suggestion.account == "work")
+        #expect(suggestion.share == 1.0)
+        #expect(suggestion.people.map(\.name) == ["Guest"])
+        #expect(suggestion.people.map(\.meetings) == [2])
+
+        await store.dismissAccountSuggestion(Self.id)
+
+        let row = try #require(store.meetings.first)
+        let detail = try #require(store.detail)
+        #expect(store.actionError == nil)
+        #expect(row.accountSuggestion == nil)
+        #expect(detail.accountSuggestion == nil)
+        #expect(detail.account == nil)
+    }
+
     @Test func meetingAccessDecodesOptionalGrantsAndSendsGrantChanges() async throws {
         let without = """
         {"instance":"example","browser":{"installed":null,"run":true},"web_search":false,"telegram":false,
@@ -75,6 +118,14 @@ struct MeetingsStoreTests {
                 if fields == ["grant": "meetings", "action": "revoke", "alias": "work"] {
                     return .json(200, without)
                 }
+                if let body = request.json, body.count == 3, body["grant"] as? String == "meetings",
+                   body["unfiled"] as? Bool == true {
+                    switch body["action"] as? String {
+                    case "grant": return .json(200, String(without.dropLast()) + #","meetings_unfiled":true}"#)
+                    case "revoke": return .json(200, String(without.dropLast()) + #","meetings_unfiled":false}"#)
+                    default: return Self.unexpected
+                    }
+                }
                 return Self.unexpected
             default:
                 return Self.unexpected
@@ -83,12 +134,17 @@ struct MeetingsStoreTests {
         let client = server.client
         let before = try await client.access("example")
         #expect(before.meetings == nil)
+        #expect(before.meetingsUnfiled == nil)
         let aliases = try await client.meetingAccountAliases()
         #expect(aliases == ["work"])
         let granted = try await client.grantAccess("example", .meetings(alias: "work"))
         #expect(granted.meetings?.map(\.account) == ["work"])
         let revoked = try await client.grantAccess("example", .meetings(alias: "work", action: "revoke"))
         #expect(revoked.meetings == nil)
+        let unfiledGranted = try await client.grantAccess("example", .meetingsUnfiled())
+        #expect(unfiledGranted.meetingsUnfiled == true)
+        let unfiledRevoked = try await client.grantAccess("example", .meetingsUnfiled(action: "revoke"))
+        #expect(unfiledRevoked.meetingsUnfiled == false)
     }
 
     nonisolated private static func transcript(

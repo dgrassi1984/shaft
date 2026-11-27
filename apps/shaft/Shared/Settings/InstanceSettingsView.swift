@@ -241,6 +241,11 @@ private struct InstanceAccessSection: View {
                 if access.googleAccounts.isEmpty {
                     Text("No Google accounts configured.").foregroundStyle(Color.textSecondary)
                 }
+                Toggle("Meetings (unfiled)", isOn: Binding(
+                    get: { self.access?.meetingsUnfiled == true },
+                    set: { setGrant(.meetingsUnfiled(action: $0 ? "grant" : "revoke")) }
+                ))
+                .disabled(saving)
                 if let available = access.shortcutsAvailable {
                     ForEach(shortcutRows(available, granted: access.shortcuts ?? []), id: \.id) { shortcut in
                         Toggle(shortcut.gone ? "Shortcut \(shortcut.name) (no longer on the Mac)"
@@ -274,6 +279,7 @@ private struct InstanceAccessSection: View {
                 }
                 #if os(macOS)
                 Text("A Meetings grant lets the instance read all ready transcripts filed under that account.")
+                Text("A Meetings (unfiled) grant lets the instance read ready transcripts from meetings without an account.")
                 if access?.shortcutsAvailable != nil {
                     Text("A Shortcut grant lets the instance run that shortcut on the server Mac, as you, whenever it chooses.")
                 }

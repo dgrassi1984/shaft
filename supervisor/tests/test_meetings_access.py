@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import json
 import re
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -32,8 +32,8 @@ class MeetingsAccessTest(test_app_api.AppTest):
         self.broker = broker.Broker(INSTANCE, self.sup, {}, self.sup / "broker.log",
                                     root=self.inst / INSTANCE, share=True)
 
-    def create(self, account="work", day=24, title="Example"):
-        return meetings.create({"mode": "online", "started": f"2026-11-{day}T10:00:00",
+    def create(self, account="work", day=24, title="Example", *, mode="online"):
+        return meetings.create({"mode": mode, "started": f"2026-11-{day}T10:00:00",
                                 "device": "example", "ext": "wav", "account": account, "title": title})["id"]
 
     def process(self, mid, text="Share the deck.", end=8):
@@ -277,6 +277,127 @@ class MeetingsAccessTest(test_app_api.AppTest):
         for name in ("outside", "quiet"):
             self.assertEqual(list((self.inst / name / "inbox").glob("*.md")), [])
 
+    def test_unfiled_grant_controls_search_read_and_watch_across_filing(self):
+        self.assertEqual(self.grant("--unfiled"), {"meetings": [{"account": None}]})
+        self.grant("--unfiled")
+        self.assertEqual(core.meetings_grants(INSTANCE), [{"account": None}])
+        for invalid in ([{}, {"account": None}], [{"account": None}] * 2, [{"account": False}]):
+            with self.assertRaises(ValueError):
+                core.set_meetings_grants(INSTANCE, invalid)
+        for action in ("grant", "revoke"):
+            for targets in ([], ["work", "--unfiled"]):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
+                    main(["meetings", action, INSTANCE, *targets])
+                self.assertEqual(refused.exception.code, 2)
+        access = self.get(f"/app/v1/access/{INSTANCE}")
+        self.assertIs(access["meetings_unfiled"], True)
+        self.assertNotIn("meetings", access)
+        self.assertIn("meeting_read", self.specs())
+        (self.inst / INSTANCE / "config.env").write_text("WATCH_MEETINGS=inbox\n")
+        mid = self.ready(None)
+        self.assertEqual(self.ids(), [mid])
+        self.assertIn("Account: unfiled", self.result("meeting_search"))
+        self.assertIn("Account: unfiled", self.result("meeting_read", id=mid))
+        self.assertEqual(meetings.get(mid)["notified"], [INSTANCE])
+        self.cli("file", mid, "work")
+        self.assertEqual(self.ids(), [])
+        self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+        self.get(f"{APP}/{mid}", method="POST", data={"account": None})
+        self.assertEqual(len(list((self.inst / INSTANCE / "inbox").glob("*.md"))), 1)
+        self.cli("revoke", INSTANCE, "--unfiled")
+        self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+
+    def test_suggestion_after_naming_and_recognition_dismissal_and_filing(self):
+        mid = self.ready(None)
+        first = self.ready()
+        speakers.name_label(first, "S2", "Guest")
+        speakers.name_label(mid, "S2", "Guest")
+        self.assertNotIn("account_suggestion", meetings.get(mid))  # one filed meeting
+        self.ready()
+        self.grant("--unfiled")
+        proposal = self.propose(mid, "Guest")
+        self.get(APP + "/proposals", method="POST", data={"id": proposal["id"], "approve": True})
+        expected = {"account": "work", "people": [{"name": "Guest", "meetings": 2}], "share": 1.0}
+        self.assertEqual(self.get(f"{APP}/{mid}")["account_suggestion"], expected)
+        for tool, args in (("meeting_read", {"id": mid}), ("meeting_search", {})):
+            self.assertIn("Account: unfiled (suggested: work)", self.result(tool, **args))
+        recognised = self.ready(None)
+        self.assertEqual(meetings.get(recognised)["account_suggestion"], expected)
+        self.assertIn("unfiled — suggested work", webpush.notify.call_args.args[0]["body"])
+        dismiss = {"dismiss_account_suggestion": True}
+        path = f"{APP}/{mid}"
+        self.assertEqual(self.api(path, "POST", {**dismiss, "title": "Example"}).status, 400)
+        self.assertEqual(self.api(path, "POST", {"dismiss_account_suggestion": 1}).status, 400)
+        self.assertNotIn("account_suggestion", self.get(path, method="POST", data=dismiss))
+        speakers.name_label(mid, "S2", "Guest")
+        self.assertEqual(meetings.get(mid)["account_suggestion_dismissed"], "work")
+        self.assertNotIn("account_suggestion", meetings.get(mid))
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["meetings", "file", mid, "--suggested", "--json"]), 1)
+        person, = speakers.list_people()
+        speakers.rename(person["id"], "Visitor")
+        self.assertEqual(meetings.get(recognised)["account_suggestion"]["people"], [{"name": "Visitor", "meetings": 2}])
+        filed = self.cli("file", recognised, "--suggested")
+        self.assertEqual(filed["account"], "work")
+        self.assertNotIn("account_suggestion", filed)
+
+    def publish_suggestion_fixture(self, alias, *people, mic=(), mode="online"):
+        mid = self.create(alias, mode=mode)
+        meetings.finish(mid, size=0, sha256=hashlib.sha256(b"").hexdigest(), chunks=0)
+        meetings.set_state(mid, "processing")
+        voices = [(p, 2) for p in people] + [(p, 1) for p in mic]
+        transcript = {"speakers": {str(i): {"person": p, "name": p, "channel": channel}
+                                   for i, (p, channel) in enumerate(voices)},
+                      "segments": [], "gaps": [], "processed_with": "fixture"}
+        meetings.complete_processing(mid, transcript, "")
+        return meetings.get(mid).get("account_suggestion")
+
+    def test_suggestion_ignores_online_mic_when_only_operator_is_recognised(self):
+        for _ in range(2):
+            self.publish_suggestion_fixture("work", "Operator")
+        self.assertIsNone(self.publish_suggestion_fixture(None, mic=("Operator",)))
+
+    def test_suggestion_uses_far_end_guest_without_operator_vote(self):
+        for _ in range(2):
+            self.publish_suggestion_fixture("home", mic=("Operator",))
+            self.publish_suggestion_fixture("work", "Guest")
+        self.assertEqual(self.publish_suggestion_fixture(None, "Guest", mic=("Operator",)),
+                         {"account": "work", "people": [{"name": "Guest", "meetings": 2}], "share": 1.0})
+
+    def test_suggestion_ignores_person_seen_on_online_mic_in_unpublished_peer(self):
+        publish = self.publish_suggestion_fixture
+        for _ in range(2):
+            publish("work", mic=("Operator",), mode="inperson")
+        self.assertEqual(publish(None, mic=("Operator",), mode="inperson"),
+                         {"account": "work", "people": [{"name": "Operator", "meetings": 2}], "share": 1.0})
+        peer = self.create(None)
+        transcript = {"speakers": {"M1": {"person": "Operator", "name": "Operator", "channel": 1}}}
+        (self.sup / "meetings" / peer / "transcript.json").write_text(json.dumps(transcript))
+        self.assertIsNone(publish(None, mic=("Operator",), mode="inperson"))
+
+    def test_suggestion_counts_distinct_meetings_and_weights_people_equally(self):
+        publish = self.publish_suggestion_fixture
+
+        for bad in (None, b"{", b'{"speakers": [1]}'):
+            folder = self.sup / "meetings" / self.ready("home")
+            path = folder / "transcript.json"
+            if bad is None:
+                path.unlink()
+            else:
+                path.write_bytes(bad)
+        publish("work", "Guest", "Operator")
+        self.assertIsNone(publish(None, "Guest", "Operator"))  # both from the same meeting
+        publish("work", "Guest", "Operator")
+        for _ in range(4):
+            publish("home", "Operator")
+        # Guest gives work one vote and Operator gives it one third. Exactly two thirds overall.
+        self.assertEqual(publish(None, "Guest", "Guest", "Operator"),
+                         {"account": "work", "people": [{"name": "Guest", "meetings": 2},
+                                                       {"name": "Operator", "meetings": 2}], "share": 2 / 3})
+        publish("work", "Operator")
+        publish("work", "Operator")
+        self.assertIsNone(publish(None, "Operator"))  # four meetings on each account
+
     def test_unfiled_then_filed_through_app_and_cli(self):
         self.grant()
         for name, aliases in (("reader", ("work", "home")), ("other", ("home",))):
@@ -326,6 +447,15 @@ class MeetingsAccessTest(test_app_api.AppTest):
             self.assertNotIn("meetings", revoked)
             self.assertEqual(web_config.run("meetings", INSTANCE, {"op": "grant", "alias": "work"})[0], 200)
             self.assertEqual(core.meetings_grants(INSTANCE), [{"account": "work"}])
+            unfiled = {"grant": "meetings", "unfiled": True}
+            for fields in ({}, {"unfiled": False}, {"unfiled": 1}, {"unfiled": True, "alias": "work"}):
+                self.assertEqual(self.api(path, "POST", {"grant": "meetings", "action": "grant", **fields}).status, 400)
+            for action, enabled in (("grant", True), ("revoke", False)):
+                result = self.get(path, method="POST", data={**unfiled, "action": action})
+                self.assertIs(result["meetings_unfiled"], enabled)
+                self.assertEqual(result["meetings"], [{"account": "work"}])
+            self.assertEqual(web_config.run("meetings", INSTANCE, {"op": "grant", "unfiled": "1"})[0], 200)
+            self.assertIn({"account": None}, core.meetings_grants(INSTANCE))
 
 
 class ReviewFixesTest(unittest.TestCase):

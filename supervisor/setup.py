@@ -14,13 +14,14 @@ from . import core
 
 
 def access(name: str) -> dict:
-    """{instance, folder, browser: {installed, run}, web_search, telegram, mail, calendar, drive, chat, meetings,
-    claude_notes, shortcuts, shortcuts_available, shortcuts_problem, google_accounts}: meetings is present when
-    granted; claude_notes is whether its inbox takes notes from the operator's Claude sessions; shortcuts are the
+    """{instance, folder, browser: {installed, run}, web_search, telegram, mail, calendar, drive, chat, meetings, meetings_unfiled,
+    claude_notes, shortcuts, shortcuts_available, shortcuts_problem, google_accounts}: meetings lists granted filed accounts
+    when present; claude_notes is whether its inbox takes notes from the operator's Claude sessions; shortcuts are the
     granted Shortcuts ({id, name, present}), shortcuts_available this Mac's ({id, name}) and shortcuts_problem why
     they could not be listed, or null (§18.6)."""
     from . import browser, google, telegram, web_config
     a = web_config.access(name)
+    filed = [g for g in a["meetings"] if g["account"] is not None]
     env = core.secrets_env()
     return {"instance": name, "folder": a["shared"] or None,
             # one Chromium for every instance; an instance browses from inside `run` (supervisor/browser.py)
@@ -32,7 +33,8 @@ def access(name: str) -> dict:
                           "write": bool(g.get("write"))} for g in a["calendar"]],
             "drive": [{"account": g["account"], "reach": g["reach"]} for g in a["gdrive"]],
             "chat": [{"account": g["account"]} for g in a["gchat"]],
-            **({"meetings": a["meetings"]} if a["meetings"] else {}),
+            **({"meetings": filed} if filed else {}),
+            "meetings_unfiled": {"account": None} in a["meetings"],
             "claude_notes": a["claude_notes"],
             "shortcuts": a["shortcuts"], "shortcuts_available": a["shortcuts_available"],
             "shortcuts_problem": a["shortcuts_problem"],

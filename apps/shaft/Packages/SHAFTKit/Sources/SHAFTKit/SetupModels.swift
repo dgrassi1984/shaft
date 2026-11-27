@@ -107,6 +107,7 @@ public struct AccessResponse: Codable, Sendable, Equatable {
     public var drive: [DriveGrant]
     public var chat: [ChatGrant]
     public var meetings: [MeetingGrant]?
+    public var meetingsUnfiled: Bool?
     /// Whether the operator's Claude sessions may leave notes, nil on older servers.
     public var claudeNotes: Bool?
     /// The operator's Shortcuts it may run on the server Mac, nil on older servers.
@@ -183,6 +184,7 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     public var what: String?
     public var all: Bool?
     public var writable: Bool?
+    public private(set) var unfiled: Bool?
 
     public init(grant: String, action: String = "grant", alias: String? = nil, what: String? = nil, all: Bool? = nil,
                 writable: Bool? = nil) {
@@ -230,6 +232,12 @@ public struct AccessGrant: Codable, Sendable, Equatable {
     /// `meetings grant|revoke <n> <alias>`.
     public static func meetings(alias: String, action: String = "grant") -> AccessGrant {
         AccessGrant(grant: "meetings", action: action, alias: alias)
+    }
+
+    public static func meetingsUnfiled(action: String = "grant") -> AccessGrant {
+        var request = AccessGrant(grant: "meetings", action: action)
+        request.unfiled = true
+        return request
     }
 }
 

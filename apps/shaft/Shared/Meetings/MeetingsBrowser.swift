@@ -329,9 +329,12 @@ private struct MeetingDetail: View {
                 Text(accountError).font(.callout).foregroundStyle(Color.danger)
             }
             if meeting.account == nil {
-                Text("Unfiled: choose an account so instances can read it.")
+                Text("Instances with an unfiled grant can read this transcript when it is ready.")
                     .font(.callout)
                     .foregroundStyle(Color.textSecondary)
+                if let suggestion = meeting.accountSuggestion {
+                    accountSuggestionCard(suggestion)
+                }
             }
             Button("Save") {
                 Task {
@@ -342,6 +345,31 @@ private struct MeetingDetail: View {
             .disabled(title == meeting.title && account == savedAccount)
         }
         .disabled(store.mutating)
+    }
+
+    private func accountSuggestionCard(_ suggestion: Meeting.AccountSuggestion) -> some View {
+        let evidence = suggestion.people.prefix(3).map { person in
+            "\(person.name): \(person.meetings) \(person.meetings == 1 ? "meeting" : "meetings") in \(suggestion.account)"
+        }.joined(separator: ", ")
+        return VStack(alignment: .leading, spacing: Design.Space.s4) {
+            Text("File under \(suggestion.account)?").fontWeight(.medium)
+            Text(evidence).font(.callout).foregroundStyle(Color.textSecondary)
+            HStack {
+                Button("File") {
+                    Task {
+                        await store.file(meeting.id, account: suggestion.account, title: nil)
+                        if store.meetings.first(where: { $0.id == meeting.id })?.account == suggestion.account {
+                            draftAccount = nil
+                        }
+                    }
+                }
+                Button("Dismiss") {
+                    Task { await store.dismissAccountSuggestion(meeting.id) }
+                }
+            }
+        }
+        .padding(Design.Space.s8)
+        .background(Color.brand.opacity(0.08), in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous))
     }
 
     private func speakers(_ transcript: MeetingTranscript) -> some View {

@@ -10,8 +10,10 @@ import re
 import secrets
 import shutil
 import tempfile
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 from uuid import UUID
 
@@ -27,6 +29,8 @@ MODES = ("online", "inperson")
 WORKER_TRANSITIONS = {"queued": ("processing",), "processing": ("queued", "ready", "failed"),
                       "ready": ("queued",), "failed": ("queued",)}
 TRANSCRIPT_PAGE_SIZE = 200
+SUGGESTION_SHARE = Fraction(2, 3)
+"""Require a two-thirds majority so people seen across accounts seldom decide a filing."""
 
 
 class Error(Exception):
@@ -234,6 +238,15 @@ def _account_alias(alias, *, configured=True) -> str:
 
 
 def update(meeting_id: str, changes: dict) -> dict:
+    if "dismiss_account_suggestion" in changes:
+        if len(changes) != 1 or changes["dismiss_account_suggestion"] is not True:
+            raise Invalid("Supply dismiss_account_suggestion: true on its own.")
+        with _locked(meeting_id) as (folder, metadata):
+            if not (suggestion := metadata.pop("account_suggestion", None)):
+                raise Conflict("This meeting has no account suggestion.")
+            metadata["account_suggestion_dismissed"] = suggestion["account"]
+            _save(folder, metadata)
+            return metadata
     if not changes or changes.keys() - {"account", "title", "vocabulary", "others"}:
         raise Invalid("Supply account, title, vocabulary, others, or a mix of them.")
     if "vocabulary" in changes and (not isinstance(changes["vocabulary"], str) or len(changes["vocabulary"]) > 500
@@ -251,27 +264,38 @@ def update(meeting_id: str, changes: dict) -> dict:
     except UnicodeError:
         raise Invalid("Meeting fields must contain valid Unicode.") from None
     with _locked(meeting_id) as (folder, metadata):
-        account_changed = "account" in changes and changes["account"] != metadata["account"]
-        metadata.update(changes)
-        if "account" in changes:
-            metadata.pop("account_auto", None)  # the operator's filing, unfiled included, is never redone by Listen
-        if "title" in changes:
-            metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
-            metadata.pop("title_from", None)
-        if account_changed and (metadata["state"] == "ready" or "notified" in metadata):
-            if metadata["account"]:
-                metadata["notification_owed"] = True
-            else:
-                metadata.pop("notification_owed", None)
-        _save(folder, metadata)
-        if metadata["state"] == "ready" and _notification_owed(metadata):
-            _deliver(folder, metadata, json.loads((folder / "transcript.json").read_bytes()))
-        return metadata
+        return _apply_update(folder, metadata, changes)
 
 
-def change_grant(name: str, action: str, alias: str) -> list[dict]:
+def _apply_update(folder, metadata, changes):
+    account_changed = "account" in changes and changes["account"] != metadata["account"]
+    metadata.update(changes)
+    if "account" in changes:
+        if metadata["account"] is not None:
+            metadata.pop("account_suggestion", None)
+        metadata.pop("account_auto", None)  # the operator's filing, unfiled included, is never redone by Listen
+    if "title" in changes:
+        metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
+        metadata.pop("title_from", None)
+    if account_changed and (metadata["state"] == "ready" or "notified" in metadata):
+        metadata["notification_owed"] = True
+    _save(folder, metadata)
+    if metadata["state"] == "ready" and _notification_owed(metadata):
+        _deliver(folder, metadata, json.loads((folder / "transcript.json").read_bytes()))
+    return metadata
+
+
+def _file_suggested(meeting_id):
+    with _locked(meeting_id) as (folder, metadata):
+        if not (suggestion := metadata.get("account_suggestion")):
+            raise Conflict("This meeting has no account suggestion.")
+        return _apply_update(folder, metadata, {"account": _account_alias(suggestion["account"])})
+
+
+def change_grant(name: str, action: str, alias: str | None) -> list[dict]:
     core.instance_root(name)
-    _account_alias(alias, configured=action == "grant")
+    if alias is not None:
+        _account_alias(alias, configured=action == "grant")
     with core._grant_lock(name, "meetings"):
         grants = [g for g in core.meetings_grants(name) if g["account"] != alias]
         if action == "grant":
@@ -387,6 +411,7 @@ def file_from_calendar(meeting_id: str, alias: str) -> bool:
             except Invalid:
                 return False                       # no longer configured: stays unfiled, as before
             metadata.update(account=alias, account_from="calendar")
+            metadata.pop("account_suggestion", None)
             _save(folder, metadata)
             return True
         return False
@@ -416,7 +441,8 @@ def tell_operator(metadata: dict, speakers: dict | None = None) -> None:
         if unknown:
             parts.append(f"{unknown} voice{'s' if unknown != 1 else ''} to name")
         if not metadata.get("account"):
-            parts.append("unfiled: no instance can read it yet")
+            suggestion = metadata.get("account_suggestion")
+            parts.append(f'unfiled — suggested {suggestion["account"]}' if suggestion else "unfiled")
         if metadata.get("warnings"):
             parts.append("recording incomplete")
         event = {"title": f"Meeting ready: {title}", "body": " · ".join(parts)}
@@ -465,6 +491,73 @@ def _write_transcript(folder: Path, transcript: dict, markdown: str) -> None:
         md.write(markdown.encode())
 
 
+def _recognised(transcript):
+    return {s["person"]: s["name"] for s in transcript["speakers"].values()
+            if isinstance(s.get("person"), str) and s["person"] and isinstance(s.get("name"), str)}
+
+
+def _online_mic_people(metadata, transcript):
+    if metadata.get("mode") != "online":
+        return set()
+    return {pid for speaker in transcript["speakers"].values()
+            if speaker.get("channel") == 1 and isinstance(pid := speaker.get("person"), str) and pid}
+
+
+def _refresh_suggestion(folder, metadata, transcript):
+    """Read peers' atomic files under this meeting's lock without nesting locks.
+
+    Online microphone speakers are on the operator's side and can recur across accounts.
+    Exclude their identities from all votes, even when an unpublished transcript identifies them.
+    """
+    metadata.pop("account_suggestion", None)
+    if metadata["account"] is not None or not transcript.get("speakers"):
+        return
+    people = _recognised(transcript)
+    if not people:
+        return
+    from . import google
+    operator_side = _online_mic_people(metadata, transcript)
+    filed_matches = []
+    for peer in folder.parent.iterdir():
+        if peer == folder or not re.fullmatch(ID, peer.name):
+            continue
+        try:
+            row = json.loads((peer / "meeting.json").read_bytes())
+            peer_transcript = json.loads((peer / "transcript.json").read_bytes())
+            operator_side.update(_online_mic_people(row, peer_transcript))
+            alias = row["account"]
+            if not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias) or not is_published(row):
+                continue
+            matches = people.keys() & _recognised(peer_transcript)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            continue
+        if matches:
+            filed_matches.append((alias, matches))
+    people = {pid: name for pid, name in people.items() if pid not in operator_side}
+    counts = {pid: Counter() for pid in people}
+    support = Counter()
+    for alias, matches in filed_matches:
+        eligible = matches - operator_side
+        if eligible:
+            support[alias] += 1
+        for pid in eligible:
+            counts[pid][alias] += 1
+    scores = Counter()
+    for history in counts.values():
+        total = history.total()
+        for alias, n in history.items():
+            scores[alias] += Fraction(n, total)
+    if not scores:
+        return
+    alias, score = scores.most_common(1)[0]
+    share = score / scores.total()
+    if share < SUGGESTION_SHARE or support[alias] < 2 or alias == metadata.get("account_suggestion_dismissed"):
+        return
+    evidence = [{"name": name, "meetings": counts[pid][alias]} for pid, name in people.items() if counts[pid][alias]]
+    evidence.sort(key=lambda p: (-p["meetings"], p["name"]))
+    metadata["account_suggestion"] = {"account": alias, "people": evidence, "share": float(share)}
+
+
 def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdown: str) -> None:
     if metadata["state"] != "processing":
         raise Conflict("This meeting is no longer processing.")
@@ -475,6 +568,7 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     metadata.update(state="ready", published=True, warnings=transcript.get("warnings", []),
                     error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
+    _refresh_suggestion(folder, metadata, transcript)
     _save(folder, metadata)
     tell_operator(metadata, transcript.get("speakers"))
     if _notification_owed(metadata):
@@ -490,8 +584,7 @@ def _deliver(folder: Path, metadata: dict, transcript: dict) -> None:
     from . import watch
 
     notified = metadata.get("notified") or []
-    if metadata["account"]:
-        notified.extend(watch.meeting_ready(metadata, transcript))
+    notified.extend(watch.meeting_ready(metadata, transcript))
     metadata["notified"] = notified
     metadata.pop("notification_owed", None)
     _save(folder, metadata)
@@ -552,10 +645,10 @@ def command(args) -> int:
             return 0
         if args.action in ("grant", "revoke"):
             result = {"meetings": change_grant(args.name, args.action, args.alias)}
-            line = ", ".join(g["account"] for g in result["meetings"]) or "No meeting grants."
+            line = ", ".join(g["account"] or "(unfiled)" for g in result["meetings"]) or "No meeting grants."
         elif args.action == "file":
-            result = update(args.id, {"account": args.alias})
-            line = f"Filed {args.id} under {args.alias}."
+            result = _file_suggested(args.id) if args.suggested else update(args.id, {"account": args.alias})
+            line = f'Filed {args.id} under {result["account"]}.'
         elif args.action == "proposals":
             from . import meeting_proposals
 

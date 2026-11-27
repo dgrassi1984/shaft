@@ -160,7 +160,8 @@ meeting. The paired app can also remove gallery samples learned from that meetin
 
 File a meeting with `shaft meetings file <id> <alias>`. Grant an instance access with
 `shaft meetings grant <instance> <alias>` or from the web Access page. Use a configured Google account alias
-for both commands. An unfiled meeting is invisible to every instance. Revoking a grant takes effect on the next
+for both commands. To allow access to unfiled meetings, use `shaft meetings grant <instance> --unfiled`.
+Use `shaft meetings revoke <instance> --unfiled` to withdraw it. Filing or revoking changes visibility on the next
 broker call. A transcript page already delivered to an inbox stays there.
 
 The broker offers three tools to granted instances. It checks the grant on each call and allows 30 meeting calls
@@ -169,7 +170,7 @@ per run, including continuation pages. Unknown, malformed, never-published, and 
 
 | Tool | Result |
 |---|---|
-| `meeting_search(text="", person="", after="", before="")` | One row per matching published meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
+| `meeting_search(text="", person="", after="", before="")` | One row per matching published meeting, newest first. Each row has an ID, title, recording date, duration in minutes, people, and account. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
 | `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. If recording warnings exist, they appear on a `Recording problems:` line. Unknown labels appear as `Speaker S2 (unknown)`. |
 | `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
 
@@ -177,17 +178,27 @@ Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a gran
 The note includes the page's recording warnings when present.
 Use `wake` to also request a cycle. The default is `off`. The apps set it under **Watches** in the instance's
 settings, beside the mail, calendar and Google Chat watches. Filing or refiling a ready meeting sends the note to
-watching instances with a grant for the new account that have yet to receive it.
+watching instances with a matching grant that have yet to receive it. This includes the unfiled grant.
 
 A proposal pushes a notification to the operator's paired devices. In the apps, the meeting shows it beside its
 speaker with **Confirm** and **Reject**. `shaft meetings proposals` lists the pending ones too.
 [Meeting API](app-api.md#206-speaker-proposals)
 
+## Account suggestion
+
+When an unfiled meeting becomes ready or a speaker's name changes, SHAFT checks the recognised people's
+other published, filed meetings. SHAFT excludes anyone identified on the microphone in an online meeting,
+including in unpublished transcripts, because that channel records the operator's side.
+Each person with history contributes one vote, divided among accounts in
+proportion to their meeting counts. An account needs at least two thirds of the votes and two distinct filed
+meetings. The suggestion leaves the meeting unfiled. Use `shaft meetings file <id> --suggested` to accept it.
+Dismissing a suggestion suppresses that alias on later checks.
+
 ## Notifications to the operator
 
 When a meeting is ready, the paired devices get a **Meeting ready** notification with the names Listen recognised,
-how many voices still need a name, and whether the meeting is unfiled. It includes `recording incomplete` if there
-are recording warnings. On failure, devices get **Meeting failed** with the reason. Tapping either notification
+how many voices still need a name, and whether the meeting is unfiled. For an unfiled meeting, the notification includes
+the suggested alias when available. It includes `recording incomplete` if there are recording warnings. On failure, devices get **Meeting failed** with the reason. Tapping either notification
 opens the meeting in **Meetings**. A failure is sent once, and a reprocess that ends sends again.
 
 ## Changing a speaker's name

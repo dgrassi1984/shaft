@@ -97,8 +97,14 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
                     (["--all"] if op == "grant" and form.get("all") == "1" else []))
     if verb == "meetings":
         op, alias = form.get("op", ""), form.get("alias", "").strip()
-        if op not in ("grant", "revoke") or not alias:
-            raise Refused("meetings grant or revoke needs an account")
+        if "unfiled" in form:
+            if form["unfiled"] != "1" or "alias" in form:
+                raise Refused("Choose an account or unfiled meetings")
+            alias = "--unfiled"
+        elif not alias or alias.startswith("-"):
+            raise Refused("Choose a meeting account")
+        if op not in ("grant", "revoke"):
+            raise Refused("Choose grant or revoke")
         return _ran(["meetings", op, name, alias])
     if verb == "shortcuts":
         op, which = form.get("op", ""), form.get("shortcut", "").strip()
@@ -414,7 +420,11 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
     meeting_rows = [h('<li>{alias} {b}</li>', alias=g["account"],
                       b=button("meetings", "Revoke", f"Revoke the meeting grant for {g['account']}?",
                                {"name": n, "op": "revoke", "alias": g["account"]}, cls="small"))
-                    for g in a.get("meetings", [])]
+                    for g in a.get("meetings", []) if g["account"] is not None]
+    op = "revoke" if {"account": None} in a.get("meetings", []) else "grant"
+    meeting_rows.append(h('<li>Unfiled meetings {b}</li>',
+                          b=button("meetings", op.title(), f"{op.title()} access to unfiled meetings for {n}?",
+                                   {"name": n, "op": op, "unfiled": "1"}, cls="small")))
     meeting_grant = (h('<form class="act" data-post="/action/meetings" '
                        'data-confirm="Let {n} read transcripts filed under this account?"{a}>'
                        '<input type="hidden" name="name" value="{n}"><input type="hidden" name="op" value="grant">'
@@ -422,8 +432,7 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                        '<button type="submit" class="small">Grant</button></form>',
                        n=n, o=acct_opts, a=post_attrs("Access", actions.RUN_NOW_S)) if accounts else
                      h('<p class="dim">No Google account logged in.</p>'))
-    meeting_access = join([h('<ul class="lines">{r}</ul>', r=join(meeting_rows)) if meeting_rows else
-                           h('<p class="dim">none</p>'), meeting_grant])
+    meeting_access = join([h('<ul class="lines">{r}</ul>', r=join(meeting_rows)), meeting_grant])
 
     shortcut_rows = [h('<li>{s}{gone} {b}</li>', s=g["name"],
                        gone=" (no longer on this Mac)" if g["present"] is False else "",

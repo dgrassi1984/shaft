@@ -1693,7 +1693,8 @@ yet: `409 refused`. An unknown instance: `404 not_found`.
 | `calendar` | [{`account`, `calendar`, `name`, `write`: bool}] | calendars by id, with their title when granted |
 | `drive` | [{`account`, `reach`}] | `reach` `own` or `all` |
 | `chat` | [{`account`}] | Google Chat accounts |
-| `meetings` | [{`account`}] (optional) | Accounts whose published meeting transcripts the instance may read. Omitted when there are no meeting grants. |
+| `meetings` | [{`account`}] (optional) | Accounts whose published meeting transcripts the instance may read. Omitted when there are no filed-account grants. |
+| `meetings_unfiled` | boolean | Whether the instance may read published unfiled meetings. |
 | `claude_notes` | bool | its inbox takes notes from the operator's Claude sessions (`shaft claude-notes`, integrations.md "Notes from your Claude sessions") |
 | `shortcuts` | [{`id`, `name`, `present`: bool or null}] | the operator's Shortcuts it may run (`shaft shortcuts`), by identifier, with their names now; `present` false: no longer on the Mac, null: the Mac's shortcuts could not be listed |
 | `shortcuts_available` | [{`id`, `name`}] | every shortcut on the server Mac, in the Shortcuts app's order (empty when they could not be listed) |
@@ -1711,7 +1712,7 @@ object:
 | `calendar` | `alias`, `what` (`primary`, a title or an id), `writable` | `calendar <n> grant|revoke <alias> <what>`; a writable grant first resolves `what` to the calendar's id once (`calendar.grant_id`; unresolvable: `409 refused`, nothing granted), then runs `grant` and `grant-write` with that id, so a concurrent grant on the same account never receives this request's write; `writable` revoke: `revoke-write` |
 | `drive` | `alias`, `all` | `gdrive <n> grant <alias> [--all]` / `revoke <alias>` |
 | `chat` | `alias` | `gchat <n> grant|revoke <alias>` |
-| `meetings` | `alias` | `meetings grant <n> <alias>` or `meetings revoke <n> <alias>` |
+| `meetings` | Either `alias` or `"unfiled": true` | `meetings grant` or `meetings revoke` uses the alias or `--unfiled`. |
 | `claude` | | `claude-notes <n> on`; revoke: `claude-notes <n> off` |
 | `shortcut` | `what` (a shortcut's identifier or name) | `shortcuts <n> grant|revoke <what>`; a name not on the Mac: `409 refused` |
 
@@ -1818,7 +1819,7 @@ See [meeting storage and CLI](meetings.md).
 | POST | `/meetings/<id>/finish` | `{size, sha256, chunks}` | 200, meeting metadata (§20.3) |
 | GET | `/meetings` | | 200, `{meetings: [metadata]}`, newest first (§20.4) |
 | GET | `/meetings/<id>` | | 200, meeting metadata (§20.4) |
-| POST | `/meetings/<id>` | `{account?, title?}` | 200, updated meeting metadata (§20.4) |
+| POST | `/meetings/<id>` | Meeting changes or `{"dismiss_account_suggestion": true}` | 200, updated meeting metadata (§20.4) |
 | GET | `/meetings/proposals` | | 200, `{proposals: [...]}` (§20.6) |
 | POST | `/meetings/proposals` | `{id, approve}` | 200, decided proposal (§20.6) |
 | POST | `/meetings/<id>/reprocess` | | 200, queued meeting metadata (§20.4) |
@@ -1878,7 +1879,13 @@ seconds from the start of the recording. Channel 1 is the microphone and channel
 Use `?page=N` to fetch up to 200 segments at a time. The default is page 1. A page past the end has an
 empty `segments` array. An invalid page number returns `400 bad_request`.
 
-`POST /meetings/<id>` updates at least one of `account` and `title`. The other field keeps its current value.
+An unfiled meeting can include `"account_suggestion": {"account":"work","people":[{"name":"Guest","meetings":2}],"share":1.0}`.
+The people are ordered by their meeting counts on the suggested account. The share is the fraction of the
+recognised people's combined votes for that account. The field is absent when there is no suggestion.
+Send `{"dismiss_account_suggestion":true}` alone to suppress the current alias. The response is updated
+metadata, or `409` if there is no suggestion. Filing under any account clears the suggestion.
+
+`POST /meetings/<id>` also accepts changes to `account`, `title`, `vocabulary` and `others`.
 `account` must be a configured Google account alias or `null` to unfile the meeting. `title` must be a string;
 setting it turns `title_auto` off, so the calendar never replaces it.
 Changing the account on a ready meeting sends a watch note to eligible instances that have yet to receive it.

@@ -600,7 +600,7 @@ class AccessTest(SetupTest):
         got = self.get("/app/v1/access/wisp")
         self.assertEqual(got, {"instance": "wisp", "folder": None, "browser": {"installed": "1.64.0", "run": True},
                                "web_search": False, "telegram": False, "mail": [], "calendar": [], "drive": [],
-                               "chat": [], "claude_notes": False, "shortcuts": [], "shortcuts_available": [],
+                               "chat": [], "meetings_unfiled": False, "claude_notes": False, "shortcuts": [], "shortcuts_available": [],
                                "shortcuts_problem": "Shortcuts is not on this computer (macOS only)",
                                "google_accounts": []})
 

@@ -44,6 +44,14 @@ def visible(meeting_id, aliases):
         raise NotVisible(NOT_VISIBLE) from None
 
 
+def _account_line(metadata):
+    account = metadata["account"]
+    if account is None:
+        suggestion = metadata.get("account_suggestion")
+        account = f'unfiled (suggested: {suggestion["account"]})' if suggestion else "unfiled"
+    return "Account: " + _line(account)
+
+
 def _summary(metadata, transcript):
     started = datetime.fromisoformat(metadata["started"])
     ended = datetime.fromisoformat(metadata["ended"]) if metadata["ended"] is not None else None
@@ -110,7 +118,7 @@ def search(aliases, text="", person="", after="", before=""):
         if not re.fullmatch(meetings.ID, folder.name):
             continue
         try:
-            with visible(folder.name, aliases) as (row, names, _, transcript):
+            with visible(folder.name, aliases) as (row, names, metadata, transcript):
                 started = datetime.fromisoformat(row["date"])
                 if not lower <= started.date() <= upper:
                     continue
@@ -119,6 +127,7 @@ def search(aliases, text="", person="", after="", before=""):
                 if text and text not in row["title"].casefold() and not any(
                         text in segment["text"].casefold() for segment in transcript["segments"]):
                     continue
+                row["account_line"] = _account_line(metadata)
                 rows.append((started.timestamp(), row["id"], row))
         except NotVisible:
             continue
@@ -131,7 +140,7 @@ def search(aliases, text="", person="", after="", before=""):
     for row in ordered:
         minutes = round(row["duration"] / 60)
         line = (f'{row["id"]} · {row["date"][:16].replace("T", " ")} · {minutes} min · '
-                f'"{_short(row["title"], 200)}" · {_short(", ".join(row["people"]) or "no one named", 300)}')
+                f'"{_short(row["title"], 200)}" · {_short(", ".join(row["people"]) or "no one named", 300)} · {row["account_line"]}')
         if sum(len(x) + 1 for x in lines) + len(line) + 80 > PAGE_CHARS:
             break
         lines.append(line)
@@ -154,7 +163,7 @@ def render_page(summary, names, metadata, transcript, page):
     marking = MARKING.format(title=title, date=summary["date"])
     gaps = _short(", ".join(map(_gap_line, transcript["gaps"])), 600)
     people = _short(", ".join(summary["people"]), 600)
-    header = [marking, f'Account: {metadata["account"]}', f'People: {people or "none"}',
+    header = [marking, _account_line(metadata), f'People: {people or "none"}',
               f'Gaps: {gaps or "none"}']
     if warnings := transcript.get("warnings"):
         header.append("Recording problems: " + "; ".join(map(_line, warnings)))
