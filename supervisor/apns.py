@@ -17,11 +17,11 @@ from . import core, webpush
 from .core import knob, log
 
 KEY_ID, _ = knob("SHAFT_APNS_KEY_ID", "", str.strip, "APNs signing key id; empty disables native push",
-                 group="Ports and paths", services=("web", "runs"))
+                 group="Ports and paths", services=("web", "runs", "listen"))
 TEAM_ID, _ = knob("SHAFT_APNS_TEAM_ID", "", str.strip, "Apple developer team id for native push",
-                  group="Ports and paths", services=("web", "runs"))
+                  group="Ports and paths", services=("web", "runs", "listen"))
 TOPIC, _ = knob("SHAFT_APNS_TOPIC", "", str.strip, "Native app bundle id used as the APNs topic",
-                group="Ports and paths", services=("web", "runs"))
+                group="Ports and paths", services=("web", "runs", "listen"))
 CURL = "/usr/bin/curl"
 _lock = threading.Lock()
 _token_lock = threading.Lock()

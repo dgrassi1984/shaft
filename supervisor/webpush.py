@@ -24,9 +24,11 @@ What goes out, and how:
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -34,6 +36,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import core
@@ -203,6 +206,7 @@ def unsubscribe(device: str, endpoint: str | None = None) -> bool:
         gone = subs.pop(device, None) is not None
         if gone:
             _save(subs)
+    with _queue_lock():
         queue = _queue()
         if queue.pop(device, None) is not None:
             _save_queue(queue)
@@ -216,6 +220,21 @@ NOTHING = {"title": "SHAFT", "body": "Open SHAFT to see what is new", "url": "/"
 
 def _queue_path() -> Path:
     return _dir() / "push-queue.json"
+
+
+@contextmanager
+def _queue_lock():
+    """The thread lock and a file lock: the queue is read, changed and replaced by more than one process (the web
+    service, a run's broker, the listen worker), and a save from a stale read dropped another process's event."""
+    with _lock:
+        path = _dir() / ".push-queue.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _queue() -> dict:
@@ -239,7 +258,7 @@ def _fields(event: dict) -> dict:
     return {**{k: v for k, v in event.items() if k != "at"}, "cid": event.get("cid")}
 
 
-def take(device: str, instance: str | None = None, now: float | None = None) -> list[dict]:
+def take(device: str, instance: str | None = None, now: float | None = None, meeting: str | None = None) -> list[dict]:
     """What this device shows for the push that woke it: every event still queued for it that its push service could
     still deliver (TTL_S), oldest first, taken off the queue. All of them, not one: a wake that failed (the network, a
     push service's error) left its event behind, and the next wake shows it too, beside its own (Codex review,
@@ -247,11 +266,13 @@ def take(device: str, instance: str | None = None, now: float | None = None) -> 
     (it replaces itself), since iOS shows something for every push; with nothing ever, a plain one. With an instance,
     take its thread and From URLs and fall back only to its last event; other instances stay queued."""
     now = time.time() if now is None else now
-    with _lock:
+    with _queue_lock():
         queue = _queue()
         mine = queue.get(device) or {}
         pending = [e for e in mine.get("pending") or [] if now - e.get("at", 0) <= TTL_S]
         def matches(event):
+            if meeting is not None:                # a meeting's push takes only its own events
+                return meeting_of(event) == meeting
             path = urllib.parse.urlsplit(event["url"]).path
             return instance is None or path in (f"/i/{instance}/chat", f"/i/{instance}/from")
         fresh = [e for e in pending if matches(e)]
@@ -261,7 +282,8 @@ def take(device: str, instance: str | None = None, now: float | None = None) -> 
         for event in fresh:
             lasts[event["url"]] = event
         fallback = (max((e for e in reversed(list(lasts.values())) if matches(e)),
-                        key=lambda e: e.get("at", 0), default=None) if instance is not None else mine.get("last"))
+                        key=lambda e: e.get("at", 0), default=None)
+                    if instance is not None or meeting is not None else mine.get("last"))
         last = fresh[-1] if fresh else fallback
         if last:
             queue[device] = {"pending": [e for e in pending if not matches(e)],
@@ -308,8 +330,27 @@ def apns_payload(event: dict, badge: int) -> dict:
     fixture server replaces apns.py with a stub and writes this same payload, so a simulator sees what a phone gets."""
     parts = urllib.parse.urlsplit(event["url"]).path.split("/")
     instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
-    return {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
-                    "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+    payload = {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
+                       "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+    if meeting := meeting_of(event):
+        payload["meeting"] = meeting               # the tap opens it in Meetings
+    return payload
+
+
+MEETING_ID = r"m-[0-9]{8}-[0-9]{4}-[0-9a-f]{4}"
+
+
+def meeting_url(meeting_id: str) -> str:
+    """Where a push about a meeting points: the web UI's overview (it has no meeting pages, so a Web Push tap lands
+    there), naming the meeting for the apps, which open it in Meetings."""
+    return f"/overview?meeting={meeting_id}"
+
+
+def meeting_of(event: dict) -> str | None:
+    """The meeting a push is about (meeting_url), else None."""
+    parts = urllib.parse.urlsplit(event.get("url", ""))
+    found = urllib.parse.parse_qs(parts.query).get("meeting", [""])[0] if parts.path == "/overview" else ""
+    return found if re.fullmatch(MEETING_ID, found) else None
 
 
 def notify(event: dict, skip=frozenset()) -> list[str]:
@@ -336,7 +377,7 @@ def notify(event: dict, skip=frozenset()) -> list[str]:
     if not recipients:
         return []
     why = event["title"]
-    with _lock:
+    with _queue_lock():
         queue = _queue()
         for device in recipients:
             mine = queue.get(device) or {}

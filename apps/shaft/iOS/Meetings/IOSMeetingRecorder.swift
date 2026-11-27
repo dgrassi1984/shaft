@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import SHAFTKit
+import UserNotifications
 
 @MainActor
 @Observable
@@ -11,6 +12,14 @@ final class IOSMeetingRecorder {
             let start: TimeInterval
             let end: TimeInterval
             let reason: String
+            /// How long the gap lasted on the clock: paused time is absent from the file, so `start` and `end` can be
+            /// the same audio position (review 2026-11-27: a ten-minute call read as a gap of no length).
+            var wallSeconds: TimeInterval? = nil
+
+            enum CodingKeys: String, CodingKey {
+                case start, end, reason
+                case wallSeconds = "wall_seconds"
+            }
         }
 
         let started: Date
@@ -30,19 +39,23 @@ final class IOSMeetingRecorder {
     private struct Recording {
         let file: URL
         var sidecar: Sidecar
-        var interruption: (start: TimeInterval, deadline: ContinuousClock.Instant)?
+        var interruption: (start: TimeInterval, deadline: ContinuousClock.Instant, began: Date)?
 
-        mutating func endGap(at audioTime: TimeInterval) {
+        mutating func endGap(at audioTime: TimeInterval, now: Date) {
             guard let interruption else { return }
-            // Paused time is absent from the file, so both ends may mark the same audio position.
+            // Paused time is absent from the file, so both ends may mark the same audio position: the clock time
+            // says how long it lasted.
             sidecar.gaps.append(.init(start: interruption.start, end: max(interruption.start, audioTime),
-                                      reason: "Audio session interruption"))
+                                      reason: "Audio session interruption",
+                                      wallSeconds: max(0, now.timeIntervalSince(interruption.began))))
             self.interruption = nil
         }
     }
 
     private(set) var starting = false
     private(set) var problem: String?
+    /// A recording stopped early and the operator has not opened Meetings since: the chat keeps a banner for it.
+    private(set) var problemUnseen = false
     private var recording: Recording?
     var started: Date? { recording?.sidecar.started }
     var interrupted: Bool { recording?.interruption != nil }
@@ -67,6 +80,7 @@ final class IOSMeetingRecorder {
     @ObservationIgnored private let device: @MainActor () -> String
     @ObservationIgnored private let interruptionLimit: Duration
     @ObservationIgnored private let retryInterval: Duration
+    @ObservationIgnored private let notify: @MainActor (String) -> Void
     @ObservationIgnored private var interruptionTask: Task<Void, Never>?
     @ObservationIgnored private var client: APIClient?
     @ObservationIgnored private var foreground = false
@@ -76,7 +90,9 @@ final class IOSMeetingRecorder {
     init(audio: any IOSMeetingAudio, audioUse: IOSAudioUse,
          folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory),
          now: @escaping @MainActor () -> Date = { Date() }, device: @escaping @MainActor () -> String,
-         interruptionLimit: Duration = .seconds(30), retryInterval: Duration = .seconds(1)) {
+         interruptionLimit: Duration = .seconds(3 * 3600), retryInterval: Duration = .seconds(1),
+         notify: @escaping @MainActor (String) -> Void = IOSMeetingRecorder.postNotification) {
+        self.notify = notify
         self.audio = audio
         self.audioUse = audioUse
         self.folder = folder
@@ -97,6 +113,7 @@ final class IOSMeetingRecorder {
         }
         starting = true
         problem = nil
+        problemUnseen = false
         defer {
             starting = false
             if recording == nil { audioUse.release(.meeting) }
@@ -126,7 +143,9 @@ final class IOSMeetingRecorder {
         switch event {
         case .interrupted:
             guard !interrupted else { return }
-            recording.interruption = (audio.currentTime, ContinuousClock.now + interruptionLimit)
+            // A phone call holds the microphone for as long as it lasts: wait for it (review 2026-11-27: after 30 s
+            // the rest of the meeting was not recorded), up to the limit.
+            recording.interruption = (audio.currentTime, ContinuousClock.now + interruptionLimit, now())
             self.recording = recording
             audio.pause()
             interruptionTask = Task { [weak self, retryInterval] in
@@ -154,13 +173,14 @@ final class IOSMeetingRecorder {
 
     private func tryResume() {
         guard var recording, let interruption = recording.interruption else { return }
-        guard (try? audio.resume()) == true else {
-            if ContinuousClock.now >= interruption.deadline {
-                finish(problem: "The microphone could not resume recording after an audio interruption.")
-            }
+        // Past the limit the meeting is over, even if the microphone is free again (review 2026-11-27: an app
+        // suspended for hours resumed the old meeting when brought back).
+        guard ContinuousClock.now < interruption.deadline else {
+            finish(problem: "The microphone could not resume recording after an audio interruption.")
             return
         }
-        recording.endGap(at: audio.currentTime)
+        guard (try? audio.resume()) == true else { return }
+        recording.endGap(at: audio.currentTime, now: now())
         self.recording = recording
         interruptionTask?.cancel()
         interruptionTask = nil
@@ -169,7 +189,7 @@ final class IOSMeetingRecorder {
     private func finish(problem failure: String? = nil) {
         guard var recording else { return }
         let ended = now()
-        recording.endGap(at: audio.currentTime)
+        recording.endGap(at: audio.currentTime, now: ended)
         interruptionTask?.cancel()
         interruptionTask = nil
         audio.stop()
@@ -178,6 +198,10 @@ final class IOSMeetingRecorder {
         recording.sidecar.ended = ended
         if let failure { recording.sidecar.problems.append(failure) }
         problem = failure.map { "Recording stopped early. \($0)" }
+        if let problem {
+            problemUnseen = true
+            if !foreground { notify(problem) }
+        }
 
         do {
             try Self.save(recording.sidecar, for: recording.file)
@@ -187,6 +211,21 @@ final class IOSMeetingRecorder {
         }
         if client == nil { uploadProblem = "Pair with SHAFT to send this recording." }
         requestUpload()
+    }
+
+    /// Meetings was opened: the chat's banner about a recording that stopped early goes.
+    func markProblemSeen() {
+        problemUnseen = false
+    }
+
+    /// Said on the lock screen when the recording stopped early with the app in the background.
+    static func postNotification(_ problem: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Meeting recording stopped"
+        content.body = problem
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "meeting-stopped-" + UUID().uuidString,
+                                                                     content: content, trigger: nil))
     }
 
     func updateUploadContext(foreground: Bool, client: APIClient?) {
@@ -264,7 +303,7 @@ final class IOSMeetingRecorder {
         let data = try? Data(contentsOf: Self.sidecarURL(file))
         let existing = data.flatMap { try? decoder.decode(Sidecar.self, from: $0) }
         if let existing, existing.ended != nil { return existing }
-        try? Self.trimPartialPacket(of: file)
+        try? MeetingFiles.trimPartialPacket(of: file)
         guard let duration = try? Self.playableDuration(of: file) else { return nil }
         let dates = try? file.resourceValues(forKeys: [.creationDateKey])
         let started = existing?.started ?? dates?.creationDate ?? now()
@@ -274,41 +313,6 @@ final class IOSMeetingRecorder {
         recovered.problems.append("The app stopped before the recording ended.")
         try Self.save(recovered, for: file)
         return recovered
-    }
-
-    /// A CAF recording cut short ends in an open `data` chunk (size -1) whose last packet may be half written; the
-    /// server's decoder refuses that half packet, so it is cut off. Files that are not such a CAF are left alone.
-    static func trimPartialPacket(of file: URL) throws {
-        let handle = try FileHandle(forUpdating: file)
-        defer { try? handle.close() }
-        let size = try handle.seekToEnd()
-        func read(_ offset: UInt64, _ count: Int) throws -> Data? {
-            try handle.seek(toOffset: offset)
-            let data = try handle.read(upToCount: count) ?? Data()
-            return data.count == count ? data : nil
-        }
-        func number(_ data: Data, _ range: Range<Int>) -> UInt64 {
-            data[range].reduce(0) { $0 << 8 | UInt64($1) }
-        }
-        guard let head = try read(0, 8), head.prefix(4) == Data("caff".utf8) else { return }
-        var offset: UInt64 = 8
-        var bytesPerPacket: UInt64 = 0
-        while offset + 12 <= size, let chunk = try read(offset, 12) {
-            let type = String(decoding: chunk.prefix(4), as: UTF8.self)
-            let length = number(chunk, 4..<12)
-            if type == "desc", let desc = try read(offset + 12, 32) {
-                bytesPerPacket = number(desc, 16..<20)
-            }
-            if type == "data" {
-                let start = offset + 12 + 4  // after the edit count
-                guard length == UInt64.max, bytesPerPacket > 0, size > start else { return }
-                let whole = start + (size - start) / bytesPerPacket * bytesPerPacket
-                if whole < size { try handle.truncate(atOffset: whole) }
-                return
-            }
-            guard length != UInt64.max else { return }
-            offset += 12 + length
-        }
     }
 
     private static func playableDuration(of file: URL) throws -> TimeInterval? {

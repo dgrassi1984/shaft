@@ -420,7 +420,14 @@ public final class APIClient: Sendable {
     }
 
     func pushLatest(instance: String?) async throws -> PushLatest {
-        try await get("/app/v1/push/latest", query: instance.map { [URLQueryItem(name: "instance", value: $0)] } ?? [])
+        try await pushLatest(instance: instance, meeting: nil)
+    }
+
+    /// With `meeting`, only that meeting's events are taken: another meeting's or chat's stay queued for their own push.
+    func pushLatest(instance: String?, meeting: String?) async throws -> PushLatest {
+        let query = meeting.map { [URLQueryItem(name: "meeting", value: $0)] }
+            ?? instance.map { [URLQueryItem(name: "instance", value: $0)] } ?? []
+        return try await get("/app/v1/push/latest", query: query)
     }
 
     // MARK: Cycles (§16)

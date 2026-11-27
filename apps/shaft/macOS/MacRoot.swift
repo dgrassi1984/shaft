@@ -103,6 +103,19 @@ final class MacState {
         }
     }
 
+    /// Bring the Meetings window to the front (a tapped meeting notification), opening it when it is closed.
+    func bringMeetingsForward() {
+        NSApp.activate()
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MeetingsWindow.windowID) == true }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else if let openWindow {
+            openWindow(id: MeetingsWindow.windowID)
+        } else {
+            bringForward()
+        }
+    }
+
     /// Bring the window to the front, opening it again when it was closed.
     func bringForward() {
         NSApp.activate()
@@ -165,7 +178,11 @@ struct MacRoot: View {
         .frame(minWidth: Self.minimumWidth, minHeight: 480)
         // The reading surface behind everything, the title bar's area too.
         .containerBackground(Color.canvas, for: .window)
-        .onAppear { state.openWindow = openWindow }
+        .onAppear {
+            state.openWindow = openWindow
+            // A meeting notification clicked at launch, before the window could open Meetings: open it now.
+            if model.openMeeting != nil { state.bringMeetingsForward() }
+        }
         // shaft://chat/<instance>[/<cid>]: the chat a notification click opens, from a link too.
         .onOpenURL { url in
             let target = AppLinks.target(in: url)

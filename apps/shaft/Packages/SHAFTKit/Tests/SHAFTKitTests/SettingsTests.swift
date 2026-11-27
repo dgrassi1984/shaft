@@ -63,6 +63,14 @@ struct SettingsTests {
         #expect(settings.voiceMode.choices == ["on", "off"])
         #expect(settings.voiceEffort.value == "")
         #expect(settings.voiceEffort.choices == ["", "medium", "xhigh", "low"])
+        #expect(settings.watchMeetings == nil)                        // a server before the watch fields
+        let watches = settingsExample.replacingOccurrences(of: #""voice_effort""#, with:
+            #""watch_mail":{"value":"off","choices":["off","inbox","wake"]},"watch_calendar":{"value":"inbox","choices":["off","inbox","wake"]},"watch_gchat":{"value":"wake","choices":["off","inbox","wake"]},"watch_meetings":{"value":"wake","choices":["off","inbox","wake"]},"voice_effort""#)
+        let watching = try SHAFTJSON.decoder().decode(InstanceSettings.self, from: Data(watches.utf8))
+        #expect(watching.watch(.watchMeetings)?.value == "wake")
+        #expect(watching.watch(.watchGchat)?.choices == ["off", "inbox", "wake"])
+        #expect(watching.value(for: .watchCalendar) == .string("inbox"))
+        #expect(SettingField.watchMeetings.rawValue == "watch_meetings")
         let unavailableVoiceEffort = settingsExample.replacingOccurrences(
             of: #""choices":["","medium","xhigh","low"]"#, with: #""choices":null"#)
         let unavailable = try SHAFTJSON.decoder().decode(

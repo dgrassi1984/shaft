@@ -75,7 +75,13 @@ def calendar_event(row: dict) -> tuple[dict | None, str | None]:
             if start and end and gcal.own_response(event) != "declined":
                 found.append(((min(end, ended) - max(start, started)).total_seconds(), alias, event))
     seconds, alias, event = max(found, key=lambda item: item[0], default=(0, None, None))
-    return (event, alias) if seconds > 0 else (None, None)
+    if seconds <= 0:
+        return None, None
+    # As long an overlap on another account's calendar: the event names the meeting, but which account it belongs to
+    # is unknown, so it is not filed (review 2026-11-27: a personal and a work event in the same hour).
+    if any(other != alias and abs(overlap - seconds) < 60 for overlap, other, _ in found):
+        return event, None
+    return event, alias
 
 
 class Engines:
@@ -185,10 +191,28 @@ def recover() -> None:
 def recorder_problems(folder: Path) -> list[str]:
     """The problems the recording device wrote in the sidecar, or none when it is missing or unreadable."""
     try:
-        problems = json.loads((folder / "sidecar.json").read_bytes()).get("problems")
+        return _recorder_problems(json.loads((folder / "sidecar.json").read_bytes()))
     except (OSError, ValueError, AttributeError, RecursionError):
         return []
+
+
+def _recorder_problems(sidecar: dict) -> list[str]:
+    problems = sidecar.get("problems")
     return [str(p) for p in problems if str(p).strip()] if isinstance(problems, list) else []
+
+
+def _recording_warnings(sidecar: dict) -> list[str]:
+    warnings = _recorder_problems(sidecar)
+    lost = sidecar.get("seconds_lost")
+    if type(lost) in (int, float) and 0 < lost < float("inf"):
+        amount = f"{lost:g}" if isinstance(lost, float) else str(lost)
+        # The Mac recorder reports failed writes rounded to one decimal place.
+        rounded = f"{lost:.1f}" if isinstance(lost, float) else f"{lost}.0"
+        reported = tuple(f"{value} s of audio {reason}" for value in (amount, rounded)
+                         for reason in ("were lost", "could not be written"))
+        if not any(problem.strip().casefold().startswith(reported) for problem in warnings):
+            warnings.append(f"{amount} s of audio were lost")
+    return warnings
 
 
 def process_next(engines) -> bool:
@@ -203,13 +227,15 @@ def process_next(engines) -> bool:
             sidecar = json.loads((folder / "sidecar.json").read_bytes())
             event, alias = calendar_event(row)
             title = " ".join(str((event or {}).get("summary") or "").split())
+            filed = bool(alias and not row.get("account") and meetings.file_from_calendar(meeting_id, alias))
             if title and row.get("title_auto"):
-                meetings.name_from_calendar(meeting_id, title, row.get("account"))
+                meetings.name_from_calendar(meeting_id, title, alias if filed else row.get("account"))
             people = [person["displayName"] for person in (event or {}).get("attendees") or []
                       if person.get("displayName") and not person.get("resource")]
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
                     row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines, hints(people))
+            transcript["warnings"] = _recording_warnings(sidecar)
             speakers.complete_processing(meeting_id, transcript, transcript.pop("_embeddings"))
             LOG.info("%s ready", meeting_id)
         except meetings.Missing:

@@ -1,3 +1,4 @@
+import AppKit
 import SHAFTKit
 import SwiftUI
 
@@ -6,9 +7,12 @@ struct MeetingsWindow: View {
 
     let client: APIClient
     let recorder: MeetingRecorder
+    let model: AppModel
 
     var body: some View {
-        MeetingsBrowser(client: client, refreshID: recorder.phase) {
+        MeetingsBrowser(client: client, refreshID: recorder.phase, requested: model.openMeeting,
+                        opened: { id in if model.openMeeting == id { model.openMeeting = nil } },
+                        stopRecording: recorder.isRecording ? { Task { await recorder.stop() } } : nil) {
             MeetingRecordControls(recorder: recorder)
         }
         .frame(minWidth: 700, minHeight: 460)
@@ -45,19 +49,30 @@ struct MeetingRecordControls: View {
                         .buttonStyle(.borderedProminent)
                     Button("Record In Person", systemImage: "person.2") { Task { await recorder.start(online: false) } }
                 }
-                .disabled(recorder.phase == .uploading)
                 switch recorder.phase {
                 case .uploading:
-                    if let uploader = recorder.uploader, uploader.totalBytes > 0 {
-                        ProgressView("Sending to SHAFT…", value: Double(uploader.bytesSent), total: Double(uploader.totalBytes))
-                    } else {
-                        ProgressView("Sending to SHAFT…")
+                    HStack {
+                        if let uploader = recorder.uploader, uploader.totalBytes > 0 {
+                            ProgressView("Sending to SHAFT…", value: Double(uploader.bytesSent), total: Double(uploader.totalBytes))
+                        } else {
+                            ProgressView("Sending to SHAFT…")
+                        }
+                        Button("Stop Sending") { recorder.cancelUpload() }
                     }
                 case .failed(let message):
                     Text(message).font(.callout).foregroundStyle(.red)
                     Button("Send Again") { Task { await recorder.sendPending() } }
                 default:
                     EmptyView()
+                }
+                // What the last recording could not keep stays said after it was sent (review 2026-11-27).
+                if let warning = recorder.warning { Text(warning).font(.callout).foregroundStyle(.orange) }
+                if !recorder.damaged.isEmpty {
+                    HStack {
+                        Text("\(recorder.damaged.count) recording\(recorder.damaged.count == 1 ? " holds" : "s hold") no readable audio and \(recorder.damaged.count == 1 ? "was" : "were") not sent.")
+                            .font(.callout).foregroundStyle(.orange)
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(recorder.damaged) }
+                    }
                 }
             }
         }

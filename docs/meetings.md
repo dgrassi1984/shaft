@@ -2,7 +2,7 @@
 
 The supervisor stores each meeting under `.supervisor/meetings/<id>/`. Each folder has a `meeting.json` metadata
 file, a `sidecar.json` file for recorder data, and either an `upload/` directory or assembled `audio.<ext>`.
-The audio extension is `m4a`, `caf`, or `wav`. A meeting without an account alias is unfiled.
+The audio extension is `caf` (the apps), `m4a` (older Mac builds) or `wav`. A meeting without an account alias is unfiled.
 
 The app creates a meeting in state `uploading` and sends numbered chunks of up to 8 MiB. The server records the
 indices received so the app can resume a partial upload. To finish, the app sends the expected size, SHA-256,
@@ -16,10 +16,12 @@ that you are recording, then tap **Record**. SHAFT records one channel from the 
 other apps' audio and phone call audio out of the recording. End voice mode before recording a meeting.
 
 Start with SHAFT in the foreground. The microphone keeps recording when the screen locks or SHAFT
-goes into the background. A phone call or Siri can pause the recording. The app notes the gap and
-resumes in the same file if iOS allows it. The transcript marks each gap at the point where audio
-paused and shows how long the gap lasted. If the microphone cannot resume, SHAFT keeps the partial
-recording and shows why it stopped.
+goes into the background. A phone call or Siri can pause the recording. The app waits for it to end (up to
+three hours), notes the gap and resumes in the same file if iOS allows it. Paused time is not in the audio, so the
+gap records its clock length (`wall_seconds` in the sidecar): the transcript marks each gap where audio paused and
+says how long nothing was recorded. If the microphone cannot resume, SHAFT keeps the partial recording and says why
+it stopped: a notification when SHAFT is in the background, and a banner above the chat until Meetings is opened.
+While recording, the banner above the chat and the meeting's toolbar both have **Stop**.
 The iPhone records IMA4 audio in a `.caf` file (24 kHz, about 0.7 MB a minute): if iOS ends SHAFT during a
 recording, the file stays readable up to that moment and is sent at the next launch, marked as cut short.
 
@@ -37,11 +39,27 @@ Core Audio UID as `input_device_uid`, and the choice as `input_chosen` (`default
 microphone unplugged and plugged back in during a recording is picked up again by its UID.
 
 Record from the Meeting menu, the menu bar icon or the Meetings window (⌥⌘M), which has **Record Online**,
-**Record In Person** and **Stop Recording** while one runs.
+**Record In Person** and **Stop Recording** while one runs (also in the open meeting's toolbar).
+
+The Mac records IMA4 audio in a `.caf` file (two channels at the microphone's rate, about 2.9 MB a minute at
+48 kHz). Quitting SHAFT while recording finishes the file first; if SHAFT crashes, the file stays readable up to
+that moment, and at the next launch SHAFT trims it, writes a sidecar that says it was cut short, and sends it.
+A recording that holds no readable audio is kept in `~/Library/Application Support/SHAFT/Meetings/`, never sent,
+and listed in the Meetings window and the Meeting menu with **Show in Finder**. While recording, the Mac does not
+go to sleep on its own; closing the lid still sleeps it, and the time asleep becomes a gap: up to a minute is
+filled with silence, a longer one is only marked, with its clock length (`wall_seconds`), as the iPhone's are. The recording says so while it runs when the
+microphone has heard nothing for 30 seconds, when the system audio stays silent (the permission), when audio
+cannot be written, and when the audio device cannot be restarted; a warning goes once its cause clears. If the
+microphone's rate changes during the recording (AirPods switching to call mode), the file keeps its rate and SHAFT
+resamples. A recording stopped while another uploads is sent after it. What a recording could not
+keep stays shown after it was sent. **Stop Sending** pauses an upload; a new recording can start while one uploads.
 
 The apps send a recording without a title. Listen names it after the calendar event the recording overlaps most
 (timed, not declined) on the primary calendar of the Google account it is filed under, or of every logged-in
 account when it is not filed yet; until then, or when no event overlaps, it is called `Meeting <date> at <time>`.
+A meeting created unfiled is filed under the account whose calendar holds that event (`account_from: calendar`),
+unless an event as long on another account's calendar makes it ambiguous, or the operator chose its account (unfiled
+included) in the app or with `shaft meetings file`. Meetings from before this are never filed by Listen.
 A title the operator sets is never replaced, nor is a meeting filed under another account while Listen read the
 calendar. A calendar that cannot be read is logged in the Listen log and only costs the title. The event's
 invitees' names join the prompt (below).
@@ -85,9 +103,14 @@ and, online, whose channel carries it loudest against that channel's own speech;
 phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
 are numbered by their first turn of at least 0.4 seconds, so a label keeps its number when the meeting is reprocessed.
 
-A ready meeting has `transcript.json` and `transcript.md` in its folder. Segment and word times are seconds from
+A ready meeting has `transcript.json` and `transcript.md` in its folder. The first successful transcription marks
+the meeting `published` in `meeting.json`. Older `ready` meetings count as published and get the flag when queued
+again. Reprocessing keeps the last good transcript available in the app and to granted instances, even if the new
+attempt fails. A successful attempt replaces `transcript.json` atomically. Segment and word times are seconds from
 the start of the recording. To mark an interruption, the recorder can add a `gaps` array to `sidecar.json` with
 `start`, `end`, and `reason` for each gap. The Markdown transcript shows these gaps in time order.
+On success, Listen saves a `warnings` list in `transcript.json` and `meeting.json`. The list contains the recorder's
+`problems` and adds a positive `seconds_lost` count if the recorder has not already reported it.
 Listen marks a meeting `failed` if decoding fails or it detects no speech or transcribes no words. With at
 least 10 seconds of detected speech, it also requires at least one word per 30 seconds of speech. Use
 `shaft meetings show <id>` to read the error.
@@ -97,7 +120,8 @@ least 10 seconds of detected speech, it also requires at least one word per 30 s
 The Listen worker stores cluster voiceprints in `speakers.npz` in the meeting folder and up to three clean
 5–10 second clip ranges per label in `transcript.json`. The paired app plays these clips from the original
 audio channel. To enrol a voiceprint, the operator names a label in the paired app or runs `shaft meetings name`.
-Naming a label updates both transcript files without running the speech engines again.
+Naming or merging labels requires a `ready` meeting. Naming a label updates both transcript files without running
+the speech engines again.
 Reprocess older meetings to generate voiceprints and clip ranges.
 
 The gallery lives under `.supervisor/speakers/`. It stores people in `people.json`, their confirmed voiceprints
@@ -122,21 +146,38 @@ for both commands. An unfiled meeting is invisible to every instance. Revoking a
 broker call. A transcript page already delivered to an inbox stays there.
 
 The broker offers three tools to granted instances. It checks the grant on each call and allows 30 meeting calls
-per run, including continuation pages. Unknown, malformed, failed, and ungranted meetings receive the same
+per run, including continuation pages. Unknown, malformed, never-published, and ungranted meetings receive the same
 `NotVisible` response.
 
 | Tool | Result |
 |---|---|
-| `meeting_search(text="", person="", after="", before="")` | One row per matching ready meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
-| `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. Unknown labels appear as `Speaker S2 (unknown)`. |
+| `meeting_search(text="", person="", after="", before="")` | One row per matching published meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
+| `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. If recording warnings exist, they appear on a `Recording problems:` line. Unknown labels appear as `Speaker S2 (unknown)`. |
 | `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
 
 Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a granted meeting first becomes ready.
-Use `wake` to also request a cycle. The default is `off`. Filing or refiling a ready meeting sends the note to
+The note includes the page's recording warnings when present.
+Use `wake` to also request a cycle. The default is `off`. The apps set it under **Watches** in the instance's
+settings, beside the mail, calendar and Google Chat watches. Filing or refiling a ready meeting sends the note to
 watching instances with a grant for the new account that have yet to receive it.
 
-Run `shaft meetings proposals` to list pending speaker names. The paired-device API accepts confirmation or
-rejection. [Meeting API](app-api.md#206-speaker-proposals)
+A proposal pushes a notification to the operator's paired devices. In the apps, the meeting shows it beside its
+speaker with **Confirm** and **Reject**. `shaft meetings proposals` lists the pending ones too.
+[Meeting API](app-api.md#206-speaker-proposals)
+
+## Notifications to the operator
+
+When a meeting is ready, the paired devices get a **Meeting ready** notification with the names Listen recognised,
+how many voices still need a name, and whether the meeting is unfiled. It includes `recording incomplete` if there
+are recording warnings. On failure, devices get **Meeting failed** with the reason. Tapping either notification
+opens the meeting in **Meetings**. A failure is sent once, and a reprocess that ends sends again.
+
+## Changing a speaker's name
+
+A named speaker has a **Change** menu in the meeting: **Not <name>** names that speaker differently in this
+meeting (its voice moves to the new person); **Rename <name> in every meeting** renames the person in the gallery
+and every saved transcript; **Forget <name>'s voice** removes their voiceprints, keeping or anonymising the name in
+past meetings (the same as `shaft speakers forget`).
 
 ## Point an instance at a meeting
 
@@ -157,7 +198,7 @@ The recorder files new meetings automatically when there is exactly one configur
 | `shaft meetings delete <id>` | Deletes the meeting folder and its contents. |
 | `shaft meetings import FILE [--title T] [--mode online\|inperson]` | Copies local audio into a new queued meeting. The file stem supplies the default title. The default mode is `inperson`. |
 | `shaft meetings file <id> <alias>` | Files a meeting under a configured Google account. |
-| `shaft meetings grant <instance> <alias>` | Grants access to ready transcripts filed under the account. |
+| `shaft meetings grant <instance> <alias>` | Grants access to published transcripts filed under the account. |
 | `shaft meetings revoke <instance> <alias>` | Revokes access to the account's transcripts. |
 | `shaft meetings proposals` | Lists pending speaker name proposals. |
 | `shaft meetings name <id> <label> <name>` | Enrols the label's voiceprint under the name. |

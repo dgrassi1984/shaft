@@ -17,7 +17,7 @@ from supervisor.tests import test_app_api
 from supervisor.tests.test_listen import FakeEngines, spoken
 
 
-class SpeakerTest(test_app_api.AppTest):
+class SpeakerBase(test_app_api.AppTest):
     def setUp(self):
         super().setUp()
         self.source = self.sup / "example.wav"
@@ -53,6 +53,9 @@ class SpeakerTest(test_app_api.AppTest):
 
     def folder(self, meeting_id):
         return self.sup / "meetings" / meeting_id
+
+
+class SpeakerTest(SpeakerBase):
 
     def test_confirmation_updates_transcript_and_matching_on_reprocess(self):
         from supervisor.__main__ import main
@@ -217,3 +220,62 @@ class SpeakerTest(test_app_api.AppTest):
             turns, vectors = engine.diarise(self.source)
         self.assertEqual(turns, [(0, 7, "Z"), (8, 15, "A")])
         self.assertEqual(vectors, {"A": (1, 0), "Z": (0, 1)})
+
+
+class OperatorPushTest(SpeakerBase):
+    """The operator heard nothing when a meeting became ready or failed (review 2026-11-27): only the Meetings window
+    showed it. Every finished processing now pushes once to the paired devices, and the tap opens the meeting."""
+
+    def setUp(self):
+        super().setUp()
+        from supervisor import webpush
+        self.pushed = []
+        self.enterContext(mock.patch.object(webpush, "notify", side_effect=lambda e, **_: self.pushed.append(e) or []))
+
+    def test_ready_pushes_who_spoke_and_how_many_voices_need_a_name(self):
+        first, path = self.meeting({"ch1": {"A": (1, 0)}})
+        self.name(path, "M1", "Example Person")
+        self.pushed.clear()
+        second, _ = self.meeting({"ch1": {"A": (1, 0), "B": (0, 1)}})
+        self.assertEqual(len(self.pushed), 1, self.pushed)
+        event = self.pushed[0]
+        self.assertEqual(event["title"], "Meeting ready: Example")
+        self.assertEqual(event["url"], f"/overview?meeting={second}")
+        self.assertIn("Example Person", event["body"])
+        self.assertIn("1 voice to name", event["body"])
+        self.assertIn("unfiled", event["body"])
+
+    def test_failed_pushes_the_error_once(self):
+        meeting_id = meetings.import_audio(self.source, title="Example", mode="inperson")["id"]
+        meetings.set_state(meeting_id, "processing")
+        meetings.set_state(meeting_id, "failed", error="Audio decode failed: moov atom not found")
+        meetings.set_state(meeting_id, "failed", error="Audio decode failed: moov atom not found")
+        self.assertEqual(self.pushed, [{"title": "Meeting failed: Example",
+                                        "body": "Audio decode failed: moov atom not found",
+                                        "url": f"/overview?meeting={meeting_id}", "tag": f"meeting-{meeting_id}", "cid": None}])
+
+    def test_a_worker_that_stops_twice_pushes_the_failure(self):
+        meeting_id = meetings.import_audio(self.source, title="Example", mode="inperson")["id"]
+        for _ in range(2):
+            meetings.set_state(meeting_id, "processing")
+            meetings.recover_processing(meeting_id)
+        self.assertEqual([e["title"] for e in self.pushed], ["Meeting failed: Example"])
+        self.assertIn("worker stopped", self.pushed[0]["body"])
+
+    def test_a_push_that_fails_still_leaves_the_meeting_ready(self):
+        from supervisor import webpush
+        with mock.patch.object(webpush, "notify", side_effect=OSError("disk full")):
+            meeting_id, path = self.meeting({"ch1": {"A": (1, 0)}})
+        self.assertEqual(self.get(path)["state"], "ready")
+
+    def test_an_instance_proposal_pushes_and_opens_the_meeting(self):
+        from supervisor import meeting_proposals
+        meeting_id, _ = self.meeting({"ch1": {"A": (1, 0)}})
+        self.pushed.clear()
+        metadata = json.loads((self.folder(meeting_id) / "meeting.json").read_text())
+        meeting_proposals.create("example", metadata, "M1", "Example Person", "The invite lists them.")
+        self.assertEqual(len(self.pushed), 1)
+        self.assertEqual(self.pushed[0]["url"], f"/overview?meeting={meeting_id}")
+        self.assertIn("Example Person", self.pushed[0]["body"])
+        rows = self.get("/app/v1/meetings/proposals")["proposals"]
+        self.assertEqual([(r["speaker"], r["name"]) for r in rows], [("M1", "Example Person")])

@@ -27,7 +27,7 @@ struct SHAFTApp: App {
 
         Window("Meetings", id: MeetingsWindow.windowID) {
             if let client = delegate.model.session?.store?.client {
-                MeetingsWindow(client: client, recorder: delegate.meetings)
+                MeetingsWindow(client: client, recorder: delegate.meetings, model: delegate.model)
                     .id(ObjectIdentifier(client))
                     .modifier(MacAppearance())
             } else {
@@ -115,6 +115,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         #endif
     }
 
+    /// Quitting while recording finishes the meeting's file first (review 2026-11-27: a quit left an .m4a without its
+    /// index, which no decoder opens); it is sent at the next launch. The window and the menu bar say a recording is
+    /// running; a Sparkle update relaunch also comes here.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { meetings.finishForQuit() }
+        return .terminateNow
+    }
+
     /// A push still arrives, and the Dock icon still shows the badge, with the window closed.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
@@ -161,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         let instance = NotificationContent.instance(from: userInfo)
         let cid = NotificationContent.cid(from: userInfo)
+        let meeting = NotificationContent.meeting(from: userInfo)
         if response.actionIdentifier != UNNotificationDefaultActionIdentifier {
             guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
             let request = NotificationQuestion.answer(actionIdentifier: response.actionIdentifier, userInfo: userInfo,
@@ -170,8 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         await MainActor.run {
-            model.notificationTapped(instance: instance, cid: cid)
-            state.bringForward()
+            model.notificationTapped(instance: instance, cid: cid, meeting: meeting)
+            if meeting != nil { state.bringMeetingsForward() } else { state.bringForward() }
         }
     }
 }

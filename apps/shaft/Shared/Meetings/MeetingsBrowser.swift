@@ -6,6 +6,13 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     let client: APIClient
     let refreshID: RefreshID
     let clipPlaybackAllowed: Bool
+    /// A meeting to open (a tapped notification about it): selected once the list has it, then `opened(id)` is called
+    /// (also when the list answered without it: deleted since). A list that failed to load keeps it pending.
+    let requested: String?
+    private let opened: ((String) -> Void)?
+    /// Set while a recording runs: a Stop button in the meeting's toolbar too, where the sidebar's controls are out of
+    /// sight (an iPhone showing a meeting, an iPad with the sidebar hidden).
+    private let stopRecording: (() -> Void)?
     private let close: (() -> Void)?
     private let controls: () -> Controls
     @State private var store: MeetingsStore
@@ -15,11 +22,15 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     @State private var aliases: [String]?
     @State private var accountError: String?
 
-    init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true,
-         close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
+    init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true, requested: String? = nil,
+         opened: ((String) -> Void)? = nil, stopRecording: (() -> Void)? = nil, close: (() -> Void)? = nil,
+         @ViewBuilder controls: @escaping () -> Controls) {
         self.client = client
         self.refreshID = refreshID
         self.clipPlaybackAllowed = clipPlaybackAllowed
+        self.requested = requested
+        self.opened = opened
+        self.stopRecording = stopRecording
         self.close = close
         self.controls = controls
         _store = State(initialValue: MeetingsStore(client: client))
@@ -68,6 +79,7 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
                             if let selection, store.meetings.contains(where: { $0.id == selection }) {
                                 await store.load(selection)
                             }
+                            await store.loadProposals()
                             await loadAccounts()
                         }
                     } label: {
@@ -77,12 +89,22 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
                 }
             }
         } detail: {
-            if let meeting = store.meetings.first(where: { $0.id == selection }) {
-                MeetingDetail(meeting: meeting, store: store, aliases: aliases, accountError: accountError,
-                              clipPlaybackAllowed: clipPlaybackAllowed)
-                    .id(meeting.id)
-            } else {
-                ContentUnavailableView("Select a meeting", systemImage: "waveform")
+            Group {
+                if let meeting = store.meetings.first(where: { $0.id == selection }) {
+                    MeetingDetail(meeting: meeting, store: store, aliases: aliases, accountError: accountError,
+                                  clipPlaybackAllowed: clipPlaybackAllowed)
+                        .id(meeting.id)
+                } else {
+                    ContentUnavailableView("Select a meeting", systemImage: "waveform")
+                }
+            }
+            .toolbar {
+                if let stopRecording {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Stop Recording", systemImage: "stop.fill", action: stopRecording)
+                            .tint(Color.danger)
+                    }
+                }
             }
         }
         #if os(iOS)
@@ -93,6 +115,17 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
         .task { await loadAccounts() }
         .task(id: refreshID) { await store.refresh() }
         .task(id: store.needsPolling) { await store.poll() }
+        .task(id: requested) {
+            guard let requested else { return }
+            await store.refresh()
+            guard !Task.isCancelled, store.listError == nil else { return }
+            if store.meetings.contains(where: { $0.id == requested }) {
+                selection = requested
+                compactColumn = .detail
+                await store.loadProposals()          // a proposal's tap: the meeting may already be on screen
+            }
+            opened?(requested)
+        }
         .onChange(of: store.meetings.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) {
                 self.selection = nil
@@ -165,7 +198,7 @@ private struct MeetingDetail: View {
     @State private var playbackError: String?
 
     private var transcript: MeetingTranscript? {
-        guard meeting.state == "ready", store.detail?.id == meeting.id else { return nil }
+        guard store.detail?.id == meeting.id else { return nil }
         return store.detail?.transcript
     }
 
@@ -180,8 +213,10 @@ private struct MeetingDetail: View {
                     Text(error).foregroundStyle(Color.danger)
                 }
                 if let transcript {
-                    speakers(transcript)
-                    Divider()
+                    if meeting.state == "ready" {
+                        speakers(transcript)
+                        Divider()
+                    }
                     transcriptRows(transcript)
                 } else if store.loadingDetail {
                     ProgressView()
@@ -209,8 +244,20 @@ private struct MeetingDetail: View {
             Text(meeting.displayTitle).font(.title.bold())
             Text(meeting.started.formatted(date: .long, time: .shortened))
                 .foregroundStyle(Color.textSecondary)
+            // A transcript of an incomplete recording says so here, not only in the push (Codex review 2026-11-27).
+            if let warnings = meeting.warnings, !warnings.isEmpty {
+                Label("The recording is incomplete: " + warnings.joined(separator: "; "), systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(Color.warning)
+            }
             filingFields
             if let transcript {
+                if meeting.state != "ready" {
+                    Text(meeting.state.capitalized).foregroundStyle(Color.textSecondary)
+                    if let error = meeting.error {
+                        Text(error).foregroundStyle(Color.danger)
+                    }
+                }
                 let names = Set(transcript.speakers.values.compactMap(\.name)).sorted()
                 Label(names.isEmpty ? "No named speakers" : names.formatted(.list(type: .and)),
                       systemImage: "person.2")
@@ -278,7 +325,12 @@ private struct MeetingDetail: View {
             if let error = store.peopleError {
                 HStack {
                     Text(error).foregroundStyle(Color.danger)
-                    Button("Retry") { Task { await store.loadPeople() } }
+                    Button("Retry") {
+                        Task {
+                            await store.loadPeople()
+                            await store.loadProposals()
+                        }
+                    }
                 }
             }
             if let playbackError { Text(playbackError).foregroundStyle(Color.danger) }
@@ -286,14 +338,25 @@ private struct MeetingDetail: View {
                 if let speaker = transcript.speakers[label] {
                     MeetingSpeakerRow(label: label, speaker: speaker, transcript: transcript,
                                       otherLabels: labels.filter { $0 != label }, people: store.people,
+                                      proposals: store.proposals.filter { $0.meeting == meeting.id && $0.speaker == label },
                                       playbackAllowed: clipPlaybackAllowed, play: { clipLabel = label },
                                       save: { name in Task { await store.name(meeting.id, label: label, name: name) } },
-                                      merge: { target in Task { await store.merge(meeting.id, label: label, into: target) } })
+                                      merge: { target in Task { await store.merge(meeting.id, label: label, into: target) } },
+                                      decide: { proposal, approve in Task { await store.decide(proposal, approve: approve) } },
+                                      rename: { person, name in
+                                          Task { await store.renamePerson(person, name: name, meeting: meeting.id) }
+                                      },
+                                      forget: { person, anonymise in
+                                          Task { await store.forgetPerson(person, anonymise: anonymise, meeting: meeting.id) }
+                                      })
                     .disabled(store.mutating || store.loadingDetail || clipLabel != nil)
                 }
             }
         }
-        .task { await store.loadPeople() }
+        .task {
+            await store.loadPeople()
+            await store.loadProposals()
+        }
     }
 
     private func transcriptRows(_ transcript: MeetingTranscript) -> some View {
@@ -302,7 +365,8 @@ private struct MeetingDetail: View {
              isGap: false)
         }
         let gaps = transcript.recordingGaps.map { gap in
-            (start: gap.start, text: "[gap \(meetingClock(gap.start))–\(meetingClock(gap.end)): \(gap.reason)]",
+            (start: gap.start, text: "[gap \(meetingClock(gap.start))–\(meetingClock(gap.end)): \(gap.reason)"
+                + (gap.wallSeconds.map { $0 > gap.end - gap.start + 1 ? ", \(meetingClock($0)) not recorded" : "" } ?? "") + "]",
              isGap: true)
         }
         let rows = (segments + gaps).sorted { $0.start < $1.start }
@@ -374,11 +438,22 @@ private struct MeetingSpeakerRow: View {
     let transcript: MeetingTranscript
     let otherLabels: [String]
     let people: [SpeakerPerson]
+    let proposals: [MeetingSpeakerProposal]
     let playbackAllowed: Bool
     let play: () -> Void
     let save: (String) -> Void
     let merge: (String) -> Void
+    let decide: (MeetingSpeakerProposal, Bool) -> Void
+    /// Rename the known person everywhere (person id, new name).
+    let rename: (String, String) -> Void
+    /// Forget the known person's voice (person id, anonymise past meetings).
+    let forget: (String, Bool) -> Void
     @State private var name = ""
+    /// Naming a speaker who already has a name: the same field as for an unknown one.
+    @State private var renaming = false
+    @State private var renamingPerson = false
+    @State private var personName = ""
+    @State private var confirmForget = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.s8) {
@@ -398,7 +473,56 @@ private struct MeetingSpeakerRow: View {
                     .accessibilityLabel("Merge Speaker \(label) into another speaker")
                 }
             }
-            if speaker.name == nil {
+            ForEach(proposals) { proposal in
+                VStack(alignment: .leading, spacing: Design.Space.s4) {
+                    Text("\(proposal.instance) suggests \(proposal.name)").fontWeight(.medium)
+                    Text(proposal.why).font(.callout).foregroundStyle(Color.textSecondary)
+                    HStack {
+                        Button("Confirm \(proposal.name)") { decide(proposal, true) }
+                        Button("Reject") { decide(proposal, false) }
+                    }
+                }
+                .padding(Design.Space.s8)
+                .background(Color.brand.opacity(0.08), in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous))
+            }
+            if let person = speaker.person, let current = speaker.name, !renaming {
+                HStack {
+                    Button(action: play) { Image(systemName: "play.fill") }
+                        .accessibilityLabel("Play clip for \(current)")
+                        .disabled(!playbackAllowed || speaker.clips?.isEmpty != false)
+                    Spacer()
+                    Menu("Change") {
+                        Button("Not \(current): name this speaker…") {
+                            name = ""
+                            renaming = true
+                        }
+                        Button("Rename \(current) in every meeting…") {
+                            personName = current
+                            renamingPerson = true
+                        }
+                        Button("Forget \(current)'s voice…", role: .destructive) { confirmForget = true }
+                    }
+                    .fixedSize()
+                    .accessibilityLabel("Change the name of Speaker \(label)")
+                }
+                .alert("Rename \(current)", isPresented: $renamingPerson) {
+                    TextField("Name", text: $personName)
+                    Button("Cancel", role: .cancel) {}
+                    Button("Rename") {
+                        let trimmed = personName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty, trimmed != current { rename(person, trimmed) }
+                    }
+                } message: {
+                    Text("Every meeting that names \(current) shows the new name.")
+                }
+                .confirmationDialog("Forget \(current)'s voice?", isPresented: $confirmForget, titleVisibility: .visible) {
+                    Button("Forget, keep the name in past meetings", role: .destructive) { forget(person, false) }
+                    Button("Forget and anonymise past meetings", role: .destructive) { forget(person, true) }
+                } message: {
+                    Text("No meeting is matched to \(current) again. Text already sent to instances cannot be recalled.")
+                }
+            }
+            if speaker.name == nil || renaming {
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 let matches = people.filter { trimmed.isEmpty || $0.name.localizedCaseInsensitiveContains(trimmed) }
                     .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -408,7 +532,12 @@ private struct MeetingSpeakerRow: View {
                         .help(speaker.clips?.isEmpty == false ? "Play speaker clip" : "No clip available")
                         .disabled(!playbackAllowed || speaker.clips?.isEmpty != false)
                     TextField("Name Speaker \(label)", text: $name)
-                        .onSubmit { if !trimmed.isEmpty { save(trimmed) } }
+                        .onSubmit {
+                            if !trimmed.isEmpty {
+                                save(trimmed)
+                                renaming = false
+                            }
+                        }
                     if !people.isEmpty {
                         Menu("Suggestions") {
                             ForEach(matches) { person in
@@ -418,7 +547,12 @@ private struct MeetingSpeakerRow: View {
                         .fixedSize()
                         .disabled(matches.isEmpty)
                     }
-                    Button("Save") { save(trimmed) }.disabled(trimmed.isEmpty)
+                    Button("Save") {
+                        save(trimmed)
+                        renaming = false
+                    }
+                    .disabled(trimmed.isEmpty)
+                    if renaming { Button("Cancel") { renaming = false } }
                 }
             }
         }

@@ -8,6 +8,8 @@ public final class MeetingsStore {
     public private(set) var detail: Meeting?
     public private(set) var segments: [MeetingTranscript.Segment] = []
     public private(set) var people: [SpeakerPerson] = []
+    /// Pending names instances proposed for speakers, every meeting's.
+    public private(set) var proposals: [MeetingSpeakerProposal] = []
     public private(set) var loading = false
     public private(set) var loadingDetail = false
     public private(set) var mutating = false
@@ -20,6 +22,7 @@ public final class MeetingsStore {
     @ObservationIgnored private var listGeneration = 0
     @ObservationIgnored private var detailGeneration = 0
     @ObservationIgnored private var peopleGeneration = 0
+    @ObservationIgnored private var proposalsGeneration = 0
     @ObservationIgnored private var requestedID: String?
 
     public init(client: APIClient) {
@@ -89,7 +92,7 @@ public final class MeetingsStore {
                     page += 1
                     let next = try await client.meeting(id, page: page)
                     guard let nextTranscript = next.transcript else {
-                        // A reprocess started while we were paging.
+                        // The server no longer has a transcript to page through.
                         result = next
                         rows = []
                         break
@@ -127,6 +130,51 @@ public final class MeetingsStore {
         }
     }
 
+    /// A failed load keeps the last list and says why in `peopleError` (both feed the speakers section).
+    public func loadProposals() async {
+        proposalsGeneration += 1
+        let generation = proposalsGeneration
+        do {
+            let result = try await client.meetingProposals()
+            guard proposalsGeneration == generation, !Task.isCancelled else { return }
+            proposals = result
+            peopleError = nil
+        } catch {
+            guard proposalsGeneration == generation, !Task.isCancelled, let error = APIError.from(error) else { return }
+            peopleError = error.message
+        }
+    }
+
+    /// Confirm (enrols the voice under the proposed name) or reject an instance's proposal.
+    public func decide(_ proposal: MeetingSpeakerProposal, approve: Bool) async {
+        await mutate {
+            defer { proposals.removeAll { $0.id == proposal.id } }
+            try await client.decideMeetingProposal(proposal.id, approve: approve)
+            if approve, requestedID == proposal.meeting { await load(proposal.meeting) }
+            if approve { await loadPeople() }
+        }
+        await loadProposals()
+    }
+
+    /// Rename a known person everywhere: every meeting that names them shows the new name.
+    public func renamePerson(_ person: String, name: String, meeting id: String) async {
+        await mutate {
+            _ = try await client.renameSpeaker(person, name: name)
+            if requestedID == id { await load(id) }
+            await loadPeople()
+        }
+    }
+
+    /// Forget a known person's voice: no meeting is matched to them again. `anonymise` also turns their name in past
+    /// meetings into "Speaker X".
+    public func forgetPerson(_ person: String, anonymise: Bool, meeting id: String) async {
+        await mutate {
+            _ = try await client.forgetSpeaker(person, anonymise: anonymise)
+            if requestedID == id { await load(id) }
+            await loadPeople()
+        }
+    }
+
     public func name(_ id: String, label: String, name: String) async {
         await mutate {
             _ = try await client.nameMeetingSpeaker(id, label: label, name: name)
@@ -160,13 +208,7 @@ public final class MeetingsStore {
                 invalidateListRefresh()
                 meetings[index] = updated
             }
-            if requestedID == id {
-                detailGeneration += 1
-                detail = updated
-                segments = []
-                loadingDetail = false
-                detailError = nil
-            }
+            if requestedID == id { await load(id) }
         }
     }
 

@@ -11,9 +11,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, core, google, jobs, meetings, speakers, web_config
+from supervisor import broker, core, google, jobs, listen_pipeline, listen_worker, meetings, meetings_access, speakers, web_config, webpush
 from supervisor.__main__ import main
 from supervisor.tests import test_app_api
+from supervisor.tests.test_listen import FakeEngines, spoken
 
 APP = "/app/v1/meetings"
 INSTANCE = "wisp"
@@ -80,8 +81,10 @@ class MeetingsAccessTest(test_app_api.AppTest):
         return {s["function"]["name"] for s in self.broker.tool_specs()}
 
     def test_ungranted_missing_failed_and_malformed_are_indistinguishable(self):
-        mid, failed, corrupt = self.ready(), self.ready(), self.ready()
-        meetings.reprocess(failed)
+        mid, failed, corrupt = self.ready(), self.create(), self.ready()
+        meetings.finish(failed, size=0, sha256=hashlib.sha256(b"").hexdigest(), chunks=0)
+        root = self.sup / "meetings"
+        (root / failed / "transcript.json").write_bytes((root / mid / "transcript.json").read_bytes())
         meetings.set_state(failed, "processing")
         meetings.set_state(failed, "failed", error="private diagnostic")
         (self.sup / "meetings" / corrupt / "transcript.json").write_text('{"segments": null}')
@@ -95,6 +98,79 @@ class MeetingsAccessTest(test_app_api.AppTest):
         self.assertEqual(self.ids(), [mid])
         self.cli("revoke", INSTANCE, "work")
         self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+
+    def test_successful_transcription_keeps_recording_problems_in_the_app_and_inbox(self):
+        self.grant()
+        root = self.inst / INSTANCE
+        (root / "config.env").write_text("WATCH_MEETINGS=inbox\n")
+        with (mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]),
+              mock.patch.object(listen_worker, "calendar_event", return_value=(None, None))):
+            for problems, lost, expected in (
+                (["microphone stopped"], 3.5, ["microphone stopped", "3.5 s of audio were lost"]),
+                (["62.1 s of audio could not be written (OSStatus 123)"], 62.08,
+                 ["62.1 s of audio could not be written (OSStatus 123)"]),
+            ):
+                with self.subTest(problems=problems):
+                    mid = meetings.create({
+                        "mode": "inperson", "started": "2026-11-24T10:00:00", "device": "example",
+                        "ext": "wav", "account": "work", "title": "Example",
+                        "sidecar": {"problems": problems, "seconds_lost": lost},
+                    })["id"]
+                    meetings.finish(mid, size=0, sha256=hashlib.sha256(b"").hexdigest(), chunks=0)
+                    engine = FakeEngines({"ch1": [(0, 1, "A")]}, {("ch1", 0, 1): spoken("Example.")})
+                    self.assertTrue(listen_worker.process_next(engine))
+                    row = next(row for row in self.get(APP)["meetings"] if row["id"] == mid)
+                    self.assertEqual((row["state"], row.get("warnings")), ("ready", expected))
+                    detail = self.get(f"{APP}/{mid}")
+                    self.assertEqual(detail["warnings"], expected)
+                    self.assertEqual(detail["transcript"]["warnings"], expected)
+                    page = self.result("meeting_read", id=mid)
+                    self.assertTrue(page.startswith('[Meeting "Example"'))
+                    warning_line = "Recording problems: " + "; ".join(expected)
+                    self.assertIn("Gaps: none\n" + warning_line + "\n", page)
+                    note, = (root / "inbox").glob(f"*-{mid}-watch.md")
+                    self.assertIn(warning_line, note.read_text())
+                    self.assertTrue(webpush.notify.call_args.args[0]["body"].endswith("recording incomplete"))
+
+    def test_reprocessing_keeps_the_last_good_transcript_visible_even_after_failure(self):
+        self.grant()
+        mid = self.ready()
+        path = f"{APP}/{mid}"
+        folder = self.sup / "meetings" / mid
+        metadata = meetings.get(mid)
+        metadata.pop("published", None)  # A ready meeting written by an older server.
+        (folder / "meeting.json").write_text(json.dumps(metadata))
+        previous = self.get(path)["transcript"]
+        self.assertIn("Share the deck.", self.result("meeting_read", id=mid))
+        self.get(path + "/reprocess", method="POST")
+        for state in ("queued", "processing", "failed"):
+            with self.subTest(state=state):
+                if state != "queued":
+                    meetings.set_state(mid, state, error="Example failure" if state == "failed" else None)
+                detail = self.get(path)
+                self.assertEqual(detail["state"], state)
+                self.assertEqual(detail.get("transcript"), previous)
+                self.assertEqual(detail["error"], "Example failure" if state == "failed" else None)
+                self.assertIn("Share the deck.", self.result("meeting_read", id=mid))
+                self.assertEqual(self.ids(text="deck"), [mid])
+                with self.assertRaises(meetings.Conflict):
+                    speakers.name_label(mid, "S2", "Alex")
+                with self.assertRaises(meetings.Conflict):
+                    speakers.merge_labels(mid, "S2", "S3")
+                self.assertEqual(self.tool("meeting_propose_speaker", meeting=mid, speaker="S2", name="Alex",
+                                           why="Example."), NOT_VISIBLE)
+        meetings.reprocess(mid)
+        self.process(mid, text="Replacement transcript.")
+        detail = self.get(path)
+        self.assertIs(detail["published"], True)
+        self.assertEqual(detail["transcript"]["segments"][0]["text"], "Replacement transcript.")
+        self.assertIn("Replacement transcript.", self.result("meeting_read", id=mid))
+        (folder / "transcript.json").unlink()
+        self.assertNotIn("transcript", self.get(path))
+        self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+        meetings.delete(mid)
+        self.assertEqual(self.tool("meeting_read", id=mid), NOT_VISIBLE)
+        self.assertEqual(self.ids(), [])
 
     def test_granted_search_and_read(self):
         older = self.ready(day=23, title="Older")
@@ -110,6 +186,7 @@ class MeetingsAccessTest(test_app_api.AppTest):
         self.assertEqual(self.ids(text="DECK", person="alex", after="2026-11-24", before="2026-11-24"), [newer])
         page = self.result("meeting_read", id=newer)
         self.assertIn("Account: work\nPeople: Alex\nGaps: 00:00:00–00:00:01 paused", page)
+        self.assertNotIn("Recording problems:", page)
         self.assertIn("00:00:01 Alex: Share the deck.", page)
 
     def test_every_page_and_long_turn_cut_starts_with_marking(self):
@@ -307,3 +384,12 @@ class ReviewFixesTest(unittest.TestCase):
             meetings.deliver_owed()                         # once: the second start owes nothing
         self.assertEqual(ready.call_count, 1)
         self.assertEqual(meetings.get("m-20261125-1000-abcd")["notified"], ["one"])
+
+
+class GapLineTest(unittest.TestCase):
+    def test_an_iphone_interruption_says_how_long_nothing_was_recorded(self):
+        # Review 2026-11-27: paused time is absent from the iPhone's audio, so the gap read "00:00:03–00:00:03".
+        line = meetings_access._gap_line({"start": 3, "end": 3, "reason": "Audio session interruption",
+                                          "wall_seconds": 600})
+        self.assertIn("00:10:00 not recorded", line)
+        self.assertNotIn("not recorded", meetings_access._gap_line({"start": 3, "end": 63, "reason": "x"}))

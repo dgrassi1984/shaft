@@ -102,6 +102,9 @@ def _metadata(*, mode, started, device, ext, title="", ended=None, sidecar=None,
         "title": title, "title_auto": automatic, "created": datetime.now().astimezone().isoformat(timespec="microseconds"),
         "started": started, "ended": None if ended is None else _timestamp(ended, "ended"),
         "mode": mode, "device": device, "channels": sidecar.get("channels"), "account": account,
+        # Created unfiled: Listen may file it from its calendar event (file_from_calendar). Never set on meetings
+        # from before, whose operator may have unfiled them on purpose.
+        **({"account_auto": True} if account is None else {}),
         "state": "uploading", "error": None, "size": None, "sha256": None, "ext": ext,
         "chunk_size": CHUNK_SIZE, "chunks_received": [], "processed_with": None,
     }
@@ -244,6 +247,8 @@ def update(meeting_id: str, changes: dict) -> dict:
     with _locked(meeting_id) as (folder, metadata):
         account_changed = "account" in changes and changes["account"] != metadata["account"]
         metadata.update(changes)
+        if "account" in changes:
+            metadata.pop("account_auto", None)  # the operator's filing, unfiled included, is never redone by Listen
         if "title" in changes:
             metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
             metadata.pop("title_from", None)
@@ -364,6 +369,23 @@ def name_from_calendar(meeting_id: str, title: str, account: str | None) -> None
             _save(folder, metadata)
 
 
+def file_from_calendar(meeting_id: str, alias: str) -> bool:
+    """File an unfiled meeting under the account whose calendar holds its event (review 2026-11-27: with two Google
+    accounts the apps file nothing, so every meeting stayed invisible to every instance until filed by hand). Never
+    over the operator's own filing, an unfiled choice included. Runs before Listen finishes, so the ready note goes to
+    that account's watchers."""
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata.get("account") is None and metadata.get("account_auto"):
+            try:
+                _account_alias(alias)
+            except Invalid:
+                return False                       # no longer configured: stays unfiled, as before
+            metadata.update(account=alias, account_from="calendar")
+            _save(folder, metadata)
+            return True
+        return False
+
+
 def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> None:
     with _locked(meeting_id) as (folder, metadata):
         current = metadata["state"]
@@ -371,6 +393,34 @@ def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> N
             raise Conflict(f"Cannot move a meeting from {current} to {state}.")
         metadata.update(state=state, error=error, processed_with=processed_with)
         _save(folder, metadata)
+    if state == "failed" and current != "failed":
+        tell_operator(metadata)
+
+
+def tell_operator(metadata: dict, speakers: dict | None = None) -> None:
+    """A push to the operator's paired devices: the meeting is ready (who spoke, and how many voices still need a
+    name) or it failed (why). Tapping it opens the meeting in the apps. Never raises: the state is saved either way."""
+    from . import webpush
+    title = " ".join(str(metadata.get("title") or metadata["id"]).split())[:120]
+    if metadata["state"] == "ready":
+        rows = list((speakers or {}).values())
+        named = sorted({row["name"] for row in rows if row.get("name")})
+        unknown = sum(1 for row in rows if not row.get("name"))
+        parts = [", ".join(named) if named else "No speaker recognised yet"]
+        if unknown:
+            parts.append(f"{unknown} voice{'s' if unknown != 1 else ''} to name")
+        if not metadata.get("account"):
+            parts.append("unfiled: no instance can read it yet")
+        if metadata.get("warnings"):
+            parts.append("recording incomplete")
+        event = {"title": f"Meeting ready: {title}", "body": " · ".join(parts)}
+    else:
+        error = " ".join(str(metadata.get("error") or "no reason recorded").split())
+        event = {"title": f"Meeting failed: {title}", "body": error[:300]}
+    try:
+        webpush.notify({**event, "url": webpush.meeting_url(metadata["id"]), "tag": f"meeting-{metadata['id']}", "cid": None})
+    except Exception as e:
+        core.log(f"meetings: {metadata['id']}: push to the operator failed ({type(e).__name__}: {e})")
 
 
 def reprocess(meeting_id: str) -> dict:
@@ -379,6 +429,7 @@ def reprocess(meeting_id: str) -> dict:
             raise Conflict("Only ready or failed meetings can be reprocessed.")
         if metadata["state"] == "ready":
             metadata.setdefault("notified", [])  # Already ready before watches were introduced.
+            metadata["published"] = True  # Preserve access for older meetings once they leave ready.
         metadata.pop("worker_crashes", None)
         metadata.update(state="queued", error=None, processed_with=None)
         _save(folder, metadata)
@@ -393,6 +444,8 @@ def recover_processing(meeting_id: str) -> None:
             metadata.update(worker_crashes=crashes, state="queued" if retry else "failed",
                             error=None if retry else "worker stopped while processing")
             _save(folder, metadata)
+            if not retry:
+                tell_operator(metadata)
 
 
 def complete_processing(meeting_id: str, transcript: dict, markdown: str) -> None:
@@ -413,9 +466,11 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     first_ready = "notified" not in metadata
     if first_ready:
         metadata["notified"] = None                 # owed: delivered below, or at the worker's next start
-    metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
+    metadata.update(state="ready", published=True, warnings=transcript.get("warnings", []),
+                    error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
+    tell_operator(metadata, transcript.get("speakers"))
     if _notification_owed(metadata):
         _deliver(folder, metadata, transcript)
 
@@ -448,14 +503,23 @@ def deliver_owed() -> None:
                 continue
 
 
+def is_published(metadata: dict) -> bool:
+    state = metadata["state"]
+    return state == "ready" or (metadata.get("published") is True and state in (*WORKER_TRANSITIONS, "uploading"))
+
+
 def detail(meeting_id: str, page: int) -> dict:
     with _locked(meeting_id) as (folder, metadata):
-        if metadata["state"] == "ready":
+        if not is_published(metadata):
+            return metadata
+        try:
             transcript = json.loads((folder / "transcript.json").read_bytes())
-            segments = transcript["segments"]
-            first = (page - 1) * TRANSCRIPT_PAGE_SIZE
-            metadata["transcript"] = {**transcript, "segments": segments[first:first + TRANSCRIPT_PAGE_SIZE],
-                                      "page": page, "total_segments": len(segments)}
+        except FileNotFoundError:
+            return metadata
+        segments = transcript["segments"]
+        first = (page - 1) * TRANSCRIPT_PAGE_SIZE
+        metadata["transcript"] = {**transcript, "segments": segments[first:first + TRANSCRIPT_PAGE_SIZE],
+                                  "page": page, "total_segments": len(segments)}
         return metadata
 
 

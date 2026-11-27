@@ -393,7 +393,8 @@ Sources: template `shaft/config.py`, [autonomy.py](../supervisor/autonomy.py).
 `WATCH_MAIL`, `WATCH_CALENDAR`, and `WATCH_GCHAT` default to `off` when unset. They ask the supervisor's watch to report
 new mail under granted labels, changed events on granted calendars, and new messages on granted Google Chat accounts.
 The web Config page offers them as a choice of `off`, `inbox` or `wake`, listed even when unset; the app API's settings
-carry the same choices (`watch_mail`, `watch_calendar`, `watch_gchat`), which the native apps do not show yet.
+carry the same choices (`watch_mail`, `watch_calendar`, `watch_gchat`, `watch_meetings`), and the native apps show
+them under **Watches** in the instance's settings.
 `inbox` puts one message per kind per pass in the inbox. `wake` also wakes the instance, at most once per
 `SHAFT_WATCH_WAKE_MIN` minutes. Any other value is `off`, logged once. Chat includes message text cut at 500 characters
 and at most 40 message lines per inbox message. The operator's own messages land but do not wake the instance on

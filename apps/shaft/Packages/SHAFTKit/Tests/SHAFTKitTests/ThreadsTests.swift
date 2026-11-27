@@ -756,5 +756,9 @@ struct ThreadsTests {
         #expect(model.openChat?.ref == .thread("web-a"))
         model.notificationTapped(instance: "tundra")
         #expect(model.openChat?.ref == .from)
+        model.openChat = nil
+        model.notificationTapped(instance: nil, cid: nil, meeting: "m-20261127-0855-8291")
+        #expect(model.openMeeting == "m-20261127-0855-8291")
+        #expect(model.openChat == nil)
     }
 }

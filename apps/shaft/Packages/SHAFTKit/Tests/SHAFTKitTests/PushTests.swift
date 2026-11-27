@@ -77,6 +77,39 @@ struct NotificationContentTests {
         #expect(filled == NotificationContent.Filled(title: "tundra says", body: "Totals sent.", badge: 2, instance: "tundra"))
     }
 
+    /// A push about a finished meeting carried no instance (`""`) and no meeting: the body came from whichever event was
+    /// newest and the tap opened nothing (review 2026-11-27). It shows its own event and the tap opens the meeting.
+    @Test func aMeetingPushShowsItsOwnEventAndOpensTheMeeting() throws {
+        let userInfo: [AnyHashable: Any] = ["instance": "", "meeting": "m-20261127-0855-8291"]
+        #expect(NotificationContent.instance(from: userInfo) == nil)
+        #expect(NotificationContent.meeting(from: userInfo) == "m-20261127-0855-8291")
+        #expect(NotificationContent.meeting(from: ["instance": "wisp"]) == nil)
+        var events = Self.latest.events
+        events.insert(PushEvent(title: "Meeting ready: Planning", body: "Ada · 1 voice to name", url: "/meetings/m-20261127-0855-8291",
+                                tag: "meeting-m-20261127-0855-8291", instance: nil, meeting: "m-20261127-0855-8291"), at: 0)
+        let latest = PushLatest(events: events, badge: 2)
+        let filled = try #require(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-8291"))
+        #expect(filled.title == "Meeting ready: Planning")
+        #expect(filled.body == "Ada · 1 voice to name")
+        #expect(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-0000") == nil)
+        let content = UNMutableNotificationContent()
+        filled.apply(to: content)
+        #expect(content.userInfo["meeting"] as? String == "m-20261127-0855-8291")
+        #expect(content.userInfo["instance"] == nil)
+    }
+
+    /// The extension asks for its own meeting's events only, so another meeting's notification keeps its body.
+    @Test func aMeetingPushFetchesOnlyItsMeeting() async throws {
+        let server = StubServer { request in
+            guard request.path == "/app/v1/push/latest", request.query("meeting") == "m-20261127-0855-8291",
+                  request.query("instance") == nil else { return .json(400, #"{"error":{"code":"bad","message":"x"}}"#) }
+            return .json(200, #"{"events":[{"title":"Meeting failed: Call","body":"moov atom not found","url":"/overview?meeting=m-20261127-0855-8291","tag":"t","instance":null,"cid":null,"meeting":"m-20261127-0855-8291"}],"badge":1}"#)
+        }
+        let latest = try await server.client.pushLatest(instance: nil, meeting: "m-20261127-0855-8291")
+        let filled = try #require(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-8291"))
+        #expect(filled.body == "moov atom not found")
+    }
+
     @Test func noEventForTheInstanceLeavesTheTitleAlone() {
         #expect(NotificationContent.choose(Self.latest, instance: "orrin") == nil)
         #expect(NotificationContent.choose(PushLatest(events: [], badge: 0), instance: nil) == nil)

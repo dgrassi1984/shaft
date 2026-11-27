@@ -372,3 +372,33 @@ class PairedOnlyTest(PushTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeetingPayloadTest(unittest.TestCase):
+    """A meeting push names its meeting for the apps' tap (and no instance); any other push names none."""
+
+    def test_meeting_url_puts_the_meeting_in_the_payload(self):
+        from supervisor import webpush
+        event = {"title": "Meeting ready: Example", "url": webpush.meeting_url("m-20260101-1200-abcd"), "cid": None}
+        payload = webpush.apns_payload(event, 2)
+        self.assertEqual((payload["meeting"], payload["instance"]), ("m-20260101-1200-abcd", ""))
+        self.assertNotIn("meeting", webpush.apns_payload({"title": "x", "url": "/i/wisp/chat"}, 0))
+        self.assertIsNone(webpush.meeting_of({"url": "/overview?meeting=../secrets"}))
+        self.assertIsNone(webpush.meeting_of({"url": "/i/wisp/chat?meeting=m-20260101-1200-abcd"}))
+
+
+class MeetingTakeTest(WebTest):
+    """A meeting's notification fetched every queued event, other meetings' and chats' included, so the next one
+    showed its title alone (Codex review 2026-11-27). It takes only its own meeting's events."""
+
+    def test_a_meeting_push_takes_only_its_own_events(self):
+        a, b = "m-20260101-1200-aaaa", "m-20260101-1300-bbbb"
+        now = time.time()
+        webpush._save_queue({"phone": {"pending": [
+            {"title": "A ready", "body": "", "url": webpush.meeting_url(a), "tag": "a", "at": now},
+            {"title": "wisp replied", "body": "", "url": "/i/wisp/chat", "tag": "wisp", "at": now},
+            {"title": "B ready", "body": "", "url": webpush.meeting_url(b), "tag": "b", "at": now}]}})
+        self.assertEqual([e["title"] for e in webpush.take("phone", meeting=b)], ["B ready"])
+        self.assertEqual([e["title"] for e in webpush.take("phone", meeting=a)], ["A ready"])
+        self.assertEqual([e["title"] for e in webpush.take("phone", instance="wisp")], ["wisp replied"])
+        self.assertEqual([e["title"] for e in webpush.take("phone", meeting=a)], ["A ready"])   # shown again
