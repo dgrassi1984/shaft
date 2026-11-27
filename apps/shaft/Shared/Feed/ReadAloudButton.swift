@@ -27,6 +27,14 @@ final class ReadAloudRequests {
         voiceOwners.remove(ObjectIdentifier(owner))
     }
 
+    /// The voice voice mode speaks with for `instance` in `language` (nil: the system voice), as `client` last heard.
+    private func identifier(_ client: APIClient, _ instance: String, _ language: VoiceLanguage) -> String? {
+        (client.knownVoices(instance)?.voices[language.rawValue] ?? nil)?.identifier
+    }
+
+    /// Read the message in voice mode's voice for this instance: voice mode's language on this device and the voice
+    /// chosen for it, whatever language the message is in. Like voice mode, it asks the server for the current choice;
+    /// a server slower than 2 s gets the voice this client last heard for the instance (the system voice when none).
     func toggle(id: String, source: String, screen: ChatScreenModel, client: APIClient) {
         #if os(iOS)
         guard IOSAudioUse.shared.owner != .meeting else { return }
@@ -34,24 +42,25 @@ final class ReadAloudRequests {
         let stopping = isActive(id)
         stop()
         guard !stopping, !screen.showVoice, voiceOwners.isEmpty else { return }
+        let instance = screen.instance
+        let language = VoicePreferences.language(for: instance)
         owner = ObjectIdentifier(screen)
         requested = id
         let mine = generation
-        let fallback = VoicePreferences.language(for: screen.instance)
-        let language = ReadAloudLanguage.detect(source) ?? fallback
         lookup = Task {
-            let voices = try? await client.voices(screen.instance)
-            finish(mine, id: id, source: source, identifier: (voices?.voices[language.rawValue] ?? nil)?.identifier,
-                   fallback: fallback, screen: screen)
+            _ = try? await client.voices(instance)
+            finish(mine, id: id, source: source, identifier: identifier(client, instance, language), language: language,
+                   screen: screen)
         }
         timeout = Task {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            finish(mine, id: id, source: source, identifier: nil, fallback: fallback, screen: screen)
+            finish(mine, id: id, source: source, identifier: identifier(client, instance, language), language: language,
+                   screen: screen)
         }
     }
 
     private func finish(_ mine: Int, id: String, source: String, identifier: String?,
-                        fallback: VoiceLanguage, screen: ChatScreenModel) {
+                        language: VoiceLanguage, screen: ChatScreenModel) {
         guard generation == mine else { return }
         generation += 1
         lookup?.cancel()
@@ -60,7 +69,7 @@ final class ReadAloudRequests {
         timeout = nil
         requested = nil
         guard !screen.showVoice, voiceOwners.isEmpty else { owner = nil; return }
-        ReadAloudPlayer.shared.toggle(id: id, markdown: source, voiceIdentifier: identifier, fallback: fallback)
+        ReadAloudPlayer.shared.toggle(id: id, markdown: source, voiceIdentifier: identifier, language: language)
     }
 
     func stop(owner screen: ChatScreenModel? = nil) {

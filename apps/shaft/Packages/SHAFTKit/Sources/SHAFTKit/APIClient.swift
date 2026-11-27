@@ -110,6 +110,8 @@ public struct OutgoingMessage: Codable, Sendable, Equatable {
 public final class APIClient: Sendable {
     public let credential: ServerCredential
     let session: URLSession
+    /// Each instance's last voices answer from this server (§17), from any voice route: what voice mode speaks with.
+    let knownVoices = KnownVoices()
 
     public init(credential: ServerCredential, session: URLSession = .shared) {
         self.credential = credential

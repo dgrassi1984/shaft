@@ -169,26 +169,40 @@ extension APIClient {
 
     /// The instance's voices, its proposals and what each platform reported.
     public func voices(_ instance: String) async throws -> VoicesResponse {
-        try await voiceCall("GET", "/app/v1/voices/\(instance)", body: nil as VoiceChoice?)
+        let asked = knownVoices.ask()
+        return knownVoices.remember(try await voiceCall("GET", "/app/v1/voices/\(instance)", body: nil as VoiceChoice?),
+                                    for: instance, asked: asked)
     }
 
     /// Pick the voice `identifier` for `language` (`"en"`, `"it"`): the operator's choice, over any proposal.
     public func setVoice(_ instance: String, language: String, identifier: String) async throws -> VoicesResponse {
-        try await voiceCall("POST", "/app/v1/voices/\(instance)",
-                            body: VoiceChoice(language: language, identifier: identifier, clear: nil))
+        let asked = knownVoices.ask()
+        return knownVoices.remember(try await voiceCall("POST", "/app/v1/voices/\(instance)",
+                                                        body: VoiceChoice(language: language, identifier: identifier, clear: nil)),
+                                    for: instance, asked: asked)
     }
 
     /// No voice for `language`: the system voice speaks.
     public func clearVoice(_ instance: String, language: String) async throws -> VoicesResponse {
-        try await voiceCall("POST", "/app/v1/voices/\(instance)",
-                            body: VoiceChoice(language: language, identifier: nil, clear: true))
+        let asked = knownVoices.ask()
+        return knownVoices.remember(try await voiceCall("POST", "/app/v1/voices/\(instance)",
+                                                        body: VoiceChoice(language: language, identifier: nil, clear: true)),
+                                    for: instance, asked: asked)
     }
 
     /// Accept or reject the instance's proposal `id`; the instance is told either way, with `reason` on a rejection.
     public func decideVoiceProposal(_ instance: String, id: String, accept: Bool,
                                     reason: String? = nil) async throws -> VoicesResponse {
-        try await voiceCall("POST", "/app/v1/voices/\(instance)/proposals/\(id)",
-                            body: VoiceDecision(accept: accept, reason: reason))
+        let asked = knownVoices.ask()
+        return knownVoices.remember(try await voiceCall("POST", "/app/v1/voices/\(instance)/proposals/\(id)",
+                                                        body: VoiceDecision(accept: accept, reason: reason)),
+                                    for: instance, asked: asked)
+    }
+
+    /// The instance's voices as this client last heard them from any voice route, without asking the server; nil
+    /// before the first answer. What a reading falls back to when the server is slow to answer.
+    public func knownVoices(_ instance: String) -> VoicesResponse? {
+        knownVoices.answer(for: instance)
     }
 
     /// This device's installed voices, replacing what `platform` (`"ios"`, `"macos"`) reported before. Returns what
@@ -319,5 +333,30 @@ struct ServerSentEvents: Sendable {
         default: break                                // `retry` and unknown fields: nothing the app uses
         }
         return nil
+    }
+}
+
+/// The last voices answer for each instance, safe to read and write from any task. Answers are kept in the order
+/// their requests were sent: a slow GET sent before a voice was chosen never replaces the choice's own answer.
+final class KnownVoices: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [String: (asked: Int, answer: VoicesResponse)] = [:]
+    private var sent = 0
+
+    /// Number a request as it is sent.
+    func ask() -> Int {
+        lock.withLock { sent += 1; return sent }
+    }
+
+    /// Keep `answer` for `instance` unless a request sent after `asked` already answered; hand it back either way.
+    func remember(_ answer: VoicesResponse, for instance: String, asked: Int) -> VoicesResponse {
+        lock.withLock {
+            if (answers[instance]?.asked ?? 0) < asked { answers[instance] = (asked, answer) }
+        }
+        return answer
+    }
+
+    func answer(for instance: String) -> VoicesResponse? {
+        lock.withLock { answers[instance]?.answer }
     }
 }

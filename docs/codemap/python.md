@@ -78,7 +78,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/ledger.py` | — | `record_charge`, `spend` |
 | `supervisor/ledger_mirror.py` | — | `path`, `parse`, `records`, `rows`, `holding`, `sync`, `observe`, `merged` |
 | `supervisor/listen_pipeline.py` | `DiarisationTurns` | `decode`, `speech_seconds`, `longest_clips`, `chunk_spans`, `attribute`, `transcribe_meeting`, `render_markdown` |
-| `supervisor/listen_worker.py` | `Engines` | `hints`, `calendar_event`, `recover`, `process_next`, `main` |
+| `supervisor/listen_worker.py` | `Engines` | `hints`, `calendar_event`, `recover`, `recorder_problems`, `process_next`, `main` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible`, `HistoryExpired` | `labels`, `label_id`, `visible`, `get_thread`, `row`, `search`, `history_now`, `history`, `header`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `reply_defaults`, `build_message`, `create_draft`, `update_draft`, `label_message`, `draft_message_id` |
 | `supervisor/mcp_server.py` | — | `handle`, `serve`, `install`, `uninstall`, `command` |
