@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return self.slashFocusesComposer(event) ? .some(nil) : .some(event)
         }
         #endif
+        model.registerForRemoteNotifications = { NSApplication.shared.registerForRemoteNotifications() }
         if MacDevSession.asksForNotifications {
             Task {
                 // APNs may change the token: register at every launch (§11.1).

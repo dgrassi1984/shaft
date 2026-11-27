@@ -65,6 +65,25 @@ public final class AppModel {
         session?.onBadge = { [weak self] count in self?.setBadge(count) }
     }
 
+    /// Whether the system lets SHAFT notify (nil until read): Settings offers Allow when undecided and the system's
+    /// notification settings when denied (2026-11-27: a refusal at first launch left push off for good, unsaid).
+    public private(set) var notificationAuthorization: UNAuthorizationStatus?
+    /// Registers for remote notifications on this platform; set by the app delegate.
+    public var registerForRemoteNotifications: (@MainActor () -> Void)?
+
+    public func refreshNotificationAuthorization() async {
+        notificationAuthorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    /// Settings' Allow Notifications: ask, and register for a push token when allowed.
+    public func enableNotifications() async {
+        if await requestNotifications() {
+            pushError = nil
+            registerForRemoteNotifications?()
+        }
+        await refreshNotificationAuthorization()
+    }
+
     /// Ask for alerts, badges and sounds. True when allowed; the caller then registers for remote notifications.
     public func requestNotifications() async -> Bool {
         do {

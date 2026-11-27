@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         watch.start()
         Task {
             // APNs may change the token: register at every launch (§11.1).
+            model.registerForRemoteNotifications = { UIApplication.shared.registerForRemoteNotifications() }
             if await model.requestNotifications() { application.registerForRemoteNotifications() }
         }
         return true
