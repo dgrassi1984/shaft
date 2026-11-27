@@ -178,7 +178,8 @@ class SpeakerTest(SpeakerBase):
             "ch1": listen_pipeline.DiarisationTurns(exclusive, original),
         })
         self.assertEqual(self.transcript(path)["speakers"]["M1"]["clips"], [[20, 30], [50, 58], [60, 67]])
-        self.assertEqual(self.transcript(path)["speakers"]["M2"]["clips"], [])
+        # Never 5 s alone: its longest clean stretch instead, so it can still be auditioned (review 2026-11-27).
+        self.assertEqual(self.transcript(path)["speakers"]["M2"]["clips"], [[10, 14]])
 
     def test_every_speaker_route_requires_a_paired_bearer(self):
         _, path = self.meeting({"ch1": {"A": (1, 0)}})

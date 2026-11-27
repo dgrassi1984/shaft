@@ -40,6 +40,11 @@ public extension APIClient {
         return try await post("/app/v1/meetings/\(id)", json: fields)
     }
 
+    /// Words this meeting's transcription should spell as written; they apply when it is (re)processed.
+    func setMeetingVocabulary(_ id: String, vocabulary: String) async throws -> Meeting {
+        try await post("/app/v1/meetings/\(id)", json: ["vocabulary": vocabulary])
+    }
+
     func meetingAccountAliases() async throws -> [String] {
         guard case let .value(list, _) = try await instances(),
               let instance = list.instances.first?.name ?? list.paused?.first?.name else { return [] }

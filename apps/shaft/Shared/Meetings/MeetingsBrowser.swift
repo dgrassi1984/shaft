@@ -192,6 +192,8 @@ private struct MeetingDetail: View {
     @State private var draftTitle: String?
     @State private var draftAccount: String?
     @State private var confirmDelete = false
+    @State private var editingVocabulary = false
+    @State private var vocabulary = ""
     @State private var forgetVoices = false
     @State private var clipLabel: String?
     @State private var player: AVAudioPlayer?
@@ -237,6 +239,14 @@ private struct MeetingDetail: View {
         .onChange(of: meeting.title) { if draftTitle == meeting.title { draftTitle = nil } }
         .onChange(of: meeting.account) { if draftAccount == (meeting.account ?? "") { draftAccount = nil } }
         .sheet(isPresented: $confirmDelete) { deleteSheet }
+        .alert("Words to listen for", isPresented: $editingVocabulary) {
+            TextField("Foresight, BPER, Patricia", text: $vocabulary)
+            Button("Cancel", role: .cancel) {}
+            Button("Reprocess") { Task { await store.reprocess(meeting.id, vocabulary: vocabulary) } }
+        } message: {
+            Text("Names and terms this meeting uses, comma-separated: the transcription spells them as written. The "
+                 + "meeting is processed again with them.")
+        }
     }
 
     private var header: some View {
@@ -279,6 +289,11 @@ private struct MeetingDetail: View {
         CopyMeetingReference(meeting: meeting)
         Button("Reprocess") { Task { await store.reprocess(meeting.id) } }
             .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
+        Button("Words to Listen For…") {
+            vocabulary = meeting.vocabulary ?? ""
+            editingVocabulary = true
+        }
+        .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
         Button("Delete…", role: .destructive) {
             forgetVoices = false
             confirmDelete = true
@@ -528,8 +543,11 @@ private struct MeetingSpeakerRow: View {
             }
             if speaker.name == nil || renaming {
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                let matches = people.filter { trimmed.isEmpty || $0.name.localizedCaseInsensitiveContains(trimmed) }
-                    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                // The event's invitees first (review 2026-11-27), then everyone the gallery knows.
+                let known = Set(people.map { $0.name.lowercased() })
+                let invited = transcript.attendees.filter { !known.contains($0.lowercased()) }
+                let matches = (invited + people.map(\.name).sorted { $0.localizedStandardCompare($1) == .orderedAscending })
+                    .filter { trimmed.isEmpty || $0.localizedCaseInsensitiveContains(trimmed) }
                 HStack {
                     Button(action: play) { Image(systemName: "play.fill") }
                         .accessibilityLabel("Play clip for Speaker \(label)")
@@ -542,10 +560,10 @@ private struct MeetingSpeakerRow: View {
                                 renaming = false
                             }
                         }
-                    if !people.isEmpty {
+                    if !people.isEmpty || !transcript.attendees.isEmpty {
                         Menu("Suggestions") {
-                            ForEach(matches) { person in
-                                Button(person.name) { name = person.name }
+                            ForEach(matches, id: \.self) { suggestion in
+                                Button(suggestion) { name = suggestion }
                             }
                         }
                         .fixedSize()

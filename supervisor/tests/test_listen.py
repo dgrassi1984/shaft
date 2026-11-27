@@ -31,7 +31,8 @@ class FakeEngines:
         self.prompts = []
         self.mixed = []
 
-    def diarise(self, wav):
+    def diarise(self, wav, max_speakers=None):
+        self.caps = getattr(self, "caps", []) + [max_speakers]
         return self.turns.get(wav.stem, []), self.embeddings.get(wav.stem, {})
 
     def loudness(self, wav, spans):
@@ -93,7 +94,7 @@ class ListenTest(unittest.TestCase):
         self.assertEqual(meetings.get(meeting_id)["state"], "queued")
 
         class Engines(FakeEngines):
-            def diarise(inner, path):
+            def diarise(inner, path, max_speakers=None):
                 self.assertEqual(meetings.get(meeting_id)["state"], "processing")
                 with wave.open(str(path), "rb") as wav:
                     self.assertEqual((wav.getnchannels(), wav.getframerate()), (1, 16_000))
@@ -130,8 +131,9 @@ class ListenTest(unittest.TestCase):
                          segment("M2", 1, "Sono d'accordo.", 4)],
             "gaps": [{"start": 5, "end": 6, "reason": "interruption"}],
             "warnings": [],
+            "attendees": [],
             "speakers": {"M1": {"channel": 1, "seconds": 0.8, "clips": []},
-                         "S1": {"channel": 2, "seconds": 4, "clips": []},
+                         "S1": {"channel": 2, "seconds": 4, "clips": [[1, 5]]},
                          "M2": {"channel": 1, "seconds": 1, "clips": []}},
             "processed_with": FakeEngines.processed_with,
         })
@@ -329,6 +331,58 @@ class ConversationTest(unittest.TestCase):
         self.assertEqual((chunks[2][0], chunks[-1][1]), (44.7, 115.3))
         self.assertEqual(len(listen_pipeline.chunk_spans([(0.36, 27.76, "M1", 1)])), 1)
         self.assertTrue(all(end - start <= listen_pipeline.CHUNK_SECONDS + 1e-9 for start, end in chunks))
+
+    def test_text_the_decoder_heard_outside_a_chunk_never_prompts_the_next(self):
+        # Review 2026-11-27: the next prompt took the decoder's whole text, words outside the chunk included, so a
+        # misheard name there steered the next chunk; and a chunk long after the last kept its context.
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        stray = {"text": " Forse. Va bene.", "lang": "it", "words": [
+            {"w": "Forse.", "raw": " Forse.", "start": 0.0, "end": 0.4},       # before the chunk: not kept
+            {"w": "Va", "raw": " Va", "start": 2.0, "end": 2.2}, {"w": "bene.", "raw": " bene.", "start": 2.2, "end": 2.6}]}
+        later = {"text": " Ok.", "lang": "it", "words": [{"w": "Ok.", "raw": " Ok.", "start": 80.0, "end": 80.3}]}
+        last = {"text": " Sì.", "lang": "it", "words": [{"w": "Sì.", "raw": " Sì.", "start": 110.0, "end": 110.3}]}
+
+        class Engines(FakeEngines):
+            def transcribe(inner, wav, start, end, prompt=None):
+                inner.prompts.append(prompt)
+                return [stray, later, last][len(inner.prompts) - 1]
+
+        engines = Engines({"ch1": [(1.5, 3, "A"), (80, 80.5, "A"), (110, 110.5, "A")]}, {})
+        listen_pipeline.transcribe_meeting({"id": "m", "mode": "inperson"}, Path("a.caf"), Path("."), {}, engines)
+        self.assertEqual(engines.prompts[0], None)
+        self.assertEqual(engines.prompts[1], None)            # 77 s later: what was said then is not its context
+        self.assertEqual(engines.prompts[2], "Ok.")
+
+    def test_far_end_echo_in_the_microphone_is_not_the_operator(self):
+        # Review 2026-11-27: on speakers instead of headphones the far end leaks into the mic, where diarisation can
+        # label it a mic speaker. The loudness evidence already gives a word heard far quieter on the mic to the system
+        # speaker; this pins it (a separate echo rule changed no outcome the loudness did not, so there is none).
+        words = [{"w": w, "raw": " " + w, "start": 1 + 0.3 * i, "end": 1.3 + 0.3 * i} for i, w in enumerate("Va bene così".split())]
+        reading = {"text": " Va bene così", "lang": "it", "words": words}
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav"), Path("ch2.wav")]))
+
+        def level(wav, start, end):
+            # The words (short spans) are heard 26 dB down on the mic; its own speech, and the far end, at full level.
+            return 0.05 if wav.stem == "ch1" and 0.9 < start < 2 and end - start < 1 else 1.0
+
+        engines = FakeEngines({"ch1": [(0.9, 2.0, "A"), (5, 8, "A")], "ch2": [(0.9, 2.0, "B")]},
+                              {("ch2", 0.9, 2.0): reading}, loudness=level)
+        transcript = listen_pipeline.transcribe_meeting({"id": "m", "mode": "online"}, Path("a.caf"), Path("."), {}, engines)
+        self.assertEqual({row["speaker"] for row in transcript["segments"]}, {"S1"})
+
+    def test_the_calendar_caps_each_channels_speakers(self):
+        # Review 2026-11-27: one remote voice split into S1 and S2. The invitees bound the speakers per channel.
+        me = {"email": "me@example.com", "self": True}
+        one = [me, {"email": "ada@example.com"}]
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, one), {2: 1})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "inperson"}, one + [{"email": "b@example.com"}]), {1: 3})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, [me]), {})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, []), {})
+
+    def test_the_meetings_own_vocabulary_comes_first_in_the_prompt(self):
+        with mock.patch.object(listen_worker, "VOCABULARY", ("UniCredit",)), \
+                mock.patch.object(listen_worker.speakers, "known_names", return_value=[]):
+            self.assertEqual(listen_worker.hints(["Ada"], "Foresight, BPER"), "Foresight, BPER, Ada, UniCredit.")
 
     def test_a_stray_word_inside_a_phrase_keeps_its_speaker_and_a_pause_lets_it_change(self):
         words = [{"start": 0.0, "end": 0.3}, {"start": 0.3, "end": 0.6}, {"start": 0.6, "end": 0.9},
