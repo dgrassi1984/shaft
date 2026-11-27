@@ -19,6 +19,8 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     public let chunksReceived: [Int]
     public let processedWith: MeetingTranscript.Processing?
     public let workerCrashes: Int?
+    /// Names and terms for this meeting's transcription (`vocabulary`), used at its next processing.
+    public let vocabulary: String?
     public let transcript: MeetingTranscript?
 
     public func chatReference(timeZone: TimeZone = .current) -> String? {
@@ -88,9 +90,11 @@ public struct MeetingTranscript: Decodable, Sendable, Equatable {
     public let processedWith: Processing?
     public let page: Int
     public let totalSegments: Int
+    /// The calendar event's invitees, first suggestions for naming its unknown speakers.
+    public let attendees: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case meeting, segments, gaps, speakers, processedWith, page, totalSegments
+        case meeting, segments, gaps, speakers, processedWith, page, totalSegments, attendees
     }
 
     public init(from decoder: any Decoder) throws {
@@ -103,6 +107,7 @@ public struct MeetingTranscript: Decodable, Sendable, Equatable {
         processedWith = try values.decodeIfPresent(Processing.self, forKey: .processedWith)
         page = try values.decode(Int.self, forKey: .page)
         totalSegments = try values.decode(Int.self, forKey: .totalSegments)
+        attendees = try values.decodeIfPresent([String].self, forKey: .attendees) ?? []
     }
 
     public struct Gap: Decodable, Sendable, Equatable {
