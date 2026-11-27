@@ -453,7 +453,7 @@ private struct MeetingSpeakerRow: View {
                     }
                 }
                 .padding(Design.Space.s8)
-                .background(Color.brand.opacity(0.08), in: .rect(cornerRadius: 8))
+                .background(Color.brand.opacity(0.08), in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous))
             }
             if let person = speaker.person, let current = speaker.name, !renaming {
                 HStack {
