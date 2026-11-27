@@ -173,12 +173,13 @@ final class IOSMeetingRecorder {
 
     private func tryResume() {
         guard var recording, let interruption = recording.interruption else { return }
-        guard (try? audio.resume()) == true else {
-            if ContinuousClock.now >= interruption.deadline {
-                finish(problem: "The microphone could not resume recording after an audio interruption.")
-            }
+        // Past the limit the meeting is over, even if the microphone is free again (review 2026-11-27: an app
+        // suspended for hours resumed the old meeting when brought back).
+        guard ContinuousClock.now < interruption.deadline else {
+            finish(problem: "The microphone could not resume recording after an audio interruption.")
             return
         }
+        guard (try? audio.resume()) == true else { return }
         recording.endGap(at: audio.currentTime, now: now())
         self.recording = recording
         interruptionTask?.cancel()

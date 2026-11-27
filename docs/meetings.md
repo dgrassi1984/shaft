@@ -46,18 +46,20 @@ The Mac records IMA4 audio in a `.caf` file (two channels at the microphone's ra
 that moment, and at the next launch SHAFT trims it, writes a sidecar that says it was cut short, and sends it.
 A recording that holds no readable audio is kept in `~/Library/Application Support/SHAFT/Meetings/`, never sent,
 and listed in the Meetings window and the Meeting menu with **Show in Finder**. While recording, the Mac does not
-go to sleep on its own; closing the lid still sleeps it, and the time asleep becomes a gap, filled with silence up
-to four hours (a longer one is said in the sidecar's `problems`). The recording says so while it runs when the
+go to sleep on its own; closing the lid still sleeps it, and the time asleep becomes a gap: up to a minute is
+filled with silence, a longer one is only marked, with its clock length (`wall_seconds`), as the iPhone's are. The recording says so while it runs when the
 microphone has heard nothing for 30 seconds, when the system audio stays silent (the permission), when audio
-cannot be written, and when the audio device cannot be restarted. If the microphone's rate changes during the
-recording (AirPods switching to call mode), the file keeps its rate and SHAFT converts. What a recording could not
+cannot be written, and when the audio device cannot be restarted; a warning goes once its cause clears. If the
+microphone's rate changes during the recording (AirPods switching to call mode), the file keeps its rate and SHAFT
+resamples. A recording stopped while another uploads is sent after it. What a recording could not
 keep stays shown after it was sent. **Stop Sending** pauses an upload; a new recording can start while one uploads.
 
 The apps send a recording without a title. Listen names it after the calendar event the recording overlaps most
 (timed, not declined) on the primary calendar of the Google account it is filed under, or of every logged-in
 account when it is not filed yet; until then, or when no event overlaps, it is called `Meeting <date> at <time>`.
-An unfiled meeting is filed under the account whose calendar holds that event (`account_from: calendar`), unless
-the operator chose its account, unfiled included, in the app or with `shaft meetings file`.
+A meeting created unfiled is filed under the account whose calendar holds that event (`account_from: calendar`),
+unless an event as long on another account's calendar makes it ambiguous, or the operator chose its account (unfiled
+included) in the app or with `shaft meetings file`. Meetings from before this are never filed by Listen.
 A title the operator sets is never replaced, nor is a meeting filed under another account while Listen read the
 calendar. A calendar that cannot be read is logged in the Listen log and only costs the title. The event's
 invitees' names join the prompt (below).

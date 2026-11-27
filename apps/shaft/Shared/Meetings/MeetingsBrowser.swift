@@ -244,6 +244,12 @@ private struct MeetingDetail: View {
             Text(meeting.displayTitle).font(.title.bold())
             Text(meeting.started.formatted(date: .long, time: .shortened))
                 .foregroundStyle(Color.textSecondary)
+            // A transcript of an incomplete recording says so here, not only in the push (Codex review 2026-11-27).
+            if let warnings = meeting.warnings, !warnings.isEmpty {
+                Label("The recording is incomplete: " + warnings.joined(separator: "; "), systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(Color.warning)
+            }
             filingFields
             if let transcript {
                 if meeting.state != "ready" {

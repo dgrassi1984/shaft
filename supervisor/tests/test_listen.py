@@ -455,6 +455,14 @@ class CalendarTitleTest(unittest.TestCase):
         self.assertEqual((found["summary"], alias), ("Update MKT", "work"))
         self.assertEqual(events.call_count, 2)
 
+    def test_as_long_an_overlap_on_two_accounts_names_the_meeting_but_files_it_nowhere(self):
+        # Codex review 2026-11-27: a personal and a work event in the same hour; the first alias sorted won, and the
+        # meeting was filed (and shown to that account's instances) by alphabetical order.
+        (found, alias), _ = self.lookup(self.row(), [([self.event("Dentist", "09:30", "10:00")], False),
+                                                      ([self.event("Update MKT", "09:30", "10:00")], False)])
+        self.assertIsNotNone(found)
+        self.assertIsNone(alias)
+
     def test_named_time_zones_count_and_a_broken_event_or_reply_never_fails_the_meeting(self):
         # Review 2026-11-26: an event with a zone name and no offset, or an unparsable one, raised and failed
         # transcription; so did any error from Google other than the two it names.
@@ -514,12 +522,19 @@ class CalendarTitleTest(unittest.TestCase):
         unfiled = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
         chosen = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
         meetings.update(chosen, {"account": None})
-        for meeting_id in (unfiled, chosen):
+        # One from before this change: unfiled, perhaps on purpose, so never filed by Listen.
+        legacy = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
+        folder = meetings._root() / legacy
+        old = json.loads((folder / "meeting.json").read_text())
+        old.pop("account_auto")
+        (folder / "meeting.json").write_text(json.dumps(old))
+        for meeting_id in (unfiled, chosen, legacy):
             engines = FakeEngines({"ch1": [(0, 5, "A")]}, {("ch1", 0, 5): spoken("Buongiorno a tutti")})
             with mock.patch.object(listen_worker, "calendar_event", return_value=(event, "home")):
                 self.assertTrue(listen_worker.process_next(engines))
         self.assertEqual((meetings.get(unfiled)["account"], meetings.get(unfiled)["title"]), ("home", "Update MKT"))
         self.assertIsNone(meetings.get(chosen)["account"])
+        self.assertIsNone(meetings.get(legacy)["account"])
 
     def test_processing_names_the_meeting_and_prompts_with_its_invitees(self):
         meeting_id = meetings.import_audio(self.audio, title="", mode="inperson")["id"]

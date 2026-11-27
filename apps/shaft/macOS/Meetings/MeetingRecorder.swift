@@ -25,7 +25,14 @@ final class MeetingRecorder {
     private(set) var phase: Phase = .idle
     /// Said by the capture while recording (the system audio silent: the permission is the likely cause), and what
     /// the stopped recording could not keep: shown until the next recording starts, also after it was sent.
-    private(set) var warning: String?
+    var warning: String? {
+        let lines = liveWarnings.sorted { $0.key < $1.key }.map(\.value) + (stopWarning.map { [$0] } ?? [])
+        return lines.isEmpty ? nil : lines.joined(separator: " ")
+    }
+    /// The capture's standing problems by cause, cleared when the cause clears; and what the stopped recording could
+    /// not keep.
+    private var liveWarnings: [String: String] = [:]
+    private var stopWarning: String?
     /// Recordings here that hold no readable audio: kept for the operator (Show in Finder), never sent.
     private(set) var damaged: [URL] = []
     /// The upload under way, for its progress.
@@ -43,6 +50,9 @@ final class MeetingRecorder {
 
     @ObservationIgnored private var capture: MeetingCapture?
     @ObservationIgnored private var sendTask: Task<Void, Never>?
+    /// Recordings waiting for the send task, in order: a Stop during another upload joins it (review 2026-11-27: it
+    /// was dropped, and the menu said the earlier one's "Sent").
+    @ObservationIgnored private var sendQueue: [URL] = []
     @ObservationIgnored private var sleepAssertion: IOPMAssertionID = 0
     @ObservationIgnored private var file: URL?
     @ObservationIgnored private let client: @MainActor () -> APIClient?
@@ -102,7 +112,8 @@ final class MeetingRecorder {
         guard !isRecording, !starting else { return }
         starting = true
         defer { starting = false }
-        warning = nil
+        liveWarnings = [:]
+        stopWarning = nil
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
             phase = .failed("SHAFT may not use the microphone: allow it in System Settings → Privacy & Security → Microphone.")
             return
@@ -116,7 +127,9 @@ final class MeetingRecorder {
             refreshMicrophones()
             let input = MeetingMicrophones.resolve(saved: microphoneUID, savedName: microphoneName, available: microphones)
             let capture = MeetingCapture(online: online, url: url, stallSeconds: 20, inputUID: input.uid)
-            capture.onWarning = { [weak self] message in Task { @MainActor in self?.warning = message } }
+            capture.onWarning = { [weak self] cause, message in
+                Task { @MainActor in self?.liveWarnings[cause] = message }
+            }
             try capture.start()
             self.capture = capture
             file = url
@@ -133,7 +146,6 @@ final class MeetingRecorder {
     func stop() async {
         guard let file = finishCapture() else { return }
         startSending([file])
-        await sendTask?.value
     }
 
     /// The app is quitting: finish the file so it stays readable; it is sent at the next launch.
@@ -151,8 +163,9 @@ final class MeetingRecorder {
         recordingFrom = nil
         inputNotice = nil
         phase = .idle
+        liveWarnings = [:]
         if let problems = sidecar["problems"] as? [String], !problems.isEmpty {
-            warning = "The recording is incomplete: " + problems.joined(separator: "; ") + "."
+            stopWarning = "The recording is incomplete: " + problems.joined(separator: "; ") + "."
         }
         return file
     }
@@ -171,16 +184,19 @@ final class MeetingRecorder {
     }
 
     private func startSending(_ files: [URL]) {
-        guard sendTask == nil, !files.isEmpty else { return }
+        sendQueue += files.filter { !sendQueue.contains($0) }
+        guard sendTask == nil, !sendQueue.isEmpty else { return }
         sendTask = Task { [weak self] in
-            for file in files {
-                guard let self, !Task.isCancelled else { break }
-                await self.send(file)
+            while let self, !Task.isCancelled, !self.sendQueue.isEmpty {
+                await self.send(self.sendQueue.removeFirst())
             }
             guard let self else { return }
             self.sendTask = nil
             self.uploader = nil
-            if Task.isCancelled, !self.isRecording { self.phase = .failed("Sending stopped. It is sent again at the next launch.") }
+            if Task.isCancelled {
+                self.sendQueue = []                 // still here: sent at the next launch or Send Again
+                if !self.isRecording { self.phase = .failed("Sending stopped. It is sent again at the next launch.") }
+            }
         }
     }
 

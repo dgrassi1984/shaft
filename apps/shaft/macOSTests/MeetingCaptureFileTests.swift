@@ -69,4 +69,38 @@ final class MeetingCaptureFileTests: XCTestCase {
         XCTAssertNil(MeetingCapture.secondsInFile(path))
         XCTAssertFalse(MeetingCapture.recover(path))
     }
+
+    /// AirPods switching to call mode mid-meeting: the device runs at 24 kHz, the file stays at 48 kHz. The IO thread
+    /// resamples (the writer's client format never changes mid-file), so a second of audio is a second in the file.
+    func testADeviceRateChangeIsResampledToTheFilesRate() {
+        let capture = MeetingCapture(online: false, url: url("rate"), stallSeconds: 20)
+        capture.fileRate = 48_000
+        capture.sampleRate = 24_000
+        var total = 0
+        for _ in 0..<(24_000 / 512) {
+            for i in 0..<512 { capture.scratch[i] = Float(i) / 512 }
+            total += capture.resample(512)
+        }
+        XCTAssertEqual(Double(total), 2 * Double(24_000 / 512 * 512), accuracy: 4)
+    }
+
+    /// Codex review 2026-11-27: hours asleep were filled with silence in one IO callback (a stall), or capped and the
+    /// rest lost unsaid. A long gap is marked with its clock length, not filled.
+    func testALongGapIsMarkedNotFilled() throws {
+        let path = url("gap")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let capture = MeetingCapture(online: true, url: path, stallSeconds: 20)
+        var fmt = capture.clientFormat(48_000)
+        capture.file = try capture.openFile(fmt: &fmt)
+        XCTAssertEqual(ExtAudioFileWriteAsync(capture.file!, 0, nil), noErr)
+        capture.fillGap(seconds: 3600, reason: "no audio (the Mac asleep, or a stall)")
+        capture.fillGap(seconds: 59, reason: "rebuild")
+        _ = capture.control.sync {}
+        XCTAssertEqual(capture.gaps.first?.wallSeconds, 3600)
+        XCTAssertEqual(capture.gaps.first?.end, 0)
+        XCTAssertEqual(capture.gaps.last?.end ?? 0, 59, accuracy: 0.01)
+        XCTAssertEqual(capture.framesLost.load(ordering: .relaxed), 0, "write error \(capture.lastWriteError.load(ordering: .relaxed))")
+        XCTAssertEqual(capture.framesWritten.load(ordering: .relaxed), 59 * 48_000)
+        ExtAudioFileDispose(capture.file!)
+    }
 }

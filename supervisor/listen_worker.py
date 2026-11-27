@@ -75,7 +75,13 @@ def calendar_event(row: dict) -> tuple[dict | None, str | None]:
             if start and end and gcal.own_response(event) != "declined":
                 found.append(((min(end, ended) - max(start, started)).total_seconds(), alias, event))
     seconds, alias, event = max(found, key=lambda item: item[0], default=(0, None, None))
-    return (event, alias) if seconds > 0 else (None, None)
+    if seconds <= 0:
+        return None, None
+    # As long an overlap on another account's calendar: the event names the meeting, but which account it belongs to
+    # is unknown, so it is not filed (review 2026-11-27: a personal and a work event in the same hour).
+    if any(other != alias and abs(overlap - seconds) < 60 for overlap, other, _ in found):
+        return event, None
+    return event, alias
 
 
 class Engines:

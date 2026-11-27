@@ -102,6 +102,9 @@ def _metadata(*, mode, started, device, ext, title="", ended=None, sidecar=None,
         "title": title, "title_auto": automatic, "created": datetime.now().astimezone().isoformat(timespec="microseconds"),
         "started": started, "ended": None if ended is None else _timestamp(ended, "ended"),
         "mode": mode, "device": device, "channels": sidecar.get("channels"), "account": account,
+        # Created unfiled: Listen may file it from its calendar event (file_from_calendar). Never set on meetings
+        # from before, whose operator may have unfiled them on purpose.
+        **({"account_auto": True} if account is None else {}),
         "state": "uploading", "error": None, "size": None, "sha256": None, "ext": ext,
         "chunk_size": CHUNK_SIZE, "chunks_received": [], "processed_with": None,
     }
@@ -245,7 +248,7 @@ def update(meeting_id: str, changes: dict) -> dict:
         account_changed = "account" in changes and changes["account"] != metadata["account"]
         metadata.update(changes)
         if "account" in changes:
-            metadata["account_chosen"] = True  # the operator's filing, unfiled included, is never redone by Listen
+            metadata.pop("account_auto", None)  # the operator's filing, unfiled included, is never redone by Listen
         if "title" in changes:
             metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
             metadata.pop("title_from", None)
@@ -372,7 +375,7 @@ def file_from_calendar(meeting_id: str, alias: str) -> bool:
     over the operator's own filing, an unfiled choice included. Runs before Listen finishes, so the ready note goes to
     that account's watchers."""
     with _locked(meeting_id) as (folder, metadata):
-        if metadata.get("account") is None and not metadata.get("account_chosen"):
+        if metadata.get("account") is None and metadata.get("account_auto"):
             try:
                 _account_alias(alias)
             except Invalid:

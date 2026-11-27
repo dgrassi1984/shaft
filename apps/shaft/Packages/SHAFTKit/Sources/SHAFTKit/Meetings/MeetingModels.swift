@@ -19,6 +19,8 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     public let chunksReceived: [Int]
     public let processedWith: MeetingTranscript.Processing?
     public let workerCrashes: Int?
+    /// What the recording device could not keep, though the meeting transcribed (`warnings`, server 2026-11-27).
+    public let warnings: [String]?
     public let transcript: MeetingTranscript?
 
     public func chatReference(timeZone: TimeZone = .current) -> String? {
