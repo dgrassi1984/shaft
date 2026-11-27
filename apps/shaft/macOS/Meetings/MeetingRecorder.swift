@@ -61,7 +61,7 @@ final class MeetingRecorder {
     var isRecording: Bool { if case .recording = phase { true } else { false } }
     /// Set before the permission prompt's await, so a second Record click cannot start a second capture over the first
     /// (review 2026-11-25).
-    @ObservationIgnored private var starting = false
+    @ObservationIgnored private(set) var starting = false
 
     @ObservationIgnored private let defaults: UserDefaults
 

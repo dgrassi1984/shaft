@@ -21,7 +21,14 @@ three hours), notes the gap and resumes in the same file if iOS allows it. Pause
 gap records its clock length (`wall_seconds` in the sidecar): the transcript marks each gap where audio paused and
 says how long nothing was recorded. If the microphone cannot resume, SHAFT keeps the partial recording and says why
 it stopped: a notification when SHAFT is in the background, and a banner above the chat until Meetings is opened.
-While recording, the banner above the chat and the meeting's toolbar both have **Stop**.
+The banner above the chat and the meeting's toolbar both have **Stop**. The Live Activity shows elapsed time
+on the Lock Screen and Dynamic Island. Tap **Stop** on the Lock Screen or in the expanded Dynamic Island.
+The activity shows when recording is paused and briefly shows the reason if recording stops early.
+
+Say "Record a meeting with SHAFT" or "Stop recording my meeting with SHAFT" to Siri, or use
+**Record Meeting** and **Stop Meeting Recording** in Shortcuts or Control Center. On supported iPhones,
+assign either control to the Action button. **Record Meeting** opens SHAFT before using the microphone.
+
 The iPhone records IMA4 audio in a `.caf` file (24 kHz, about 0.7 MB a minute): if iOS ends SHAFT during a
 recording, the file stays readable up to that moment and is sent at the next launch, marked as cut short.
 
@@ -40,6 +47,8 @@ microphone unplugged and plugged back in during a recording is picked up again b
 
 Record from the Meeting menu, the menu bar icon or the Meetings window (⌥⌘M), which has **Record Online**,
 **Record In Person** and **Stop Recording** while one runs (also in the open meeting's toolbar).
+The same Siri phrases and Shortcuts actions work on Mac. **Record Meeting** defaults to **Online**.
+Choose **In Person** in Shortcuts to record only the microphone.
 
 The Mac records IMA4 audio in a `.caf` file (two channels at the microphone's rate, about 2.9 MB a minute at
 48 kHz). Quitting SHAFT while recording finishes the file first; if SHAFT crashes, the file stays readable up to

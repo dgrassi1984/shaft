@@ -46,10 +46,35 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             self?.model.notificationTapped(instance: instance)
         }
         AppDependencyManager.shared.add(dependency: openChat)
+        let meetingActions = MeetingIntentActions(
+            start: { [weak self] _ in
+                guard UIApplication.shared.applicationState != .background else {
+                    return "Open SHAFT to record a meeting."
+                }
+                guard let recorder = self?.meetings else { return "Open SHAFT to record a meeting." }
+                guard recorder.started == nil else { return "A meeting is already recording." }
+                guard !recorder.starting else { return "A recording is already starting." }
+                ReadAloudRequests.shared.stop()
+                await recorder.start()
+                if recorder.started != nil { return "Recording started" }
+                if let problem = recorder.problem { return "\(problem)" }
+                return "Could not start recording."
+            },
+            stop: { [weak self] in
+                guard let self, meetings.started != nil else { return "No meeting is recording." }
+                meetings.stop()
+                if let problem = meetings.problem { return "\(problem)" }
+                guard let session = model.session, !session.isDemo, session.store?.client != nil else {
+                    return "Recording stopped. Pair with SHAFT to send it."
+                }
+                if !meetings.uploadsInForeground { return "Recording stopped. Open SHAFT to send it." }
+                return "Recording stopped. Upload queued."
+            })
+        AppDependencyManager.shared.add(dependency: meetingActions)
     }
 
     lazy var meetings = IOSMeetingRecorder(audio: SystemMeetingAudio(), audioUse: .shared,
-                                           device: { UIDevice.current.name })
+                                           device: { UIDevice.current.name }, startActivity: SystemMeetingActivity.start)
     /// The Apple Watch app's way to the server (it has none of its own).
     private lazy var watch = WatchRelay(model: model)
 

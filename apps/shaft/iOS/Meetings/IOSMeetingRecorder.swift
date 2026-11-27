@@ -5,6 +5,12 @@ import SHAFTKit
 import UserNotifications
 
 @MainActor
+protocol IOSMeetingActivity: AnyObject {
+    func setInterrupted(_ interrupted: Bool)
+    func end(at date: Date, problem: String?)
+}
+
+@MainActor
 @Observable
 final class IOSMeetingRecorder {
     private struct Sidecar: Codable {
@@ -81,6 +87,8 @@ final class IOSMeetingRecorder {
     @ObservationIgnored private let interruptionLimit: Duration
     @ObservationIgnored private let retryInterval: Duration
     @ObservationIgnored private let notify: @MainActor (String) -> Void
+    @ObservationIgnored private let startActivity: @MainActor (Date) -> (any IOSMeetingActivity)?
+    @ObservationIgnored private var activity: (any IOSMeetingActivity)?
     @ObservationIgnored private var interruptionTask: Task<Void, Never>?
     @ObservationIgnored private var client: APIClient?
     @ObservationIgnored private var foreground = false
@@ -91,8 +99,10 @@ final class IOSMeetingRecorder {
          folder: URL = URL.applicationSupportDirectory.appending(path: "SHAFT/Meetings", directoryHint: .isDirectory),
          now: @escaping @MainActor () -> Date = { Date() }, device: @escaping @MainActor () -> String,
          interruptionLimit: Duration = .seconds(3 * 3600), retryInterval: Duration = .seconds(1),
-         notify: @escaping @MainActor (String) -> Void = IOSMeetingRecorder.postNotification) {
+         notify: @escaping @MainActor (String) -> Void = IOSMeetingRecorder.postNotification,
+         startActivity: @escaping @MainActor (Date) -> (any IOSMeetingActivity)? = { _ in nil }) {
         self.notify = notify
+        self.startActivity = startActivity
         self.audio = audio
         self.audioUse = audioUse
         self.folder = folder
@@ -126,7 +136,9 @@ final class IOSMeetingRecorder {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let input = try audio.start(at: file)
-            recording = Recording(file: file, sidecar: Sidecar(started: now(), mode: "inperson", inputDevice: input))
+            let started = now()
+            recording = Recording(file: file, sidecar: Sidecar(started: started, mode: "inperson", inputDevice: input))
+            activity = startActivity(started)
         } catch {
             audio.stop()
             try? FileManager.default.removeItem(at: file)
@@ -138,6 +150,8 @@ final class IOSMeetingRecorder {
         finish()
     }
 
+    var uploadsInForeground: Bool { foreground }
+
     private func handle(_ event: IOSMeetingAudioEvent) {
         guard var recording else { return }
         switch event {
@@ -148,6 +162,7 @@ final class IOSMeetingRecorder {
             recording.interruption = (audio.currentTime, ContinuousClock.now + interruptionLimit, now())
             self.recording = recording
             audio.pause()
+            activity?.setInterrupted(true)
             interruptionTask = Task { [weak self, retryInterval] in
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: retryInterval) } catch { return }
@@ -182,6 +197,7 @@ final class IOSMeetingRecorder {
         guard (try? audio.resume()) == true else { return }
         recording.endGap(at: audio.currentTime, now: now())
         self.recording = recording
+        activity?.setInterrupted(false)
         interruptionTask?.cancel()
         interruptionTask = nil
     }
@@ -198,6 +214,8 @@ final class IOSMeetingRecorder {
         recording.sidecar.ended = ended
         if let failure { recording.sidecar.problems.append(failure) }
         problem = failure.map { "Recording stopped early. \($0)" }
+        activity?.end(at: ended, problem: problem)
+        activity = nil
         if let problem {
             problemUnseen = true
             if !foreground { notify(problem) }
