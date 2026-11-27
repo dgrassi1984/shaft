@@ -271,7 +271,8 @@ class LongChatTest(unittest.TestCase):
                  for k in range(200)]
         chat = {"id": "web-a", "state": "idle", "created": "2026-10-27T10:00:00", "turns": turns}
         feed = str(web_views.chat_feed("wisp", chat, []))
-        self.assertIn('<a class="button" href="?all=1">Show the 120 earlier messages</a>', feed)
+        # the thread's own page: "?all=1" alone opened Main (2026-11-27)
+        self.assertIn('<a class="button" href="?id=web-a&amp;all=1">Show the 120 earlier messages</a>', feed)
         self.assertNotIn('data-k="u0"', feed)
         self.assertIn('data-k="u120"', feed)              # each turn keeps its own index: nothing shifts
         self.assertIn('data-k="a199"', feed)
