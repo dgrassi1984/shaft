@@ -1143,10 +1143,10 @@ are taken as before.
 
 | Field | Type | |
 |---|---|---|
-| `events` | list | `{title, body, url, tag, instance, cid}` |
+| `events` | list | `{title, body, url, tag, instance, cid}`, plus `meeting` (its id) on a meeting's event |
 | `title` | str | "example replied", "example's reply failed", "example asks", "example says" |
 | `body` | str | its first line, at most 160 characters |
-| `url` | str | the web path it opens (`/i/example/chat?id=web-abc` or `/i/example/from`) |
+| `url` | str | the web path it opens (`/i/example/chat?id=web-abc` or `/i/example/from`); `/meetings/<id>` for a meeting that is ready or failed, or has a speaker proposal (the APNs payload then carries `meeting`, and the apps open it in Meetings) |
 | `tag` | str | replaces an earlier notification with the same tag |
 | `instance` | str or null | the instance to open: parsed from either chat or From URL; null for the plain one |
 | `cid` | str or null | Thread id, `"from"`, or null for an untargeted or legacy event |

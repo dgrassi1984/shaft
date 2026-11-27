@@ -6,6 +6,9 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     let client: APIClient
     let refreshID: RefreshID
     let clipPlaybackAllowed: Bool
+    /// A meeting to open (a tapped notification about it): selected once the list has it, then `opened` is called.
+    let requested: String?
+    private let opened: (() -> Void)?
     private let close: (() -> Void)?
     private let controls: () -> Controls
     @State private var store: MeetingsStore
@@ -15,11 +18,13 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     @State private var aliases: [String]?
     @State private var accountError: String?
 
-    init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true,
-         close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
+    init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true, requested: String? = nil,
+         opened: (() -> Void)? = nil, close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
         self.client = client
         self.refreshID = refreshID
         self.clipPlaybackAllowed = clipPlaybackAllowed
+        self.requested = requested
+        self.opened = opened
         self.close = close
         self.controls = controls
         _store = State(initialValue: MeetingsStore(client: client))
@@ -93,6 +98,15 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
         .task { await loadAccounts() }
         .task(id: refreshID) { await store.refresh() }
         .task(id: store.needsPolling) { await store.poll() }
+        .task(id: requested) {
+            guard let requested else { return }
+            await store.refresh()
+            if store.meetings.contains(where: { $0.id == requested }) {
+                selection = requested
+                compactColumn = .detail
+            }
+            opened?()
+        }
         .onChange(of: store.meetings.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) {
                 self.selection = nil
@@ -286,14 +300,25 @@ private struct MeetingDetail: View {
                 if let speaker = transcript.speakers[label] {
                     MeetingSpeakerRow(label: label, speaker: speaker, transcript: transcript,
                                       otherLabels: labels.filter { $0 != label }, people: store.people,
+                                      proposals: store.proposals.filter { $0.meeting == meeting.id && $0.speaker == label },
                                       playbackAllowed: clipPlaybackAllowed, play: { clipLabel = label },
                                       save: { name in Task { await store.name(meeting.id, label: label, name: name) } },
-                                      merge: { target in Task { await store.merge(meeting.id, label: label, into: target) } })
+                                      merge: { target in Task { await store.merge(meeting.id, label: label, into: target) } },
+                                      decide: { proposal, approve in Task { await store.decide(proposal, approve: approve) } },
+                                      rename: { person, name in
+                                          Task { await store.renamePerson(person, name: name, meeting: meeting.id) }
+                                      },
+                                      forget: { person, anonymise in
+                                          Task { await store.forgetPerson(person, anonymise: anonymise, meeting: meeting.id) }
+                                      })
                     .disabled(store.mutating || store.loadingDetail || clipLabel != nil)
                 }
             }
         }
-        .task { await store.loadPeople() }
+        .task {
+            await store.loadPeople()
+            await store.loadProposals()
+        }
     }
 
     private func transcriptRows(_ transcript: MeetingTranscript) -> some View {
@@ -374,11 +399,22 @@ private struct MeetingSpeakerRow: View {
     let transcript: MeetingTranscript
     let otherLabels: [String]
     let people: [SpeakerPerson]
+    let proposals: [MeetingSpeakerProposal]
     let playbackAllowed: Bool
     let play: () -> Void
     let save: (String) -> Void
     let merge: (String) -> Void
+    let decide: (MeetingSpeakerProposal, Bool) -> Void
+    /// Rename the known person everywhere (person id, new name).
+    let rename: (String, String) -> Void
+    /// Forget the known person's voice (person id, anonymise past meetings).
+    let forget: (String, Bool) -> Void
     @State private var name = ""
+    /// Naming a speaker who already has a name: the same field as for an unknown one.
+    @State private var renaming = false
+    @State private var renamingPerson = false
+    @State private var personName = ""
+    @State private var confirmForget = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.s8) {
@@ -398,7 +434,56 @@ private struct MeetingSpeakerRow: View {
                     .accessibilityLabel("Merge Speaker \(label) into another speaker")
                 }
             }
-            if speaker.name == nil {
+            ForEach(proposals) { proposal in
+                VStack(alignment: .leading, spacing: Design.Space.s4) {
+                    Text("\(proposal.instance) suggests \(proposal.name)").fontWeight(.medium)
+                    Text(proposal.why).font(.callout).foregroundStyle(Color.textSecondary)
+                    HStack {
+                        Button("Confirm \(proposal.name)") { decide(proposal, true) }
+                        Button("Reject") { decide(proposal, false) }
+                    }
+                }
+                .padding(Design.Space.s8)
+                .background(Color.brand.opacity(0.08), in: .rect(cornerRadius: 8))
+            }
+            if let person = speaker.person, let current = speaker.name, !renaming {
+                HStack {
+                    Button(action: play) { Image(systemName: "play.fill") }
+                        .accessibilityLabel("Play clip for \(current)")
+                        .disabled(!playbackAllowed || speaker.clips?.isEmpty != false)
+                    Spacer()
+                    Menu("Change") {
+                        Button("Not \(current): name this speaker…") {
+                            name = ""
+                            renaming = true
+                        }
+                        Button("Rename \(current) in every meeting…") {
+                            personName = current
+                            renamingPerson = true
+                        }
+                        Button("Forget \(current)'s voice…", role: .destructive) { confirmForget = true }
+                    }
+                    .fixedSize()
+                    .accessibilityLabel("Change the name of Speaker \(label)")
+                }
+                .alert("Rename \(current)", isPresented: $renamingPerson) {
+                    TextField("Name", text: $personName)
+                    Button("Cancel", role: .cancel) {}
+                    Button("Rename") {
+                        let trimmed = personName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty, trimmed != current { rename(person, trimmed) }
+                    }
+                } message: {
+                    Text("Every meeting that names \(current) shows the new name.")
+                }
+                .confirmationDialog("Forget \(current)'s voice?", isPresented: $confirmForget, titleVisibility: .visible) {
+                    Button("Forget, keep the name in past meetings", role: .destructive) { forget(person, false) }
+                    Button("Forget and anonymise past meetings", role: .destructive) { forget(person, true) }
+                } message: {
+                    Text("No meeting is matched to \(current) again. Text already sent to instances cannot be recalled.")
+                }
+            }
+            if speaker.name == nil || renaming {
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 let matches = people.filter { trimmed.isEmpty || $0.name.localizedCaseInsensitiveContains(trimmed) }
                     .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -408,7 +493,12 @@ private struct MeetingSpeakerRow: View {
                         .help(speaker.clips?.isEmpty == false ? "Play speaker clip" : "No clip available")
                         .disabled(!playbackAllowed || speaker.clips?.isEmpty != false)
                     TextField("Name Speaker \(label)", text: $name)
-                        .onSubmit { if !trimmed.isEmpty { save(trimmed) } }
+                        .onSubmit {
+                            if !trimmed.isEmpty {
+                                save(trimmed)
+                                renaming = false
+                            }
+                        }
                     if !people.isEmpty {
                         Menu("Suggestions") {
                             ForEach(matches) { person in
@@ -418,7 +508,12 @@ private struct MeetingSpeakerRow: View {
                         .fixedSize()
                         .disabled(matches.isEmpty)
                     }
-                    Button("Save") { save(trimmed) }.disabled(trimmed.isEmpty)
+                    Button("Save") {
+                        save(trimmed)
+                        renaming = false
+                    }
+                    .disabled(trimmed.isEmpty)
+                    if renaming { Button("Cancel") { renaming = false } }
                 }
             }
         }

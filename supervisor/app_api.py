@@ -930,7 +930,8 @@ def _latest(req: Request) -> Response:
     if instance is not None and not NAME_RE.fullmatch(instance):
         raise Refusal(400, "bad_request", "instance must be an instance name.")
     events = [{**e, "instance": m[1] if (m := re.fullmatch(r"/i/([A-Za-z0-9_-]+)/(?:chat|from)",
-                                                       urllib.parse.urlsplit(e.get("url", "")).path)) else None}
+                                                       urllib.parse.urlsplit(e.get("url", "")).path)) else None,
+               **({"meeting": meeting} if (meeting := webpush.meeting_of(e)) else {})}
               for e in webpush.take(req.device, instance=instance)]
     return _json(200, {"events": events, "badge": web_seen.badge(req.device)})
 

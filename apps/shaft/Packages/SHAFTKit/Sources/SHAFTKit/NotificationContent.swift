@@ -6,8 +6,16 @@ import UserNotifications
 /// failure (not paired, offline, too slow, nothing for this instance) leaves the notification as it came: title only.
 public enum NotificationContent {
     /// The instance a notification is about: the payload's `instance` (PLAN §2.2), for the tap to open its chat.
+    /// Nil for an empty one: a push about no instance (a meeting) carries `""`.
     public static func instance(from userInfo: [AnyHashable: Any]) -> String? {
-        userInfo["instance"] as? String
+        guard let instance = userInfo["instance"] as? String, !instance.isEmpty else { return nil }
+        return instance
+    }
+
+    /// The meeting a notification is about (ready or failed): the payload's `meeting`, for the tap to open it.
+    public static func meeting(from userInfo: [AnyHashable: Any]) -> String? {
+        guard let meeting = userInfo["meeting"] as? String, !meeting.isEmpty else { return nil }
+        return meeting
     }
 
     /// The thread a notification is about: the payload's `cid` (a chat id, or `"from"` for the From feed), or the one
@@ -20,7 +28,7 @@ public enum NotificationContent {
 
     /// What to show for a push about `instance`: the newest queued event for it. Nil on any failure. `session` is for
     /// tests; the extension's own is ephemeral, with `timeout` on the whole fetch.
-    public static func fetch(instance: String?, cid: String? = nil, store: any CredentialStore,
+    public static func fetch(instance: String?, cid: String? = nil, meeting: String? = nil, store: any CredentialStore,
                              timeout: TimeInterval = 20, session: URLSession? = nil) async -> Filled? {
         guard let credential = try? store.load() else { return nil }
         let own: URLSession? = session == nil ? {
@@ -32,13 +40,21 @@ public enum NotificationContent {
         defer { own?.finishTasksAndInvalidate() }
         let client = APIClient(credential: credential, session: session ?? own!)
         guard let latest = try? await client.pushLatest(instance: instance) else { return nil }
-        return choose(latest, instance: instance, cid: cid)
+        return choose(latest, instance: instance, cid: cid, meeting: meeting)
     }
 
     /// The event to show: the newest for `instance` (or the newest of all when the payload named none), of the thread
     /// `cid` when the payload named one and an event of it is there. Nil when no event of the instance matches: a body
-    /// from another instance's chat would be wrong, so the title stays alone.
-    public static func choose(_ latest: PushLatest, instance: String?, cid: String? = nil) -> Filled? {
+    /// from another instance's chat would be wrong, so the title stays alone. A push about a meeting shows only that
+    /// meeting's event.
+    public static func choose(_ latest: PushLatest, instance: String?, cid: String? = nil,
+                              meeting: String? = nil) -> Filled? {
+        if let meeting {
+            guard let event = latest.events.last(where: { $0.meeting == meeting }) else { return nil }
+            var filled = Filled(title: event.title, body: event.body, badge: latest.badge, instance: nil)
+            filled.meeting = meeting
+            return filled
+        }
         let mine = instance.map { name in latest.events.filter { $0.instance == name } } ?? latest.events
         let event = cid.flatMap { cid in mine.last { $0.cid == cid } } ?? mine.last
         guard let event else { return nil }
@@ -57,6 +73,8 @@ public enum NotificationContent {
         /// The thread the event is about (`PushEvent.cid`): kept in `userInfo["cid"]`, so the tap opens it.
         public var cid: String?
         public var question: NotificationQuestion? = nil
+        /// The meeting the event is about: kept in `userInfo["meeting"]`, so the tap opens it.
+        public var meeting: String? = nil
 
         public init(title: String, body: String, badge: Int, instance: String?, cid: String? = nil) {
             self.title = title
@@ -75,6 +93,7 @@ public enum NotificationContent {
                 content.userInfo["instance"] = instance
             }
             if let cid { content.userInfo["cid"] = cid }
+            if let meeting { content.userInfo["meeting"] = meeting }
             content.categoryIdentifier = ""
             content.userInfo.removeValue(forKey: "question_file")
             content.userInfo.removeValue(forKey: "question_option_count")
@@ -104,12 +123,14 @@ public final class NotificationDelivery: @unchecked Sendable {
 
     /// Fetch the body and deliver. Runs `NotificationContent.fetch` with the shared Keychain credential.
     public func run(store: any CredentialStore, timeout: TimeInterval = 20) {
-        let (instance, cid) = lock.withLock {
+        let (instance, cid, meeting) = lock.withLock {
             (content.flatMap { NotificationContent.instance(from: $0.userInfo) },
-             content.flatMap { NotificationContent.cid(from: $0.userInfo) })
+             content.flatMap { NotificationContent.cid(from: $0.userInfo) },
+             content.flatMap { NotificationContent.meeting(from: $0.userInfo) })
         }
         Task {
-            let filled = await NotificationContent.fetch(instance: instance, cid: cid, store: store, timeout: timeout)
+            let filled = await NotificationContent.fetch(instance: instance, cid: cid, meeting: meeting, store: store,
+                                                         timeout: timeout)
             await self.deliverAfterRegistration(filled) { category in
                 await QuestionCategoryRegistry.shared.register(category)
             }

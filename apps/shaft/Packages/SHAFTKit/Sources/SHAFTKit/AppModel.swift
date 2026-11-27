@@ -18,6 +18,9 @@ public final class AppModel {
     /// The chat a notification tap (or a link) asked for, its thread when it named one: the UI opens it, then sets this
     /// to nil.
     public var openChat: ChatTarget?
+    /// The meeting a notification tap asked for (ready or failed): the Meetings screen opens on it, then sets this to
+    /// nil.
+    public var openMeeting: String?
     /// The chat on screen while the app is in front (its thread's `cid`, `"from"`, or nil for the current chat), nil
     /// otherwise: a notification about it shows no banner.
     public var visibleChat: ChatTarget?
@@ -92,9 +95,11 @@ public final class AppModel {
         return [.banner, .list, .sound, .badge]
     }
 
-    /// A notification was tapped: open the chat it is about, its thread when it names one.
-    public func notificationTapped(instance: String?, cid: String? = nil) {
-        if let instance { openChat = ChatTarget(instance: instance, cid: cid) }
+    /// A notification was tapped: open the meeting it is about, else the chat it is about (its thread when it names
+    /// one).
+    public func notificationTapped(instance: String?, cid: String? = nil, meeting: String? = nil) {
+        if let meeting { openMeeting = meeting }
+        else if let instance { openChat = ChatTarget(instance: instance, cid: cid) }
     }
 
     /// Notification actions run without opening a chat. Every refusal, including an answer made elsewhere, is shown.

@@ -241,6 +241,39 @@ struct MeetingsStoreTests {
         #expect(clip == audio)
     }
 
+    /// Instances' speaker proposals were confirmed only from the CLI (review 2026-11-27): the app lists them and sends
+    /// the operator's decision.
+    @Test func listsAndConfirmsAnInstanceProposal() async throws {
+        let decided = Mutex(false)
+        let proposal = #"{"id":"0123456789abcdef0123456789abcdef","instance":"wisp","meeting":"\#(Self.id)","speaker":"S2","name":"Ada","why":"The invite lists her.","created":"2026-11-25T14:02:31+01:00","state":"pending","revision":"r"}"#
+        let server = StubServer { request in
+            switch (request.method, request.path) {
+            case ("GET", "\(Self.base)/proposals"):
+                return .json(200, decided.withLock { $0 } ? #"{"proposals":[]}"# : "{\"proposals\":[\(proposal)]}")
+            case ("POST", "\(Self.base)/proposals"):
+                guard let body = request.json as? [String: Any], body["id"] as? String == "0123456789abcdef0123456789abcdef",
+                      body["approve"] as? Bool == true else { return Self.unexpected }
+                decided.withLock { $0 = true }
+                return .json(200, proposal.replacingOccurrences(of: "pending", with: "confirmed"))
+            case ("GET", Self.detail):
+                return .json(200, Self.metadata("ready", transcript: Self.transcript(named: true)))
+            case ("GET", Self.gallery):
+                return .json(200, "{\"people\":[\(Self.person)]}")
+            default:
+                return Self.unexpected
+            }
+        }
+        let store = MeetingsStore(client: server.client)
+        await store.load(Self.id)
+        await store.loadProposals()
+        let pending = try #require(store.proposals.first)
+        #expect((pending.instance, pending.speaker, pending.name) == ("wisp", "S2", "Ada"))
+        await store.decide(pending, approve: true)
+        #expect(store.actionError == nil)
+        #expect(store.proposals.isEmpty)
+        #expect(store.detail?.transcript?.speakers["S2"]?.name == "Ada")
+    }
+
     @Test func renamesAndForgetsAGalleryPerson() async throws {
         let server = StubServer { request in
             let path = "\(Self.gallery)/p-12345678"

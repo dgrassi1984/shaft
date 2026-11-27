@@ -11,6 +11,27 @@ public struct InstanceSettings: Codable, Sendable, Equatable {
     public var operatorName: OperatorName
     public var voiceMode: VoiceMode
     public var voiceEffort: VoiceEffort
+    /// WATCH_MAIL / WATCH_CALENDAR / WATCH_GCHAT / WATCH_MEETINGS (off, inbox or wake); nil from a server without them.
+    public var watchMail: Watch?
+    public var watchCalendar: Watch?
+    public var watchGchat: Watch?
+    public var watchMeetings: Watch?
+
+    public struct Watch: Codable, Sendable, Equatable {
+        public var value: String
+        public var choices: [String]
+    }
+
+    /// The watch a field names, for the four watch fields.
+    public func watch(_ field: SettingField) -> Watch? {
+        switch field {
+        case .watchMail: watchMail
+        case .watchCalendar: watchCalendar
+        case .watchGchat: watchGchat
+        case .watchMeetings: watchMeetings
+        default: nil
+        }
+    }
 
     public struct Model: Codable, Sendable, Equatable {
         public var value: String
@@ -67,6 +88,7 @@ public struct InstanceSettings: Codable, Sendable, Equatable {
         case .operatorName: .string(operatorName.value)
         case .voiceMode: .string(voiceMode.value)
         case .voiceEffort: .string(voiceEffort.value)
+        case .watchMail, .watchCalendar, .watchGchat, .watchMeetings: .string(watch(field)?.value ?? "off")
         }
     }
 }
@@ -78,6 +100,13 @@ public enum SettingField: String, Codable, Sendable, CaseIterable {
     case operatorName = "operator_name"
     case voiceMode = "voice_mode"
     case voiceEffort = "voice_effort"
+    case watchMail = "watch_mail"
+    case watchCalendar = "watch_calendar"
+    case watchGchat = "watch_gchat"
+    case watchMeetings = "watch_meetings"
+
+    /// The watches, in the order the settings show them.
+    public static let watches: [SettingField] = [.watchMeetings, .watchMail, .watchCalendar, .watchGchat]
 }
 
 /// A scalar JSON value. `.null` explicitly unsets effort or the cloud-cap override.

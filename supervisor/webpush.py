@@ -27,6 +27,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -308,8 +309,17 @@ def apns_payload(event: dict, badge: int) -> dict:
     fixture server replaces apns.py with a stub and writes this same payload, so a simulator sees what a phone gets."""
     parts = urllib.parse.urlsplit(event["url"]).path.split("/")
     instance = parts[2] if len(parts) > 2 and parts[1] == "i" else ""
-    return {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
-                    "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+    payload = {"aps": {"alert": {"title": event["title"]}, "badge": badge, "sound": "default",
+                       "thread-id": instance, "mutable-content": 1}, "instance": instance, "cid": event.get("cid")}
+    if meeting := meeting_of(event):
+        payload["meeting"] = meeting               # the tap opens it in Meetings
+    return payload
+
+
+def meeting_of(event: dict) -> str | None:
+    """The meeting a push is about (meetings.tell_operator: `/meetings/<id>`), else None."""
+    match = re.fullmatch(r"/meetings/(m-[0-9]{8}-[0-9]{4}-[0-9a-f]{4})", urllib.parse.urlsplit(event.get("url", "")).path)
+    return match[1] if match else None
 
 
 def notify(event: dict, skip=frozenset()) -> list[str]:

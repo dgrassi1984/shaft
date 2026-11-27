@@ -87,6 +87,16 @@ public extension APIClient {
         try await post("/app/v1/meetings/\(id)/speakers", json: ["label": label, "merge_into": target])
     }
 
+    func meetingProposals() async throws -> [MeetingSpeakerProposal] {
+        let result: MeetingProposalsResponse = try await get("/app/v1/meetings/proposals")
+        return result.proposals
+    }
+
+    @discardableResult
+    func decideMeetingProposal(_ id: String, approve: Bool) async throws -> MeetingSpeakerProposal {
+        try await post("/app/v1/meetings/proposals", json: ProposalDecision(id: id, approve: approve))
+    }
+
     func meetingClip(_ id: String, speaker: String, n: Int = 0) async throws -> Data {
         let path = "/app/v1/meetings/\(id)/clip"
         let query = [URLQueryItem(name: "speaker", value: speaker), URLQueryItem(name: "n", value: String(n))]
@@ -109,6 +119,15 @@ public struct SpeakerDeleted: Decodable, Sendable, Equatable {
 
 private struct SpeakersResponse: Decodable {
     let people: [SpeakerPerson]
+}
+
+private struct MeetingProposalsResponse: Decodable {
+    let proposals: [MeetingSpeakerProposal]
+}
+
+private struct ProposalDecision: Encodable {
+    let id: String
+    let approve: Bool
 }
 
 private struct MeetingChunkReceipt: Decodable {

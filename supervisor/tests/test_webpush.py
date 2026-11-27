@@ -372,3 +372,15 @@ class PairedOnlyTest(PushTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeetingPayloadTest(unittest.TestCase):
+    """A meeting push names its meeting for the apps' tap (and no instance); any other push names none."""
+
+    def test_meeting_url_puts_the_meeting_in_the_payload(self):
+        from supervisor import webpush
+        event = {"title": "Meeting ready: Example", "url": "/meetings/m-20260101-1200-abcd", "cid": None}
+        payload = webpush.apns_payload(event, 2)
+        self.assertEqual((payload["meeting"], payload["instance"]), ("m-20260101-1200-abcd", ""))
+        self.assertNotIn("meeting", webpush.apns_payload({"title": "x", "url": "/i/wisp/chat"}, 0))
+        self.assertIsNone(webpush.meeting_of({"url": "/meetings/../secrets"}))

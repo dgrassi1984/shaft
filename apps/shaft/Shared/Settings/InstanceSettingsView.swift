@@ -89,6 +89,27 @@ struct InstanceSettingsView: View {
             }
             .listRowBackground(Color.elevated)
             VoiceSettingsSection(store: store, client: instances.client, settings: settings)
+            if SettingField.watches.contains(where: { settings.watch($0) != nil }) {
+                Section {
+                    ForEach(SettingField.watches, id: \.self) { field in
+                        if let watch = settings.watch(field) {
+                            savingRow(field) {
+                                Picker(Self.watchLabel(field), selection: stringBinding(field, read: {
+                                    store.settings?.watch(field)?.value ?? "off"
+                                })) {
+                                    if !watch.choices.contains(watch.value) { Text(watch.value).tag(watch.value) }
+                                    ForEach(watch.choices, id: \.self) { Text(Self.watchChoice($0)).tag($0) }
+                                }
+                            }
+                        }
+                    }
+                } header: { Text("Watches") } footer: {
+                    Text("What \(store.instance) hears about by itself on what you granted it: nothing, a note in its "
+                         + "inbox, or a note that also wakes it. A meeting is sent once, when its transcript is first ready.")
+                        .foregroundStyle(Color.textSecondary)
+                }
+                .listRowBackground(Color.elevated)
+            }
             InstanceAccessSection(client: instances.client, instance: store.instance)
             Section {
                 HStack {
@@ -152,6 +173,25 @@ struct InstanceSettingsView: View {
         Task {
             await store.setPaused(value)
             pausing = false
+        }
+    }
+
+    static func watchLabel(_ field: SettingField) -> String {
+        switch field {
+        case .watchMeetings: "Meetings"
+        case .watchMail: "Mail"
+        case .watchCalendar: "Calendar"
+        case .watchGchat: "Google Chat"
+        default: field.rawValue
+        }
+    }
+
+    static func watchChoice(_ value: String) -> String {
+        switch value {
+        case "off": "Off"
+        case "inbox": "Inbox note"
+        case "wake": "Inbox note and wake"
+        default: value
         }
     }
 

@@ -371,6 +371,32 @@ def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> N
             raise Conflict(f"Cannot move a meeting from {current} to {state}.")
         metadata.update(state=state, error=error, processed_with=processed_with)
         _save(folder, metadata)
+    if state == "failed" and current != "failed":
+        tell_operator(metadata)
+
+
+def tell_operator(metadata: dict, speakers: dict | None = None) -> None:
+    """A push to the operator's paired devices: the meeting is ready (who spoke, and how many voices still need a
+    name) or it failed (why). Tapping it opens the meeting in the apps. Never raises: the state is saved either way."""
+    from . import webpush
+    title = " ".join(str(metadata.get("title") or metadata["id"]).split())[:120]
+    if metadata["state"] == "ready":
+        rows = list((speakers or {}).values())
+        named = sorted({row["name"] for row in rows if row.get("name")})
+        unknown = sum(1 for row in rows if not row.get("name"))
+        parts = [", ".join(named) if named else "No speaker recognised yet"]
+        if unknown:
+            parts.append(f"{unknown} voice{'s' if unknown != 1 else ''} to name")
+        if not metadata.get("account"):
+            parts.append("unfiled: no instance can read it yet")
+        event = {"title": f"Meeting ready: {title}", "body": " · ".join(parts)}
+    else:
+        error = " ".join(str(metadata.get("error") or "no reason recorded").split())
+        event = {"title": f"Meeting failed: {title}", "body": error[:300]}
+    try:
+        webpush.notify({**event, "url": f"/meetings/{metadata['id']}", "tag": f"meeting-{metadata['id']}", "cid": None})
+    except Exception as e:
+        core.log(f"meetings: {metadata['id']}: push to the operator failed ({type(e).__name__}: {e})")
 
 
 def reprocess(meeting_id: str) -> dict:
@@ -393,6 +419,8 @@ def recover_processing(meeting_id: str) -> None:
             metadata.update(worker_crashes=crashes, state="queued" if retry else "failed",
                             error=None if retry else "worker stopped while processing")
             _save(folder, metadata)
+            if not retry:
+                tell_operator(metadata)
 
 
 def complete_processing(meeting_id: str, transcript: dict, markdown: str) -> None:
@@ -416,6 +444,7 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
+    tell_operator(metadata, transcript.get("speakers"))
     if _notification_owed(metadata):
         _deliver(folder, metadata, transcript)
 

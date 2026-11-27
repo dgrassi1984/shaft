@@ -180,6 +180,29 @@ public struct SpeakerPerson: Decodable, Sendable, Equatable, Identifiable {
     public let count: Int?
 }
 
+/// A name an instance proposed for a meeting speaker (`GET /meetings/proposals`): only the operator's confirmation
+/// enrols the voice.
+public struct MeetingSpeakerProposal: Decodable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let instance: String
+    public let meeting: String
+    public let speaker: String
+    public let name: String
+    public let why: String
+    public let state: String
+
+    public init(id: String, instance: String, meeting: String, speaker: String, name: String, why: String,
+                state: String = "pending") {
+        self.id = id
+        self.instance = instance
+        self.meeting = meeting
+        self.speaker = speaker
+        self.name = name
+        self.why = why
+        self.state = state
+    }
+}
+
 public struct MeetingSpeakerUpdate: Decodable, Sendable, Equatable {
     public let label: String
     public let speaker: MeetingTranscript.Speaker

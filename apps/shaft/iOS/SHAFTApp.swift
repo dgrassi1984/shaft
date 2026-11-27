@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         let instance = NotificationContent.instance(from: userInfo)
         let cid = NotificationContent.cid(from: userInfo)
+        let meeting = NotificationContent.meeting(from: userInfo)
         if response.actionIdentifier != UNNotificationDefaultActionIdentifier {
             guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
             let request = NotificationQuestion.answer(actionIdentifier: response.actionIdentifier, userInfo: userInfo,
@@ -104,7 +105,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             await sendAnswer(request, instance: instance)
             return
         }
-        await MainActor.run { model.notificationTapped(instance: instance, cid: cid) }
+        await MainActor.run { model.notificationTapped(instance: instance, cid: cid, meeting: meeting) }
     }
 
     private func sendAnswer(_ request: ChoiceAnswerRequest?, instance: String?) async {

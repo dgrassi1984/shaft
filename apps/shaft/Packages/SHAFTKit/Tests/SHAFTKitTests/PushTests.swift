@@ -77,6 +77,27 @@ struct NotificationContentTests {
         #expect(filled == NotificationContent.Filled(title: "tundra says", body: "Totals sent.", badge: 2, instance: "tundra"))
     }
 
+    /// A push about a finished meeting carried no instance (`""`) and no meeting: the body came from whichever event was
+    /// newest and the tap opened nothing (review 2026-11-27). It shows its own event and the tap opens the meeting.
+    @Test func aMeetingPushShowsItsOwnEventAndOpensTheMeeting() throws {
+        let userInfo: [AnyHashable: Any] = ["instance": "", "meeting": "m-20261127-0855-8291"]
+        #expect(NotificationContent.instance(from: userInfo) == nil)
+        #expect(NotificationContent.meeting(from: userInfo) == "m-20261127-0855-8291")
+        #expect(NotificationContent.meeting(from: ["instance": "wisp"]) == nil)
+        var events = Self.latest.events
+        events.insert(PushEvent(title: "Meeting ready: Planning", body: "Ada · 1 voice to name", url: "/meetings/m-20261127-0855-8291",
+                                tag: "meeting-m-20261127-0855-8291", instance: nil, meeting: "m-20261127-0855-8291"), at: 0)
+        let latest = PushLatest(events: events, badge: 2)
+        let filled = try #require(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-8291"))
+        #expect(filled.title == "Meeting ready: Planning")
+        #expect(filled.body == "Ada · 1 voice to name")
+        #expect(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-0000") == nil)
+        let content = UNMutableNotificationContent()
+        filled.apply(to: content)
+        #expect(content.userInfo["meeting"] as? String == "m-20261127-0855-8291")
+        #expect(content.userInfo["instance"] == nil)
+    }
+
     @Test func noEventForTheInstanceLeavesTheTitleAlone() {
         #expect(NotificationContent.choose(Self.latest, instance: "orrin") == nil)
         #expect(NotificationContent.choose(PushLatest(events: [], badge: 0), instance: nil) == nil)

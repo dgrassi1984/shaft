@@ -6,9 +6,11 @@ struct MeetingsWindow: View {
 
     let client: APIClient
     let recorder: MeetingRecorder
+    let model: AppModel
 
     var body: some View {
-        MeetingsBrowser(client: client, refreshID: recorder.phase) {
+        MeetingsBrowser(client: client, refreshID: recorder.phase, requested: model.openMeeting,
+                        opened: { model.openMeeting = nil }) {
             MeetingRecordControls(recorder: recorder)
         }
         .frame(minWidth: 700, minHeight: 460)

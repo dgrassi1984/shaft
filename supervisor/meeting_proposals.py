@@ -32,7 +32,20 @@ def create(instance, metadata, label, name, why):
         _save(root / f"{pid}.json", row)
     except UnicodeError:
         raise meetings.Invalid("why must contain valid Unicode.") from None
+    _notify(row, metadata)
     return {"id": pid, "state": "pending"}
+
+
+def _notify(row, metadata):
+    """A push to the operator: the tap opens the meeting, where the proposal waits beside its speaker."""
+    from . import webpush
+    title = " ".join(str(metadata.get("title") or metadata["id"]).split())[:80]
+    try:
+        webpush.notify({"title": f"{row['instance']}: name a speaker in {title}",
+                        "body": f"Speaker {row['speaker']} is {row['name']}? {row['why']}"[:300],
+                        "url": f"/meetings/{metadata['id']}", "tag": f"meeting-proposal-{row['id']}", "cid": None})
+    except Exception as e:
+        core.log(f"meeting proposal {row['id']}: push to the operator failed ({type(e).__name__}: {e})")
 
 
 def pending():

@@ -844,6 +844,8 @@ public struct PushEvent: Codable, Sendable, Equatable {
     /// server before threads.
     public var cid: String?
     public var question: NotificationQuestion? = nil
+    /// The meeting it is about (ready or failed), nil for any other event or from an older server.
+    public var meeting: String? = nil
 }
 
 // MARK: - Errors (§1.5)

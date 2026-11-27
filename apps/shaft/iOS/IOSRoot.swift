@@ -31,7 +31,10 @@ struct IOSRoot: View {
             }
         }
         .fullScreenCover(isPresented: $meetings) {
-            IOSMeetingsScreen(client: model.session?.store?.client, recorder: recorder)
+            IOSMeetingsScreen(client: model.session?.store?.client, recorder: recorder, model: model)
+        }
+        .onChange(of: model.openMeeting, initial: true) { _, meeting in
+            if meeting != nil { meetings = true }
         }
     }
 }

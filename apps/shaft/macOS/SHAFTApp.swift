@@ -27,7 +27,7 @@ struct SHAFTApp: App {
 
         Window("Meetings", id: MeetingsWindow.windowID) {
             if let client = delegate.model.session?.store?.client {
-                MeetingsWindow(client: client, recorder: delegate.meetings)
+                MeetingsWindow(client: client, recorder: delegate.meetings, model: delegate.model)
                     .id(ObjectIdentifier(client))
                     .modifier(MacAppearance())
             } else {
@@ -161,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         let instance = NotificationContent.instance(from: userInfo)
         let cid = NotificationContent.cid(from: userInfo)
+        let meeting = NotificationContent.meeting(from: userInfo)
         if response.actionIdentifier != UNNotificationDefaultActionIdentifier {
             guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
             let request = NotificationQuestion.answer(actionIdentifier: response.actionIdentifier, userInfo: userInfo,
@@ -170,8 +171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         await MainActor.run {
-            model.notificationTapped(instance: instance, cid: cid)
-            state.bringForward()
+            model.notificationTapped(instance: instance, cid: cid, meeting: meeting)
+            if meeting != nil { state.bringMeetingsForward() } else { state.bringForward() }
         }
     }
 }

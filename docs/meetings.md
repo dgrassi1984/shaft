@@ -132,11 +132,26 @@ per run, including continuation pages. Unknown, malformed, failed, and ungranted
 | `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
 
 Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a granted meeting first becomes ready.
-Use `wake` to also request a cycle. The default is `off`. Filing or refiling a ready meeting sends the note to
+Use `wake` to also request a cycle. The default is `off`. The apps set it under **Watches** in the instance's
+settings, beside the mail, calendar and Google Chat watches. Filing or refiling a ready meeting sends the note to
 watching instances with a grant for the new account that have yet to receive it.
 
-Run `shaft meetings proposals` to list pending speaker names. The paired-device API accepts confirmation or
-rejection. [Meeting API](app-api.md#206-speaker-proposals)
+A proposal pushes a notification to the operator's paired devices. In the apps, the meeting shows it beside its
+speaker with **Confirm** and **Reject**. `shaft meetings proposals` lists the pending ones too.
+[Meeting API](app-api.md#206-speaker-proposals)
+
+## Notifications to the operator
+
+When Listen finishes a meeting, the paired devices get a notification: **Meeting ready** with the names it
+recognised, how many voices still need a name, and whether the meeting is unfiled; or **Meeting failed** with the
+reason. Tapping it opens the meeting in **Meetings**. A failure is sent once; a reprocess that ends sends again.
+
+## Changing a speaker's name
+
+A named speaker has a **Change** menu in the meeting: **Not <name>** names that speaker differently in this
+meeting (its voice moves to the new person); **Rename <name> in every meeting** renames the person in the gallery
+and every saved transcript; **Forget <name>'s voice** removes their voiceprints, keeping or anonymising the name in
+past meetings (the same as `shaft speakers forget`).
 
 ## Point an instance at a meeting
 
