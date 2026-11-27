@@ -127,7 +127,9 @@ final class MeetingCapture: @unchecked Sendable {
     let framesLost = Atomic<Int>(0)
     let lastWriteError = Atomic<Int32>(0)
     let tapSilentFrames = Atomic<Int>(0)        // consecutive frames of exact-zero tap audio
-    let micSilentFrames = Atomic<Int>(0)        // consecutive frames where the mic stayed below −70 dBFS
+    let micSilentFrames = Atomic<Int>(0)
+    /// The microphone's RMS in the last callback, as Float bits, for the meter.
+    let micLevel = Atomic<UInt32>(0)        // consecutive frames where the mic stayed below −70 dBFS
     let micLoudWhileSilent = Atomic<Int>(0)     // frames in that stretch where the mic was above −50 dBFS
     // IO-thread-only state.
     var pendingGapReason = ""                    // set by a rebuild: why the next gap happened
@@ -324,6 +326,7 @@ final class MeetingCapture: @unchecked Sendable {
         lastAudioWall.store(wall, ordering: .relaxed)
         if tapMax > 0 { tapEverHeard.store(true, ordering: .relaxed) }
 
+        micLevel.store((micSq / Float(frames)).squareRoot().bitPattern, ordering: .relaxed)
         if (micSq / Float(frames)).squareRoot() < 0.0003 {
             micSilentFrames.add(frames, ordering: .relaxed)
         } else {

@@ -61,6 +61,7 @@ targets:
       - package: MarkdownUI
       - target: NotificationService-iOS
       - target: ShareExtension-iOS
+      - target: MeetingWidgets-iOS
       # The Apple Watch app, embedded so it installs with the iPhone app.
       - target: SHAFT-watchOS
     settings:
@@ -82,6 +83,7 @@ targets:
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         # Keep voice mode and meeting recording running while the device is locked or the app is in the background.
         UIBackgroundModes: [remote-notification, audio]
+        NSSupportsLiveActivities: true
         NSMicrophoneUsageDescription: >-
           SHAFT uses the microphone for voice mode and meeting recordings. Voice mode sends only the transcript.
           When you record a meeting, SHAFT sends the recording to your paired SHAFT server.
@@ -349,6 +351,32 @@ targets:
       path: Generated/ShareExtension-iOS.entitlements
       properties:
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  MeetingWidgets-iOS:
+    type: app-extension
+    platform: iOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: MeetingWidgets
+      - path: Shared/Meetings/MeetingActivity.swift
+      - path: Shared/Meetings/MeetingIntents.swift
+    settings:
+      base:
+        PRODUCT_NAME: MeetingWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHAFT_BUNDLE_PREFIX).shaft.MeetingWidgets
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: Generated/MeetingWidgets-iOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT Meetings
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    postBuildScripts:
+      - name: Stamp git version
+        script: '"$SRCROOT/Scripts/stamp-version.sh"'
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(DERIVED_FILE_DIR)/stamp-version.stamp]
+        basedOnDependencyAnalysis: false
 
   NotificationService-iOS:
     type: app-extension

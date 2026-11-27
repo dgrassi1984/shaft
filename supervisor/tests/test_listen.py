@@ -31,7 +31,8 @@ class FakeEngines:
         self.prompts = []
         self.mixed = []
 
-    def diarise(self, wav):
+    def diarise(self, wav, max_speakers=None):
+        self.caps = getattr(self, "caps", []) + [max_speakers]
         return self.turns.get(wav.stem, []), self.embeddings.get(wav.stem, {})
 
     def loudness(self, wav, spans):
@@ -93,7 +94,7 @@ class ListenTest(unittest.TestCase):
         self.assertEqual(meetings.get(meeting_id)["state"], "queued")
 
         class Engines(FakeEngines):
-            def diarise(inner, path):
+            def diarise(inner, path, max_speakers=None):
                 self.assertEqual(meetings.get(meeting_id)["state"], "processing")
                 with wave.open(str(path), "rb") as wav:
                     self.assertEqual((wav.getnchannels(), wav.getframerate()), (1, 16_000))
@@ -130,8 +131,9 @@ class ListenTest(unittest.TestCase):
                          segment("M2", 1, "Sono d'accordo.", 4)],
             "gaps": [{"start": 5, "end": 6, "reason": "interruption"}],
             "warnings": [],
+            "attendees": [],
             "speakers": {"M1": {"channel": 1, "seconds": 0.8, "clips": []},
-                         "S1": {"channel": 2, "seconds": 4, "clips": []},
+                         "S1": {"channel": 2, "seconds": 4, "clips": [[1, 5]]},
                          "M2": {"channel": 1, "seconds": 1, "clips": []}},
             "processed_with": FakeEngines.processed_with,
         })
@@ -330,6 +332,63 @@ class ConversationTest(unittest.TestCase):
         self.assertEqual(len(listen_pipeline.chunk_spans([(0.36, 27.76, "M1", 1)])), 1)
         self.assertTrue(all(end - start <= listen_pipeline.CHUNK_SECONDS + 1e-9 for start, end in chunks))
 
+    def test_text_the_decoder_heard_outside_a_chunk_never_prompts_the_next(self):
+        # Review 2026-11-27: the next prompt took the decoder's whole text, words outside the chunk included, so a
+        # misheard name there steered the next chunk; and a chunk long after the last kept its context.
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        stray = {"text": " Forse. Va bene.", "lang": "it", "words": [
+            {"w": "Forse.", "raw": " Forse.", "start": 0.0, "end": 0.4},       # before the chunk: not kept
+            {"w": "Va", "raw": " Va", "start": 2.0, "end": 2.2}, {"w": "bene.", "raw": " bene.", "start": 2.2, "end": 2.6}]}
+        later = {"text": " Ok.", "lang": "it", "words": [{"w": "Ok.", "raw": " Ok.", "start": 80.0, "end": 80.3}]}
+        last = {"text": " Sì.", "lang": "it", "words": [{"w": "Sì.", "raw": " Sì.", "start": 110.0, "end": 110.3}]}
+
+        class Engines(FakeEngines):
+            def transcribe(inner, wav, start, end, prompt=None):
+                inner.prompts.append(prompt)
+                return [stray, later, last][len(inner.prompts) - 1]
+
+        engines = Engines({"ch1": [(1.5, 3, "A"), (80, 80.5, "A"), (110, 110.5, "A")]}, {})
+        listen_pipeline.transcribe_meeting({"id": "m", "mode": "inperson"}, Path("a.caf"), Path("."), {}, engines)
+        self.assertEqual(engines.prompts[0], None)
+        self.assertEqual(engines.prompts[1], None)            # 77 s later: what was said then is not its context
+        self.assertEqual(engines.prompts[2], "Ok.")
+
+    def test_far_end_echo_in_the_microphone_is_not_the_operator(self):
+        # Review 2026-11-27: on speakers instead of headphones the far end leaks into the mic, where diarisation can
+        # label it a mic speaker. The loudness evidence already gives a word heard far quieter on the mic to the system
+        # speaker; this pins it (a separate echo rule changed no outcome the loudness did not, so there is none).
+        words = [{"w": w, "raw": " " + w, "start": 1 + 0.3 * i, "end": 1.3 + 0.3 * i} for i, w in enumerate("Va bene così".split())]
+        reading = {"text": " Va bene così", "lang": "it", "words": words}
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav"), Path("ch2.wav")]))
+
+        def level(wav, start, end):
+            # The words (short spans) are heard 26 dB down on the mic; its own speech, and the far end, at full level.
+            return 0.05 if wav.stem == "ch1" and 0.9 < start < 2 and end - start < 1 else 1.0
+
+        engines = FakeEngines({"ch1": [(0.9, 2.0, "A"), (5, 8, "A")], "ch2": [(0.9, 2.0, "B")]},
+                              {("ch2", 0.9, 2.0): reading}, loudness=level)
+        transcript = listen_pipeline.transcribe_meeting({"id": "m", "mode": "online"}, Path("a.caf"), Path("."), {}, engines)
+        self.assertEqual({row["speaker"] for row in transcript["segments"]}, {"S1"})
+
+    def test_the_operators_count_caps_each_channels_speakers_and_the_calendar_alone_never_does(self):
+        # Review 2026-11-27: one remote voice split into S1 and S2. A count the operator gives caps the channel; the
+        # invitation alone never does (Codex review: two people behind one invitation would be merged, for good).
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online", "others": 1}), {2: 1})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "inperson", "others": 2}), {1: 3})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}), {})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online", "others": None}), {})
+
+    def test_the_meetings_own_vocabulary_survives_a_long_prompt(self):
+        # Codex review 2026-11-27: Whisper keeps the end of a long prompt, and a large gallery pushed the meeting's
+        # own terms out. They come last, and the general ones go first.
+        gallery = [f"Person {i:03d}" for i in range(80)]
+        with mock.patch.object(listen_worker, "VOCABULARY", ("UniCredit",)), \
+                mock.patch.object(listen_worker.speakers, "known_names", return_value=gallery):
+            prompt = listen_worker.hints(["Ada"], "Foresight, BPER")
+        self.assertTrue(prompt.endswith("Ada, Foresight, BPER."))
+        self.assertLessEqual(len(prompt), listen_worker.HINT_CHARS + 1)
+        self.assertNotIn("UniCredit", prompt)
+
     def test_a_stray_word_inside_a_phrase_keeps_its_speaker_and_a_pause_lets_it_change(self):
         words = [{"start": 0.0, "end": 0.3}, {"start": 0.3, "end": 0.6}, {"start": 0.6, "end": 0.9},
                  {"start": 1.5, "end": 1.8}]
@@ -410,7 +469,9 @@ class HintsTest(unittest.TestCase):
         (gallery / "tombstones.json").write_text(json.dumps({"p-00000002": {"sources": {}, "anonymise": False}}))
         with mock.patch.object(core, "SUP_DIR", Path(temporary.name)), \
                 mock.patch.object(listen_worker, "VOCABULARY", ("Foresight", "Patricia Navi", "lead")):
-            self.assertEqual(listen_worker.hints(), "Patricia Navi, Daniele Grassi, Foresight, lead.")
+            # The global vocabulary first, the gallery after it (Whisper keeps a long prompt's end); a repeat keeps
+            # its last place.
+            self.assertEqual(listen_worker.hints(), "Foresight, lead, Patricia Navi, Daniele Grassi.")
         with mock.patch.object(core, "SUP_DIR", Path(temporary.name) / "empty"), \
                 mock.patch.object(listen_worker, "VOCABULARY", ()):
             self.assertEqual(listen_worker.hints(), "")
@@ -549,4 +610,4 @@ class CalendarTitleTest(unittest.TestCase):
             self.assertTrue(listen_worker.process_next(engines))
         self.assertEqual(meetings.get(meeting_id)["title"], "Update MKT")
         # Whisper's special-token marks never reach its prompt (tiktoken refuses them and the meeting would fail).
-        self.assertEqual(engines.prompts, ["Patricia Navi, startoftranscript Mallory, Foresight."])
+        self.assertEqual(engines.prompts, ["Foresight, Patricia Navi, startoftranscript Mallory."])

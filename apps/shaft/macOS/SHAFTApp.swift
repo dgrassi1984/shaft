@@ -76,6 +76,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             state.bringForward()
         }
         AppDependencyManager.shared.add(dependency: openChat)
+        let meetingActions = MeetingIntentActions(
+            start: { [weak self] online in
+                guard let recorder = self?.meetings else { return "Open SHAFT to record a meeting." }
+                guard !recorder.isRecording else { return "A meeting is already recording." }
+                guard !recorder.starting else { return "A recording is already starting." }
+                await recorder.start(online: online)
+                if recorder.isRecording { return "Recording started" }
+                if case .failed(let problem) = recorder.phase { return "\(problem)" }
+                return "Could not start recording."
+            },
+            stop: { [weak self] in
+                guard let self, meetings.isRecording else { return "No meeting is recording." }
+                await meetings.stop()
+                if model.session?.store?.client == nil { return "Recording stopped. Pair with SHAFT to send it." }
+                if let warning = meetings.warning { return "\(warning) Upload queued." }
+                return "Recording stopped. Upload queued."
+            })
+        AppDependencyManager.shared.add(dependency: meetingActions)
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -103,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return self.slashFocusesComposer(event) ? .some(nil) : .some(event)
         }
         #endif
+        model.registerForRemoteNotifications = { NSApplication.shared.registerForRemoteNotifications() }
         if MacDevSession.asksForNotifications {
             Task {
                 // APNs may change the token: register at every launch (§11.1).

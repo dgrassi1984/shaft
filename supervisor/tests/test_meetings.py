@@ -139,6 +139,18 @@ class MeetingTest(AppTest):
         self.assertFalse(folder.exists())
         self.assert_error(self.api(first), 404, "not_found")
 
+    def test_a_meetings_own_vocabulary_is_saved_and_checked(self):
+        # Review 2026-11-27: names and jargon of one meeting ("Foresight", a client's name) had nowhere to go but the
+        # global SHAFT_LISTEN_VOCABULARY. The app sets them per meeting and reprocesses.
+        path, folder = self.create()
+        self.assertEqual(self.get(path, method="POST", data={"vocabulary": "Foresight, BPER"})["vocabulary"],
+                         "Foresight, BPER")
+        self.assert_error(self.api(path, "POST", {"vocabulary": "a\nb"}), 400, "bad_request")
+        self.assert_error(self.api(path, "POST", {"vocabulary": "x" * 501}), 400, "bad_request")
+        self.assert_error(self.api(path, "POST", {"vocabulary": "trailing\n"}), 400, "bad_request")
+        self.assertEqual(self.get(path, method="POST", data={"others": 1})["others"], 1)
+        self.assert_error(self.api(path, "POST", {"others": 0}), 400, "bad_request")
+
     def test_cli_import_list_show_and_delete(self):
         from supervisor.__main__ import main
 

@@ -21,7 +21,14 @@ three hours), notes the gap and resumes in the same file if iOS allows it. Pause
 gap records its clock length (`wall_seconds` in the sidecar): the transcript marks each gap where audio paused and
 says how long nothing was recorded. If the microphone cannot resume, SHAFT keeps the partial recording and says why
 it stopped: a notification when SHAFT is in the background, and a banner above the chat until Meetings is opened.
-While recording, the banner above the chat and the meeting's toolbar both have **Stop**.
+The banner above the chat and the meeting's toolbar both have **Stop**. The Live Activity shows elapsed time
+on the Lock Screen and Dynamic Island. Tap **Stop** on the Lock Screen or in the expanded Dynamic Island.
+The activity shows when recording is paused and briefly shows the reason if recording stops early.
+
+Say "Record a meeting with SHAFT" or "Stop recording my meeting with SHAFT" to Siri, or use
+**Record Meeting** and **Stop Meeting Recording** in Shortcuts or Control Center. On supported iPhones,
+assign either control to the Action button. **Record Meeting** opens SHAFT before using the microphone.
+
 The iPhone records IMA4 audio in a `.caf` file (24 kHz, about 0.7 MB a minute): if iOS ends SHAFT during a
 recording, the file stays readable up to that moment and is sent at the next launch, marked as cut short.
 
@@ -40,6 +47,8 @@ microphone unplugged and plugged back in during a recording is picked up again b
 
 Record from the Meeting menu, the menu bar icon or the Meetings window (⌥⌘M), which has **Record Online**,
 **Record In Person** and **Stop Recording** while one runs (also in the open meeting's toolbar).
+The same Siri phrases and Shortcuts actions work on Mac. **Record Meeting** defaults to **Online**.
+Choose **In Person** in Shortcuts to record only the microphone.
 
 The Mac records IMA4 audio in a `.caf` file (two channels at the microphone's rate, about 2.9 MB a minute at
 48 kHz). Quitting SHAFT while recording finishes the file first; if SHAFT crashes, the file stays readable up to
@@ -96,9 +105,18 @@ channel. Listen diarises each channel separately; speaker labels begin with `M` 
 system audio. It then transcribes the meeting as one conversation: it brings both channels of an online recording
 to the same speech loudness and mixes them, and cuts the speech into chunks of up to 28 seconds that start and end
 in pauses. A short turn is transcribed with the speech around it, not cut out on its own: Whisper invents phrases
-such as "Thank you" for a short clip padded with silence. Each chunk detects its language and is prompted with what was said just before it and with
-the names of the event's invitees and of the people in the speaker gallery, and the terms in `SHAFT_LISTEN_VOCABULARY` (product names, jargon:
-anything Whisper should spell as written). Listen gives each word to the speaker whose diarised turn covers it
+such as "Thank you" for a short clip padded with silence. Each chunk detects its language; a chunk read unsure (mean
+log-probability below −1) is read again in the meeting's other language and the likelier reading kept. It is
+prompted with the terms in `SHAFT_LISTEN_VOCABULARY`, the people in the speaker gallery, the event's invitees and the
+meeting's own vocabulary (in that order, because Whisper keeps the end of a long prompt: past 400 characters the
+general terms go first), then with the words kept from the chunk before it (none after 30 seconds of silence).
+
+In the apps, **Words and People…** on a meeting sets its own vocabulary (names and terms, comma-separated) and how
+many people spoke besides the operator, then processes it again: no more voices than that are told apart on the
+far end (online) or in the room (in person). The calendar alone never caps the voices, since two people can share
+one invitation; when a call has more unnamed far-end voices than its invitation has other people, the meeting says
+so and suggests Merge into…. The invitees' names are the first naming suggestions, and a speaker who never spoke
+five seconds alone gets their longest clean stretch as a clip. Listen gives each word to the speaker whose diarised turn covers it
 and, online, whose channel carries it loudest against that channel's own speech; it changes speaker inside a
 phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
 are numbered by their first turn of at least 0.4 seconds, so a label keeps its number when the meeting is reprocessed.

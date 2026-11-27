@@ -66,8 +66,13 @@ def _clean_turns(turns):
 
 
 def longest_clips(ranges):
-    return [[start, min(end, start + 10)] for start, end in
-            sorted(ranges, key=lambda span: (span[0] - span[1], span[0]))[:3] if end - start >= 5]
+    """Up to three 5–10 s clips of a speaker's clean speech, for naming; a speaker who never spoke 5 s alone gets
+    their longest stretch of at least 1.5 s instead (review 2026-11-27: such a speaker had no clip to audition)."""
+    ordered = sorted(ranges, key=lambda span: (span[0] - span[1], span[0]))
+    clips = [[start, min(end, start + 10)] for start, end in ordered[:3] if end - start >= 5]
+    if not clips and ordered and ordered[0][1] - ordered[0][0] >= 1.5:
+        clips = [[ordered[0][0], ordered[0][1]]]
+    return clips
 
 
 # Whisper decodes 30-second windows. Speech is cut into chunks that fit one window, at pauses, so every chunk carries
@@ -76,6 +81,9 @@ def longest_clips(ranges):
 CHUNK_SECONDS = 28.0
 PAD_SECONDS = 0.3
 CONTEXT_CHARS = 300
+# What was said this long before a chunk is not its context any more.
+CONTEXT_GAP_SECONDS = 30.0
+
 # A speaker change inside a phrase costs this much evidence; at a pause of PAUSE_SECONDS or more it is free.
 SWITCH_COST = 2.0
 PAUSE_SECONDS = 0.25
@@ -110,7 +118,11 @@ def _coverage(start, end, spans) -> float:
 
 def attribute(words, speakers, evidence):
     """The likeliest speaker for each word: `evidence(word_index, speaker)` scores each, and a change of speaker
-    inside a phrase costs SWITCH_COST (Viterbi), so a single word is not flipped by a stray timestamp."""
+    inside a phrase costs SWITCH_COST (Viterbi), so a single word is not flipped by a stray timestamp.
+
+    Making a change the diarisation supports cheaper (review 2026-11-27) was measured on a real 11-minute IT/EN call
+    against a reference transcript: words given to the wrong side rose from 1.5% to 2.4% and sub-2 s segments from 21 to
+    46, because diarisation's own stray turns then won words too. The flat cost stays."""
     if not words:
         return []
     score = {speaker: evidence(0, speaker) for speaker in speakers}
@@ -132,10 +144,12 @@ def attribute(words, speakers, evidence):
     return path[::-1]
 
 
-def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, engines, hints: str = "") -> dict:
+def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, engines, hints: str = "",
+                       max_speakers: dict | None = None) -> dict:
     """Diarise each channel, transcribe the meeting as one conversation, and give each word to its speaker.
 
-    Engine word timestamps use seconds from the start of the recording. `hints` (names and terms) prompt the ASR."""
+    Engine word timestamps use seconds from the start of the recording. `hints` (names and terms) prompt the ASR.
+    `max_speakers` ({channel: n}) caps a channel's speakers when the calendar says how many there can be."""
     wavs = decode(audio, work, meeting["mode"])
     turns = []  # (start, end, speaker, channel)
     intervals = []
@@ -144,7 +158,8 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
     for channel, wav in enumerate(wavs, 1):
         labels = {}
         prefix = "M" if channel == 1 else "S"
-        diarised, vectors = engines.diarise(wav)
+        cap = (max_speakers or {}).get(channel)
+        diarised, vectors = engines.diarise(wav, max_speakers=cap) if cap else engines.diarise(wav)
         original = getattr(diarised, "original", diarised)
         diarised = sorted((start, end, label) for start, end, label in diarised if end > start)
         # Number labels by their first turn of LABEL_SECONDS or more, then the rest by first turn, so a label keeps
@@ -184,15 +199,23 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
 
     words = []
     context = ""
+    previous_end = None
     for start, end in chunk_spans(turns):
+        if previous_end is not None and start - previous_end > CONTEXT_GAP_SECONDS:
+            context = ""
         prompt = " ".join(part for part in (hints.strip(), context[-CONTEXT_CHARS:].strip()) if part)
+        # Decoding a second of audio on both sides of each chunk (review 2026-11-27) raised the word difference on
+        # the same call from 15.4% to 16.3%: chunks are decoded as they are.
         result = engines.transcribe(source, start, end, prompt or None)
         # Whisper can place a word past the audio it was given; a word belongs to the chunk it starts in.
         heard = [word for word in result["words"] if word["w"] and start <= word["start"] < end]
         if heard:
             heard[0] = {**heard[0], "raw": " " + heard[0].get("raw", heard[0]["w"]).lstrip()}
         words.extend({**word, "lang": result["lang"]} for word in heard)
-        context += " " + result["text"].strip()
+        # The next chunk's context is what was kept here, never the decoder's whole text (review 2026-11-27: words
+        # it heard outside the chunk, or a chunk with none kept, still steered the next one).
+        context = (context + "".join(word.get("raw", " " + word["w"]) for word in heard)) if heard else ""
+        previous_end = end
 
     loud = {}
     if len(wavs) > 1:

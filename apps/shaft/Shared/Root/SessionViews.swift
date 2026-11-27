@@ -1,5 +1,9 @@
 import SHAFTKit
 import SwiftUI
+import UserNotifications
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -240,6 +244,7 @@ struct SettingsView: View {
                         if push == nil && notes.isEmpty { ProgressView() }
                         if let problem = push?.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
                         if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
+                        NotificationPermissionRow(model: model)
                     }
                     .listRowBackground(Color.elevated)
                     #if os(iOS)
@@ -947,3 +952,54 @@ private struct QuietListSelection: NSViewRepresentable {
     }
 }
 #endif
+
+
+/// Allow Notifications when the system has not asked yet, the system's notification settings when it was refused,
+/// Register Again when allowed with no push token (2026-11-27: "Notifications are not allowed" with no way to change
+/// it from SHAFT).
+private struct NotificationPermissionRow: View {
+    let model: AppModel
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Group {
+            switch model.notificationAuthorization {
+            case .notDetermined:
+                Button("Allow Notifications") { Task { await model.enableNotifications() } }
+            case .denied:
+                Button("Open Notification Settings") {
+                    if let url = Self.settingsURL { openURL(url) }
+                }
+                Text("Notifications are off for SHAFT in the system's settings: turn them on there, then come back.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSecondary)
+            case .authorized, .provisional, .ephemeral:
+                if model.pushError != nil {
+                    Button("Register Again") { Task { await model.enableNotifications() } }
+                }
+            default:
+                EmptyView()
+            }
+        }
+        .foregroundStyle(Color.brand)
+        .task { await model.refreshNotificationAuthorization() }
+        #if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshNotificationAuthorization() }
+        }
+        #else
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshNotificationAuthorization() }
+        }
+        #endif
+    }
+
+    private static var settingsURL: URL? {
+        #if os(macOS)
+        URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id="
+            + (Bundle.main.bundleIdentifier ?? ""))
+        #else
+        URL(string: UIApplication.openNotificationSettingsURLString)
+        #endif
+    }
+}

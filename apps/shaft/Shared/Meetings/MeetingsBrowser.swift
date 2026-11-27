@@ -192,6 +192,9 @@ private struct MeetingDetail: View {
     @State private var draftTitle: String?
     @State private var draftAccount: String?
     @State private var confirmDelete = false
+    @State private var editingVocabulary = false
+    @State private var vocabulary = ""
+    @State private var others = ""
     @State private var forgetVoices = false
     @State private var clipLabel: String?
     @State private var player: AVAudioPlayer?
@@ -237,6 +240,19 @@ private struct MeetingDetail: View {
         .onChange(of: meeting.title) { if draftTitle == meeting.title { draftTitle = nil } }
         .onChange(of: meeting.account) { if draftAccount == (meeting.account ?? "") { draftAccount = nil } }
         .sheet(isPresented: $confirmDelete) { deleteSheet }
+        .alert("Words and people", isPresented: $editingVocabulary) {
+            TextField("Foresight, BPER, Patricia", text: $vocabulary)
+            TextField("People besides you (empty: any)", text: $others)
+            Button("Cancel", role: .cancel) {}
+            Button("Reprocess") {
+                let count = Int(others.trimmingCharacters(in: .whitespaces))
+                Task { await store.reprocess(meeting.id, vocabulary: vocabulary, others: count) }
+            }
+        } message: {
+            Text("Names and terms this meeting uses, comma-separated: the transcription spells them as written. How "
+                 + "many people spoke besides you: no more voices than that are told apart. The meeting is processed "
+                 + "again with them.")
+        }
     }
 
     private var header: some View {
@@ -249,6 +265,10 @@ private struct MeetingDetail: View {
                 Label("The recording is incomplete: " + warnings.joined(separator: "; "), systemImage: "exclamationmark.triangle")
                     .font(.callout)
                     .foregroundStyle(Color.warning)
+            }
+            // A failed meeting says why at the top of its page, not only in the list (review 2026-11-27).
+            if meeting.state == "failed", let error = meeting.error, transcript == nil {
+                Text(error).font(.callout).foregroundStyle(Color.danger).textSelection(.enabled)
             }
             filingFields
             if let transcript {
@@ -275,6 +295,12 @@ private struct MeetingDetail: View {
         CopyMeetingReference(meeting: meeting)
         Button("Reprocess") { Task { await store.reprocess(meeting.id) } }
             .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
+        Button("Words and People…") {
+            vocabulary = meeting.vocabulary ?? ""
+            others = meeting.others.map(String.init) ?? ""
+            editingVocabulary = true
+        }
+        .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
         Button("Delete…", role: .destructive) {
             forgetVoices = false
             confirmDelete = true
@@ -334,6 +360,16 @@ private struct MeetingDetail: View {
                 }
             }
             if let playbackError { Text(playbackError).foregroundStyle(Color.danger) }
+            // More far-end voices than the invitation has other people: likely one voice split in two. Said, not
+            // merged: two people can share one invitation (review 2026-11-27).
+            let far = labels.filter { $0.hasPrefix("S") && transcript.speakers[$0]?.name == nil }.count
+            let invited = max(0, transcript.attendees.count - 1)
+            if invited > 0, far > invited, meeting.others == nil {
+                Text("The invitation lists \(invited) other \(invited == 1 ? "person" : "people") and the call has \(far) "
+                     + "unnamed voices: one may be split in two. Use Merge into…, or Words and People… to give the count.")
+                    .font(.callout)
+                    .foregroundStyle(Color.textSecondary)
+            }
             ForEach(labels, id: \.self) { label in
                 if let speaker = transcript.speakers[label] {
                     MeetingSpeakerRow(label: label, speaker: speaker, transcript: transcript,
@@ -524,8 +560,11 @@ private struct MeetingSpeakerRow: View {
             }
             if speaker.name == nil || renaming {
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                let matches = people.filter { trimmed.isEmpty || $0.name.localizedCaseInsensitiveContains(trimmed) }
-                    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                // The event's invitees first (review 2026-11-27), then everyone the gallery knows.
+                let known = Set(people.map { $0.name.lowercased() })
+                let invited = transcript.attendees.filter { !known.contains($0.lowercased()) }
+                let matches = (invited + people.map(\.name).sorted { $0.localizedStandardCompare($1) == .orderedAscending })
+                    .filter { trimmed.isEmpty || $0.localizedCaseInsensitiveContains(trimmed) }
                 HStack {
                     Button(action: play) { Image(systemName: "play.fill") }
                         .accessibilityLabel("Play clip for Speaker \(label)")
@@ -538,10 +577,10 @@ private struct MeetingSpeakerRow: View {
                                 renaming = false
                             }
                         }
-                    if !people.isEmpty {
+                    if !people.isEmpty || !transcript.attendees.isEmpty {
                         Menu("Suggestions") {
-                            ForEach(matches) { person in
-                                Button(person.name) { name = person.name }
+                            ForEach(matches, id: \.self) { suggestion in
+                                Button(suggestion) { name = suggestion }
                             }
                         }
                         .fixedSize()

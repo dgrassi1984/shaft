@@ -30,15 +30,27 @@ VOCABULARY, _ = knob(
     "names and terms meetings use that speech recognition should spell as written (product names, jargon, "
     "places), comma-separated; the speaker gallery's names are added on their own", group="Meetings",
     services=("listen",), web=False)
+# A chunk read below this mean log-probability is decoded again in the meeting's other language(s).
+UNSURE_LIKELIHOOD = -1.0
 LOG = logging.getLogger(__name__)
 
 
-def hints(people=()) -> str:
-    """The words the ASR is prompted with: the meeting's invitees, the gallery's people and SHAFT_LISTEN_VOCABULARY.
-    Each is one line, without Whisper's special-token marks (an invitee's name is text someone else wrote)."""
-    clean = (" ".join(term.replace("<|", "").replace("|>", "").split()) for term in
-             [*people, *speakers.known_names(), *VOCABULARY])
-    terms = list(dict.fromkeys(term for term in clean if term))
+# Room for the hints in the prompt; what was just said follows them (listen_pipeline.CONTEXT_CHARS).
+HINT_CHARS = 400
+
+
+def hints(people=(), vocabulary="") -> str:
+    """The words the ASR is prompted with: SHAFT_LISTEN_VOCABULARY, the gallery's people, the meeting's invitees and
+    its own vocabulary, in that order. Whisper keeps the end of a long prompt, so the meeting's own words come last,
+    and the general ones are dropped first when the hints outgrow HINT_CHARS (Codex review 2026-11-27: a large
+    gallery pushed the meeting's own terms out). Each is one line, without Whisper's special-token marks (an
+    invitee's name is text someone else wrote)."""
+    own = [term.strip() for term in str(vocabulary or "").split(",")]
+    clean = [" ".join(term.replace("<|", "").replace("|>", "").split()) for term in
+             [*VOCABULARY, *speakers.known_names(), *people, *own]]
+    terms = list(reversed(dict.fromkeys(term for term in reversed(clean) if term)))   # a repeat keeps its last place
+    while terms and len(", ".join(terms)) > HINT_CHARS:
+        terms.pop(0)
     return ", ".join(terms) + "." if terms else ""
 
 
@@ -93,7 +105,7 @@ class Engines:
         return {"diarisation": DIARISATION, "asr": ASR,
                 "versions": {name: version(name) for name in ("pyannote.audio", "mlx-whisper", "soundfile", "numpy")}}
 
-    def diarise(self, wav: Path):
+    def diarise(self, wav: Path, max_speakers: int | None = None):
         import soundfile
         import torch
         from pyannote.audio import Pipeline
@@ -114,7 +126,8 @@ class Engines:
         samples, rate = soundfile.read(wav, dtype="float32")
         if not len(samples):
             raise ValueError("Audio decode yielded no samples.")
-        result = self.pipeline({"waveform": torch.from_numpy(samples[None, :]), "sample_rate": rate})
+        options = {"max_speakers": max_speakers} if max_speakers else {}
+        result = self.pipeline({"waveform": torch.from_numpy(samples[None, :]), "sample_rate": rate}, **options)
         turns = listen_pipeline.DiarisationTurns(
             [(turn.start, turn.end, label) for turn, label in result.exclusive_speaker_diarization],
             [(turn.start, turn.end, label) for turn, label in result.speaker_diarization],
@@ -160,11 +173,14 @@ class Engines:
         options = {"path_or_hf_repo": ASR, "word_timestamps": True, "verbose": None, "initial_prompt": prompt,
                    "condition_on_previous_text": False}
         result = mlx_whisper.transcribe(samples, **options)
-        if LANGUAGES and result["language"] not in LANGUAGES:
-            # A chunk is sometimes heard as a third language (a spoken "Allora." as Portuguese): ask in each of the
-            # meeting's languages and keep the likeliest reading.
-            tries = [mlx_whisper.transcribe(samples, **options, language=code) for code in LANGUAGES]
-            result = max(tries, key=_likelihood)
+        if LANGUAGES and (result["language"] not in LANGUAGES
+                          or (len(LANGUAGES) > 1 and _likelihood(result) < UNSURE_LIKELIHOOD)):
+            # A chunk is sometimes heard as a third language (a spoken "Allora." as Portuguese), or decoded unsure in
+            # one of the meeting's languages when it was the other (review 2026-11-27): ask in each of them and keep
+            # the likeliest reading.
+            tries = [mlx_whisper.transcribe(samples, **options, language=code) for code in LANGUAGES
+                     if code != result["language"]]
+            result = max([result, *tries] if result["language"] in LANGUAGES else tries, key=_likelihood)
         offset = first / listen_pipeline.SAMPLE_RATE
         # "raw" keeps Whisper's own spacing ("c'" + "è" is one word on the page); the transcript stores "w".
         words = [{"w": word["word"].strip(), "raw": word["word"], "start": offset + word["start"],
@@ -177,6 +193,18 @@ def _likelihood(result: dict) -> float:
     segments = result.get("segments") or []
     total = sum(max(s["end"] - s["start"], 0.01) for s in segments)
     return sum(s.get("avg_logprob", -10) * max(s["end"] - s["start"], 0.01) for s in segments) / total if total else -99
+
+
+def speaker_caps(row: dict) -> dict:
+    """At most how many speakers each channel can hold, from the people besides the operator that the operator gave
+    for this meeting (`others`; review 2026-11-27: one remote voice split into S1 and S2). Online, the system channel
+    holds them; in person, the microphone holds them and the operator. Never from the calendar on its own: two people
+    behind one invitation would be merged into one voice, which nothing undoes, while a split one is merged in the
+    app (Codex review 2026-11-27)."""
+    others = row.get("others")
+    if not isinstance(others, int) or others < 1:
+        return {}
+    return {2: others} if row.get("mode") == "online" else {1: others + 1}
 
 
 def recover() -> None:
@@ -230,12 +258,15 @@ def process_next(engines) -> bool:
             filed = bool(alias and not row.get("account") and meetings.file_from_calendar(meeting_id, alias))
             if title and row.get("title_auto"):
                 meetings.name_from_calendar(meeting_id, title, alias if filed else row.get("account"))
-            people = [person["displayName"] for person in (event or {}).get("attendees") or []
-                      if person.get("displayName") and not person.get("resource")]
+            invited = [person for person in (event or {}).get("attendees") or [] if not person.get("resource")]
+            people = [person["displayName"] for person in invited if person.get("displayName")]
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
-                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines, hints(people))
+                    row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines,
+                    hints(people, row.get("vocabulary")), speaker_caps(row))
             transcript["warnings"] = _recording_warnings(sidecar)
+            # The invitees' names, for naming its unknown speakers in the apps.
+            transcript["attendees"] = people
             speakers.complete_processing(meeting_id, transcript, transcript.pop("_embeddings"))
             LOG.info("%s ready", meeting_id)
         except meetings.Missing:

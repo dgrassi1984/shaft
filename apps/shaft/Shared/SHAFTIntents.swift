@@ -97,6 +97,10 @@ struct SHAFTShortcuts: AppShortcutsProvider {
                     shortTitle: "Send to instance", systemImageName: "paperplane")
         AppShortcut(intent: OpenInstanceChatIntent(), phrases: ["Open a chat in \(.applicationName)"],
                     shortTitle: "Open instance chat", systemImageName: "bubble.left")
+        AppShortcut(intent: RecordMeetingIntent(), phrases: ["Record a meeting with \(.applicationName)"],
+                    shortTitle: "Record Meeting", systemImageName: "record.circle")
+        AppShortcut(intent: StopMeetingRecordingIntent(), phrases: ["Stop recording my meeting with \(.applicationName)"],
+                    shortTitle: "Stop Meeting Recording", systemImageName: "stop.circle")
     }
 }
 
