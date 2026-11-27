@@ -242,7 +242,7 @@ struct MeetingUploaderTests {
     }
 
     /// Review 2026-11-27: the local copy of a recording with problems was pruned after a week like any other, though
-    /// it is the one worth keeping.
+    /// it is the one worth keeping: it stays four weeks.
     @Test func pruningKeepsARecordingWhoseSidecarListsProblems() async throws {
         let recording = try Recording()
         defer { recording.cleanUp() }
@@ -250,8 +250,10 @@ struct MeetingUploaderTests {
         await MeetingUploader(client: server.client, audioURL: recording.audio).upload(create)
         let sidecar = recording.audio.deletingPathExtension().appendingPathExtension("json")
         try Data(#"{"problems":["12.0 s of audio could not be written"]}"#.utf8).write(to: sidecar)
-        try MeetingUploader.pruneUploaded(in: recording.directory, olderThan: .distantFuture)
+        try MeetingUploader.pruneUploaded(in: recording.directory, olderThan: Date().addingTimeInterval(3600))
         #expect(FileManager.default.fileExists(atPath: recording.audio.path))
+        try MeetingUploader.pruneUploaded(in: recording.directory, olderThan: .distantFuture)
+        #expect(!FileManager.default.fileExists(atPath: recording.audio.path))
     }
 
     @Test func meetingRoutesDecodeMetadataAndTranscriptAsReturnedByServer() async throws {

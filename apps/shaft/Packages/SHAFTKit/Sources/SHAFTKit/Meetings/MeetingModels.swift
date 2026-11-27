@@ -23,6 +23,8 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     public let warnings: [String]?
     /// Names and terms for this meeting's transcription (`vocabulary`), used at its next processing.
     public let vocabulary: String?
+    /// The people besides the operator the operator gave for this meeting (`others`): caps the speakers found.
+    public let others: Int?
     public let transcript: MeetingTranscript?
 
     public func chatReference(timeZone: TimeZone = .current) -> String? {

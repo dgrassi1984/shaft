@@ -147,6 +147,9 @@ class MeetingTest(AppTest):
                          "Foresight, BPER")
         self.assert_error(self.api(path, "POST", {"vocabulary": "a\nb"}), 400, "bad_request")
         self.assert_error(self.api(path, "POST", {"vocabulary": "x" * 501}), 400, "bad_request")
+        self.assert_error(self.api(path, "POST", {"vocabulary": "trailing\n"}), 400, "bad_request")
+        self.assertEqual(self.get(path, method="POST", data={"others": 1})["others"], 1)
+        self.assert_error(self.api(path, "POST", {"others": 0}), 400, "bad_request")
 
     def test_cli_import_list_show_and_delete(self):
         from supervisor.__main__ import main

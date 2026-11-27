@@ -223,17 +223,10 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
             values = engines.loudness(wav, [(max(0.0, w["start"] - 0.05), w["end"] + 0.05) for w in words])
             loud[channel] = [math.log(value / levels[channel] + 1e-3) if levels[channel] else -7.0 for value in values]
 
-    cache = {}
-
-    def support(index, speaker):
-        if (index, speaker) not in cache:
-            word = words[index]
-            cache[index, speaker] = _coverage(word["start"], word["end"], spans[speaker])
-        return cache[index, speaker]
-
     def evidence(index, speaker):
+        word = words[index]
         energy = loud[channel_of[speaker]][index] if loud else 0.0
-        return 2 * support(index, speaker) + energy
+        return 2 * _coverage(word["start"], word["end"], spans[speaker]) + energy
 
     segments = []
     for word, speaker in zip(words, attribute(words, sorted(spans), evidence)):

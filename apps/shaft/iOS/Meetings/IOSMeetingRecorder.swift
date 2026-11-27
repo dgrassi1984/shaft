@@ -8,6 +8,8 @@ import UserNotifications
 protocol IOSMeetingActivity: AnyObject {
     func setInterrupted(_ interrupted: Bool)
     func end(at date: Date, problem: String?)
+    /// Returns once every update so far has reached the system.
+    func settle() async
 }
 
 @MainActor
@@ -91,6 +93,8 @@ final class IOSMeetingRecorder {
     @ObservationIgnored private let notify: @MainActor (String) -> Void
     @ObservationIgnored private let startActivity: @MainActor (Date) -> (any IOSMeetingActivity)?
     @ObservationIgnored private var activity: (any IOSMeetingActivity)?
+    /// The activity just ended, until its end has reached the system.
+    @ObservationIgnored private var endingActivity: (any IOSMeetingActivity)?
     @ObservationIgnored private var interruptionTask: Task<Void, Never>?
     @ObservationIgnored private var client: APIClient?
     @ObservationIgnored private var foreground = false
@@ -217,6 +221,7 @@ final class IOSMeetingRecorder {
         if let failure { recording.sidecar.problems.append(failure) }
         problem = failure.map { "Recording stopped early. \($0)" }
         activity?.end(at: ended, problem: problem)
+        endingActivity = activity
         activity = nil
         if let problem {
             problemUnseen = true
@@ -239,6 +244,12 @@ final class IOSMeetingRecorder {
         try? FileManager.default.removeItem(at: file)
         try? FileManager.default.removeItem(at: Self.sidecarURL(file))
         damagedRecordings.removeAll { $0 == file }
+    }
+
+    /// Wait until the Lock Screen shows the recording ended (Stop from a Live Activity or Siri).
+    func settleActivity() async {
+        await endingActivity?.settle()
+        endingActivity = nil
     }
 
     /// Meetings was opened: the chat's banner about a recording that stopped early goes.

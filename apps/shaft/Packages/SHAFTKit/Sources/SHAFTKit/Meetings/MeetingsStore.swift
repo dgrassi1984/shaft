@@ -202,8 +202,8 @@ public final class MeetingsStore {
     }
 
     /// Save the meeting's vocabulary and process it again with it.
-    public func reprocess(_ id: String, vocabulary: String) async {
-        await mutate { _ = try await client.setMeetingVocabulary(id, vocabulary: vocabulary) }
+    public func reprocess(_ id: String, vocabulary: String, others: Int?) async {
+        await mutate { _ = try await client.setMeetingHints(id, vocabulary: vocabulary, others: others) }
         guard actionError == nil else { return }
         await reprocess(id)
     }

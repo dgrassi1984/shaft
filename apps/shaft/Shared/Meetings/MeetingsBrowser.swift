@@ -194,6 +194,7 @@ private struct MeetingDetail: View {
     @State private var confirmDelete = false
     @State private var editingVocabulary = false
     @State private var vocabulary = ""
+    @State private var others = ""
     @State private var forgetVoices = false
     @State private var clipLabel: String?
     @State private var player: AVAudioPlayer?
@@ -239,13 +240,18 @@ private struct MeetingDetail: View {
         .onChange(of: meeting.title) { if draftTitle == meeting.title { draftTitle = nil } }
         .onChange(of: meeting.account) { if draftAccount == (meeting.account ?? "") { draftAccount = nil } }
         .sheet(isPresented: $confirmDelete) { deleteSheet }
-        .alert("Words to listen for", isPresented: $editingVocabulary) {
+        .alert("Words and people", isPresented: $editingVocabulary) {
             TextField("Foresight, BPER, Patricia", text: $vocabulary)
+            TextField("People besides you (empty: any)", text: $others)
             Button("Cancel", role: .cancel) {}
-            Button("Reprocess") { Task { await store.reprocess(meeting.id, vocabulary: vocabulary) } }
+            Button("Reprocess") {
+                let count = Int(others.trimmingCharacters(in: .whitespaces))
+                Task { await store.reprocess(meeting.id, vocabulary: vocabulary, others: count) }
+            }
         } message: {
-            Text("Names and terms this meeting uses, comma-separated: the transcription spells them as written. The "
-                 + "meeting is processed again with them.")
+            Text("Names and terms this meeting uses, comma-separated: the transcription spells them as written. How "
+                 + "many people spoke besides you: no more voices than that are told apart. The meeting is processed "
+                 + "again with them.")
         }
     }
 
@@ -289,8 +295,9 @@ private struct MeetingDetail: View {
         CopyMeetingReference(meeting: meeting)
         Button("Reprocess") { Task { await store.reprocess(meeting.id) } }
             .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
-        Button("Words to Listen For…") {
+        Button("Words and People…") {
             vocabulary = meeting.vocabulary ?? ""
+            others = meeting.others.map(String.init) ?? ""
             editingVocabulary = true
         }
         .disabled(store.mutating || !["ready", "failed"].contains(meeting.state))
@@ -353,6 +360,16 @@ private struct MeetingDetail: View {
                 }
             }
             if let playbackError { Text(playbackError).foregroundStyle(Color.danger) }
+            // More far-end voices than the invitation has other people: likely one voice split in two. Said, not
+            // merged: two people can share one invitation (review 2026-11-27).
+            let far = labels.filter { $0.hasPrefix("S") && transcript.speakers[$0]?.name == nil }.count
+            let invited = max(0, transcript.attendees.count - 1)
+            if invited > 0, far > invited, meeting.others == nil {
+                Text("The invitation lists \(invited) other \(invited == 1 ? "person" : "people") and the call has \(far) "
+                     + "unnamed voices: one may be split in two. Use Merge into…, or Words and People… to give the count.")
+                    .font(.callout)
+                    .foregroundStyle(Color.textSecondary)
+            }
             ForEach(labels, id: \.self) { label in
                 if let speaker = transcript.speakers[label] {
                     MeetingSpeakerRow(label: label, speaker: speaker, transcript: transcript,

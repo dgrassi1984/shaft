@@ -35,14 +35,22 @@ UNSURE_LIKELIHOOD = -1.0
 LOG = logging.getLogger(__name__)
 
 
+# Room for the hints in the prompt; what was just said follows them (listen_pipeline.CONTEXT_CHARS).
+HINT_CHARS = 400
+
+
 def hints(people=(), vocabulary="") -> str:
-    """The words the ASR is prompted with: the meeting's own vocabulary and invitees first (the prompt is short),
-    then the gallery's people and SHAFT_LISTEN_VOCABULARY. Each is one line, without Whisper's special-token marks
-    (an invitee's name is text someone else wrote)."""
+    """The words the ASR is prompted with: SHAFT_LISTEN_VOCABULARY, the gallery's people, the meeting's invitees and
+    its own vocabulary, in that order. Whisper keeps the end of a long prompt, so the meeting's own words come last,
+    and the general ones are dropped first when the hints outgrow HINT_CHARS (Codex review 2026-11-27: a large
+    gallery pushed the meeting's own terms out). Each is one line, without Whisper's special-token marks (an
+    invitee's name is text someone else wrote)."""
     own = [term.strip() for term in str(vocabulary or "").split(",")]
-    clean = (" ".join(term.replace("<|", "").replace("|>", "").split()) for term in
-             [*own, *people, *speakers.known_names(), *VOCABULARY])
-    terms = list(dict.fromkeys(term for term in clean if term))
+    clean = [" ".join(term.replace("<|", "").replace("|>", "").split()) for term in
+             [*VOCABULARY, *speakers.known_names(), *people, *own]]
+    terms = list(reversed(dict.fromkeys(term for term in reversed(clean) if term)))   # a repeat keeps its last place
+    while terms and len(", ".join(terms)) > HINT_CHARS:
+        terms.pop(0)
     return ", ".join(terms) + "." if terms else ""
 
 
@@ -187,14 +195,16 @@ def _likelihood(result: dict) -> float:
     return sum(s.get("avg_logprob", -10) * max(s["end"] - s["start"], 0.01) for s in segments) / total if total else -99
 
 
-def speaker_caps(row: dict, invited: list) -> dict:
-    """At most how many speakers each channel can hold, from the calendar event's invitees (review 2026-11-27: one
-    remote voice split into S1 and S2). Online, the system channel holds everyone but the operator; in person, the
-    microphone holds everyone. Nothing without an event, or when its invitee list names nobody else."""
-    others = [person for person in invited if not person.get("self")]
-    if not others:
+def speaker_caps(row: dict) -> dict:
+    """At most how many speakers each channel can hold, from the people besides the operator that the operator gave
+    for this meeting (`others`; review 2026-11-27: one remote voice split into S1 and S2). Online, the system channel
+    holds them; in person, the microphone holds them and the operator. Never from the calendar on its own: two people
+    behind one invitation would be merged into one voice, which nothing undoes, while a split one is merged in the
+    app (Codex review 2026-11-27)."""
+    others = row.get("others")
+    if not isinstance(others, int) or others < 1:
         return {}
-    return {2: len(others)} if row.get("mode") == "online" else {1: len(others) + 1}
+    return {2: others} if row.get("mode") == "online" else {1: others + 1}
 
 
 def recover() -> None:
@@ -253,7 +263,7 @@ def process_next(engines) -> bool:
             with tempfile.TemporaryDirectory(dir=meetings._root(), prefix=".listen-work-") as work:
                 transcript = listen_pipeline.transcribe_meeting(
                     row, folder / f"audio.{row['ext']}", Path(work), sidecar, engines,
-                    hints(people, row.get("vocabulary")), speaker_caps(row, invited))
+                    hints(people, row.get("vocabulary")), speaker_caps(row))
             transcript["warnings"] = _recording_warnings(sidecar)
             # The invitees' names, for naming its unknown speakers in the apps.
             transcript["attendees"] = people

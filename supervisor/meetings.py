@@ -234,11 +234,14 @@ def _account_alias(alias, *, configured=True) -> str:
 
 
 def update(meeting_id: str, changes: dict) -> dict:
-    if not changes or changes.keys() - {"account", "title", "vocabulary"}:
-        raise Invalid("Supply account, title, vocabulary, or a mix of them.")
+    if not changes or changes.keys() - {"account", "title", "vocabulary", "others"}:
+        raise Invalid("Supply account, title, vocabulary, others, or a mix of them.")
     if "vocabulary" in changes and (not isinstance(changes["vocabulary"], str) or len(changes["vocabulary"]) > 500
-                                    or len(changes["vocabulary"].splitlines()) > 1):
+                                    or any(c in changes["vocabulary"] for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
         raise Invalid("vocabulary must be one line of at most 500 characters: names and terms, comma-separated.")
+    if "others" in changes and changes["others"] is not None and (type(changes["others"]) is not int
+                                                                 or not 1 <= changes["others"] <= 30):
+        raise Invalid("others must be the number of people besides you (1–30), or null for any.")
     if "account" in changes and changes["account"] is not None:
         _account_alias(changes["account"])
     if "title" in changes and not isinstance(changes["title"], str):

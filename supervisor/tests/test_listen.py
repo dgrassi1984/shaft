@@ -370,19 +370,24 @@ class ConversationTest(unittest.TestCase):
         transcript = listen_pipeline.transcribe_meeting({"id": "m", "mode": "online"}, Path("a.caf"), Path("."), {}, engines)
         self.assertEqual({row["speaker"] for row in transcript["segments"]}, {"S1"})
 
-    def test_the_calendar_caps_each_channels_speakers(self):
-        # Review 2026-11-27: one remote voice split into S1 and S2. The invitees bound the speakers per channel.
-        me = {"email": "me@example.com", "self": True}
-        one = [me, {"email": "ada@example.com"}]
-        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, one), {2: 1})
-        self.assertEqual(listen_worker.speaker_caps({"mode": "inperson"}, one + [{"email": "b@example.com"}]), {1: 3})
-        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, [me]), {})
-        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}, []), {})
+    def test_the_operators_count_caps_each_channels_speakers_and_the_calendar_alone_never_does(self):
+        # Review 2026-11-27: one remote voice split into S1 and S2. A count the operator gives caps the channel; the
+        # invitation alone never does (Codex review: two people behind one invitation would be merged, for good).
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online", "others": 1}), {2: 1})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "inperson", "others": 2}), {1: 3})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online"}), {})
+        self.assertEqual(listen_worker.speaker_caps({"mode": "online", "others": None}), {})
 
-    def test_the_meetings_own_vocabulary_comes_first_in_the_prompt(self):
+    def test_the_meetings_own_vocabulary_survives_a_long_prompt(self):
+        # Codex review 2026-11-27: Whisper keeps the end of a long prompt, and a large gallery pushed the meeting's
+        # own terms out. They come last, and the general ones go first.
+        gallery = [f"Person {i:03d}" for i in range(80)]
         with mock.patch.object(listen_worker, "VOCABULARY", ("UniCredit",)), \
-                mock.patch.object(listen_worker.speakers, "known_names", return_value=[]):
-            self.assertEqual(listen_worker.hints(["Ada"], "Foresight, BPER"), "Foresight, BPER, Ada, UniCredit.")
+                mock.patch.object(listen_worker.speakers, "known_names", return_value=gallery):
+            prompt = listen_worker.hints(["Ada"], "Foresight, BPER")
+        self.assertTrue(prompt.endswith("Ada, Foresight, BPER."))
+        self.assertLessEqual(len(prompt), listen_worker.HINT_CHARS + 1)
+        self.assertNotIn("UniCredit", prompt)
 
     def test_a_stray_word_inside_a_phrase_keeps_its_speaker_and_a_pause_lets_it_change(self):
         words = [{"start": 0.0, "end": 0.3}, {"start": 0.3, "end": 0.6}, {"start": 0.6, "end": 0.9},
@@ -464,7 +469,9 @@ class HintsTest(unittest.TestCase):
         (gallery / "tombstones.json").write_text(json.dumps({"p-00000002": {"sources": {}, "anonymise": False}}))
         with mock.patch.object(core, "SUP_DIR", Path(temporary.name)), \
                 mock.patch.object(listen_worker, "VOCABULARY", ("Foresight", "Patricia Navi", "lead")):
-            self.assertEqual(listen_worker.hints(), "Patricia Navi, Daniele Grassi, Foresight, lead.")
+            # The global vocabulary first, the gallery after it (Whisper keeps a long prompt's end); a repeat keeps
+            # its last place.
+            self.assertEqual(listen_worker.hints(), "Foresight, lead, Patricia Navi, Daniele Grassi.")
         with mock.patch.object(core, "SUP_DIR", Path(temporary.name) / "empty"), \
                 mock.patch.object(listen_worker, "VOCABULARY", ()):
             self.assertEqual(listen_worker.hints(), "")
@@ -603,4 +610,4 @@ class CalendarTitleTest(unittest.TestCase):
             self.assertTrue(listen_worker.process_next(engines))
         self.assertEqual(meetings.get(meeting_id)["title"], "Update MKT")
         # Whisper's special-token marks never reach its prompt (tiktoken refuses them and the meeting would fail).
-        self.assertEqual(engines.prompts, ["Patricia Navi, startoftranscript Mallory, Foresight."])
+        self.assertEqual(engines.prompts, ["Foresight, Patricia Navi, startoftranscript Mallory."])

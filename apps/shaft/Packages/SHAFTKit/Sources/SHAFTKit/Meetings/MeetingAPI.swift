@@ -41,8 +41,9 @@ public extension APIClient {
     }
 
     /// Words this meeting's transcription should spell as written; they apply when it is (re)processed.
-    func setMeetingVocabulary(_ id: String, vocabulary: String) async throws -> Meeting {
-        try await post("/app/v1/meetings/\(id)", json: ["vocabulary": vocabulary])
+    /// `others`: the people besides the operator, which caps the speakers found (nil: any number).
+    func setMeetingHints(_ id: String, vocabulary: String, others: Int?) async throws -> Meeting {
+        try await post("/app/v1/meetings/\(id)", json: MeetingHints(vocabulary: vocabulary, others: others))
     }
 
     func meetingAccountAliases() async throws -> [String] {
@@ -124,6 +125,19 @@ public struct SpeakerDeleted: Decodable, Sendable, Equatable {
 
 private struct SpeakersResponse: Decodable {
     let people: [SpeakerPerson]
+}
+
+private struct MeetingHints: Encodable {
+    let vocabulary: String
+    let others: Int?
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(vocabulary, forKey: .vocabulary)
+        try container.encode(others, forKey: .others)          // null clears the count
+    }
+
+    private enum CodingKeys: String, CodingKey { case vocabulary, others }
 }
 
 private struct MeetingProposalsResponse: Decodable {

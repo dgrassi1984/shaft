@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             stop: { [weak self] in
                 guard let self, meetings.started != nil else { return "No meeting is recording." }
                 meetings.stop()
+                await meetings.settleActivity()
                 if let problem = meetings.problem { return "\(problem)" }
                 guard let session = model.session, !session.isDemo, session.store?.client != nil else {
                     return "Recording stopped. Pair with SHAFT to send it."
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 return "Recording stopped. Upload queued."
             })
         AppDependencyManager.shared.add(dependency: meetingActions)
+        SystemMeetingActivity.endOrphans()          // a meeting's activity left by a crash: no recording runs now
     }
 
     lazy var meetings = IOSMeetingRecorder(audio: SystemMeetingAudio(), audioUse: .shared,
