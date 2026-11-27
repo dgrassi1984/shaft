@@ -81,9 +81,6 @@ def longest_clips(ranges):
 CHUNK_SECONDS = 28.0
 PAD_SECONDS = 0.3
 CONTEXT_CHARS = 300
-# Each chunk is decoded with this much audio on both sides, keeping only the words that start inside it: a cut in a
-# stretch with no pause no longer splits a word between two chunks with no context.
-OVERLAP_SECONDS = 1.0
 # What was said this long before a chunk is not its context any more.
 CONTEXT_GAP_SECONDS = 30.0
 
@@ -119,20 +116,21 @@ def _coverage(start, end, spans) -> float:
     return min(covered / max(end - start, 0.05), 1.0)
 
 
-def attribute(words, speakers, evidence, support=None):
+def attribute(words, speakers, evidence):
     """The likeliest speaker for each word: `evidence(word_index, speaker)` scores each, and a change of speaker
-    inside a phrase costs SWITCH_COST (Viterbi), so a single word is not flipped by a stray timestamp. `support(index,
-    speaker)` (0–1: how much of the word diarisation gives that speaker) makes a change the diarisation supports cheap
-    (review 2026-11-27: a whole "sì" diarised to the other speaker was smoothed back into the phrase around it)."""
+    inside a phrase costs SWITCH_COST (Viterbi), so a single word is not flipped by a stray timestamp.
+
+    Making a change the diarisation supports cheaper (review 2026-11-27) was measured on a real 11-minute IT/EN call
+    against a reference transcript: words given to the wrong side rose from 1.5% to 2.4% and sub-2 s segments from 21 to
+    46, because diarisation's own stray turns then won words too. The flat cost stays."""
     if not words:
         return []
     score = {speaker: evidence(0, speaker) for speaker in speakers}
     back = []
     for index in range(1, len(words)):
-        base = SWITCH_COST if words[index]["start"] - words[index - 1]["end"] < PAUSE_SECONDS else 0.0
+        cost = SWITCH_COST if words[index]["start"] - words[index - 1]["end"] < PAUSE_SECONDS else 0.0
         step, came = {}, {}
         for speaker in speakers:
-            cost = base * (1 - support(index, speaker)) if support and base else base
             best = max(speakers, key=lambda other: score[other] - (cost if other != speaker else 0))
             step[speaker] = score[best] - (cost if best != speaker else 0) + evidence(index, speaker)
             came[speaker] = best
@@ -206,7 +204,9 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
         if previous_end is not None and start - previous_end > CONTEXT_GAP_SECONDS:
             context = ""
         prompt = " ".join(part for part in (hints.strip(), context[-CONTEXT_CHARS:].strip()) if part)
-        result = engines.transcribe(source, max(0.0, start - OVERLAP_SECONDS), end + OVERLAP_SECONDS, prompt or None)
+        # Decoding a second of audio on both sides of each chunk (review 2026-11-27) raised the word difference on
+        # the same call from 15.4% to 16.3%: chunks are decoded as they are.
+        result = engines.transcribe(source, start, end, prompt or None)
         # Whisper can place a word past the audio it was given; a word belongs to the chunk it starts in.
         heard = [word for word in result["words"] if word["w"] and start <= word["start"] < end]
         if heard:
@@ -236,7 +236,7 @@ def transcribe_meeting(meeting: dict, audio: Path, work: Path, sidecar: dict, en
         return 2 * support(index, speaker) + energy
 
     segments = []
-    for word, speaker in zip(words, attribute(words, sorted(spans), evidence, support)):
+    for word, speaker in zip(words, attribute(words, sorted(spans), evidence)):
         row = segments[-1] if segments else None
         entry = {"w": word["w"], "start": word["start"], "end": word["end"]}
         raw = word.get("raw", " " + word["w"])
