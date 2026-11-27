@@ -509,14 +509,15 @@ check due at the next launch. Everyday builds, not from `release-mac.sh`, carry 
 
 ## Release to the App Store
 
-The iPhone/iPad app, its Share and notification extensions, and its embedded Apple Watch app ship together.
+The iPhone/iPad app, its Share, notification, and MeetingWidgets extensions, and its embedded Apple Watch app ship together.
 The Mac app stays outside the Store: its setup wizard runs tools and writes the server installation without App
 Sandbox. Its Developer ID distribution remains [Release a signed build](#release-a-signed-build).
 
 One-time setup, with a paid Apple Developer team:
 
 1. Set the team and bundle prefix in `Signing.local.yml`. Register explicit App IDs for `<prefix>.shaft`,
-   `<prefix>.shaft.ShareExtension`, `<prefix>.shaft.NotificationService` and `<prefix>.shaft.watchkitapp`.
+   `<prefix>.shaft.ShareExtension`, `<prefix>.shaft.NotificationService`, `<prefix>.shaft.MeetingWidgets`,
+   and `<prefix>.shaft.watchkitapp`.
    Enable Push Notifications for the iOS app and Keychain Sharing for the app and its iOS extensions.
 2. Create the iOS app record in App Store Connect with the app's bundle ID.
 3. Sign in to Xcode → Settings → Accounts. Automatic signing creates the Apple Distribution certificate and
@@ -532,14 +533,25 @@ Scripts/release-ios.sh --out build/app-store-upload --upload
 ```
 
 The script archives Release with production APNs, then exports `build/release-ios/export/SHAFT.ipa` by default.
-It checks the exported app's signed production push entitlement, all four bundles and their privacy manifests,
-matching version and build numbers, the app's exempt-encryption declaration, and the absence of
-`NSAllowsLocalNetworking` in every bundle. It prints the IPA path. With `--upload`, it first verifies a local export,
+It checks all five bundles for matching version and build numbers and for the absence of `NSAllowsLocalNetworking`.
+It requires privacy manifests for the iOS app, ShareExtension, NotificationService, and the Watch app.
+It also checks the iOS app's signed production push entitlement and exempt-encryption declaration.
+It prints the IPA path. With `--upload`, it first verifies a local export,
 then exports the same archive with destination `upload`. App Store Connect still processes and validates the upload.
 
 Options: `--team TEAMID`, `--out DIR` (choose a fresh export directory), `--allow-untagged` (allows an untagged or dirty
-trial build), `--dry-run` (preconditions and printed commands; no signing or Apple requests), and `--self-test`
+trial build), `--manual-signing` (manual export signing), `--dry-run` (preconditions and printed commands without
+signing or Apple requests), and `--self-test`
 (synthetic plist checks). To authenticate with an App Store Connect API key instead of the Xcode account, pass
 `--api-key-path PATH --api-key-id ID --api-issuer ID` together. No password is passed to the script.
+
+Archiving uses automatic signing. Export also uses automatic signing by default. Use `--manual-signing` when your API
+key lacks access to cloud-managed distribution certificates. Register an App ID for every archived app and extension,
+including each new extension.
+Create a manually managed App Store provisioning profile for each App ID with your Apple Distribution certificate
+in the Apple Developer portal or through the App Store Connect API. Install the profiles in
+`~/Library/Developer/Xcode/UserData/Provisioning Profiles/`. The script selects the matching profile with the latest
+expiration date for each bundle. Xcode-managed profiles are ineligible for manual export.
+With `--dry-run`, the script prints the selected profiles if the archive already exists.
 
 Listing material is in [AppStore/README.md](AppStore/README.md).
