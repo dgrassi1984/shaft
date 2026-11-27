@@ -1926,7 +1926,7 @@ class Broker:
                 spec["function"]["description"] += " Granted to you: " + self.gchat_env() + "."
             if tool == "meeting_search":
                 spec = json.loads(json.dumps(spec))
-                spec["function"]["description"] += " Granted to you: " + ", ".join(sorted(meetings)) + "."
+                spec["function"]["description"] += " Granted to you: " + ", ".join(sorted(alias or "(unfiled)" for alias in meetings)) + "."
             if tool == "shortcut_run":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + ", ".join(g["name"] for g in shortcuts) + "."
@@ -3425,7 +3425,7 @@ class Broker:
         from .core import meetings_grants
         return meetings_grants(self.name) if self.grants_allowed else []
 
-    def _meeting_aliases(self) -> set[str]:
+    def _meeting_aliases(self) -> set[str | None]:
         return {g["account"] for g in self.meetings_grants()} if not self.as_of else set()
 
     def _meeting_search(self, text="", person="", after="", before=""):

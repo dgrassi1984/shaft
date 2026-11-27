@@ -1521,7 +1521,7 @@ def _setup_hello(req: Request, n: str) -> Response:
 # -- access (§18.6) ---------------------------------------------------------------------------------------------------
 GRANT_FIELDS = {"folder": {"what"}, "browser": set(), "mail": {"alias", "what", "writable"},
                 "calendar": {"alias", "what", "writable"}, "drive": {"alias", "all"}, "chat": {"alias"},
-                "meetings": {"alias"}, "claude": set(), "shortcut": {"what"}}
+                "meetings": {"alias", "unfiled"}, "claude": set(), "shortcut": {"what"}}
 GRANT_VERBS = {"mail": "mail", "calendar": "calendar", "drive": "gdrive", "chat": "gchat", "meetings": "meetings"}
 
 
@@ -1549,6 +1549,10 @@ def _access_args(n: str, data: dict) -> list[list[str]]:
         return [["claude-notes", n, "on" if action == "grant" else "off"]]
     if grant == "shortcut":
         return [["shortcuts", n, action, _text(data, "what", 200)]]
+    if grant == "meetings" and "unfiled" in data:
+        if data["unfiled"] is not True or "alias" in data:
+            raise Refusal(400, "bad_request", "Supply either alias or unfiled: true.")
+        return [["meetings", action, n, "--unfiled"]]
     alias = _text(data, "alias", 31)
     if not google.ALIAS_RE.fullmatch(alias):
         raise Refusal(400, "bad_request", "alias is a Google account alias (lowercase letters, digits, -).")
@@ -1646,7 +1650,8 @@ def _meeting_call(operation, *args, **kwargs):
 
 
 def _meeting_metadata(row: dict) -> dict:
-    public = {key: value for key, value in row.items() if key not in ("notified", "notification_owed", "ready_revision")}
+    private = {"notified", "notification_owed", "ready_revision", "account_suggestion_dismissed"}
+    public = {key: value for key, value in row.items() if key not in private}
     return {**public, **{key: stamp(row[key]) for key in ("created", "started", "ended")}}
 
 

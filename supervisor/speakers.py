@@ -142,8 +142,11 @@ def _match(vector, kind, gallery):
     return person
 
 
-def _render(folder: Path, transcript: dict) -> None:
+def _render(folder: Path, metadata: dict, transcript: dict) -> None:
     meetings._write_transcript(folder, transcript, listen_pipeline.render_markdown(transcript))
+    if metadata["state"] == "ready" and metadata["account"] is None:
+        meetings._refresh_suggestion(folder, metadata, transcript)
+        meetings._save(folder, metadata)
 
 
 def _assign(speaker: dict, person: dict) -> None:
@@ -242,7 +245,7 @@ def _name_label(meeting_id, label, name, *, expected_revision=_ANY_REVISION) -> 
         rows[source] = vector
         _save_vectors(path, rows)
         _assign(speaker, person)
-        _render(folder, transcript)
+        _render(folder, metadata, transcript)
         return {"label": label, **speaker}
 
 
@@ -263,7 +266,7 @@ def merge_labels(meeting_id: str, label, merge_into) -> dict:
         if label in vectors:
             del vectors[label]
             _save_vectors(archive, vectors)
-        _render(folder, transcript)
+        _render(folder, metadata, transcript)
         return {"label": merge_into, **target}
 
 
@@ -312,11 +315,11 @@ def _find(people: list, pid: str) -> dict:
 def _saved_transcript(meeting_id: str):
     with ExitStack() as stack:
         try:
-            folder, _ = stack.enter_context(meetings._locked(meeting_id))
+            folder, metadata = stack.enter_context(meetings._locked(meeting_id))
         except meetings.Missing:
-            yield None, None  # Deleted after the scan.
+            yield None, None, None  # Deleted after the scan.
         else:
-            yield folder, _read_json(folder / "transcript.json", None)
+            yield folder, metadata, _read_json(folder / "transcript.json", None)
 
 
 def rename(pid: str, name) -> dict:
@@ -332,14 +335,14 @@ def rename(pid: str, name) -> dict:
         person["name"] = name
         _write_json(people_path, people)
         for row in meetings.list_meetings():
-            with _saved_transcript(row["id"]) as (folder, transcript):
+            with _saved_transcript(row["id"]) as (folder, metadata, transcript):
                 if transcript is None:
                     continue
                 matches = [s for s in transcript["speakers"].values() if s.get("person") == pid]
                 for speaker in matches:
                     _assign(speaker, person)
                 if matches:
-                    _render(folder, transcript)
+                    _render(folder, metadata, transcript)
         return person
 
 
@@ -366,7 +369,7 @@ def forget(pid: str, *, anonymise: bool) -> None:
 
         for row in meetings.list_meetings():
             meeting_id = row["id"]
-            with _saved_transcript(meeting_id) as (folder, transcript):
+            with _saved_transcript(meeting_id) as (folder, metadata, transcript):
                 if transcript is None:
                     continue
                 labels = set(sources.get(meeting_id, []))
@@ -387,7 +390,7 @@ def forget(pid: str, *, anonymise: bool) -> None:
                             speaker.pop("person", None)
                             speaker["name"] = f"Speaker {label}"
                 _save_vectors(archive, vectors)
-                _render(folder, transcript)
+                _render(folder, metadata, transcript)
 
 
 def delete_meeting(meeting_id: str) -> None:

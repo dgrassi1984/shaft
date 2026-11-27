@@ -33,6 +33,7 @@
       "account": "work"
     }
   ],
+  "meetings_unfiled": false,
   "claude_notes": true,
   "shortcuts": [
     {

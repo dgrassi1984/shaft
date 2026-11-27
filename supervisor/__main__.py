@@ -1738,7 +1738,9 @@ def main(argv: list[str]) -> int:
         if action in ("grant", "revoke"):
             q.add_argument("name")
         if action in ("file", "grant", "revoke"):
-            q.add_argument("alias")
+            target = q.add_mutually_exclusive_group(required=True)
+            target.add_argument("alias", nargs="?")
+            target.add_argument("--suggested" if action == "file" else "--unfiled", action="store_true")
         if action == "name":
             q.add_argument("label")
             q.add_argument("name")
