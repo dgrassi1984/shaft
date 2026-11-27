@@ -12,7 +12,7 @@ import wave
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, core, listen_pipeline, listen_worker, meetings
+from supervisor import autonomy, core, listen_pipeline, listen_worker, meetings, speakers
 from supervisor.tests import test_app_api
 
 
@@ -65,6 +65,22 @@ def segment(speaker, channel, text, start=0, lang="en"):
             "words": words, "text": text}
 
 
+def caf_chunk(kind, payload):
+    return struct.pack(">4sq", kind, len(payload)) + payload
+
+
+def mac_ima4_caf():
+    packets = 100
+    return b"".join((
+        struct.pack(">4sHH", b"caff", 1, 0),
+        caf_chunk(b"desc", struct.pack(">d4sIIIII", 24_000, b"ima4", 0, 68, 64, 2, 0)),
+        caf_chunk(b"chan", struct.pack(">III", 0x650002, 0, 0)),
+        caf_chunk(b"pakt", struct.pack(">qqii", 0, packets * 64 - 32, 0, 32)),
+        caf_chunk(b"free", bytes(0xF74)),
+        caf_chunk(b"data", struct.pack(">I", 1) + bytes(packets * 68)),
+    ))
+
+
 class ListenTest(unittest.TestCase):
     maxDiff = None
 
@@ -81,6 +97,72 @@ class ListenTest(unittest.TestCase):
 
     def mock_decode(self):
         self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+
+    def test_normalize_caf_only_renames_the_empty_cbr_packet_table_20261127(self):
+        audio = self.root / "audio.caf"
+        original = mac_ima4_caf()
+        audio.write_bytes(original)
+        self.assertEqual(original[0x4C:0x50], b"pakt")
+        self.assertTrue(listen_pipeline.normalize_caf(audio))
+        self.assertEqual(audio.stat().st_size, len(original))
+        expected = original[:0x4C] + b"free" + original[0x50:]
+        self.assertEqual(audio.read_bytes(), expected)
+        self.assertFalse(listen_pipeline.normalize_caf(audio))
+        self.assertEqual(audio.read_bytes(), expected)
+
+    def test_normalize_caf_leaves_other_audio_and_malformed_headers_untouched(self):
+        original = mac_ima4_caf()
+        pcm = (original[:8] + caf_chunk(b"desc", struct.pack(">d4sIIIII", 24_000, b"lpcm", 2, 4, 1, 2, 16))
+               + caf_chunk(b"data", bytes(8)))
+        wav = io.BytesIO()
+        with wave.open(wav, "wb") as output:
+            output.setparams((1, 2, 16_000, 0, "NONE", ""))
+            output.writeframes(bytes(2))
+        audio = self.root / "audio"
+        for case, contents in {
+            "PCM without pakt": pcm,
+            "VBR bytes per packet": original[:0x24] + bytes(4) + original[0x28:],
+            "VBR frames per packet": original[:0x28] + bytes(4) + original[0x2C:],
+            "nonempty packet table": original[:0x58] + struct.pack(">q", 100) + original[0x60:],
+            "WAV": wav.getvalue(),
+            "truncated desc": original[:0x20],
+            "truncated chunk header after pakt": original[:0x74],
+            "negative non-data chunk size": original[:0x74] + struct.pack(">q", -1) + original[0x7C:],
+            "truncated data": original[:-1],
+        }.items():
+            with self.subTest(case=case):
+                audio.write_bytes(contents)
+                self.assertFalse(listen_pipeline.normalize_caf(audio))
+                self.assertEqual(audio.read_bytes(), contents)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is unavailable")
+    def test_a_mac_ima4_caf_with_an_empty_packet_table_decodes_20261127(self):
+        audio = self.root / "audio.caf"
+        audio.write_bytes(mac_ima4_caf())
+        paths = listen_pipeline.decode(audio, self.root, "online")
+        self.assertEqual(paths, [self.root / "ch1.wav", self.root / "ch2.wav"])
+        for path in paths:
+            with wave.open(str(path), "rb") as output:
+                self.assertGreater(output.getnframes(), 0)
+
+    def test_decode_and_speaker_clip_normalize_caf_before_ffmpeg(self):
+        audio = self.root / "audio.caf"
+        metadata = {"state": "ready", "ext": "caf", "mode": "online"}
+        transcript = {"speakers": {"M1": {"channel": 1, "clips": [[0, 0.2]]}}}
+        (self.root / "transcript.json").write_text(json.dumps(transcript))
+
+        def ffmpeg(command, **kwargs):
+            self.assertEqual(command[command.index("-i") + 1], str(audio))
+            self.assertEqual(audio.read_bytes()[0x4C:0x50], b"free")
+            return mock.Mock(returncode=0, stdout=bytes(2))
+
+        with mock.patch.object(listen_pipeline.subprocess, "run", side_effect=ffmpeg) as run:
+            audio.write_bytes(mac_ima4_caf())
+            listen_pipeline.decode(audio, self.root, "online")
+            audio.write_bytes(mac_ima4_caf())
+            with mock.patch.object(meetings, "_locked", return_value=contextlib.nullcontext((self.root, metadata))):
+                speakers.clip("example", "M1", 0)
+            self.assertEqual(run.call_count, 2)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is unavailable")
     def test_online_worker_mixes_channels_and_gives_each_word_to_its_speaker(self):

@@ -275,6 +275,7 @@ def clip(meeting_id: str, label, index: int) -> bytes:
             raise meetings.Missing("No such speaker clip.")
         start, end = ranges[index]
         audio = folder / f"audio.{metadata['ext']}"
+        listen_pipeline.normalize_caf(audio)
         command = ["ffmpeg", "-nostdin", "-v", "error", "-ss", str(start), "-i", str(audio), "-map", "0:a:0"]
         if metadata["mode"] == "online":
             command += ["-af", f"channelmap=map={speaker['channel'] - 1}:channel_layout=mono"]
