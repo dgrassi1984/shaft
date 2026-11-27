@@ -65,6 +65,8 @@ final class IOSMeetingRecorder {
     private var recording: Recording?
     var started: Date? { recording?.sidecar.started }
     var interrupted: Bool { recording?.interruption != nil }
+    /// The microphone's level while recording (0–1), polled by the meter.
+    var level: Float { recording == nil ? 0 : audio.level }
 
     private(set) var uploader: MeetingUploader?
     private(set) var uploadProblem: String?
@@ -229,6 +231,14 @@ final class IOSMeetingRecorder {
         }
         if client == nil { uploadProblem = "Pair with SHAFT to send this recording." }
         requestUpload()
+    }
+
+    /// Delete a recording that holds no readable audio, with its sidecar (the operator chose to, in Meetings).
+    func deleteDamaged(_ file: URL) {
+        guard damagedRecordings.contains(file) else { return }
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: Self.sidecarURL(file))
+        damagedRecordings.removeAll { $0 == file }
     }
 
     /// Meetings was opened: the chat's banner about a recording that stopped early goes.

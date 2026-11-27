@@ -12,6 +12,8 @@ enum IOSMeetingAudioEvent: Sendable {
 protocol IOSMeetingAudio: AnyObject {
     var onEvent: ((IOSMeetingAudioEvent) -> Void)? { get set }
     var currentTime: TimeInterval { get }
+    /// The microphone's level now, 0 (silence or below −60 dBFS) to 1 (full scale).
+    var level: Float { get }
     func requestPermission() async -> Bool
     func start(at url: URL) throws -> String
     func pause()
@@ -25,6 +27,11 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
     private let session = AVAudioSession.sharedInstance()
     private var recorder: AVAudioRecorder?
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }
+    var level: Float {
+        guard let recorder, recorder.isRecording else { return 0 }
+        recorder.updateMeters()
+        return max(0, min(1, (recorder.averagePower(forChannel: 0) + 60) / 60))
+    }
     private var inputName: String { session.currentRoute.inputs.first?.portName ?? "Microphone" }
     private var previousCategory: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
 
@@ -54,6 +61,7 @@ final class SystemMeetingAudio: NSObject, IOSMeetingAudio, AVAudioRecorderDelega
         // (2026-11-26: "Recording damaged"). 24 kHz mono, about 0.7 MB a minute; transcription uses 16 kHz.
         let audio = try AVAudioRecorder(url: url, settings: IOSMeetingRecorder.recordingSettings)
         audio.delegate = self
+        audio.isMeteringEnabled = true
         recorder = audio
         guard audio.record() else { throw CaptureError.startFailed }
         return inputName

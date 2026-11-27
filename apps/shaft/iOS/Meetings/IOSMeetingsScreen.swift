@@ -42,10 +42,17 @@ struct IOSMeetingsScreen: View {
                         .accessibilityValue(meetingClock(context.date.timeIntervalSince(started)))
                 }
                 if recorder.interrupted { Text("Recording paused by an audio interruption.") }
+                // A dead or covered microphone shows as a still bar (review 2026-11-27: it looked like a quiet room).
+                TimelineView(.periodic(from: .now, by: 0.2)) { _ in
+                    ProgressView(value: Double(recorder.level))
+                        .tint(Color.brand)
+                        .accessibilityLabel("Microphone level")
+                }
                 Button("Stop", systemImage: "stop.fill") { recorder.stop() }
                     .buttonStyle(.borderedProminent)
             } else if client != nil {
-                Text("Tell the people in the meeting that you are recording.")
+                Text("Tell the people in the meeting that you are recording. This device records its own microphone "
+                     + "only: a call on it is heard as the room hears it, record a call on the Mac.")
                     .font(.callout)
                     .foregroundStyle(Color.textSecondary)
                 Button("Record", systemImage: "mic.fill") {
@@ -59,8 +66,16 @@ struct IOSMeetingsScreen: View {
                 Text(problem).font(.callout).foregroundStyle(Color.danger)
             }
             ForEach(recorder.damagedRecordings, id: \.self) { file in
-                Text("Recording damaged. File kept: \(file.lastPathComponent)")
-                    .font(.callout).foregroundStyle(Color.danger)
+                // Kept on the device, never sent: shareable (to the Mac, Files) and deletable (review 2026-11-27).
+                VStack(alignment: .leading, spacing: Design.Space.s4) {
+                    Text("Recording damaged. File kept: \(file.lastPathComponent)")
+                        .font(.callout).foregroundStyle(Color.danger)
+                    HStack {
+                        ShareLink("Share", item: file)
+                        Button("Delete", role: .destructive) { recorder.deleteDamaged(file) }
+                    }
+                    .font(.callout)
+                }
             }
             if let uploader = recorder.uploader {
                 if case .uploading(let progress) = uploader.state {

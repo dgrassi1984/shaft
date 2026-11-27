@@ -1,5 +1,6 @@
-#if os(iOS)
-/// Voice, meeting capture, and read-aloud share the process's AVAudioSession.
+/// Voice, meeting capture, and read-aloud take turns with the microphone: on iOS they share the process's
+/// AVAudioSession; on the Mac voice mode and a meeting recording never run together (review 2026-11-27: SHAFT's
+/// spoken replies went into the meeting's microphone).
 @MainActor
 public final class IOSAudioUse {
     public enum Owner: Equatable { case voice, meeting, readAloud }
@@ -20,4 +21,3 @@ public final class IOSAudioUse {
         if self.owner == owner { self.owner = nil }
     }
 }
-#endif

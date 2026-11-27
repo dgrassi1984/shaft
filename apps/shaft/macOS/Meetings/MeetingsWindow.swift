@@ -36,6 +36,10 @@ struct MeetingRecordControls: View {
                         .monospacedDigit()
                 }
                 if let from = recorder.recordingFrom { Text("From \(from)").font(.callout).foregroundStyle(.secondary) }
+                TimelineView(.periodic(from: .now, by: 0.2)) { _ in
+                    ProgressView(value: Double(recorder.level))
+                        .accessibilityLabel("Microphone level")
+                }
                 if let notice = recorder.inputNotice { Text(notice).font(.callout).foregroundStyle(.orange) }
                 if let warning = recorder.warning { Text(warning).font(.callout).foregroundStyle(.red) }
                 Button("Stop Recording", systemImage: "stop.fill") { Task { await recorder.stop() } }
