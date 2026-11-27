@@ -9,6 +9,30 @@ import Testing
 /// A fixture is matched to its model by its shape (its top-level keys), so a new one needs no code here. A fixture
 /// that matches no model fails: either the contract grew or the fixture is not an /app/v1 answer.
 struct FixtureTests {
+    @Test func aClearedFeedStartsWithTheClearMarker() throws {
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: DecodingTests.fixture("cleared"))
+        let content = try #require(feed.content)
+        guard case .cleared(let item) = try #require(content.items.first) else {
+            Issue.record("Missing clear marker"); return
+        }
+        #expect(item.key == "cleared-0")
+        let cleared = try #require(content.chat?.cleared)
+        #expect(item.ts == cleared)
+        #expect(content.canClear == true)
+        for item in content.items {
+            if case .unknown(let key, let type) = item {
+                Issue.record("Unknown item \(key) of type \(type)")
+            }
+        }
+    }
+
+    @Test func chatInfoFromBeforeClearStillDecodes() throws {
+        let data = Data(#"{"id":"web-0000000000000001","title":"Example","state":"idle","created":"2026-11-03T13:58:40+01:00","ended":null}"#.utf8)
+        let chat = try SHAFTJSON.decoder().decode(ChatInfo.self, from: data)
+        #expect(chat.id == "web-0000000000000001")
+        #expect(chat.cleared == nil)
+    }
+
     @Test func pausedInstancesDecodeWithDatesAndAreOptionalForOlderServers() throws {
         let current = Data(#"{"instances":[],"badge":0,"paused":[{"name":"example","since":"2026-11-03T14:02:11+01:00"},{"name":"other","since":null}]}"#.utf8)
         let answer = try SHAFTJSON.decoder().decode(InstancesResponse.self, from: current)
@@ -107,7 +131,7 @@ struct FixtureTests {
     @Test func theServerFixturesAreThere() {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
-                     "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
+                     "earlier", "ended", "cleared", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
                      "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from",
                      "setup-instance", "setup-drives", "setup-provider", "setup-check", "setup-autonomy", "setup-hello",
                      "setup-errors", "setup-telegram-pair", "setup-secrets",

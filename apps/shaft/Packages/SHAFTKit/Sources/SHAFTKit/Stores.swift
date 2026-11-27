@@ -852,12 +852,17 @@ public final class ChatStore {
         return true
     }
 
-    /// New chat (§7.4): a server before threads ends the open chat and starts another. With threads it is
-    /// `InstancesStore.newThread`, which ends nothing.
+    /// Clear this conversation (§7.4). Main or an open thread starts fresh in place and keeps its earlier messages.
+    /// A server before threads ends the open chat and starts another.
     public func clear() async {
         guard let cid = chatID else { return }
         let name = instance
-        await act { try await $0.clear(name, cid: cid) }
+        guard await act({ try await $0.clear(name, cid: cid) }) else { return }
+        showingAll = false
+        if isPolling {
+            stop()
+            start()
+        }
     }
 
     /// Rename this thread (§7.8). False when refused (a blank title, an ended thread): `actionError` says why.

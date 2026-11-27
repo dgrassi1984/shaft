@@ -71,7 +71,8 @@ struct ChatScreen: View {
     private var covered: Bool {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
             || screen.showEarlierChats || screen.showInstanceSettings || preview.showing || preview.error != nil
-            || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
+            || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.confirmingClear
+            || screen.composerCovered
             || renaming || (screen.showVoice && Self.voiceCovers)
     }
     /// Voice mode covers the chat on an iPhone or iPad (a full-screen cover); on the Mac it takes the composer's place
@@ -477,6 +478,11 @@ struct ChatScreen: View {
                     Label("Stop the reply", systemImage: "stop")
                 }
             }
+            if hasThreads, chat.content?.canClear == true, !screen.archived, !chat.isEarlier {
+                Button { screen.confirmingClear = true } label: {
+                    Label("Clear conversation…", systemImage: "eraser")
+                }
+            }
             if chat.content?.canEnd == true {
                 Button { screen.confirmingEnd = true } label: {
                     Label("Close thread", systemImage: "flag.checkered")      // the menu hyphenated a longer one
@@ -493,6 +499,12 @@ struct ChatScreen: View {
         } message: {
             hasThreads ? Text("It writes up its journal. Its other threads stay open.")
                        : Text("It writes up its journal. Your next message starts a new conversation.")
+        }
+        .confirmationDialog("Clear the conversation with \(chat.instance)?",
+                            isPresented: Bindable(screen).confirmingClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) { Task { await chat.clear() } }
+        } message: {
+            Text("\(chat.instance) starts fresh: it no longer reads what was said so far, and writes up its journal. Nothing is deleted: earlier messages stay under Show earlier messages.")
         }
     }
 
