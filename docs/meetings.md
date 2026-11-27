@@ -105,9 +105,18 @@ channel. Listen diarises each channel separately; speaker labels begin with `M` 
 system audio. It then transcribes the meeting as one conversation: it brings both channels of an online recording
 to the same speech loudness and mixes them, and cuts the speech into chunks of up to 28 seconds that start and end
 in pauses. A short turn is transcribed with the speech around it, not cut out on its own: Whisper invents phrases
-such as "Thank you" for a short clip padded with silence. Each chunk detects its language and is prompted with what was said just before it and with
-the names of the event's invitees and of the people in the speaker gallery, and the terms in `SHAFT_LISTEN_VOCABULARY` (product names, jargon:
-anything Whisper should spell as written). Listen gives each word to the speaker whose diarised turn covers it
+such as "Thank you" for a short clip padded with silence. Each chunk detects its language; a chunk read unsure (mean
+log-probability below −1) is read again in the meeting's other language and the likelier reading kept. It is
+prompted with the terms in `SHAFT_LISTEN_VOCABULARY`, the people in the speaker gallery, the event's invitees and the
+meeting's own vocabulary (in that order, because Whisper keeps the end of a long prompt: past 400 characters the
+general terms go first), then with the words kept from the chunk before it (none after 30 seconds of silence).
+
+In the apps, **Words and People…** on a meeting sets its own vocabulary (names and terms, comma-separated) and how
+many people spoke besides the operator, then processes it again: no more voices than that are told apart on the
+far end (online) or in the room (in person). The calendar alone never caps the voices, since two people can share
+one invitation; when a call has more unnamed far-end voices than its invitation has other people, the meeting says
+so and suggests Merge into…. The invitees' names are the first naming suggestions, and a speaker who never spoke
+five seconds alone gets their longest clean stretch as a clip. Listen gives each word to the speaker whose diarised turn covers it
 and, online, whose channel carries it loudest against that channel's own speech; it changes speaker inside a
 phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
 are numbered by their first turn of at least 0.4 seconds, so a label keeps its number when the meeting is reprocessed.
