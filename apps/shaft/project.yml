@@ -253,6 +253,7 @@ targets:
       - path: macOS/MacDevSession.swift
       - path: macOS/UpdateFeed.swift
       - path: macOS/Meetings/MeetingMicrophones.swift
+      - path: macOS/Meetings/MeetingCapture.swift
       - path: macOS/Setup/SetupGate.swift
       - path: macOS/Setup/MacSetup.swift
       - path: macOS/Setup/ServerKeys.swift

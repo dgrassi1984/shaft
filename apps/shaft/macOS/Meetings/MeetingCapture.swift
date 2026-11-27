@@ -102,6 +102,7 @@ final class MeetingCapture: @unchecked Sendable {
     var stallThreshold: Double
     var noCallbackGrace: Double = 2              // doubles on each rebuild that brings no callbacks, back to 2 on audio
     var warnedSilentTap = false
+    var warnedWriteFailed = false
 
     // Written by the IO thread, read by the watchdog.
     let lastCallback = Atomic<UInt64>(0)        // mach host time of the last IOProc call, or of the last (re)start
@@ -148,23 +149,9 @@ final class MeetingCapture: @unchecked Sendable {
                                               mBytesPerPacket: 4 * channels, mFramesPerPacket: 1, mBytesPerFrame: 4 * channels,
                                               mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
         // AAC in an .m4a: an hour of two channels is ~85 MB instead of 1.4 GB of float PCM.
-        var aac = AudioStreamBasicDescription(mSampleRate: sampleRate, mFormatID: kAudioFormatMPEG4AAC, mFormatFlags: 0,
-                                              mBytesPerPacket: 0, mFramesPerPacket: 1024, mBytesPerFrame: 0,
-                                              mChannelsPerFrame: channels, mBitsPerChannel: 0, mReserved: 0)
-        var f: ExtAudioFileRef?
-        try check(ExtAudioFileCreateWithURL(url as CFURL, kAudioFileM4AType, &aac, nil, AudioFileFlags.eraseFile.rawValue, &f), "create file")
+        let f = try openFile(fmt: &fmt, bitRate: true)
+        do { try check(ExtAudioFileWriteAsync(f, 0, nil), "prime async writer") } catch { ExtAudioFileDispose(f); throw error }
         file = f
-        try check(ExtAudioFileSetProperty(f!, kExtAudioFileProperty_ClientDataFormat, UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &fmt), "client format")
-        var converter: AudioConverterRef?
-        var converterSize = UInt32(MemoryLayout<AudioConverterRef?>.size)
-        if ExtAudioFileGetProperty(f!, kExtAudioFileProperty_AudioConverter, &converterSize, &converter) == noErr, let converter {
-            var bitRate = UInt32(96_000) * channels                     // ~96 kbit/s per channel
-            if AudioConverterSetProperty(converter, kAudioConverterEncodeBitRate, UInt32(MemoryLayout<UInt32>.size), &bitRate) == noErr {
-                var config: CFArray? = nil
-                ExtAudioFileSetProperty(f!, kExtAudioFileProperty_ConverterConfig, UInt32(MemoryLayout<CFArray?>.size), &config)
-            }
-        }
-        try check(ExtAudioFileWriteAsync(f!, 0, nil), "prime async writer")
         started = Date()
         lastAudio.store(mach_absolute_time(), ordering: .relaxed)    // the clock starts at the start
         pendingGapFromHost = lastAudio.load(ordering: .relaxed)
@@ -176,6 +163,54 @@ final class MeetingCapture: @unchecked Sendable {
         timer.resume()
         self.timer = timer
         log("recording \(online ? "online (mic + system)" : "in person (mic)") at \(Int(sampleRate)) Hz from \"\(inputName)\"; input buffers \(bufferChannels), mic buffers \(micBuffers)")
+    }
+
+    /// Creates the AAC file and sets ~96 kbit/s per channel, clamped to a rate the encoder offers at this sample rate
+    /// and channel count. Bug 2026-11-27: AirPods in a call run at 24 kHz, where two channels top out at 128 kbit/s;
+    /// asking for 192 kbit/s failed with '!dat' and left the converter refusing every write, so a 17-minute meeting
+    /// became a 28-byte file. If a set still fails, the file is created again on the encoder's default rate.
+    func openFile(fmt: inout AudioStreamBasicDescription, bitRate: Bool) throws -> ExtAudioFileRef {
+        var aac = AudioStreamBasicDescription(mSampleRate: sampleRate, mFormatID: kAudioFormatMPEG4AAC, mFormatFlags: 0,
+                                              mBytesPerPacket: 0, mFramesPerPacket: 1024, mBytesPerFrame: 0,
+                                              mChannelsPerFrame: channels, mBitsPerChannel: 0, mReserved: 0)
+        var created: ExtAudioFileRef?
+        try check(ExtAudioFileCreateWithURL(url as CFURL, kAudioFileM4AType, &aac, nil, AudioFileFlags.eraseFile.rawValue, &created), "create file")
+        guard let f = created else { throw NSError(domain: "MeetingCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "create file returned no file"]) }
+        do {
+            try check(ExtAudioFileSetProperty(f, kExtAudioFileProperty_ClientDataFormat, UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &fmt), "client format")
+        } catch { ExtAudioFileDispose(f); throw error }
+        guard bitRate else { return f }
+        var converter: AudioConverterRef?
+        var converterSize = UInt32(MemoryLayout<AudioConverterRef?>.size)
+        guard ExtAudioFileGetProperty(f, kExtAudioFileProperty_AudioConverter, &converterSize, &converter) == noErr,
+              let converter else { return f }
+        var size: UInt32 = 0
+        var ranges: [AudioValueRange] = []
+        if AudioConverterGetPropertyInfo(converter, kAudioConverterApplicableEncodeBitRates, &size, nil) == noErr, size > 0 {
+            ranges = Array(repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
+            if AudioConverterGetProperty(converter, kAudioConverterApplicableEncodeBitRates, &size, &ranges) != noErr { ranges = [] }
+        }
+        guard var rate = Self.encodeBitRate(wanted: 96_000 * Double(channels), offered: ranges) else { return f }
+        var status = AudioConverterSetProperty(converter, kAudioConverterEncodeBitRate, UInt32(MemoryLayout<UInt32>.size), &rate)
+        if status == noErr {
+            var config: CFArray? = nil
+            status = ExtAudioFileSetProperty(f, kExtAudioFileProperty_ConverterConfig, UInt32(MemoryLayout<CFArray?>.size), &config)
+        }
+        guard status != noErr else { return f }
+        log("encode bit rate \(rate) refused (OSStatus \(status)) at \(Int(sampleRate)) Hz: using the encoder's default")
+        ExtAudioFileDispose(f)
+        return try openFile(fmt: &fmt, bitRate: false)
+    }
+
+    /// `wanted` when a range the encoder offers holds it, else the highest rate it offers below, else its lowest; nil
+    /// when it lists none.
+    static func encodeBitRate(wanted: Double, offered: [AudioValueRange]) -> UInt32? {
+        if offered.contains(where: { $0.mMinimum > 0 && $0.mMinimum <= wanted && wanted <= $0.mMaximum }) {
+            return UInt32(wanted)
+        }
+        let rates = offered.flatMap { [$0.mMinimum, $0.mMaximum] }.filter { $0 > 0 }
+        guard let lowest = rates.min() else { return nil }
+        return UInt32(rates.filter { $0 <= wanted }.max() ?? lowest)
     }
 
     func buildDevice() throws {
@@ -293,8 +328,8 @@ final class MeetingCapture: @unchecked Sendable {
         if status == noErr {
             framesWritten.add(frames, ordering: .relaxed)
         } else {
-            framesLost.add(frames, ordering: .relaxed)
-            lastWriteError.store(status, ordering: .relaxed)
+            lastWriteError.store(status, ordering: .relaxed)       // before the count: the watchdog reads both
+            framesLost.add(frames, ordering: .releasing)
         }
     }
 
@@ -314,9 +349,32 @@ final class MeetingCapture: @unchecked Sendable {
 
     static let onControl = DispatchSpecificKey<Bool>()
 
+    /// Seconds of audio a finished file holds, or nil when it cannot be opened as audio (no moov atom).
+    static func secondsInFile(_ url: URL) -> Double? {
+        var ref: ExtAudioFileRef?
+        guard ExtAudioFileOpenURL(url as CFURL, &ref) == noErr, let ref else { return nil }
+        defer { ExtAudioFileDispose(ref) }
+        var frames: Int64 = 0
+        var format = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<Int64>.size)
+        guard ExtAudioFileGetProperty(ref, kExtAudioFileProperty_FileLengthFrames, &size, &frames) == noErr else { return nil }
+        size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard ExtAudioFileGetProperty(ref, kExtAudioFileProperty_FileDataFormat, &size, &format) == noErr,
+              format.mSampleRate > 0 else { return nil }
+        return Double(frames) / format.mSampleRate
+    }
+
     // MARK: watchdog (control queue)
 
     func tick() {
+        // Said while the meeting is still going on, not at the stop (bug 2026-11-27: every write was refused for
+        // 17 minutes and the operator learnt it only from the failed transcript). Checked first, so no other branch
+        // of the watchdog can skip it.
+        if !warnedWriteFailed, framesLost.load(ordering: .acquiring) > 0 {
+            warnedWriteFailed = true
+            onWarning?("Audio is not being saved (OSStatus \(lastWriteError.load(ordering: .relaxed))). Stop and start "
+                       + "the recording again, or record from the iPhone.")
+        }
         let now = mach_absolute_time()
         let sinceCallback = hostSeconds(now) - hostSeconds(lastCallback.load(ordering: .relaxed))
         if sinceCallback > noCallbackGrace {
@@ -328,7 +386,7 @@ final class MeetingCapture: @unchecked Sendable {
         }
         if hostSeconds(now) - hostSeconds(lastAudio.load(ordering: .relaxed)) < 1 { noCallbackGrace = 2 }
         guard online else { return }
-        if !warnedSilentTap, !tapEverHeard.load(ordering: .relaxed),
+        if !warnedSilentTap, !warnedWriteFailed, !tapEverHeard.load(ordering: .relaxed),
            Double(tapSilentFrames.load(ordering: .relaxed)) / sampleRate > 10 {
             warnedSilentTap = true
             onWarning?("No sound from other apps for 10 s. If the call is playing, allow SHAFT under System Settings → "
@@ -377,7 +435,11 @@ final class MeetingCapture: @unchecked Sendable {
         if file != nil, missing > 0.5 { writeSilence(seconds: min(missing, 600), reason: "no audio before stop") }
         var finalise: OSStatus = noErr
         if let f = file { finalise = ExtAudioFileDispose(f); file = nil }
-        let seconds = Double(framesWritten.load(ordering: .relaxed)) / sampleRate
+        // The writes the async writer accepted are not proof the audio reached the file (it reports a failure on a
+        // later call, or only at the dispose): the length is read back from the file itself.
+        let accepted = Double(framesWritten.load(ordering: .relaxed)) / sampleRate
+        let held = Self.secondsInFile(url)
+        let seconds = held ?? 0
         let lost = Double(framesLost.load(ordering: .relaxed)) / sampleRate
         var problems: [String] = []
         if lost > 0 {
@@ -385,6 +447,11 @@ final class MeetingCapture: @unchecked Sendable {
                                    lastWriteError.load(ordering: .relaxed)))
         }
         if finalise != noErr { problems.append("the file could not be finalised (OSStatus \(finalise))") }
+        if held == nil, accepted > 0 {
+            problems.append(String(format: "the file holds no readable audio of the %.1f s recorded", accepted))
+        } else if accepted - seconds > 1 {
+            problems.append(String(format: "the file holds %.1f s of the %.1f s recorded", seconds, accepted))
+        }
         if !problems.isEmpty { log("stop: " + problems.joined(separator: "; ")) }
         let sidecar: [String: Any] = [
             "started": iso(started), "ended": iso(Date()), "mode": online ? "online" : "inperson",
