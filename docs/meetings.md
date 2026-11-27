@@ -187,7 +187,9 @@ speaker with **Confirm** and **Reject**. `shaft meetings proposals` lists the pe
 ## Account suggestion
 
 When an unfiled meeting becomes ready or a speaker's name changes, SHAFT checks the recognised people's
-other published, filed meetings. Each person with history contributes one vote, divided among accounts in
+other published, filed meetings. SHAFT excludes anyone identified on the microphone in an online meeting,
+including in unpublished transcripts, because that channel records the operator's side.
+Each person with history contributes one vote, divided among accounts in
 proportion to their meeting counts. An account needs at least two thirds of the votes and two distinct filed
 meetings. The suggestion leaves the meeting unfiled. Use `shaft meetings file <id> --suggested` to accept it.
 Dismissing a suggestion suppresses that alias on later checks.

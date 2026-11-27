@@ -32,8 +32,8 @@ class MeetingsAccessTest(test_app_api.AppTest):
         self.broker = broker.Broker(INSTANCE, self.sup, {}, self.sup / "broker.log",
                                     root=self.inst / INSTANCE, share=True)
 
-    def create(self, account="work", day=24, title="Example"):
-        return meetings.create({"mode": "online", "started": f"2026-11-{day}T10:00:00",
+    def create(self, account="work", day=24, title="Example", *, mode="online"):
+        return meetings.create({"mode": mode, "started": f"2026-11-{day}T10:00:00",
                                 "device": "example", "ext": "wav", "account": account, "title": title})["id"]
 
     def process(self, mid, text="Share the deck.", end=8):
@@ -341,15 +341,42 @@ class MeetingsAccessTest(test_app_api.AppTest):
         self.assertEqual(filed["account"], "work")
         self.assertNotIn("account_suggestion", filed)
 
+    def publish_suggestion_fixture(self, alias, *people, mic=(), mode="online"):
+        mid = self.create(alias, mode=mode)
+        meetings.finish(mid, size=0, sha256=hashlib.sha256(b"").hexdigest(), chunks=0)
+        meetings.set_state(mid, "processing")
+        voices = [(p, 2) for p in people] + [(p, 1) for p in mic]
+        transcript = {"speakers": {str(i): {"person": p, "name": p, "channel": channel}
+                                   for i, (p, channel) in enumerate(voices)},
+                      "segments": [], "gaps": [], "processed_with": "fixture"}
+        meetings.complete_processing(mid, transcript, "")
+        return meetings.get(mid).get("account_suggestion")
+
+    def test_suggestion_ignores_online_mic_when_only_operator_is_recognised(self):
+        for _ in range(2):
+            self.publish_suggestion_fixture("work", "Operator")
+        self.assertIsNone(self.publish_suggestion_fixture(None, mic=("Operator",)))
+
+    def test_suggestion_uses_far_end_guest_without_operator_vote(self):
+        for _ in range(2):
+            self.publish_suggestion_fixture("home", mic=("Operator",))
+            self.publish_suggestion_fixture("work", "Guest")
+        self.assertEqual(self.publish_suggestion_fixture(None, "Guest", mic=("Operator",)),
+                         {"account": "work", "people": [{"name": "Guest", "meetings": 2}], "share": 1.0})
+
+    def test_suggestion_ignores_person_seen_on_online_mic_in_unpublished_peer(self):
+        publish = self.publish_suggestion_fixture
+        for _ in range(2):
+            publish("work", mic=("Operator",), mode="inperson")
+        self.assertEqual(publish(None, mic=("Operator",), mode="inperson"),
+                         {"account": "work", "people": [{"name": "Operator", "meetings": 2}], "share": 1.0})
+        peer = self.create(None)
+        transcript = {"speakers": {"M1": {"person": "Operator", "name": "Operator", "channel": 1}}}
+        (self.sup / "meetings" / peer / "transcript.json").write_text(json.dumps(transcript))
+        self.assertIsNone(publish(None, mic=("Operator",), mode="inperson"))
+
     def test_suggestion_counts_distinct_meetings_and_weights_people_equally(self):
-        def publish(alias, *people):
-            mid = self.create(alias)
-            meetings.finish(mid, size=0, sha256=hashlib.sha256(b"").hexdigest(), chunks=0)
-            meetings.set_state(mid, "processing")
-            transcript = {"speakers": {str(i): {"person": p, "name": p} for i, p in enumerate(people)},
-                          "segments": [], "gaps": [], "processed_with": "fixture"}
-            meetings.complete_processing(mid, transcript, "")
-            return meetings.get(mid).get("account_suggestion")
+        publish = self.publish_suggestion_fixture
 
         for bad in (None, b"{", b'{"speakers": [1]}'):
             folder = self.sup / "meetings" / self.ready("home")

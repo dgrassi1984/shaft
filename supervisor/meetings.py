@@ -496,8 +496,19 @@ def _recognised(transcript):
             if isinstance(s.get("person"), str) and s["person"] and isinstance(s.get("name"), str)}
 
 
+def _online_mic_people(metadata, transcript):
+    if metadata.get("mode") != "online":
+        return set()
+    return {pid for speaker in transcript["speakers"].values()
+            if speaker.get("channel") == 1 and isinstance(pid := speaker.get("person"), str) and pid}
+
+
 def _refresh_suggestion(folder, metadata, transcript):
-    """Called under this meeting's lock. Read atomic files from peers without nesting meeting locks."""
+    """Read peers' atomic files under this meeting's lock without nesting locks.
+
+    Online microphone speakers are on the operator's side and can recur across accounts.
+    Exclude their identities from all votes, even when an unpublished transcript identifies them.
+    """
     metadata.pop("account_suggestion", None)
     if metadata["account"] is not None or not transcript.get("speakers"):
         return
@@ -505,22 +516,31 @@ def _refresh_suggestion(folder, metadata, transcript):
     if not people:
         return
     from . import google
-    counts = {pid: Counter() for pid in people}
-    support = Counter()
+    operator_side = _online_mic_people(metadata, transcript)
+    filed_matches = []
     for peer in folder.parent.iterdir():
         if peer == folder or not re.fullmatch(ID, peer.name):
             continue
         try:
             row = json.loads((peer / "meeting.json").read_bytes())
+            peer_transcript = json.loads((peer / "transcript.json").read_bytes())
+            operator_side.update(_online_mic_people(row, peer_transcript))
             alias = row["account"]
             if not isinstance(alias, str) or not google.ALIAS_RE.fullmatch(alias) or not is_published(row):
                 continue
-            matches = people.keys() & _recognised(json.loads((peer / "transcript.json").read_bytes()))
+            matches = people.keys() & _recognised(peer_transcript)
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
             continue
         if matches:
+            filed_matches.append((alias, matches))
+    people = {pid: name for pid, name in people.items() if pid not in operator_side}
+    counts = {pid: Counter() for pid in people}
+    support = Counter()
+    for alias, matches in filed_matches:
+        eligible = matches - operator_side
+        if eligible:
             support[alias] += 1
-        for pid in matches:
+        for pid in eligible:
             counts[pid][alias] += 1
     scores = Counter()
     for history in counts.values():

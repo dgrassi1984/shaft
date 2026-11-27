@@ -9,6 +9,7 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     public let mode: String
     public let device: String
     public let account: String?
+    public let accountSuggestion: AccountSuggestion?
     public let state: String
     public let error: String?
     public let size: Int?
@@ -26,6 +27,17 @@ public struct Meeting: Decodable, Sendable, Equatable, Identifiable {
     /// The people besides the operator the operator gave for this meeting (`others`): caps the speakers found.
     public let others: Int?
     public let transcript: MeetingTranscript?
+
+    public struct AccountSuggestion: Decodable, Sendable, Equatable {
+        public let account: String
+        public let people: [Person]
+        public let share: Double
+
+        public struct Person: Decodable, Sendable, Equatable {
+            public let name: String
+            public let meetings: Int
+        }
+    }
 
     public func chatReference(timeZone: TimeZone = .current) -> String? {
         guard account != nil else { return nil }
