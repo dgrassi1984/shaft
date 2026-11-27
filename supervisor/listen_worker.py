@@ -182,6 +182,15 @@ def recover() -> None:
                 continue  # Deleted after the scan.
 
 
+def recorder_problems(folder: Path) -> list[str]:
+    """The problems the recording device wrote in the sidecar, or none when it is missing or unreadable."""
+    try:
+        problems = json.loads((folder / "sidecar.json").read_bytes()).get("problems")
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return []
+    return [str(p) for p in problems if str(p).strip()] if isinstance(problems, list) else []
+
+
 def process_next(engines) -> bool:
     for row in reversed(meetings.list_meetings()):
         if row["state"] != "queued":
@@ -207,6 +216,9 @@ def process_next(engines) -> bool:
             return True
         except Exception as error:
             message = str(error) or type(error).__name__
+            problems = recorder_problems(meetings._root() / meeting_id)
+            if problems:  # what the recording device said first: ffmpeg only sees the file it left (bug 2026-11-27)
+                message = "The recording device reported: " + "; ".join(problems) + ". " + message
             try:
                 meetings.set_state(meeting_id, "failed", error=message)
             except meetings.Missing:

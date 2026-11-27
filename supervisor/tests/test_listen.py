@@ -151,6 +151,32 @@ class ListenTest(unittest.TestCase):
         self.assertIn("Invalid data found", row["error"])
         self.assertFalse((self.root / "meetings" / meeting_id / "transcript.json").exists())
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is unavailable")
+    def test_decode_error_leads_with_the_recorder_problems(self):
+        # Bug 2026-11-27: the Mac's AAC encoder refused every write and left a 28-byte file; the card said only
+        # "moov atom not found", not what the recorder had already reported in the sidecar.
+        meeting_id = self.enqueue("online")
+        folder = self.root / "meetings" / meeting_id
+        (folder / "sidecar.json").write_text(json.dumps({"problems": [
+            "62.1 s of audio could not be written (OSStatus 560226676)",
+            "the file could not be finalised (OSStatus 560226676)"]}))
+        with self.assertLogs("supervisor.listen_worker", level="ERROR"):
+            self.assertTrue(listen_worker.process_next(FakeEngines({}, {})))
+        error = meetings.get(meeting_id)["error"]
+        self.assertTrue(error.startswith("The recording device reported: 62.1 s of audio could not be written"), error)
+        self.assertIn("the file could not be finalised (OSStatus 560226676). Audio decode failed (ffmpeg exit", error)
+
+    def test_recorder_problems_tolerates_missing_or_malformed_sidecar(self):
+        folder = self.root / "nowhere"
+        folder.mkdir()
+        self.assertEqual(listen_worker.recorder_problems(folder), [])
+        (folder / "sidecar.json").write_text("[1, 2]")
+        self.assertEqual(listen_worker.recorder_problems(folder), [])
+        (folder / "sidecar.json").write_text("[" * 12_000 + "]" * 12_000)
+        self.assertEqual(listen_worker.recorder_problems(folder), [])
+        (folder / "sidecar.json").write_text('{"problems": ["x", " "]}')
+        self.assertEqual(listen_worker.recorder_problems(folder), ["x"])
+
     def test_words_floor_rejects_sparse_transcript_and_keeps_previous_output(self):
         self.mock_decode()
         meeting_id = self.enqueue()
