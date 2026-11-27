@@ -1,9 +1,10 @@
 #!/bin/bash
 # Archives and exports the iPhone/iPad app, its extensions and Watch app for App Store Connect.
-#   Scripts/release-ios.sh [--team TEAMID] [--out DIR] [--upload] [--allow-untagged] [--dry-run]
+#   Scripts/release-ios.sh [--team TEAMID] [--out DIR] [--upload] [--manual-signing] [--allow-untagged] [--dry-run]
 #   Scripts/release-ios.sh [--api-key-path PATH --api-key-id ID --api-issuer ID]
 #   Scripts/release-ios.sh --self-test (synthetic plists only; signs and uploads nothing)
 # --dry-run checks preconditions and prints the plan without signing or contacting Apple.
+# --manual-signing exports with installed manual App Store profiles for every archived app and extension.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 app_dir=$(cd "$here/.." && pwd)
@@ -12,16 +13,18 @@ out="$app_dir/build/release-ios"
 allow_untagged=0
 dry=0
 upload=0
+signing_style=automatic
 self_test_requested=0
 api_key_path=""
 api_key_id=""
 api_issuer=""
-usage() { sed -n '2,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --team) team=${2:?--team needs a value}; shift 2 ;;
     --out) out=${2:?--out needs a value}; shift 2 ;;
     --upload) upload=1; shift ;;
+    --manual-signing) signing_style=manual; shift ;;
     --allow-untagged) allow_untagged=1; shift ;;
     --dry-run) dry=1; shift ;;
     --self-test) self_test_requested=1; shift ;;
@@ -65,7 +68,7 @@ plist_value() {
   printf '%s\n' "$out"
 }
 
-# Check the four exported bundles; the entitlement check is separate so self-test needs no signing identity.
+# The entitlement check is separate so self-test needs no signing identity.
 check_production() {
   [ "$(plist_value "$1" aps-environment)" = production ] || die "Signed app aps-environment is not production."
 }
@@ -77,10 +80,14 @@ check_bundles() {
   [ "$(plutil -type ITSAppUsesNonExemptEncryption "$app/Info.plist")" = bool ] &&
     [ "$(plist_value "$app/Info.plist" ITSAppUsesNonExemptEncryption)" = false ] ||
     die "App must declare ITSAppUsesNonExemptEncryption = false (boolean)."
-  for bundle in "$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" "$app/Watch/SHAFT.app"; do
+  for bundle in "$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" \
+    "$app/Watch/SHAFT.app" "$app/PlugIns/MeetingWidgets.appex"; do
     [ -d "$bundle" ] || die "Missing bundle: $bundle"
-    [ -f "$bundle/PrivacyInfo.xcprivacy" ] || die "Missing privacy manifest: $bundle"
-    plutil -lint "$bundle/PrivacyInfo.xcprivacy" >/dev/null || die "Invalid privacy manifest: $bundle"
+    # MeetingWidgets does not ship a privacy manifest.
+    if [ "$bundle" != "$app/PlugIns/MeetingWidgets.appex" ]; then
+      [ -f "$bundle/PrivacyInfo.xcprivacy" ] || die "Missing privacy manifest: $bundle"
+      plutil -lint "$bundle/PrivacyInfo.xcprivacy" >/dev/null || die "Invalid privacy manifest: $bundle"
+    fi
     [ "$(plist_value "$bundle/Info.plist" CFBundleShortVersionString)" = "$version" ] || die "Version mismatch: $bundle"
     [ "$(plist_value "$bundle/Info.plist" CFBundleVersion)" = "$build" ] || die "Build mismatch: $bundle"
     rc=0
@@ -89,11 +96,91 @@ check_bundles() {
   done
 }
 
+pick_profiles() {
+  python3 - "$1" "$2" "$3" <<'PYCODE'
+from datetime import datetime, timezone
+from pathlib import Path
+import plistlib
+import sys
+
+app, team, decoded = sys.argv[1:]
+
+def archived_bundle_ids(bundle):
+    with (bundle / 'Info.plist').open('rb') as stream:
+        bundle_id = plistlib.load(stream).get('CFBundleIdentifier')
+    if not isinstance(bundle_id, str) or not bundle_id:
+        raise ValueError(f'Missing or invalid CFBundleIdentifier in {bundle / "Info.plist"}')
+    yield bundle_id
+    for pattern in ('PlugIns/*.appex', 'Watch/*.app'):
+        for child in sorted(bundle.glob(pattern)):
+            if child.is_dir():
+                yield from archived_bundle_ids(child)
+
+try:
+    bundle_ids = sorted(set(archived_bundle_ids(Path(app))))
+except (OSError, ValueError, plistlib.InvalidFileException) as error:
+    sys.exit(f'Cannot read archived bundles: {error}')
+
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+best = {}
+for path in sorted(Path(decoded).glob('*.plist')):
+    with path.open('rb') as stream:
+        profile = plistlib.load(stream)
+    entitlements = profile.get('Entitlements', {})
+    identifier = entitlements.get('application-identifier')
+    expiry = profile.get('ExpirationDate')
+    name = profile.get('Name')
+    if ('ProvisionedDevices' in profile
+            or profile.get('ProvisionsAllDevices', False) is not False
+            or entitlements.get('get-task-allow', False) is not False
+            or profile.get('IsXcodeManaged', False) is not False
+            or not isinstance(identifier, str)
+            or not isinstance(expiry, datetime) or expiry <= now
+            or not isinstance(name, str) or not name):
+        continue
+    if identifier not in best or expiry > best[identifier][0]:
+        best[identifier] = (expiry, name)
+
+selected = {}
+missing = []
+for bundle_id in bundle_ids:
+    match = best.get(f'{team}.{bundle_id}')
+    if match:
+        selected[bundle_id] = match[1]
+    else:
+        missing.append(bundle_id)
+if missing:
+    print('Missing manual App Store provisioning profiles for these bundle IDs:', file=sys.stderr)
+    print(*missing, sep='\n', file=sys.stderr)
+    sys.exit('Register each App ID and create a manually managed App Store profile with the Apple Distribution '
+             'certificate in the Apple Developer portal or via the App Store Connect API. '
+             'Install the profiles and rerun.')
+plistlib.dump(selected, sys.stdout.buffer)
+PYCODE
+}
+
+installed_profiles() (
+  local decoded profile index=0
+  decoded=$(mktemp -d) || die 'Cannot create a directory for decoded provisioning profiles.'
+  trap 'rm -rf "$decoded"' EXIT
+  shopt -s nullglob
+  for profile in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/"*.mobileprovision; do
+    index=$((index + 1))
+    if ! security cms -D -i "$profile" >"$decoded/$index.plist"; then
+      echo "Could not decode provisioning profile: $profile" >&2
+      rm "$decoded/$index.plist"
+    fi
+  done
+  pick_profiles "$1" "$team" "$decoded"
+)
+
 self_test() {
-  local t app bundle fails=0
+  local t app bundle key fails=0
+  local manifests
   t=$(mktemp -d)
   app="$t/Payload/SHAFT.app"
-  for bundle in "$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" "$app/Watch/SHAFT.app"; do
+  manifests=("$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" "$app/Watch/SHAFT.app")
+  for bundle in "${manifests[@]}" "$app/PlugIns/MeetingWidgets.appex"; do
     mkdir -p "$bundle"
     cat >"$bundle/Info.plist" <<'PLIST'
 <?xml version="1.0"?><plist version="1.0"><dict>
@@ -102,6 +189,8 @@ self_test() {
 <key>ITSAppUsesNonExemptEncryption</key><false/>
 </dict></plist>
 PLIST
+  done
+  for bundle in "${manifests[@]}"; do
     cp "$bundle/Info.plist" "$bundle/PrivacyInfo.xcprivacy"
   done
   expect_status() {
@@ -111,8 +200,8 @@ PLIST
     if [ "$rc" -eq "$expected" ]; then echo "ok   $name";
     else echo "FAIL $name: expected status $expected, got $rc"; cat "$t/check.log"; fails=$((fails + 1)); fi
   }
-  expect_status 'valid four bundles' 0 check_bundles "$app"
-  for bundle in "$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" "$app/Watch/SHAFT.app"; do
+  expect_status 'valid five bundles with four privacy manifests' 0 check_bundles "$app"
+  for bundle in "${manifests[@]}"; do
     mv "$bundle/PrivacyInfo.xcprivacy" "$t/manifest"
     expect_status "missing manifest: ${bundle#"$t/"}" 1 check_bundles "$app"
     mv "$t/manifest" "$bundle/PrivacyInfo.xcprivacy"
@@ -121,12 +210,15 @@ PLIST
   mv "$bundle" "$t/watch"
   expect_status 'missing watch bundle' 1 check_bundles "$app"
   mv "$t/watch" "$bundle"
+  mv "$app/PlugIns/MeetingWidgets.appex" "$t/widgets"
+  expect_status 'missing MeetingWidgets bundle' 1 check_bundles "$app"
+  mv "$t/widgets" "$app/PlugIns/MeetingWidgets.appex"
   for key in CFBundleShortVersionString CFBundleVersion; do
     /usr/libexec/PlistBuddy -c "Set :$key 999" "$bundle/Info.plist"
     expect_status "mismatched $key" 1 check_bundles "$app"
     cp "$app/Info.plist" "$bundle/Info.plist"
   done
-  for bundle in "$app" "$app/PlugIns/ShareExtension.appex" "$app/PlugIns/NotificationService.appex" "$app/Watch/SHAFT.app"; do
+  for bundle in "${manifests[@]}" "$app/PlugIns/MeetingWidgets.appex"; do
     /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity dict' -c 'Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool false' "$bundle/Info.plist"
     expect_status "local networking key even when false: ${bundle#"$t/"}" 1 check_bundles "$app"
     /usr/libexec/PlistBuddy -c 'Delete :NSAppTransportSecurity' "$bundle/Info.plist"
@@ -145,6 +237,65 @@ PLIST
   expect_status 'development entitlement' 1 check_production "$t/entitlements.plist"
   /usr/libexec/PlistBuddy -c 'Delete :aps-environment' "$t/entitlements.plist"
   expect_status 'missing entitlement' 1 check_production "$t/entitlements.plist"
+  mkdir "$t/profiles"
+  python3 - "$t" <<'PYCODE'
+from datetime import datetime
+from pathlib import Path
+import plistlib
+import sys
+
+root = Path(sys.argv[1])
+archive_app = root / 'archive' / 'SHAFT.app'
+bundles = {
+    archive_app: 'example.shaft',
+    archive_app / 'PlugIns/MeetingWidgets.appex': 'example.shaft.widgets',
+    archive_app / 'Watch/SHAFT.app': 'example.shaft.watch',
+    archive_app / 'Watch/SHAFT.app/PlugIns/WatchExtension.appex': 'example.shaft.watch.extension',
+}
+for bundle, bundle_id in bundles.items():
+    bundle.mkdir(parents=True)
+    (bundle / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': bundle_id}))
+
+def profile(name, year, identifier='TEAM.example.shaft', entitlements=None, **flags):
+    data = dict(Entitlements={'application-identifier': identifier, **(entitlements or {})},
+                Name=name, ExpirationDate=datetime(year, 1, 1), **flags)
+    (root / 'profiles' / f'{name}.plist').write_bytes(plistlib.dumps(data))
+
+profile('Earlier', 2098)
+profile('Latest', 2099, entitlements={'get-task-allow': False}, IsXcodeManaged=False)
+profile('Older', 2097)
+profile('Expired', 2000, 'TEAM.example.shaft.widgets')
+profile('Devices', 2100, ProvisionedDevices=['example-device'])
+profile('Debuggable', 2100, entitlements={'get-task-allow': True})
+profile('Enterprise', 2100, ProvisionsAllDevices=True)
+profile('Xcode managed', 2100, IsXcodeManaged=True)
+profile('Wildcard', 2100, 'TEAM.example.shaft.*')
+profile('Other team', 2100, 'OTHER.example.shaft')
+profile('Widgets', 2099, 'TEAM.example.shaft.widgets')
+profile('Watch', 2099, 'TEAM.example.shaft.watch')
+profile('Watch extension', 2099, 'TEAM.example.shaft.watch.extension')
+(root / 'expected.plist').write_bytes(plistlib.dumps(dict(zip(
+    bundles.values(), ('Latest', 'Widgets', 'Watch', 'Watch extension')
+))))
+PYCODE
+  expect_status 'pick manual App Store profiles for archived bundles' 0 pick_profiles "$t/archive/SHAFT.app" TEAM "$t/profiles"
+  if cmp -s "$t/expected.plist" "$t/check.log"; then
+    echo 'ok   selected profile names and latest expiry'
+  else
+    echo 'FAIL selected profile names and latest expiry'
+    cat "$t/check.log"
+    fails=$((fails + 1))
+  fi
+  rm "$t/profiles/Widgets.plist" "$t/profiles/Watch extension.plist"
+  expect_status 'fail when manual profiles are missing' 1 pick_profiles "$t/archive/SHAFT.app" TEAM "$t/profiles"
+  if grep -Fxq 'example.shaft.widgets' "$t/check.log" &&
+    grep -Fxq 'example.shaft.watch.extension' "$t/check.log"; then
+    echo 'ok   list every missing bundle ID'
+  else
+    echo 'FAIL list every missing bundle ID'
+    cat "$t/check.log"
+    fails=$((fails + 1))
+  fi
   rm -rf "$t"
   [ "$fails" -eq 0 ] || die "$fails self-test(s) failed."
   echo 'self-test passed.'
@@ -167,6 +318,9 @@ echo "git: ${tag:-untagged HEAD $(git -C "$app_dir" rev-parse --short HEAD)}"
 for tool in xcodegen xcodebuild codesign plutil ditto python3; do
   command -v "$tool" >/dev/null 2>&1 || problem "$tool is not installed."
 done
+if [ "$signing_style" = manual ]; then
+  command -v security >/dev/null 2>&1 || problem 'security is not installed.'
+fi
 auth=()
 if [ -n "$api_key_path$api_key_id$api_issuer" ]; then
   if [ -z "$api_key_path" ] || [ -z "$api_key_id" ] || [ -z "$api_issuer" ]; then
@@ -198,18 +352,38 @@ run xcodebuild -project "$app_dir/SHAFT.xcodeproj" -scheme SHAFT-iOS -configurat
   -destination 'generic/platform=iOS' -archivePath "$archive" -derivedDataPath "$out/dd" \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} DEVELOPMENT_TEAM="$team" CODE_SIGN_STYLE=Automatic SHAFT_APS_ENVIRONMENT=production archive
 
+profiles=""
+if [ "$signing_style" = manual ]; then
+  archive_app="$archive/Products/Applications/SHAFT.app"
+  if [ "$dry" -eq 1 ] && [ ! -d "$archive_app" ]; then
+    echo "[dry-run] would select installed manual App Store profiles for each bundle in $archive_app after archiving."
+  else
+    profiles=$(installed_profiles "$archive_app") || die 'Could not select manual provisioning profiles.'
+  fi
+fi
 write_export_options() {
   if [ "$dry" -eq 1 ]; then
-    echo "[dry-run] would write $export_plist: method app-store-connect, destination $1, signingStyle automatic, teamID $team, manageAppVersionAndBuildNumber false"
-  else
-    python3 - "$export_plist" "$team" "$1" <<'PYCODE'
+    echo "[dry-run] would write $export_plist: method app-store-connect, destination $1, signingStyle $signing_style, teamID $team, manageAppVersionAndBuildNumber false"
+    [ "$signing_style" = manual ] || return 0
+    echo '[dry-run] signingCertificate Apple Distribution'
+    [ -n "$profiles" ] || return 0
+  fi
+  python3 - "$export_plist" "$team" "$1" "$signing_style" "$profiles" "$dry" <<'PYCODE'
 import plistlib
 import sys
-with open(sys.argv[1], 'wb') as stream:
-    plistlib.dump(dict(method='app-store-connect', destination=sys.argv[3], teamID=sys.argv[2],
-                       signingStyle='automatic', manageAppVersionAndBuildNumber=False), stream)
+path, team, destination, signing_style, profiles, dry = sys.argv[1:]
+options = dict(method='app-store-connect', destination=destination, teamID=team,
+               signingStyle=signing_style, manageAppVersionAndBuildNumber=False)
+if signing_style == 'manual':
+    options.update(signingCertificate='Apple Distribution',
+                   provisioningProfiles=plistlib.loads(profiles.encode('utf-8')))
+if dry == '1':
+    for bundle_id, name in options['provisioningProfiles'].items():
+        print(f'[dry-run] provisioningProfiles {bundle_id} -> {name}')
+else:
+    with open(path, 'wb') as stream:
+        plistlib.dump(options, stream)
 PYCODE
-  fi
 }
 # $1: where xcodebuild writes (the local IPA, or the upload's logs: never the IPA just verified).
 export_archive() {
@@ -225,7 +399,8 @@ fi
 export_archive "$export_dir"
 step 'Verify the exported IPA'
 if [ "$dry" -eq 1 ]; then
-  echo '[dry-run] would unzip the exported IPA and require app, both extensions and Watch app, four privacy manifests, matching versions, exempt encryption and no NSAllowsLocalNetworking.'
+  echo '[dry-run] would unzip the exported IPA and require the app, three extensions and Watch app, matching versions, exempt encryption and no NSAllowsLocalNetworking.'
+  echo '[dry-run] would require privacy manifests for the app, ShareExtension, NotificationService and Watch app.'
   echo '[dry-run] would verify the app signature and require signed aps-environment = production.'
   ipa="$export_dir/SHAFT.ipa"
 else
@@ -241,7 +416,7 @@ else
   codesign --verify --deep --strict --verbose=2 "$app"
   codesign -d --entitlements :- "$app" >"$unpack/entitlements.plist"
   check_production "$unpack/entitlements.plist"
-  echo 'Verified four bundles: manifests, versions, exempt encryption, Release networking and production push.'
+  echo 'Verified five bundles, four privacy manifests, versions, exempt encryption, Release networking and production push.'
 fi
 if [ "$upload" -eq 1 ]; then
   step 'Upload the verified archive to App Store Connect'
