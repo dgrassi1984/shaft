@@ -4,7 +4,8 @@
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
 //                            the operator types that word instead of clicking OK), data-after="home" goes to / after,
 //                            ="open-thread" opens the thread its answer names (data-cid), ="close" shuts its menu,
-//                            ="thread-ended" leaves a thread's own page that can no longer write; data-reset
+//                            ="thread-ended" leaves a thread's own page that can no longer write, ="cleared"
+//                            closes the earlier messages a cleared conversation had open; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
 //                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
 //                            data-check names the page a lost answer tells you to look at. The composer (its
@@ -655,6 +656,10 @@
       // a thread's own page cannot write to it once it ended: it shows it as the earlier chat it is (End). The plain
       // chat page follows the current thread by itself.
       if (r.ok && form.dataset.after === "thread-ended" && pageCid()) setTimeout(() => location.reload(), 300);
+      // Clear conversation: the feed starts at the clear again, even when its earlier messages were open (all=1)
+      if (r.ok && form.dataset.after === "cleared" && new URLSearchParams(location.search).has("all")) {
+        const u = new URL(location.href); u.searchParams.delete("all"); location.href = u.pathname + u.search;
+      }
       if (r.ok && form.dataset.after === "close") { const d = form.closest("details"); if (d) d.open = false; }
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened

@@ -277,7 +277,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     # Clear: this conversation starts fresh where it is (web_chat.clear) — Main or a thread. Its confirm says what is
     # kept.
     clear = (h('<div class="actions menuthread"><form class="act clearbtn" data-post="/chat/{n}/clear" '
-               'data-confirm="Clear this conversation? {name} starts fresh: it no longer reads what was said so far, '
+               'data-after="cleared" data-confirm="Clear this conversation? {name} starts fresh: it no longer reads what was said so far, '
                'and a journal write-up is requested. Nothing is deleted: the earlier messages stay under Show earlier '
                'messages."{a}>'
                '<input type="hidden" name="cid" value="{cid}"><button type="submit" data-focus="clear">'

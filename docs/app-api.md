@@ -299,9 +299,9 @@ refetch the order. `rev` is the saved order counter; `threads_rev` is a content 
 
 ### `GET /app/v1/chat/<n>/<cid>` — a selected thread
 
-The current chat is the one the web chat page shows (`web_chat.shown`): the most recently active open thread, else the last one, unless the
-operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`; an ended one is read-only
-(`archived: true`), an open thread reads as the current chat does.
+The current chat is the one the instance's own page shows (`web_chat.shown`): Main, the instance's own conversation
+(`chat` is null until its first message). `<cid>` names any chat of `<n>`; an ended one is read-only
+(`archived: true`), an open thread reads as the current chat does. A cleared chat (§7.4) keeps its record.
 
 - **Auth:** §1.2.
 - **Query:**
@@ -335,7 +335,10 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
   its next polls).
 - Messages the instance sent (§4.4 `sent`) and Next-cycle messages (`later`) older than the first turn shown are left
   out with them.
-- The window changes `items` only: `version`, `live`, `mids` and `last` are computed over the whole chat.
+- A cleared chat (§7.4) starts at its last clear instead: a `cleared` item, then at most 80 items after it; `earlier`
+  counts every item left out, and `all=1` returns them all, a `cleared` item where each clear was.
+- The window changes `items` only: `version`, `live` and `mids` are computed over the whole chat; `last` over what
+  came after its last clear.
 
 ### 4.2 Response
 
@@ -354,7 +357,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `pending_feedback` † | list | thumbs down waiting for the operator's next message (§4.8) |
 | `pending_edits` † | list of str | documents the operator changed that the instance hears of with the next message (`notes/docs/`-relative paths) |
 | `mids` † | list of str | every `mid` this chat holds (sent turns, queued ones, Next-cycle messages over its span): an outbox copy whose `mid` is here has arrived |
-| `last` † | timestamp or null | the newest item from the instance (an answer or a message it sent): what unread compares (§12) |
+| `last` † | timestamp or null | the newest item from the instance (an answer or a message it sent): what unread compares (§12); in a cleared chat, since its last clear |
 | `can_stop` † | bool | a reply runs and this is not an archived chat |
 | `can_end` † | bool | the chat is open, idle and has turns (the web's End button) |
 | `can_clear` † | bool | the chat (Main or an open thread) is idle and something was said since its last clear (Clear conversation, §7.4) |
@@ -370,8 +373,8 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `ended` | timestamp or null | |
 | `cleared` | timestamp or null | its last clear (§7.4), null when never cleared |
 
-With `chat` null (no chat, or cleared), `items` holds only what the instance sent since (as the HTML's empty chat
-does), and the app shows "Chat with <n>".
+With `chat` null (no Main yet), `items` holds only what the instance sent (as the HTML's empty chat does), and the
+app shows "Chat with <n>".
 
 ### 4.3 Revisions
 

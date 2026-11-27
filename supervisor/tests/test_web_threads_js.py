@@ -95,7 +95,7 @@ async function submit(form, submitter = null) {
   location.href = "here";
   await submit(formOf("/action/chat-end", "thread-ended", { "input[name=cid]": { value: "web-a" } }));
   assert.equal(reloads, thread ? 1 : 0, "End reloads a thread's page (it shows as an earlier chat)");
-  await submit(formOf("/chat/wisp/clear", "", { "input[name=cid]": { value: "web-a" } }));
+  await submit(formOf("/chat/wisp/clear", "cleared", { "input[name=cid]": { value: "web-a" } }));
   assert.equal(location.href, "here", "Clear stays on the page");
   // Answer cards use the same fetch path, retain their rendered mid on failure, and refresh the feed.
   const answerMid = {value: "card-mid"};

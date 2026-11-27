@@ -1324,6 +1324,53 @@ class ClearTest(DocsChatCase):
         self.assertNotIn("old topic", sent)
         self.assertIn("new topic", sent)
 
+    def cleared_chat(self, turns: list[dict], **mark) -> dict:
+        chat = web_chat.new_thread("wisp", ME)
+        chat["turns"] = turns
+        chat["clears"] = [{"at": "2026-11-27T10:00:00", "turn": len(turns), **mark}]
+        web_chat.save(chat)
+        return chat
+
+    def test_a_message_in_the_clears_own_second_is_after_it_unless_it_was_there(self):
+        """Codex review: times are to the second, so a note delivered just after a clear had the clear's time and
+        vanished from the feed and from the next request (`ts <= at`)."""
+        q = {"role": "user", "content": "old", "shown": "old", "ts": "2026-11-27T09:59:00"}
+        a = {"role": "assistant", "content": "old answer", "ts": "2026-11-27T09:59:30"}
+        chat = self.cleared_chat([q, a], same=["before.md"])
+        rows = [{"ts": "2026-11-27T10:00:00", "from": "wisp", "to": "operator", "file": f, "text": f, "read": True,
+                 "kind": "message", "talk": None, "thread": chat["id"]} for f in ("before.md", "after.md")]
+        model = web_chat.build("wisp", chat, rows)
+        self.assertEqual([i.get("file") for i in model["items"] if i["type"] == "sent"], ["after.md"])
+        with mock.patch.object(web_chat, "routed", return_value=rows):
+            texts = [m["content"] for m in web_chat._api_messages(chat)]
+        self.assertTrue(any("after.md" in t for t in texts), texts)
+        self.assertFalse(any("before.md" in t or "old answer" in t for t in texts), texts)
+
+    def test_what_came_before_the_clear_neither_fails_nor_is_unread_nor_retries(self):
+        """Codex review: the rail kept a cleared failure, an unread answer stayed unread with nothing to read, and
+        a failure's Retry drawn before the clear could fold or re-ask what the clear left behind."""
+        q = {"role": "user", "content": "old", "shown": "old", "ts": "2026-11-27T09:59:00"}
+        bad = {"role": "assistant", "content": "", "ts": "2026-11-27T09:59:30", "note": "error: CloudError 502",
+               "note_kind": "model", "note_retry": True, "retry_text": "old", "asked": [0]}
+        chat = self.cleared_chat([q, bad])
+        self.assertTrue(web_chat.failed({**chat, "clears": []}))       # without the clear it reads as failed
+        self.assertFalse(web_chat.failed(chat))
+        self.assertIsNone(web_chat.last_from(chat, []))
+        whole = web_chat.build("wisp", chat, [], whole=True)
+        self.assertIsNone(next(i for i in whole["items"] if i["type"] == "assistant")["failure"]["retry"])
+        with mock.patch.object(web_chat, "_send", return_value=(chat, "sent")) as sent:
+            web_chat.send("wisp", ME, "old", [], retry_of="1", cid=chat["id"])
+        sent.assert_called_once()
+        self.assertFalse(any(t.get("retried") for t in web_chat.load(chat["id"])["turns"]))
+
+    def test_a_clear_then_close_reads_in_that_order(self):
+        """Codex review: the whole history showed Ended before Cleared."""
+        chat = self.cleared_chat([{"role": "user", "content": "q", "shown": "q", "ts": "2026-11-27T09:59:00"}])
+        chat.update(state="ended", ended="2026-11-27T10:05:00")
+        web_chat.save(chat)
+        whole = web_chat.build("wisp", chat, [], archived=True, whole=True)
+        self.assertEqual([i["type"] for i in whole["items"]], ["user", "cleared", "ended"])
+
     def test_an_ended_thread_is_not_cleared_it_is_in_earlier_chats(self):
         """Clear hid the ended chat the plain page showed. Since 2026-11-11 no page shows an ended thread but Earlier
         chats: there is nothing on screen to clear, and the next message starts a new thread."""

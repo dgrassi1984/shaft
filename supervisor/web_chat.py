@@ -311,8 +311,12 @@ def reply_event(chat: dict) -> dict:
 
 
 def _instance_stamps(chat: dict | None, sent: list[dict]) -> list[str]:
-    return ([t["ts"] for t in (chat or {}).get("turns") or [] if t["role"] == "assistant"]
-            + [m["ts"] for m in sent if m.get("to") == "operator"])
+    """The times of what the instance said in `chat` since its last clear (what came before is no longer on screen:
+    an answer unread when the chat was cleared must not keep it unread with nothing to read)."""
+    mark = _last_clear(chat)
+    return ([t["ts"] for k, t in enumerate((chat or {}).get("turns") or [])
+             if t["role"] == "assistant" and not _turn_cleared(chat, k)]
+            + [m["ts"] for m in sent if m.get("to") == "operator" and (not mark or _after(m, mark))])
 
 
 def last_count(chat: dict | None, sent: list[dict]) -> int:
@@ -459,7 +463,9 @@ RETRY_CONFIRM = "Actions may already have run. Send it again anyway?"
 
 def failed(chat: dict | None) -> bool:
     """The latest assistant turn failed, excluding a stopped or retried reply."""
-    turn = next((t for t in reversed((chat or {}).get("turns") or []) if t.get("role") == "assistant"), {})
+    turns = (chat or {}).get("turns") or []
+    turn = next((t for k, t in reversed(list(enumerate(turns)))
+                 if t.get("role") == "assistant" and not _turn_cleared(chat, k)), {})
     return bool(turn.get("note") and not turn.get("retried")
                 and turn.get("note_kind", "stopped" if turn.get("note") == "stopped by you" else "unknown") != "stopped")
 
@@ -603,7 +609,7 @@ def _turn_items(name: str, chat: dict, archived: bool, ratings: dict, pending: s
             continue
         items.append({"key": f"a{k}", "type": "assistant", "k": k, "ts": t["ts"], "content": t.get("content") or "",
                       "activity": list(t.get("activity") or []), "incomplete": bool(t.get("content") and t.get("note")),
-                      "failure": failure(name, t, archived, k, turns[k - 1] if k else None),
+                      "failure": failure(name, t, archived or _turn_cleared(chat, k), k, turns[k - 1] if k else None),
                       "docs": [{"path": d["path"], "created": bool(d.get("created"))} for d in t.get("docs") or []],
                       "answered": [{"id": c["id"], "doc": c["doc"]} for c in t.get("answered") or []],
                       "opened": [{"id": c["id"], "doc": c["doc"]} for c in t.get("opened") or []],
@@ -718,10 +724,25 @@ def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
 
 
 def _after(item: dict, mark: dict) -> bool:
-    """`item` (a feed item) came after the clear `mark`: a turn by its index (the turns the chat held then), anything
-    else by its time — never one stamped in the second the clear happened, which was there before it."""
+    """`item` (a feed item, or a message row) came after the clear `mark`: a turn by its index (the turns the chat held
+    then), a message by its time — one stamped in the clear's own second by whether it was already there (`same`: the
+    message files of that second the clear saw; times are to the second, so a note delivered just after a clear has
+    its time)."""
     k = item.get("k")
-    return k >= mark["turn"] if isinstance(k, int) else item.get("ts", "") > mark["at"]
+    if isinstance(k, int):
+        return k >= mark["turn"]
+    ts = item.get("ts", "")
+    return ts > mark["at"] or (ts == mark["at"] and item.get("file") not in mark.get("same", ()))
+
+
+def _last_clear(chat: dict | None) -> dict | None:
+    return ((chat or {}).get("clears") or [None])[-1]
+
+
+def _turn_cleared(chat: dict | None, k: int) -> bool:
+    """Turn `k` of `chat` came before its last clear: no longer part of the conversation."""
+    mark = _last_clear(chat)
+    return bool(mark) and k < mark["turn"]
 
 
 def _cleared_item(k: int, mark: dict) -> dict:
@@ -736,7 +757,7 @@ def _window_cleared(model: dict, chat: dict, whole: bool) -> dict:
     if whole:
         out, pending = [], list(enumerate(marks))
         for it in items:
-            while pending and it["type"] != "ended" and _after(it, pending[0][1]):
+            while pending and (it["type"] == "ended" or _after(it, pending[0][1])):
                 out.append(_cleared_item(*pending.pop(0)))
             out.append(it)
         model["items"], model["earlier"] = out + [_cleared_item(*p) for p in pending], 0
@@ -1043,7 +1064,7 @@ def _dialogue(chat: dict, history: list[dict] | None = None, *,
     own.sort(key=lambda x: x[1])                       # in the order written, never the clock's (in_time, #16)
     items = []
     for m in routed(name, chat["id"], history):
-        if mark and m["ts"] <= mark["at"]:
+        if mark and not _after(m, mark):
             continue
         if m["from"] == name and not m.get("thread") and m.get("talk"):     # From: sent in a terminal or Telegram talk
             role, who = "assistant", _sender(INSTANCE, name)
@@ -1695,7 +1716,11 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
         if retry_of.isdigit() and c and c.get("state") != "replying" and not files:
             with _lock(c["id"]):
                 c = load(c["id"])
-                if reopened := _reopen(c, int(retry_of), text, mid):
+                if _turn_cleared(c, int(retry_of)):    # its Retry was drawn before the clear: sent as typed
+                    retry_of = ""
+                if not retry_of:
+                    pass
+                elif reopened := _reopen(c, int(retry_of), text, mid):
                     save(c)
                 elif folded := mark_retried(c, int(retry_of), text):
                     save(c)
@@ -2056,7 +2081,10 @@ def clear(name: str, cid: str) -> str:
             if c.get("state") == "replying":        # a reply began meanwhile (a message heard too late)
                 raise Refused("a reply began meanwhile: clear it once that reply ends")
             _deliver_pending_feedback(c)
-            c.setdefault("clears", []).append({"at": _now(), "turn": len(c.get("turns") or [])})
+            at = _now()
+            same = [m["file"] for m in sent_during(name, c) if m.get("ts") == at and m.get("file")]
+            c.setdefault("clears", []).append({"at": at, "turn": len(c.get("turns") or []),
+                                               **({"same": same} if same else {})})
             save(c)
     log(f"web: chat {chat['id']} with {name} cleared by the operator")
     return "cleared" + (": journal write-up requested" if status == 202 else "") + \
