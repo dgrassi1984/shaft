@@ -504,6 +504,46 @@ struct ChatStreamClientTests {
         #expect(request.body.isEmpty)
     }
 
+    /// ▶ reads with what the client last heard (2026-11-27): every voice route's answer is kept per instance, so a
+    /// reading never waits on the network to speak in voice mode's voice, and a choice made in the picker is the next
+    /// reading's voice.
+    @Test func everyVoicesAnswerIsKeptPerInstanceForReadAloud_20261127() async throws {
+        let client = StubServer { _ in .json(200, Self.voicesBody) }.client
+        #expect(client.knownVoices("tundra") == nil)
+        let read = try await client.voices("tundra")
+        #expect(client.knownVoices("tundra") == read)
+        #expect(client.knownVoices("tundra")?.voices["en"]??.identifier == "com.example.voice.ava")
+        #expect(client.knownVoices("other") == nil)
+        // Each write's answer replaces what was known: Tom, chosen in the picker, is the next reading's voice.
+        let tom = Self.voicesBody.replacingOccurrences(of: "com.example.voice.ava", with: "com.example.voice.tom")
+        let writes = StubServer { _ in .json(200, tom) }.client
+        _ = try await writes.setVoice("tundra", language: "en", identifier: "com.example.voice.tom")
+        #expect(writes.knownVoices("tundra")?.voices["en"]??.identifier == "com.example.voice.tom")
+        let cleared = StubServer { _ in .json(200, tom) }.client
+        _ = try await cleared.clearVoice("tundra", language: "it")
+        #expect(cleared.knownVoices("tundra")?.voices["en"]??.identifier == "com.example.voice.tom")
+        let decided = StubServer { _ in .json(200, tom) }.client
+        _ = try await decided.decideVoiceProposal("tundra", id: "vp-1", accept: true)
+        #expect(decided.knownVoices("tundra")?.voices["en"]??.identifier == "com.example.voice.tom")
+    }
+
+    /// Review finding (2026-11-27): a GET sent before a voice was chosen, answering after the choice, must not put the
+    /// old voice back for the next reading.
+    @Test func anOlderRequestsAnswerNeverReplacesANewerOne_20261127() throws {
+        let decoder = SHAFTJSON.decoder()
+        let ava = try decoder.decode(VoicesResponse.self, from: Data(Self.voicesBody.utf8))
+        let tom = try decoder.decode(VoicesResponse.self, from: Data(Self.voicesBody
+            .replacingOccurrences(of: "com.example.voice.ava", with: "com.example.voice.tom").utf8))
+        let known = KnownVoices()
+        let slowGet = known.ask()
+        let choice = known.ask()
+        _ = known.remember(tom, for: "tundra", asked: choice)
+        _ = known.remember(ava, for: "tundra", asked: slowGet)
+        #expect(known.answer(for: "tundra") == tom)
+        _ = known.remember(ava, for: "tundra", asked: known.ask())
+        #expect(known.answer(for: "tundra") == ava)
+    }
+
     @Test func setAndClearSendExactlyTheKeysTheServerTakes() async throws {
         let server = StubServer { _ in .json(200, Self.voicesBody) }
         _ = try await server.client.setVoice("tundra", language: "en", identifier: "com.example.voice.ava")
