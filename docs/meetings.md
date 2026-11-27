@@ -2,7 +2,7 @@
 
 The supervisor stores each meeting under `.supervisor/meetings/<id>/`. Each folder has a `meeting.json` metadata
 file, a `sidecar.json` file for recorder data, and either an `upload/` directory or assembled `audio.<ext>`.
-The audio extension is `caf` (the apps), `m4a` (older Mac builds) or `wav`. A meeting without an account alias is unfiled.
+The audio extension is `caf` (the apps), `m4a` (older Mac builds) or `wav`. Apple's IMA4 `.caf` carries an empty packet table that ffmpeg refuses; before decoding or cutting a clip, the server renames that chunk to `free` in place (lossless: constant-size packets need no table), so the file's bytes differ from the uploaded `sha256` by those four. A meeting without an account alias is unfiled.
 
 The app creates a meeting in state `uploading` and sends numbered chunks of up to 8 MiB. The server records the
 indices received so the app can resume a partial upload. To finish, the app sends the expected size, SHA-256,

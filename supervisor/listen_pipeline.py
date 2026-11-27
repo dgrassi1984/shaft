@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import os
+import struct
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -17,8 +19,52 @@ class DiarisationTurns(list):
         self.original = original
 
 
+def normalize_caf(path: Path) -> bool:
+    """Hide an empty CAF packet table that ffmpeg rejects for CBR audio.
+
+    Renaming pakt to free is lossless because CBR needs no packet table.
+    The meeting's recorded sha256 refers to the uploaded file.
+    """
+    try:
+        with path.open("r+b", buffering=0) as source:
+            if source.read(8) != b"caff\x00\x01\x00\x00":
+                return False
+            end = os.fstat(source.fileno()).st_size
+            cbr = None
+            packet_table = None
+            while True:
+                offset = source.tell()
+                kind, size = struct.unpack(">4sq", source.read(12))
+                payload = source.tell()
+                remaining = end - payload
+                if kind == b"data":
+                    if size == -1:
+                        size = remaining
+                    if not (4 <= size <= remaining and cbr and packet_table is not None):
+                        return False
+                    source.seek(packet_table)
+                    source.write(b"free")
+                    os.fsync(source.fileno())
+                    return True
+                if not 0 <= size <= remaining:
+                    return False
+                if kind == b"desc":
+                    if size != 32 or cbr is not None:
+                        return False
+                    bytes_per_packet, frames_per_packet = struct.unpack_from(">II", source.read(32), 16)
+                    cbr = bytes_per_packet > 0 and frames_per_packet > 0
+                elif kind == b"pakt":
+                    if size < 24 or packet_table is not None or source.read(8) != bytes(8):
+                        return False
+                    packet_table = offset
+                source.seek(payload + size)
+    except (OSError, struct.error):
+        return False
+
+
 def decode(audio: Path, work: Path, mode: str) -> list[Path]:
     """Decode the first audio stream to 16 kHz mono PCM for each meeting channel."""
+    normalize_caf(audio)
     command = ["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-abort_on", "empty_output_stream", "-i", str(audio)]
     paths = []
     for index in range(2 if mode == "online" else 1):
