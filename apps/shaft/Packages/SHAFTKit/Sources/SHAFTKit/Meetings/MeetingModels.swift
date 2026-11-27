@@ -109,11 +109,15 @@ public struct MeetingTranscript: Decodable, Sendable, Equatable {
         public let start: Double
         public let end: Double
         public let reason: String
+        /// How long it lasted on the clock (`wall_seconds`, iPhone interruptions): the audio skips it, so `end` may
+        /// equal `start`.
+        public let wallSeconds: Double?
 
-        public init(start: Double, end: Double, reason: String) {
+        public init(start: Double, end: Double, reason: String, wallSeconds: Double? = nil) {
             self.start = start
             self.end = end
             self.reason = reason
+            self.wallSeconds = wallSeconds
         }
     }
 

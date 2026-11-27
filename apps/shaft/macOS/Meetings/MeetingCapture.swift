@@ -1,6 +1,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
+import SHAFTKit
 import os
 import Synchronization
 
@@ -64,7 +65,8 @@ struct MeetingGap: Codable, Sendable, Equatable { var start: Double; var end: Do
 
 /// The Mac's meeting capture (docs/meetings.md): the microphone and, online, every other process's audio through a Core
 /// Audio process tap, in one private aggregate device (the mic is the clock, the tap drift-compensated), written as one
-/// AAC file — channel 1 the mic, channel 2 the system audio. A watchdog rebuilds tap + aggregate when callbacks stop or
+/// IMA4 CAF file (it survives the app quitting or crashing mid-recording, as the iPhone's does) — channel 1 the mic,
+/// channel 2 the system audio. A watchdog rebuilds tap + aggregate when callbacks stop or
 /// the tap turns to digital silence while the mic hears speech, and fills each stretch without audio with silence,
 /// recorded as a gap. Ported from the measured spike recorder; the IO thread and the control queue share state only
 /// through atomics, hence @unchecked Sendable.
@@ -81,7 +83,10 @@ final class MeetingCapture: @unchecked Sendable {
     var onWarning: (@Sendable (String) -> Void)?
 
     var file: ExtAudioFileRef?
+    /// The device's rate now: the client format's. It can change at a rebuild (AirPods switching to call mode).
     var sampleRate: Double = 48_000
+    /// The file's rate, fixed at the start; ExtAudioFile converts a later device rate to it.
+    var fileRate: Double = 48_000
     var channels: UInt32 { online ? 2 : 1 }
     var inputDevice: AudioDeviceID = 0
     var inputName = ""
@@ -103,6 +108,10 @@ final class MeetingCapture: @unchecked Sendable {
     var noCallbackGrace: Double = 2              // doubles on each rebuild that brings no callbacks, back to 2 on audio
     var warnedSilentTap = false
     var warnedWriteFailed = false
+    var warnedSilentMic = false
+    var warnedRebuildFailed = false
+    /// Said in the sidecar: what the recording could not keep (a gap too long to fill, a rebuild that kept failing).
+    var notes: [String] = []
 
     // Written by the IO thread, read by the watchdog.
     let lastCallback = Atomic<UInt64>(0)        // mach host time of the last IOProc call, or of the last (re)start
@@ -114,6 +123,7 @@ final class MeetingCapture: @unchecked Sendable {
     let framesLost = Atomic<Int>(0)
     let lastWriteError = Atomic<Int32>(0)
     let tapSilentFrames = Atomic<Int>(0)        // consecutive frames of exact-zero tap audio
+    let micSilentFrames = Atomic<Int>(0)        // consecutive frames where the mic stayed below −70 dBFS
     let micLoudWhileSilent = Atomic<Int>(0)     // frames in that stretch where the mic was above −50 dBFS
     // IO-thread-only state.
     var pendingGapFromHost: UInt64 = 0           // set by a rebuild: the host time the old device stopped at
@@ -144,12 +154,11 @@ final class MeetingCapture: @unchecked Sendable {
         inputName = (try? getString(inputDevice, kAudioObjectPropertyName)) ?? "?"
         try buildDevice()
         sampleRate = try getValue(ioDevice, kAudioDevicePropertyNominalSampleRate, initial: Float64(48_000))
-        var fmt = AudioStreamBasicDescription(mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
-                                              mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-                                              mBytesPerPacket: 4 * channels, mFramesPerPacket: 1, mBytesPerFrame: 4 * channels,
-                                              mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
-        // AAC in an .m4a: an hour of two channels is ~85 MB instead of 1.4 GB of float PCM.
-        let f = try openFile(fmt: &fmt, bitRate: true)
+        var fmt = clientFormat(sampleRate)
+        // IMA4 in a CAF: an hour of two channels at 48 kHz is ~170 MB instead of 1.4 GB of float PCM, and a file cut
+        // short by a quit or a crash still opens (MeetingFiles.trimPartialPacket), where an .m4a has no index.
+        fileRate = sampleRate
+        let f = try openFile(fmt: &fmt)
         do { try check(ExtAudioFileWriteAsync(f, 0, nil), "prime async writer") } catch { ExtAudioFileDispose(f); throw error }
         file = f
         started = Date()
@@ -165,53 +174,32 @@ final class MeetingCapture: @unchecked Sendable {
         log("recording \(online ? "online (mic + system)" : "in person (mic)") at \(Int(sampleRate)) Hz from \"\(inputName)\"; input buffers \(bufferChannels), mic buffers \(micBuffers)")
     }
 
-    /// Creates the AAC file and sets ~96 kbit/s per channel, clamped to a rate the encoder offers at this sample rate
-    /// and channel count. Bug 2026-11-27: AirPods in a call run at 24 kHz, where two channels top out at 128 kbit/s;
-    /// asking for 192 kbit/s failed with '!dat' and left the converter refusing every write, so a 17-minute meeting
-    /// became a 28-byte file. If a set still fails, the file is created again on the encoder's default rate.
-    func openFile(fmt: inout AudioStreamBasicDescription, bitRate: Bool) throws -> ExtAudioFileRef {
-        var aac = AudioStreamBasicDescription(mSampleRate: sampleRate, mFormatID: kAudioFormatMPEG4AAC, mFormatFlags: 0,
-                                              mBytesPerPacket: 0, mFramesPerPacket: 1024, mBytesPerFrame: 0,
+    /// Creates the IMA4 CAF file at `fileRate` and sets the client format (float PCM at the device's rate). IMA4 has a
+    /// fixed packet size and no bit-rate setting, so the 24 kHz AirPods case (bug 2026-11-27: an AAC bit rate refused,
+    /// a 28-byte file) cannot recur.
+    func openFile(fmt: inout AudioStreamBasicDescription) throws -> ExtAudioFileRef {
+        var ima = AudioStreamBasicDescription(mSampleRate: fileRate, mFormatID: kAudioFormatAppleIMA4, mFormatFlags: 0,
+                                              mBytesPerPacket: 34 * channels, mFramesPerPacket: 64, mBytesPerFrame: 0,
                                               mChannelsPerFrame: channels, mBitsPerChannel: 0, mReserved: 0)
         var created: ExtAudioFileRef?
-        try check(ExtAudioFileCreateWithURL(url as CFURL, kAudioFileM4AType, &aac, nil, AudioFileFlags.eraseFile.rawValue, &created), "create file")
+        try check(ExtAudioFileCreateWithURL(url as CFURL, kAudioFileCAFType, &ima, nil, AudioFileFlags.eraseFile.rawValue, &created), "create file")
         guard let f = created else { throw NSError(domain: "MeetingCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "create file returned no file"]) }
         do {
             try check(ExtAudioFileSetProperty(f, kExtAudioFileProperty_ClientDataFormat, UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &fmt), "client format")
         } catch { ExtAudioFileDispose(f); throw error }
-        guard bitRate else { return f }
-        var converter: AudioConverterRef?
-        var converterSize = UInt32(MemoryLayout<AudioConverterRef?>.size)
-        guard ExtAudioFileGetProperty(f, kExtAudioFileProperty_AudioConverter, &converterSize, &converter) == noErr,
-              let converter else { return f }
-        var size: UInt32 = 0
-        var ranges: [AudioValueRange] = []
-        if AudioConverterGetPropertyInfo(converter, kAudioConverterApplicableEncodeBitRates, &size, nil) == noErr, size > 0 {
-            ranges = Array(repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
-            if AudioConverterGetProperty(converter, kAudioConverterApplicableEncodeBitRates, &size, &ranges) != noErr { ranges = [] }
-        }
-        guard var rate = Self.encodeBitRate(wanted: 96_000 * Double(channels), offered: ranges) else { return f }
-        var status = AudioConverterSetProperty(converter, kAudioConverterEncodeBitRate, UInt32(MemoryLayout<UInt32>.size), &rate)
-        if status == noErr {
-            var config: CFArray? = nil
-            status = ExtAudioFileSetProperty(f, kExtAudioFileProperty_ConverterConfig, UInt32(MemoryLayout<CFArray?>.size), &config)
-        }
-        guard status != noErr else { return f }
-        log("encode bit rate \(rate) refused (OSStatus \(status)) at \(Int(sampleRate)) Hz: using the encoder's default")
-        ExtAudioFileDispose(f)
-        return try openFile(fmt: &fmt, bitRate: false)
+        return f
     }
 
-    /// `wanted` when a range the encoder offers holds it, else the highest rate it offers below, else its lowest; nil
-    /// when it lists none.
-    static func encodeBitRate(wanted: Double, offered: [AudioValueRange]) -> UInt32? {
-        if offered.contains(where: { $0.mMinimum > 0 && $0.mMinimum <= wanted && wanted <= $0.mMaximum }) {
-            return UInt32(wanted)
-        }
-        let rates = offered.flatMap { [$0.mMinimum, $0.mMaximum] }.filter { $0 > 0 }
-        guard let lowest = rates.min() else { return nil }
-        return UInt32(rates.filter { $0 <= wanted }.max() ?? lowest)
+    /// The float PCM format the IO thread hands the writer at `rate`.
+    func clientFormat(_ rate: Double) -> AudioStreamBasicDescription {
+        AudioStreamBasicDescription(mSampleRate: rate, mFormatID: kAudioFormatLinearPCM,
+                                    mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+                                    mBytesPerPacket: 4 * channels, mFramesPerPacket: 1, mBytesPerFrame: 4 * channels,
+                                    mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
     }
+
+    /// Gaps longer than this are filled only this far, and the rest is said in the sidecar.
+    static let maxGapFill: Double = 4 * 3600
 
     func buildDevice() throws {
         guard online else {
@@ -280,7 +268,7 @@ final class MeetingCapture: @unchecked Sendable {
 
         if pendingGapFromHost != 0 {                // first callback after a rebuild: keep the timeline aligned
             let missing = max(0, hostSeconds(host) - hostSeconds(pendingGapFromHost))
-            writeSilence(seconds: min(missing, 600), reason: pendingGapReason)
+            fillGap(seconds: missing, reason: pendingGapReason)
             pendingGapFromHost = 0
         }
 
@@ -309,6 +297,11 @@ final class MeetingCapture: @unchecked Sendable {
         lastAudio.store(host, ordering: .relaxed)
         if tapMax > 0 { tapEverHeard.store(true, ordering: .relaxed) }
 
+        if (micSq / Float(frames)).squareRoot() < 0.0003 {
+            micSilentFrames.add(frames, ordering: .relaxed)
+        } else {
+            micSilentFrames.store(0, ordering: .relaxed)
+        }
         if online {
             if tapMax == 0 {
                 tapSilentFrames.add(frames, ordering: .relaxed)
@@ -325,17 +318,31 @@ final class MeetingCapture: @unchecked Sendable {
         var abl = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: channels,
                                   mDataByteSize: UInt32(frames * Int(channels) * 4), mData: scratch))
         let status = ExtAudioFileWriteAsync(f, UInt32(frames), &abl)
+        // Counted in the file's frames: the device rate may differ after a rebuild.
+        let inFile = sampleRate == fileRate ? frames : Int((Double(frames) * fileRate / sampleRate).rounded())
         if status == noErr {
-            framesWritten.add(frames, ordering: .relaxed)
+            framesWritten.add(inFile, ordering: .relaxed)
         } else {
             lastWriteError.store(status, ordering: .relaxed)       // before the count: the watchdog reads both
-            framesLost.add(frames, ordering: .releasing)
+            framesLost.add(inFile, ordering: .releasing)
+        }
+    }
+
+    /// Fill a stretch without audio with silence, up to maxGapFill (bug 2026-11-27 review: a lid closed for more than
+    /// 10 minutes was filled only 10 minutes, so everything after it moved earlier, unsaid).
+    func fillGap(seconds: Double, reason: String) {
+        writeSilence(seconds: min(seconds, Self.maxGapFill), reason: reason)
+        if seconds > Self.maxGapFill {
+            let note = String(format: "%.0f min without audio (%@): only the first %.0f min are kept as silence, so "
+                              + "later times are early by %.0f min", seconds / 60, reason, Self.maxGapFill / 60,
+                              (seconds - Self.maxGapFill) / 60)
+            if DispatchQueue.getSpecific(key: MeetingCapture.onControl) != nil { notes.append(note) } else { control.async { self.notes.append(note) } }
         }
     }
 
     func writeSilence(seconds: Double, reason: String) {
         guard seconds > 0.005 else { return }
-        let start = Double(framesWritten.load(ordering: .relaxed)) / sampleRate
+        let start = Double(framesWritten.load(ordering: .relaxed)) / fileRate
         var left = Int(seconds * sampleRate)
         while left > 0 {
             let n = min(left, 65_536 / 2)
@@ -343,11 +350,39 @@ final class MeetingCapture: @unchecked Sendable {
             write(frames: n)
             left -= n
         }
-        let gap = MeetingGap(start: start, end: Double(framesWritten.load(ordering: .relaxed)) / sampleRate, reason: reason)
+        let gap = MeetingGap(start: start, end: Double(framesWritten.load(ordering: .relaxed)) / fileRate, reason: reason)
         if DispatchQueue.getSpecific(key: MeetingCapture.onControl) != nil { gaps.append(gap) } else { control.async { self.gaps.append(gap) } }
     }
 
     static let onControl = DispatchSpecificKey<Bool>()
+
+    /// True when `file` can be sent: its sidecar says it ended, or it was cut short and still holds audio (then the
+    /// sidecar is written from the file, saying so). False for a file with no readable audio.
+    static func recover(_ file: URL) -> Bool {
+        let side = file.deletingPathExtension().appendingPathExtension("json")
+        var fields = ((try? Data(contentsOf: side)).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        if fields["ended"] != nil { return secondsInFile(file) != nil || isUploaded(file) }
+        try? MeetingFiles.trimPartialPacket(of: file)
+        guard let seconds = secondsInFile(file), seconds > 0 else { return false }
+        let created = (try? file.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date()
+        let iso = ISO8601DateFormatter()
+        let started = (fields["started"] as? String).flatMap(iso.date(from:)) ?? created
+        fields["started"] = iso.string(from: started)
+        fields["ended"] = iso.string(from: started.addingTimeInterval(seconds))
+        fields["seconds"] = seconds
+        fields["mode"] = fields["mode"] ?? "online"
+        fields["problems"] = ((fields["problems"] as? [String]) ?? [])
+            + [String(format: "SHAFT stopped before the recording ended: %.0f s were recovered", seconds)]
+        if let data = try? JSONSerialization.data(withJSONObject: fields, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: side)
+        }
+        return true
+    }
+
+    /// A file whose upload finished (kept 7 days as insurance): never listed as damaged.
+    private static func isUploaded(_ file: URL) -> Bool {
+        FileManager.default.fileExists(atPath: file.appendingPathExtension("shaft-upload").path)
+    }
 
     /// Seconds of audio a finished file holds, or nil when it cannot be opened as audio (no moov atom).
     static func secondsInFile(_ url: URL) -> Double? {
@@ -385,6 +420,14 @@ final class MeetingCapture: @unchecked Sendable {
             return
         }
         if hostSeconds(now) - hostSeconds(lastAudio.load(ordering: .relaxed)) < 1 { noCallbackGrace = 2 }
+        // A muted, dead or wrong microphone records a file of silence (review 2026-11-27): said while it can be fixed.
+        if !warnedSilentMic, Double(micSilentFrames.load(ordering: .relaxed)) / sampleRate > 30 {
+            warnedSilentMic = true
+            onWarning?("The microphone \"\(inputName)\" has heard nothing for 30 s. Check it is not muted, or choose "
+                       + "another one under Meeting → Microphone and record again.")
+        } else if warnedSilentMic, micSilentFrames.load(ordering: .relaxed) == 0 {
+            warnedSilentMic = false
+        }
         guard online else { return }
         if !warnedSilentTap, !warnedWriteFailed, !tapEverHeard.load(ordering: .relaxed),
            Double(tapSilentFrames.load(ordering: .relaxed)) / sampleRate > 10 {
@@ -411,16 +454,36 @@ final class MeetingCapture: @unchecked Sendable {
         if let activeUID, let device = MeetingMicrophones.device(uid: activeUID) { inputDevice = device }
         do {
             try buildDevice()
+            try followDeviceRate()
             pendingGapFromHost = stoppedAt
             pendingGapReason = reason
             tapSilentFrames.store(0, ordering: .relaxed)
             micLoudWhileSilent.store(0, ordering: .relaxed)
             try startIO()
             rebuilds.append(["at": iso(Date()), "reason": reason])
+            warnedRebuildFailed = false
         } catch {
             log("rebuild failed: \(error.localizedDescription); retrying in 1 s")
             rebuilds.append(["at": iso(Date()), "reason": reason + " (failed: \(error.localizedDescription))"])
+            // Said once while it lasts (review 2026-11-27: only logged, the menu still said Recording).
+            if !warnedRebuildFailed {
+                warnedRebuildFailed = true
+                onWarning?("Recording is paused: the audio device could not be restarted (\(error.localizedDescription)). "
+                           + "SHAFT keeps trying; the missing time becomes a gap.")
+            }
         }
+    }
+
+    /// After a rebuild the device may run at another rate (AirPods switch to 24 kHz for a call): the client format
+    /// follows it, and ExtAudioFile converts to the file's rate. Runs with the IO stopped.
+    func followDeviceRate() throws {
+        let rate = try getValue(ioDevice, kAudioDevicePropertyNominalSampleRate, initial: Float64(sampleRate))
+        guard rate > 0, rate != sampleRate, let f = file else { return }
+        var fmt = clientFormat(rate)
+        try check(ExtAudioFileSetProperty(f, kExtAudioFileProperty_ClientDataFormat,
+                                          UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &fmt), "client format at \(Int(rate)) Hz")
+        log("device rate \(Int(sampleRate)) → \(Int(rate)) Hz: converting to the file's \(Int(fileRate)) Hz")
+        sampleRate = rate
     }
 
     /// Stop and finalise the file; the sidecar (also written next to the file) is returned. Runs on the control queue,
@@ -432,16 +495,16 @@ final class MeetingCapture: @unchecked Sendable {
         teardownDevice()
         // Audio that never came before the stop is still time on the meeting's clock: pad it, as a gap.
         let missing = hostSeconds(mach_absolute_time()) - hostSeconds(lastAudio.load(ordering: .relaxed))
-        if file != nil, missing > 0.5 { writeSilence(seconds: min(missing, 600), reason: "no audio before stop") }
+        if file != nil, missing > 0.5 { fillGap(seconds: missing, reason: "no audio before stop") }
         var finalise: OSStatus = noErr
         if let f = file { finalise = ExtAudioFileDispose(f); file = nil }
         // The writes the async writer accepted are not proof the audio reached the file (it reports a failure on a
         // later call, or only at the dispose): the length is read back from the file itself.
-        let accepted = Double(framesWritten.load(ordering: .relaxed)) / sampleRate
+        let accepted = Double(framesWritten.load(ordering: .relaxed)) / fileRate
         let held = Self.secondsInFile(url)
         let seconds = held ?? 0
-        let lost = Double(framesLost.load(ordering: .relaxed)) / sampleRate
-        var problems: [String] = []
+        let lost = Double(framesLost.load(ordering: .relaxed)) / fileRate
+        var problems: [String] = notes
         if lost > 0 {
             problems.append(String(format: "%.1f s of audio could not be written (OSStatus %d)", lost,
                                    lastWriteError.load(ordering: .relaxed)))
@@ -455,7 +518,7 @@ final class MeetingCapture: @unchecked Sendable {
         if !problems.isEmpty { log("stop: " + problems.joined(separator: "; ")) }
         let sidecar: [String: Any] = [
             "started": iso(started), "ended": iso(Date()), "mode": online ? "online" : "inperson",
-            "input_device": inputName, "input_device_uid": activeUID ?? "?", "input_chosen": inputUID ?? "default", "sample_rate": sampleRate, "channels": Int(channels),
+            "input_device": inputName, "input_device_uid": activeUID ?? "?", "input_chosen": inputUID ?? "default", "sample_rate": fileRate, "channels": Int(channels),
             "channel_map": online ? ["mic", "system"] : ["mic"], "seconds": seconds,
             "input_buffers": bufferChannels, "mic_buffers": micBuffers,
             "gaps": gaps.map { ["start": $0.start, "end": $0.end, "reason": $0.reason] }, "rebuilds": rebuilds,

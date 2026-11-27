@@ -92,7 +92,7 @@ public final class MeetingsStore {
                     page += 1
                     let next = try await client.meeting(id, page: page)
                     guard let nextTranscript = next.transcript else {
-                        // A reprocess started while we were paging.
+                        // The server no longer has a transcript to page through.
                         result = next
                         rows = []
                         break
@@ -208,13 +208,7 @@ public final class MeetingsStore {
                 invalidateListRefresh()
                 meetings[index] = updated
             }
-            if requestedID == id {
-                detailGeneration += 1
-                detail = updated
-                segments = []
-                loadingDetail = false
-                detailError = nil
-            }
+            if requestedID == id { await load(id) }
         }
     }
 

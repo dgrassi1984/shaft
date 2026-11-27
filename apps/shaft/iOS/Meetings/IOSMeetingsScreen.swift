@@ -13,6 +13,7 @@ struct IOSMeetingsScreen: View {
                 MeetingsBrowser(client: client, refreshID: recorder.lastSent,
                                 clipPlaybackAllowed: recorder.started == nil && !recorder.starting,
                                 requested: model.openMeeting, opened: { id in if model.openMeeting == id { model.openMeeting = nil } },
+                                stopRecording: recorder.started != nil ? { recorder.stop() } : nil,
                                 close: { dismiss() }) {
                     // In the sidebar column, above the list: as an inset over the whole split view it covered the
                     // list's first rows and the navigation title (2026-11-26, iPhone).

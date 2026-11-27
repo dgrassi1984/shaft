@@ -115,6 +115,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         #endif
     }
 
+    /// Quitting while recording finishes the meeting's file first (review 2026-11-27: a quit left an .m4a without its
+    /// index, which no decoder opens); it is sent at the next launch. The window and the menu bar say a recording is
+    /// running; a Sparkle update relaunch also comes here.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { meetings.finishForQuit() }
+        return .terminateNow
+    }
+
     /// A push still arrives, and the Dock icon still shows the badge, with the window closed.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

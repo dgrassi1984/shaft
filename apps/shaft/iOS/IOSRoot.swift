@@ -18,18 +18,39 @@ struct IOSRoot: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if recorder.started != nil, !meetings {
-                Button {
-                    meetings = true
-                } label: {
-                    Label(recorder.interrupted ? "Recording paused" : "Recording meeting", systemImage: "mic.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Design.Space.s8)
+                HStack(spacing: Design.Space.s8) {
+                    Button {
+                        meetings = true
+                    } label: {
+                        Label(recorder.interrupted ? "Recording paused" : "Recording meeting", systemImage: "mic.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityHint("Opens Meetings")
+                    // Stop from wherever the app is (review 2026-11-27: Stop was only in the Meetings sidebar).
+                    Button("Stop", systemImage: "stop.fill") { recorder.stop() }
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Stop recording")
                 }
+                .padding(.vertical, Design.Space.s8)
+                .padding(.horizontal, Design.Space.s12)
                 .foregroundStyle(Color.danger)
+                .background(.regularMaterial)
+            } else if recorder.problemUnseen, let problem = recorder.problem, !meetings {
+                // A recording that stopped early is said until Meetings is opened, not only inside it.
+                Button { meetings = true } label: {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, Design.Space.s8)
+                        .padding(.horizontal, Design.Space.s12)
+                }
+                .foregroundStyle(Color.warning)
                 .background(.regularMaterial)
                 .accessibilityHint("Opens Meetings")
             }
         }
+        .onChange(of: meetings) { _, open in if open { recorder.markProblemSeen() } }
         .fullScreenCover(isPresented: $meetings) {
             IOSMeetingsScreen(client: model.session?.store?.client, recorder: recorder, model: model)
         }

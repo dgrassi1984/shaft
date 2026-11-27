@@ -31,11 +31,15 @@ struct MeetingMenuItems: View {
             Text("Tell the people in the meeting that you are recording.")
             Button("Record Online Meeting") { Task { await recorder.start(online: true) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(recorder.phase == .uploading)
             Button("Record In-Person Meeting") { Task { await recorder.start(online: false) } }
-                .disabled(recorder.phase == .uploading)
             MeetingMicrophoneMenu(recorder: recorder)
             status
+            if let warning = recorder.warning { Text(warning) }
+            if !recorder.damaged.isEmpty {
+                Button("Show \(recorder.damaged.count) Unreadable Recording\(recorder.damaged.count == 1 ? "" : "s") in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting(recorder.damaged)
+                }
+            }
         }
     }
 
@@ -48,6 +52,7 @@ struct MeetingMenuItems: View {
             } else {
                 Text("Sending to SHAFT…")
             }
+            Button("Stop Sending") { recorder.cancelUpload() }
         case .sent:
             Divider()
             Text("Sent to SHAFT: the transcript follows.")

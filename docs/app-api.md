@@ -1693,7 +1693,7 @@ yet: `409 refused`. An unknown instance: `404 not_found`.
 | `calendar` | [{`account`, `calendar`, `name`, `write`: bool}] | calendars by id, with their title when granted |
 | `drive` | [{`account`, `reach`}] | `reach` `own` or `all` |
 | `chat` | [{`account`}] | Google Chat accounts |
-| `meetings` | [{`account`}] (optional) | Accounts whose ready meeting transcripts the instance may read. Omitted when there are no meeting grants. |
+| `meetings` | [{`account`}] (optional) | Accounts whose published meeting transcripts the instance may read. Omitted when there are no meeting grants. |
 | `claude_notes` | bool | its inbox takes notes from the operator's Claude sessions (`shaft claude-notes`, integrations.md "Notes from your Claude sessions") |
 | `shortcuts` | [{`id`, `name`, `present`: bool or null}] | the operator's Shortcuts it may run (`shaft shortcuts`), by identifier, with their names now; `present` false: no longer on the Mac, null: the Mac's shortcuts could not be listed |
 | `shortcuts_available` | [{`id`, `name`}] | every shortcut on the server Mac, in the Shortcuts app's order (empty when they could not be listed) |
@@ -1866,9 +1866,12 @@ Timestamps follow §1.6. `channels` comes from `sidecar.channels` when present. 
 `error` and `processed_with` start as `null` and can be set by the processing worker.
 The state is one of `uploading`, `queued`, `processing`, `ready`, or `failed`.
 Recovered meetings also have a `worker_crashes` count.
+After a successful transcription, the metadata includes `published: true` and `warnings`, a list of recording
+problem strings. `warnings` can be empty. Older `ready` meetings count as published even if they lack the flag.
 
-When the state is `ready`, `GET /meetings/<id>` also includes `transcript` with `meeting`, `segments`,
-`gaps`, `speakers`, `processed_with`, `page`, and `total_segments`. A segment has `start`, `end`,
+For a published meeting with a saved transcript, `GET /meetings/<id>` includes `transcript` alongside the
+current state and error. The transcript has `meeting`, `segments`, `gaps`, `speakers`, `processed_with`,
+`page`, and `total_segments`. Transcripts produced by Listen also carry the `warnings` list. A segment has `start`, `end`,
 `channel`, `speaker`, `lang`, `text`, and `words`. Each word has `w`, `start`, and `end`. Times are
 seconds from the start of the recording. Channel 1 is the microphone and channel 2 is system audio.
 
@@ -1881,7 +1884,8 @@ setting it turns `title_auto` off, so the calendar never replaces it.
 Changing the account on a ready meeting sends a watch note to eligible instances that have yet to receive it.
 
 `POST /meetings/<id>/reprocess` queues a ready or failed meeting and clears its error and crash count.
-Other states return `409 refused`.
+Other states return `409 refused`. The last published transcript stays available while the meeting is queued or
+processing, and after a failed attempt. A successful attempt replaces it.
 
 Delete removes the meeting, including its audio or any saved chunks. Use `forget_voices=1` to also remove
 gallery samples learned from it. The flag defaults to `0`. Routes for an unknown meeting return `404 not_found`.

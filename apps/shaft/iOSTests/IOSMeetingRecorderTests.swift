@@ -43,9 +43,11 @@ struct IOSMeetingRecorderTests {
         var time = Date(timeIntervalSince1970: 0)
         var interruptionLimit: Duration = .seconds(30)
         var retryInterval: Duration = .seconds(1)
+        var notified: [String] = []
         lazy var recorder = IOSMeetingRecorder(audio: audio, audioUse: audioUse, folder: folder,
                                                now: { [unowned self] in self.time }, device: { "Example device" },
-                                               interruptionLimit: interruptionLimit, retryInterval: retryInterval)
+                                               interruptionLimit: interruptionLimit, retryInterval: retryInterval,
+                                               notify: { [unowned self] in self.notified.append($0) })
 
         deinit { try? FileManager.default.removeItem(at: folder) }
 
@@ -91,6 +93,29 @@ struct IOSMeetingRecorderTests {
         #expect(gaps.compactMap { $0["start"] as? Double } == [3, 6])
         #expect(gaps.compactMap { $0["end"] as? Double } == [3, 6])
         #expect(gaps.compactMap { $0["reason"] as? String } == Array(repeating: "Audio session interruption", count: 2))
+        // Review 2026-11-27: both ends are one audio position, so the gap read as no time at all; the clock says
+        // the first lasted 10 s and the second 2 s.
+        #expect(gaps.compactMap { $0["wall_seconds"] as? Double } == [10, 2])
+    }
+
+    /// Review 2026-11-27: a phone call longer than 30 s ended the meeting and the rest was not recorded. The default
+    /// waits for the call: a recorder made without a limit is still interrupted, not finished, after a minute.
+    @Test func aLongCallDoesNotEndTheMeetingByDefault() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let audio = Audio()
+        audio.canResume = false
+        var time = Date(timeIntervalSince1970: 0)
+        let recorder = IOSMeetingRecorder(audio: audio, audioUse: IOSAudioUse(), folder: folder, now: { time },
+                                          device: { "Example device" }, retryInterval: .milliseconds(5),
+                                          notify: { _ in })
+        await recorder.start()
+        audio.onEvent?(.interrupted)
+        time.addTimeInterval(60)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.interrupted)
+        #expect(recorder.started != nil)
+        recorder.stop()
     }
 
     @Test func foregroundResumesEvenWithoutAnInterruptionEndedEvent() async throws {
@@ -118,6 +143,10 @@ struct IOSMeetingRecorderTests {
         let reason = "The microphone could not resume recording after an audio interruption."
         #expect(recorder.started == nil)
         #expect(recorder.problem == "Recording stopped early. \(reason)")
+        #expect(recorder.problemUnseen)
+        #expect(fixture.notified == ["Recording stopped early. \(reason)"])   // in the background: said on the lock screen
+        recorder.markProblemSeen()
+        #expect(!recorder.problemUnseen)
         #expect(try fixture.sidecar()["problems"] as? [String] == [reason])
         #expect(try String(contentsOf: fixture.file("caf"), encoding: .utf8) == "before")
         #expect(fixture.audioUse.claim(.voice))

@@ -85,9 +85,14 @@ and, online, whose channel carries it loudest against that channel's own speech;
 phrase only on strong evidence. A speaker's time and voice clips come from their diarised turns. A channel's labels
 are numbered by their first turn of at least 0.4 seconds, so a label keeps its number when the meeting is reprocessed.
 
-A ready meeting has `transcript.json` and `transcript.md` in its folder. Segment and word times are seconds from
+A ready meeting has `transcript.json` and `transcript.md` in its folder. The first successful transcription marks
+the meeting `published` in `meeting.json`. Older `ready` meetings count as published and get the flag when queued
+again. Reprocessing keeps the last good transcript available in the app and to granted instances, even if the new
+attempt fails. A successful attempt replaces `transcript.json` atomically. Segment and word times are seconds from
 the start of the recording. To mark an interruption, the recorder can add a `gaps` array to `sidecar.json` with
 `start`, `end`, and `reason` for each gap. The Markdown transcript shows these gaps in time order.
+On success, Listen saves a `warnings` list in `transcript.json` and `meeting.json`. The list contains the recorder's
+`problems` and adds a positive `seconds_lost` count if the recorder has not already reported it.
 Listen marks a meeting `failed` if decoding fails or it detects no speech or transcribes no words. With at
 least 10 seconds of detected speech, it also requires at least one word per 30 seconds of speech. Use
 `shaft meetings show <id>` to read the error.
@@ -97,7 +102,8 @@ least 10 seconds of detected speech, it also requires at least one word per 30 s
 The Listen worker stores cluster voiceprints in `speakers.npz` in the meeting folder and up to three clean
 5–10 second clip ranges per label in `transcript.json`. The paired app plays these clips from the original
 audio channel. To enrol a voiceprint, the operator names a label in the paired app or runs `shaft meetings name`.
-Naming a label updates both transcript files without running the speech engines again.
+Naming or merging labels requires a `ready` meeting. Naming a label updates both transcript files without running
+the speech engines again.
 Reprocess older meetings to generate voiceprints and clip ranges.
 
 The gallery lives under `.supervisor/speakers/`. It stores people in `people.json`, their confirmed voiceprints
@@ -122,16 +128,17 @@ for both commands. An unfiled meeting is invisible to every instance. Revoking a
 broker call. A transcript page already delivered to an inbox stays there.
 
 The broker offers three tools to granted instances. It checks the grant on each call and allows 30 meeting calls
-per run, including continuation pages. Unknown, malformed, failed, and ungranted meetings receive the same
+per run, including continuation pages. Unknown, malformed, never-published, and ungranted meetings receive the same
 `NotVisible` response.
 
 | Tool | Result |
 |---|---|
-| `meeting_search(text="", person="", after="", before="")` | One row per matching ready meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
-| `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. Unknown labels appear as `Speaker S2 (unknown)`. |
+| `meeting_search(text="", person="", after="", before="")` | One row per matching published meeting, newest first. Each row has an ID, title, recording date, duration in seconds, and people. Search text matches the title or transcript. Dates are inclusive and use `YYYY-MM-DD`. |
+| `meeting_read(id, page=1)` | Up to 6,000 characters of marked transcript. Each page includes the title, date, account, people, and gaps. If recording warnings exist, they appear on a `Recording problems:` line. Unknown labels appear as `Speaker S2 (unknown)`. |
 | `meeting_propose_speaker(meeting, speaker, name, why)` | Creates a pending proposal. Only the operator can confirm the name and enrol the voiceprint. |
 
 Set `WATCH_MEETINGS` to `inbox` to receive the first transcript page when a granted meeting first becomes ready.
+The note includes the page's recording warnings when present.
 Use `wake` to also request a cycle. The default is `off`. The apps set it under **Watches** in the instance's
 settings, beside the mail, calendar and Google Chat watches. Filing or refiling a ready meeting sends the note to
 watching instances with a grant for the new account that have yet to receive it.
@@ -142,9 +149,10 @@ speaker with **Confirm** and **Reject**. `shaft meetings proposals` lists the pe
 
 ## Notifications to the operator
 
-When Listen finishes a meeting, the paired devices get a notification: **Meeting ready** with the names it
-recognised, how many voices still need a name, and whether the meeting is unfiled; or **Meeting failed** with the
-reason. Tapping it opens the meeting in **Meetings**. A failure is sent once; a reprocess that ends sends again.
+When a meeting is ready, the paired devices get a **Meeting ready** notification with the names Listen recognised,
+how many voices still need a name, and whether the meeting is unfiled. It includes `recording incomplete` if there
+are recording warnings. On failure, devices get **Meeting failed** with the reason. Tapping either notification
+opens the meeting in **Meetings**. A failure is sent once, and a reprocess that ends sends again.
 
 ## Changing a speaker's name
 
@@ -172,7 +180,7 @@ The recorder files new meetings automatically when there is exactly one configur
 | `shaft meetings delete <id>` | Deletes the meeting folder and its contents. |
 | `shaft meetings import FILE [--title T] [--mode online\|inperson]` | Copies local audio into a new queued meeting. The file stem supplies the default title. The default mode is `inperson`. |
 | `shaft meetings file <id> <alias>` | Files a meeting under a configured Google account. |
-| `shaft meetings grant <instance> <alias>` | Grants access to ready transcripts filed under the account. |
+| `shaft meetings grant <instance> <alias>` | Grants access to published transcripts filed under the account. |
 | `shaft meetings revoke <instance> <alias>` | Revokes access to the account's transcripts. |
 | `shaft meetings proposals` | Lists pending speaker name proposals. |
 | `shaft meetings name <id> <label> <name>` | Enrols the label's voiceprint under the name. |

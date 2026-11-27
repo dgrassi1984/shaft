@@ -129,6 +129,7 @@ class ListenTest(unittest.TestCase):
             "segments": [segment("M1", 1, "Ciao."), segment("S1", 2, "What is the next step?", 1),
                          segment("M2", 1, "Sono d'accordo.", 4)],
             "gaps": [{"start": 5, "end": 6, "reason": "interruption"}],
+            "warnings": [],
             "speakers": {"M1": {"channel": 1, "seconds": 0.8, "clips": []},
                          "S1": {"channel": 2, "seconds": 4, "clips": []},
                          "M2": {"channel": 1, "seconds": 1, "clips": []}},
@@ -267,7 +268,7 @@ class ListenRouteTest(test_app_api.AppTest):
         response = self.api(path + "/reprocess", "POST")
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.body)["state"], "queued")
-        self.assertNotIn("transcript", self.get(path))
+        self.assertEqual(self.get(path + "?page=2")["transcript"]["segments"], segments[200:])
         meetings.set_state(meeting_id, "processing")
         meetings.set_state(meeting_id, "failed", error="Example failure")
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -502,6 +503,23 @@ class CalendarTitleTest(unittest.TestCase):
         meetings.name_from_calendar(moved["id"], "Home event", "home")
         self.assertTrue(meetings.get(moved["id"])["title"].startswith("Meeting "))
         self.assertFalse(meetings.import_audio(self.audio, title="Board call", mode="online")["title_auto"])
+
+    def test_an_unfiled_meeting_is_filed_under_its_calendar_events_account(self):
+        # Review 2026-11-27: with two Google accounts the apps file nothing, so every meeting stayed unfiled and no
+        # instance could read it. Listen files it under the account whose calendar holds its event, never over the
+        # operator's own choice (unfiled included).
+        self.enterContext(mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav")]))
+        self.enterContext(mock.patch.object(meetings, "_account_alias"))
+        event = self.event("Update MKT", "09:30", "10:00")
+        unfiled = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
+        chosen = meetings.import_audio(self.audio, title="", mode="inperson")["id"]
+        meetings.update(chosen, {"account": None})
+        for meeting_id in (unfiled, chosen):
+            engines = FakeEngines({"ch1": [(0, 5, "A")]}, {("ch1", 0, 5): spoken("Buongiorno a tutti")})
+            with mock.patch.object(listen_worker, "calendar_event", return_value=(event, "home")):
+                self.assertTrue(listen_worker.process_next(engines))
+        self.assertEqual((meetings.get(unfiled)["account"], meetings.get(unfiled)["title"]), ("home", "Update MKT"))
+        self.assertIsNone(meetings.get(chosen)["account"])
 
     def test_processing_names_the_meeting_and_prompts_with_its_invitees(self):
         meeting_id = meetings.import_audio(self.audio, title="", mode="inperson")["id"]

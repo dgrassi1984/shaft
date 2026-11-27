@@ -10,6 +10,9 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     /// (also when the list answered without it: deleted since). A list that failed to load keeps it pending.
     let requested: String?
     private let opened: ((String) -> Void)?
+    /// Set while a recording runs: a Stop button in the meeting's toolbar too, where the sidebar's controls are out of
+    /// sight (an iPhone showing a meeting, an iPad with the sidebar hidden).
+    private let stopRecording: (() -> Void)?
     private let close: (() -> Void)?
     private let controls: () -> Controls
     @State private var store: MeetingsStore
@@ -20,12 +23,14 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     @State private var accountError: String?
 
     init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true, requested: String? = nil,
-         opened: ((String) -> Void)? = nil, close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
+         opened: ((String) -> Void)? = nil, stopRecording: (() -> Void)? = nil, close: (() -> Void)? = nil,
+         @ViewBuilder controls: @escaping () -> Controls) {
         self.client = client
         self.refreshID = refreshID
         self.clipPlaybackAllowed = clipPlaybackAllowed
         self.requested = requested
         self.opened = opened
+        self.stopRecording = stopRecording
         self.close = close
         self.controls = controls
         _store = State(initialValue: MeetingsStore(client: client))
@@ -84,12 +89,22 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
                 }
             }
         } detail: {
-            if let meeting = store.meetings.first(where: { $0.id == selection }) {
-                MeetingDetail(meeting: meeting, store: store, aliases: aliases, accountError: accountError,
-                              clipPlaybackAllowed: clipPlaybackAllowed)
-                    .id(meeting.id)
-            } else {
-                ContentUnavailableView("Select a meeting", systemImage: "waveform")
+            Group {
+                if let meeting = store.meetings.first(where: { $0.id == selection }) {
+                    MeetingDetail(meeting: meeting, store: store, aliases: aliases, accountError: accountError,
+                                  clipPlaybackAllowed: clipPlaybackAllowed)
+                        .id(meeting.id)
+                } else {
+                    ContentUnavailableView("Select a meeting", systemImage: "waveform")
+                }
+            }
+            .toolbar {
+                if let stopRecording {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Stop Recording", systemImage: "stop.fill", action: stopRecording)
+                            .tint(Color.danger)
+                    }
+                }
             }
         }
         #if os(iOS)
@@ -183,7 +198,7 @@ private struct MeetingDetail: View {
     @State private var playbackError: String?
 
     private var transcript: MeetingTranscript? {
-        guard meeting.state == "ready", store.detail?.id == meeting.id else { return nil }
+        guard store.detail?.id == meeting.id else { return nil }
         return store.detail?.transcript
     }
 
@@ -198,8 +213,10 @@ private struct MeetingDetail: View {
                     Text(error).foregroundStyle(Color.danger)
                 }
                 if let transcript {
-                    speakers(transcript)
-                    Divider()
+                    if meeting.state == "ready" {
+                        speakers(transcript)
+                        Divider()
+                    }
                     transcriptRows(transcript)
                 } else if store.loadingDetail {
                     ProgressView()
@@ -229,6 +246,12 @@ private struct MeetingDetail: View {
                 .foregroundStyle(Color.textSecondary)
             filingFields
             if let transcript {
+                if meeting.state != "ready" {
+                    Text(meeting.state.capitalized).foregroundStyle(Color.textSecondary)
+                    if let error = meeting.error {
+                        Text(error).foregroundStyle(Color.danger)
+                    }
+                }
                 let names = Set(transcript.speakers.values.compactMap(\.name)).sorted()
                 Label(names.isEmpty ? "No named speakers" : names.formatted(.list(type: .and)),
                       systemImage: "person.2")
@@ -336,7 +359,8 @@ private struct MeetingDetail: View {
              isGap: false)
         }
         let gaps = transcript.recordingGaps.map { gap in
-            (start: gap.start, text: "[gap \(meetingClock(gap.start))–\(meetingClock(gap.end)): \(gap.reason)]",
+            (start: gap.start, text: "[gap \(meetingClock(gap.start))–\(meetingClock(gap.end)): \(gap.reason)"
+                + (gap.wallSeconds.map { $0 > gap.end - gap.start + 1 ? ", \(meetingClock($0)) not recorded" : "" } ?? "") + "]",
              isGap: true)
         }
         let rows = (segments + gaps).sorted { $0.start < $1.start }

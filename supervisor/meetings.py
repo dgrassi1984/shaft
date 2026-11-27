@@ -244,6 +244,8 @@ def update(meeting_id: str, changes: dict) -> dict:
     with _locked(meeting_id) as (folder, metadata):
         account_changed = "account" in changes and changes["account"] != metadata["account"]
         metadata.update(changes)
+        if "account" in changes:
+            metadata["account_chosen"] = True  # the operator's filing, unfiled included, is never redone by Listen
         if "title" in changes:
             metadata["title_auto"] = False  # the operator's title is never replaced by the calendar's
             metadata.pop("title_from", None)
@@ -364,6 +366,23 @@ def name_from_calendar(meeting_id: str, title: str, account: str | None) -> None
             _save(folder, metadata)
 
 
+def file_from_calendar(meeting_id: str, alias: str) -> bool:
+    """File an unfiled meeting under the account whose calendar holds its event (review 2026-11-27: with two Google
+    accounts the apps file nothing, so every meeting stayed invisible to every instance until filed by hand). Never
+    over the operator's own filing, an unfiled choice included. Runs before Listen finishes, so the ready note goes to
+    that account's watchers."""
+    with _locked(meeting_id) as (folder, metadata):
+        if metadata.get("account") is None and not metadata.get("account_chosen"):
+            try:
+                _account_alias(alias)
+            except Invalid:
+                return False                       # no longer configured: stays unfiled, as before
+            metadata.update(account=alias, account_from="calendar")
+            _save(folder, metadata)
+            return True
+        return False
+
+
 def set_state(meeting_id: str, state: str, error=None, processed_with=None) -> None:
     with _locked(meeting_id) as (folder, metadata):
         current = metadata["state"]
@@ -389,6 +408,8 @@ def tell_operator(metadata: dict, speakers: dict | None = None) -> None:
             parts.append(f"{unknown} voice{'s' if unknown != 1 else ''} to name")
         if not metadata.get("account"):
             parts.append("unfiled: no instance can read it yet")
+        if metadata.get("warnings"):
+            parts.append("recording incomplete")
         event = {"title": f"Meeting ready: {title}", "body": " · ".join(parts)}
     else:
         error = " ".join(str(metadata.get("error") or "no reason recorded").split())
@@ -405,6 +426,7 @@ def reprocess(meeting_id: str) -> dict:
             raise Conflict("Only ready or failed meetings can be reprocessed.")
         if metadata["state"] == "ready":
             metadata.setdefault("notified", [])  # Already ready before watches were introduced.
+            metadata["published"] = True  # Preserve access for older meetings once they leave ready.
         metadata.pop("worker_crashes", None)
         metadata.update(state="queued", error=None, processed_with=None)
         _save(folder, metadata)
@@ -441,7 +463,8 @@ def _complete_processing(folder: Path, metadata: dict, transcript: dict, markdow
     first_ready = "notified" not in metadata
     if first_ready:
         metadata["notified"] = None                 # owed: delivered below, or at the worker's next start
-    metadata.update(state="ready", error=None, processed_with=transcript["processed_with"],
+    metadata.update(state="ready", published=True, warnings=transcript.get("warnings", []),
+                    error=None, processed_with=transcript["processed_with"],
                     ready_revision=secrets.token_hex(16))
     _save(folder, metadata)
     tell_operator(metadata, transcript.get("speakers"))
@@ -477,14 +500,23 @@ def deliver_owed() -> None:
                 continue
 
 
+def is_published(metadata: dict) -> bool:
+    state = metadata["state"]
+    return state == "ready" or (metadata.get("published") is True and state in (*WORKER_TRANSITIONS, "uploading"))
+
+
 def detail(meeting_id: str, page: int) -> dict:
     with _locked(meeting_id) as (folder, metadata):
-        if metadata["state"] == "ready":
+        if not is_published(metadata):
+            return metadata
+        try:
             transcript = json.loads((folder / "transcript.json").read_bytes())
-            segments = transcript["segments"]
-            first = (page - 1) * TRANSCRIPT_PAGE_SIZE
-            metadata["transcript"] = {**transcript, "segments": segments[first:first + TRANSCRIPT_PAGE_SIZE],
-                                      "page": page, "total_segments": len(segments)}
+        except FileNotFoundError:
+            return metadata
+        segments = transcript["segments"]
+        first = (page - 1) * TRANSCRIPT_PAGE_SIZE
+        metadata["transcript"] = {**transcript, "segments": segments[first:first + TRANSCRIPT_PAGE_SIZE],
+                                  "page": page, "total_segments": len(segments)}
         return metadata
 
 
