@@ -346,9 +346,9 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `version` | str | 16 hex: the revision of everything but the running reply's activity and answer (§4.3) |
 | `live` | str | 16 hex, or `""` with no reply running: the revision of that activity and answer |
 | `reply` | object or null | the reply running now (§4.6); null when none |
-| `chat` † | object or null | `{id, title, state, created, ended}` below; null when no chat is shown |
+| `chat` † | object or null | `{id, title, state, created, ended, cleared}` below; null when no chat is shown |
 | `archived` † | bool | a past chat (`<cid>` of an ended chat): read-only, nothing in it acts on the current chat |
-| `earlier` † | int | turns left out by the window (§4.1); 0 with `all=1` or a short chat |
+| `earlier` † | int | turns left out by the window (§4.1), or, in a cleared chat, the items before its last clear and beyond the window; 0 with `all=1` or a short chat |
 | `items` † | list | the conversation in time order (§4.4) |
 | `queued` † | list | messages queued for after the reply (§4.7) |
 | `pending_feedback` † | list | thumbs down waiting for the operator's next message (§4.8) |
@@ -357,7 +357,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `last` † | timestamp or null | the newest item from the instance (an answer or a message it sent): what unread compares (§12) |
 | `can_stop` † | bool | a reply runs and this is not an archived chat |
 | `can_end` † | bool | the chat is open, idle and has turns (the web's End button) |
-| `can_clear` † | bool | a chat is shown and not archived (Clear this thread; refused while replying) |
+| `can_clear` † | bool | the chat (Main or an open thread) is idle and something was said since its last clear (Clear conversation, §7.4) |
 
 `chat`:
 
@@ -368,6 +368,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
 | `state` | str | `"idle"`, `"replying"` or `"ended"` |
 | `created` | timestamp | |
 | `ended` | timestamp or null | |
+| `cleared` | timestamp or null | its last clear (§7.4), null when never cleared |
 
 With `chat` null (no chat, or cleared), `items` holds only what the instance sent since (as the HTML's empty chat
 does), and the app shows "Chat with <n>".
@@ -487,6 +488,10 @@ turn of it (key `b<file>`).
 
 **`ended`**: the chat ended (key `ended`). Field: `ts`. The current chat says "Ended <time>: journal write-up
 requested. Your next message starts a new conversation."; an archived one "This conversation ended on <time>."
+
+**`cleared`**: the conversation was cleared here and started fresh (§7.4; key `cleared-<i>`, `i` counting its clears
+from 0). Field: `ts`. Shown as a quiet line, "Cleared <time>: <n> starts fresh from here."; the feed starts with
+the last one (what came before is `earlier`).
 
 **Attachments** (`user`, `sent`, `later`):
 
@@ -637,7 +642,7 @@ A second later, only the streamed answer moved (`?since=41d07be2c95a8f13&live=c0
 
 Returns the From feed from `web_chat.from_feed`, serialized as the full feed in §4.2: From's messages and the turns of
 the From conversation, its running `reply`, `queued` and `can_stop` as a thread's. `chat` is null until the first
-message written in From, then the From conversation (`title` "From <n>"); `can_end` and `can_clear` are always false.
+message written in From, then the From conversation (`title` "From <n>"); `can_end` is always false, `can_clear` as a thread's (§7.4).
 Times and attachment URLs use the same serializer as thread feeds. This route long-polls exactly as §4 does:
 `since`, `live`, `wait` (and `all=1`) are parsed and validated the same, and the request is held — 304 after `wait`
 with nothing new, 200 with the whole feed when `version` changes, 200 partial when only `live` changes. `watch=0` and
@@ -646,7 +651,7 @@ otherwise, `earlier` counting the rest).
 Unknown instances return `404 not_found`.
 Write in From through `/app/v1/chat/<n>/send` with `cid: "from"` and any mode (§6): `now` and `queue` are answered in
 From now, `background` leaves a note for the next cycle that names the From conversation. Its answer `chat` is
-`"from"`. Stream, stop and unqueue take `cid: "from"` too; rename, end and clear refuse it (`409 refused`).
+`"from"`. Stream, stop, unqueue and clear take `cid: "from"` too; rename and end refuse it (`409 refused`).
 Use `cid: "from"` for seen and away (§7.5, §7.6).
 
 ## 5. Earlier chats
@@ -870,10 +875,13 @@ The apps send it when they close an empty thread without asking, and ask first o
 
 ### 7.4 `POST /app/v1/chat/<n>/clear`
 
-`{"cid": str}`: Clear this thread. An open conversation is ended first; the chat is kept (Earlier chats, Transcripts).
-A new thread is §7.7: it ends nothing.
-Only `cid` is cleared; other open threads stay open. Refused while it replies. An ended chat must still be the
-shown chat, else "that is not the chat on this page any more: reload it".
+`{"cid": str}` (a thread's id, or `"from"` for Main): Clear conversation — it starts fresh where it is. Its
+conversation so far is ended at the API (journal write-up requested), the next reply's request carries only what
+comes after, and its feed starts with a `cleared` item (§4.4: `{key: "cleared-<i>", type: "cleared", ts}`), what came
+before counted in `earlier` and returned with `all=1` (a `cleared` item where each clear was). Nothing is deleted:
+`read_thread` and the transcripts keep all of it, and the thread stays open in its place. `{"said": "cleared: journal
+write-up requested · …"}`. Refused (`409 refused`) while it replies, for an ended thread, and with nothing said since
+its last clear. Other threads are untouched. A new thread is §7.7: it ends nothing.
 
 ### 7.5 `POST /app/v1/chat/<n>/seen`
 
@@ -1220,7 +1228,7 @@ Every piece `web_views.chat_feed` and `live_activity` draw, and where it is in t
 | End the conversation | `acts` | `can_end`, §7.3 |
 | The composer's sent ids (`data-sent-mids`) | | `mids` |
 | New thread (header) | | §7.7 |
-| Clear this thread (header ⋯) | | `can_clear`, §7.4 |
+| Clear conversation (header ⋯) | `cleared-<i>` | `can_clear`, §7.4 |
 | The thread's title, Rename (header) | | `chat.title`, §7.8 |
 | Earlier chats (header menu) | | §5 |
 | State and "what a message does now" (header) | | `/instances`: `state`, `since`, `busy_note` |

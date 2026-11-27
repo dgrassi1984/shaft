@@ -70,7 +70,7 @@ class SummariesTest(unittest.TestCase):
                 sent = {"ts": "2026-10-25T11:00:00", "from": "wisp", "to": "operator", "file": "m.md", "read": False, "text": text}
                 self.rows = [dict(sent, talk=None)]
                 self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
-                with self.assertRaisesRegex(web_chat.Refused, "From is not cleared"):
+                with self.assertRaisesRegex(web_chat.Refused, "API is not set up"):   # refused: nothing changes
                     web_chat.clear("wisp", "from")
                 self.assertEqual(web_chat.summary("wisp", [sent])["line"], expected)
                 with mock.patch.object(web_chat, "from_chat", return_value=None):

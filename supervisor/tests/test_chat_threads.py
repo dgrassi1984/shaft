@@ -150,9 +150,9 @@ class ThreadsTest(ChatTest):
         b, _ = web_chat.send("wisp", ME, "second", [], cid=web_chat.new_thread("wisp", ME)["id"])
         self.wait_idle(b["id"])
         web_chat.clear("wisp", a["id"])
-        self.assertEqual(web_chat.load(a["id"])["state"], "ended")
-        self.assertNotEqual(web_chat.load(b["id"])["state"], "ended")
-        self.assertEqual([c["id"] for c in web_chat.threads("wisp")], [b["id"]])
+        self.assertEqual(len(web_chat.load(a["id"])["clears"]), 1)
+        self.assertNotIn("clears", web_chat.load(b["id"]))
+        self.assertEqual({c["id"] for c in web_chat.threads("wisp")}, {a["id"], b["id"]})   # both still open
 
     def test_feedback_on_a_chat_that_is_gone_is_delivered_not_a_crash(self):
         """Review of the threads lane: send_feedback looked its target up with thread_of, which raises Refused — the

@@ -1520,6 +1520,12 @@ class FixturesTest(AppTest):
                   mids=mids)
         self.keep("ended", self.get(f"/app/v1/chat/wisp/{CID}"))
         self.keep("chats", self.get("/app/v1/chats/wisp"))
+        # cleared: the thread started fresh at its clear (web_chat.clear): a "cleared" line, then what came after
+        self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "Done."),
+                           turn("user", "2026-11-03T14:20:00", "New topic.", shown="New topic."),
+                           turn("assistant", "2026-11-03T14:20:30", "Fresh answer.")],
+                  mids=mids, clears=[{"at": "2026-11-03T14:10:00", "turn": len(turns) + 1}])
+        self.keep("cleared", self.get(f"/app/v1/chat/wisp/{CID}"))
         many = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-02T{9 + k // 60:02d}:{k % 60:02d}:00",
                      f"Answer {k}." if k % 2 else "", shown=f"Message {k}.") for k in range(84)]
         self.chat(many, cid="web-0000000000000084", created="2026-11-02T09:00:00")
@@ -1638,7 +1644,7 @@ class FixturesTest(AppTest):
 
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
-                 "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
+                 "earlier", "ended", "cleared", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
                  "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"}
         self.assertEqual(set(self.out), names)
         write_or_check_fixtures(self, self.out)

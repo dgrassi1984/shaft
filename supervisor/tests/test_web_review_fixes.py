@@ -155,7 +155,7 @@ class RailTest(ChatRoutesTest):
         reader.return_value = [dict(older, talk=None)]
         self.assertEqual(web_chat.summary("wisp", [older])["last"], "2026-10-24T10:01:00")   # the newer Main reply wins
         reader.return_value = [dict(older, talk=None), dict(sent, talk=None)]
-        with self.assertRaisesRegex(web_chat.Refused, "From is not cleared"):
+        with self.assertRaisesRegex(web_chat.Refused, "API is not set up"):   # a clear refused changes nothing
             web_chat.clear("wisp", "from")
         self.assertEqual(web_chat.summary("wisp", [older, sent]),
                          {"line": "A question?", "last": "2026-10-24T11:00:00", "last_count": 1})

@@ -110,7 +110,8 @@ def to_json(model: dict) -> dict:
     out["reply"] = _reply(out["reply"])
     out["last"] = stamp(out["last"])
     if out["chat"]:
-        out["chat"].update(created=stamp(out["chat"]["created"]), ended=stamp(out["chat"]["ended"]))
+        out["chat"].update(created=stamp(out["chat"]["created"]), ended=stamp(out["chat"]["ended"]),
+                           cleared=stamp(out["chat"]["cleared"]))
     for it in out["items"]:
         it["ts"] = stamp(it["ts"])
         if it.get("answer"):

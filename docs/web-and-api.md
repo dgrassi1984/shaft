@@ -432,14 +432,14 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   Markdown and the documents' hashes are kept until their text or file changes.
 - The chat header refreshes every 1.5 seconds. It is the name and the thread's title (tap it to **Rename**), its state
   and model under them, then three controls: **Documents**, **New thread** and **⋯**. ⋯ holds the instance's pages,
-  Earlier chats, **Clear this thread**, its actions, notifications and
+  Earlier chats, **Clear conversation**, its actions, notifications and
   Reload / update, and last, apart and in red, **Kill**. The icons are one drawn set in the text's colour (no emoji)
   and stay their size when the text size grows. When the instance is busy and not writing a reply, its state under
   the name (with an icon: working, asleep, paused by you, waiting for you) opens a notice on hover, tap or keyboard
   saying what a message does now. The open notice, history list, ⋯ menu and keyboard focus survive refreshes; your
   draft and documents stay in place.
-  A failed refresh marks the header stale. Clear this thread sends the thread id shown by the header; a missing or
-  outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and Transcripts.
+  A failed refresh marks the header stale. Clear conversation sends the conversation shown by the header (Main or
+  the thread).
 - **Earlier chats** is in the ⋯ menu. Its quick list shows the latest 20 and the total count;
   **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
   Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
@@ -449,8 +449,10 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
   **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
   cards in an archive also open the file in the current chat.
-- **New thread** opens another thread and ends none. **Clear this thread** (⋯) ends its open conversation and clears
-  it from the page; your other threads stay open. The conversation stays in Earlier chats and Transcripts. **Close thread** in the actions menu ends the topic. Its history remains in Earlier chats.
+- **New thread** opens another thread and ends none. **Clear conversation** (⋯, Main or a thread) makes it start
+  fresh where it is: the instance no longer reads what was said so far (its conversation is ended and a journal
+  write-up requested), the feed starts at a "Cleared" line, and the earlier messages stay under **Show the N earlier
+  messages**, in read_thread and in Transcripts. Your other threads are untouched. **Close thread** in the actions menu ends the topic. Its history remains in Earlier chats.
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain
@@ -828,7 +830,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/push/key`, `/push/status`, `/push/latest`, `/push/token` | Web Push JSON; latest/token additionally require `Sec-Fetch-Site: same-origin` |
 | POST | `/push/subscribe`, `/push/unsubscribe`, `/unpair` | Browser notification registration and revocation |
 | POST | `/seen` | Advance the operator's shared conversation read mark (`inst`, `key`, `last`; CSRF required) |
-| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear chat |
+| POST | `/chat/<n>/send`, `/chat/<n>/unqueue`, `/chat/<n>/uncycle`, `/chat/<n>/clear` | Send, cancel a queued message or unread next-cycle note, or clear a conversation (it starts fresh) |
 | POST | `/chat/<n>/move`, `/instances/move` | Save thread or instance order |
 | POST | `/action/chat-stop`, `/action/chat-end`, `/feedback/<n>` | Chat controls and feedback |
 | POST | `/docs/<n>/save`, `/docs/<n>/delete`, `/docs/<n>/comment[/edit\|/delete\|/send\|/state]` | Document and comment changes |

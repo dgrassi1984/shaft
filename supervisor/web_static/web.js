@@ -4,7 +4,7 @@
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
 //                            the operator types that word instead of clicking OK), data-after="home" goes to / after,
 //                            ="open-thread" opens the thread its answer names (data-cid), ="close" shuts its menu,
-//                            ="thread-ended" / "thread-cleared" leave a thread's own page that can no longer write; data-reset
+//                            ="thread-ended" leaves a thread's own page that can no longer write; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
 //                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
 //                            data-check names the page a lost answer tells you to look at. The composer (its
@@ -652,12 +652,9 @@
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
       if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       if (r.ok && form.dataset.after === "open-thread") openThread(body);
-      // a thread's own page cannot write to it once it ended: it shows it as the earlier chat it is (End), or goes to
-      // the instance's current thread (Clear). The plain chat page follows the current thread by itself.
+      // a thread's own page cannot write to it once it ended: it shows it as the earlier chat it is (End). The plain
+      // chat page follows the current thread by itself.
       if (r.ok && form.dataset.after === "thread-ended" && pageCid()) setTimeout(() => location.reload(), 300);
-      if (r.ok && form.dataset.after === "thread-cleared" && pageCid()) {
-        location.href = form.dataset.post.replace(/^\/chat\/([^/]+)\/clear$/, "/i/$1/chat");
-      }
       if (r.ok && form.dataset.after === "close") { const d = form.closest("details"); if (d) d.open = false; }
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened

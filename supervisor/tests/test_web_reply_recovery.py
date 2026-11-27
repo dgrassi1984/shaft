@@ -188,7 +188,7 @@ class RecoveryTest(unittest.TestCase):
         web_chat.save(open_chat)
         with mock.patch.object(web_chat, "_post", return_value=(202, {"ended": "api-2"})):
             web_chat.clear("wisp", open_chat["id"])
-        self.assertTrue(web_chat.load(open_chat["id"])["cleared"])
+        self.assertEqual(len(web_chat.load(open_chat["id"])["clears"]), 1)
         self.assertEqual(web_chat.load(open_chat["id"])["turns"], open_chat["turns"])
         self.assertIsNone(web_chat.shown("wisp"))
         self.assertEqual(web_chat.load(chat["id"])["turns"], chat["turns"])
@@ -199,9 +199,9 @@ class RecoveryTest(unittest.TestCase):
         header = str(web_views.chat_header("wisp", {}, chat, []))
         # New thread ends nothing; Clear, in ⋯, says what it does and its confirm says what is kept
         self.assertIn('aria-label="New thread with wisp" data-focus="new-thread">', header)
-        self.assertIn('<button type="submit" data-focus="clear">Clear this thread</button>', header)
-        self.assertIn("Clear this thread? It is kept in Earlier chats and Transcripts", header)
-        self.assertIn("Your other threads stay open.", header)
+        self.assertIn('<button type="submit" data-focus="clear">Clear conversation</button>', header)
+        self.assertIn("Clear this conversation? wisp starts fresh", header)
+        self.assertIn("Nothing is deleted: the earlier messages stay under Show earlier messages.", header)
         self.assertIn("Only the reply stops. The conversation stays open.", str(web_views.chat_feed("wisp", chat, [])))
         chat["state"] = "idle"
         # End is Close thread in the header's ⋯ now (2026-11-11), with its confirm saying what is kept

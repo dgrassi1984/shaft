@@ -89,13 +89,14 @@ async function submit(form, submitter = null) {
   // a document saved beside a thread names it; on the plain page, none (the server takes the current thread)
   await submit(formOf("/docs/wisp/save", "", { "input[name=path]": { value: "a.md" } }));
   assert.equal(sent.at(-1)[1].get("cid"), process.argv[2] === "thread" ? "web-a" : undefined);
-  // End and Clear on a thread's own page, which cannot write to it once ended; the plain page follows by itself
+  // End on a thread's own page, which cannot write to it once ended; the plain page follows by itself. Clear
+  // conversation keeps the page where it is: the thread stays open and starts fresh there.
   const thread = process.argv[2] === "thread";
   location.href = "here";
   await submit(formOf("/action/chat-end", "thread-ended", { "input[name=cid]": { value: "web-a" } }));
   assert.equal(reloads, thread ? 1 : 0, "End reloads a thread's page (it shows as an earlier chat)");
-  await submit(formOf("/chat/wisp/clear", "thread-cleared", { "input[name=cid]": { value: "web-a" } }));
-  assert.equal(location.href, thread ? "/i/wisp/chat" : "here", "Clear goes to the current thread");
+  await submit(formOf("/chat/wisp/clear", "", { "input[name=cid]": { value: "web-a" } }));
+  assert.equal(location.href, "here", "Clear stays on the page");
   // Answer cards use the same fetch path, retain their rendered mid on failure, and refresh the feed.
   const answerMid = {value: "card-mid"};
   const card = formOf("/chat/wisp/answer", "", {

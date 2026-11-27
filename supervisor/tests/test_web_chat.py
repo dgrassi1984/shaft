@@ -388,7 +388,7 @@ class RelayTest(ChatTest):
                 self.assertEqual(c["turns"][-1]["retry_text"], "")
                 self.assertFalse(c["turns"][-1]["note_retry"])
                 self.assertFalse(web_chat.mark_retried(c, 4, late[0]["shown"]))
-                web_chat.clear("wisp", c["id"])
+                web_chat.end(c["id"])                  # the next subtest starts a new thread
 
     def test_issue_16_a_refused_send_after_retry_unfolds_what_it_folded(self):
         c = self.failed_follow_up({"shown": "late"})
@@ -1261,23 +1261,68 @@ class DocsButtonTest(DocsPanelTest):
 
 
 class ClearTest(DocsChatCase):
-    """Clear the chat: the page and the rail start empty; nothing is deleted; an open conversation is ended first."""
+    """Clear conversation (2026-11-27): it starts fresh where it is — Main or a thread. The instance's conversation
+    so far is ended (written up), the next request carries only what comes after, the feed starts at a "cleared"
+    line; nothing is deleted. It replaced the old Clear, which ended a thread and hid it (Close thread does that)."""
 
-    def test_an_open_chat_is_ended_then_cleared_and_kept(self):
+    def requests_to(self, route: str) -> list:
+        return [r for r in self.api.requests if r[0] == route]
+
+    def test_a_thread_is_written_up_and_starts_fresh_in_its_place(self):
         chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
         said = web_chat.clear("wisp", chat["id"])
-        self.assertTrue(said.startswith("cleared · ended"), said)
-        self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), 1)   # written up
+        self.assertTrue(said.startswith("cleared: journal write-up requested"), said)
+        self.assertEqual(len(self.requests_to("/v1/chat/end")), 1)            # written up
         c = web_chat.load(chat["id"])
-        self.assertEqual(c["state"], "ended")
-        self.assertTrue(c["cleared"])
-        self.assertEqual(len(c["turns"]), 2)                       # nothing deleted
-        self.assertIsNone(web_chat.shown("wisp"))
-        self.assertEqual(web_chat.summary("wisp"), {})
-        self.assertIn(c, web_chat.chats("wisp"))                   # still listed with the earlier chats
-        with self.assertRaisesRegex(web_chat.Refused, "nothing to clear"):
+        self.assertEqual(c["state"], "idle")                                   # still open
+        self.assertEqual([x["id"] for x in web_chat.threads("wisp")], [chat["id"]])
+        self.assertEqual(len(c["turns"]), 2)                                   # nothing deleted
+        self.assertEqual(c["clears"][-1]["turn"], 2)
+        with self.assertRaisesRegex(web_chat.Refused, "nothing to clear"):    # not twice with nothing between
             web_chat.clear("wisp", chat["id"])
+        self.assertFalse(web_chat.feed("wisp", chat["id"])["can_clear"])
+        # The bug this guards: a clear that only hid the messages, the next request still carrying "hello".
+        say("fresh question", [], cid=chat["id"])
+        self.wait_idle(chat["id"])
+        sent = [m["content"] for m in self.api.chats()[-1][2]["messages"] if m["role"] != "system"]
+        self.assertNotIn("hello", " ".join(sent))
+        self.assertTrue(sent[-1].startswith("fresh question"), sent)
+        notes = [m["content"] for m in self.api.chats()[-1][2]["messages"] if m["role"] == "system"]
+        self.assertTrue(any("cleared this conversation" in n for n in notes), notes)   # the instance is told why
+        self.assertTrue(web_chat.feed("wisp", chat["id"])["can_clear"])
+
+    def test_the_feed_starts_at_the_clear_and_shows_the_rest_on_asking(self):
+        chat, _ = say("hello", [])
+        self.wait_idle(chat["id"])
+        version = web_chat.feed("wisp", chat["id"])["version"]
+        web_chat.clear("wisp", chat["id"])
+        model = web_chat.feed("wisp", chat["id"])
+        self.assertNotEqual(model["version"], version)                        # a held long-poll answers
+        self.assertEqual([i["type"] for i in model["items"]], ["cleared"])
+        self.assertEqual((model["earlier"], model["chat"]["cleared"]), (2, model["items"][0]["ts"]))
+        say("after", [], cid=chat["id"])
+        self.wait_idle(chat["id"])
+        model = web_chat.feed("wisp", chat["id"])
+        self.assertEqual([i["type"] for i in model["items"]], ["cleared", "user", "assistant"])
+        whole = web_chat.feed("wisp", chat["id"], whole=True)
+        self.assertEqual([i["type"] for i in whole["items"]], ["user", "assistant", "cleared", "user", "assistant"])
+        self.assertEqual(whole["earlier"], 0)
+
+    def test_main_is_cleared_too(self):
+        """Main never ends: without Clear its whole history went into every request (up to FROM_CHARS)."""
+        main = web_chat.from_chat("wisp", ME, create=True)
+        say("old topic", [], cid="from")
+        self.wait_idle(main["id"])
+        self.assertTrue(web_chat.feed("wisp")["can_clear"])
+        web_chat.clear("wisp", "from")
+        self.assertEqual(self.requests_to("/v1/chat/end")[-1][0], "/v1/chat/end")
+        self.assertEqual([i["type"] for i in web_chat.feed("wisp")["items"]], ["cleared"])
+        say("new topic", [], cid="from")
+        self.wait_idle(main["id"])
+        sent = " ".join(m["content"] for m in self.api.chats()[-1][2]["messages"])
+        self.assertNotIn("old topic", sent)
+        self.assertIn("new topic", sent)
 
     def test_an_ended_thread_is_not_cleared_it_is_in_earlier_chats(self):
         """Clear hid the ended chat the plain page showed. Since 2026-11-11 no page shows an ended thread but Earlier
@@ -1308,11 +1353,12 @@ class ClearTest(DocsChatCase):
         chat, _ = say("hello", [])
         self.wait_idle(chat["id"])
         web_chat.doc_saved("wisp", ME, "plan.md", "a\n", "a\nmine\n", "s1", cid=topic()["id"])
-        web_chat.clear("wisp", chat["id"])
-        chat2, _ = say("go on", [])
-        c = self.wait_idle(chat2["id"])
-        self.assertIn("[The operator edited notes/docs/plan.md:]", c["turns"][0]["content"])
+        web_chat.clear("wisp", chat["id"])                 # the thread stays: its next message carries them
+        say("go on", [], cid=chat["id"])
+        c = self.wait_idle(chat["id"])
+        self.assertIn("[The operator edited notes/docs/plan.md:]", c["turns"][2]["content"])
         self.assertNotIn("pending_edits", web_chat.load(chat["id"]))
+        chat2 = c
         web_chat.doc_saved("wisp", ME, "plan.md", "a\nmine\n", "a\nmine\nmore\n", "s2", cid=topic()["id"])
         web_chat.end(chat2["id"])
         chat3, _ = say("and now", [])
@@ -1332,9 +1378,12 @@ class ClearRouteTest(ChatRoutesCase):
             ok = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, body=f"cid={chat['id']}".encode(),
                           headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)})
         self.assertEqual(ok.status, 200, ok.body)
-        self.assertEqual(web_chat.threads("wisp"), [])
-        body = self.req("/i/wisp/chat", cookie=self.cookie).body.decode()   # the instance's page: Main
-        self.assertIn("1 message(s)", body)                        # in Earlier web chats, kept
+        self.assertEqual([c["id"] for c in web_chat.threads("wisp")], [chat["id"]])   # still open, in its place
+        page = self.req(f"/i/wisp/chat?id={chat['id']}", cookie=self.cookie).body.decode()
+        self.assertIn('data-k="cleared-0"', page)                  # it starts at the "cleared" line
+        self.assertIn(f"?id={chat['id']}&amp;all=1", page)          # the earlier messages, on this thread's page
+        whole = self.req(f"/i/wisp/chat?id={chat['id']}&all=1", cookie=self.cookie).body.decode()
+        self.assertLess(whole.index('data-k="u0"'), whole.index('data-k="cleared-0"'))   # nothing deleted
 
 
 class SaveRecordTest(DocSaveRouteTest):
@@ -1515,8 +1564,8 @@ class ClearInHeaderTest(ChatRoutesCase):
 
     def test_issue_18_19_header_follows_chat_clear_and_earlier(self):
         """Reverting #18/#19 keeps Clear absent or leaves its cid on the previous conversation. Main's header has no
-        Clear (Main is the record of what was sent); a thread's header clears that thread; once cleared it is in
-        Earlier chats and its header clears nothing."""
+        Clear until Main exists, then clears Main ("from"); a thread's header clears that thread, which stays open
+        and clearable again."""
         main = "/fragment/chat/wisp/header"
         self.assertNotIn('/chat/wisp/clear', self.req(main, cookie=self.cookie).body.decode())
         chat = self.chat_with([{"role": "user", "content": "hello", "ts": "2026-10-19T12:00:00"}])
@@ -1529,8 +1578,10 @@ class ClearInHeaderTest(ChatRoutesCase):
             cleared = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers=headers,
                                body=f"cid={chat['id']}".encode())
         self.assertEqual(cleared.status, 200, cleared.body)
-        self.assertNotIn('/chat/wisp/clear', self.req(url, cookie=self.cookie).body.decode())
+        self.assertIn(f'name="cid" value="{chat["id"]}"', self.req(url, cookie=self.cookie).body.decode())
         self.assertIn(f'/i/wisp/chat?id={chat["id"]}', self.req(main, cookie=self.cookie).body.decode())
+        web_chat.from_chat("wisp", create=True)
+        self.assertIn('name="cid" value="from"', self.req(main, cookie=self.cookie).body.decode())
         next_chat = self.chat_with([{"role": "user", "content": "next", "ts": "2026-10-19T13:00:00"}])
         body = self.req(f"/fragment/chat/wisp/header?id={next_chat['id']}", cookie=self.cookie).body.decode()
         self.assertIn(f'name="cid" value="{next_chat["id"]}"', body)
@@ -1545,7 +1596,7 @@ class ClearInHeaderTest(ChatRoutesCase):
                 r = self.req("/chat/wisp/clear", "POST", cookie=self.cookie, headers=headers, body=body)
                 self.assertEqual(r.status, 409, r.body)
                 self.assertIn(b"not a chat of wisp", r.body)
-                self.assertNotIn("cleared", web_chat.load(chat["id"]))
+                self.assertNotIn("clears", web_chat.load(chat["id"]))
 
     def test_clear_and_close_thread_are_in_the_header_menu(self):
         """the operator, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
