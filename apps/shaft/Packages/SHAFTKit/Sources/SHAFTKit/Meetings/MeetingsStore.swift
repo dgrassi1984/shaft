@@ -138,6 +138,7 @@ public final class MeetingsStore {
             let result = try await client.meetingProposals()
             guard proposalsGeneration == generation, !Task.isCancelled else { return }
             proposals = result
+            peopleError = nil
         } catch {
             guard proposalsGeneration == generation, !Task.isCancelled, let error = APIError.from(error) else { return }
             peopleError = error.message

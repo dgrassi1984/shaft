@@ -1139,14 +1139,15 @@ The notification extension sends `?instance=<n>` from the push payload. This tak
 `/i/<n>/chat`, `/i/<n>/chat?id=<cid>` or `/i/<n>/from`, leaving other instances queued. With none queued for that instance, only its own last event is
 shown again, or the plain one if it has none. `instance` must be a valid instance name (a lowercase letter followed
 by at most 30 lowercase letters, digits or hyphens); otherwise `400 bad_request`. Without it, all queued events
-are taken as before.
+are taken as before. The extension of a meeting's notification sends `?meeting=<id>` instead and takes only that
+meeting's events.
 
 | Field | Type | |
 |---|---|---|
 | `events` | list | `{title, body, url, tag, instance, cid}`, plus `meeting` (its id) on a meeting's event |
 | `title` | str | "example replied", "example's reply failed", "example asks", "example says" |
 | `body` | str | its first line, at most 160 characters |
-| `url` | str | the web path it opens (`/i/example/chat?id=web-abc` or `/i/example/from`); `/meetings/<id>` for a meeting that is ready or failed, or has a speaker proposal (the APNs payload then carries `meeting`, and the apps open it in Meetings) |
+| `url` | str | the web path it opens (`/i/example/chat?id=web-abc` or `/i/example/from`); `/overview?meeting=<id>` for a meeting that is ready or failed, or has a speaker proposal (the APNs payload then carries `meeting`, and the apps open it in Meetings; the web UI has no meeting page, so a Web Push tap opens the overview) |
 | `tag` | str | replaces an earlier notification with the same tag |
 | `instance` | str or null | the instance to open: parsed from either chat or From URL; null for the plain one |
 | `cid` | str or null | Thread id, `"from"`, or null for an untargeted or legacy event |

@@ -98,6 +98,18 @@ struct NotificationContentTests {
         #expect(content.userInfo["instance"] == nil)
     }
 
+    /// The extension asks for its own meeting's events only, so another meeting's notification keeps its body.
+    @Test func aMeetingPushFetchesOnlyItsMeeting() async throws {
+        let server = StubServer { request in
+            guard request.path == "/app/v1/push/latest", request.query("meeting") == "m-20261127-0855-8291",
+                  request.query("instance") == nil else { return .json(400, #"{"error":{"code":"bad","message":"x"}}"#) }
+            return .json(200, #"{"events":[{"title":"Meeting failed: Call","body":"moov atom not found","url":"/overview?meeting=m-20261127-0855-8291","tag":"t","instance":null,"cid":null,"meeting":"m-20261127-0855-8291"}],"badge":1}"#)
+        }
+        let latest = try await server.client.pushLatest(instance: nil, meeting: "m-20261127-0855-8291")
+        let filled = try #require(NotificationContent.choose(latest, instance: nil, meeting: "m-20261127-0855-8291"))
+        #expect(filled.body == "moov atom not found")
+    }
+
     @Test func noEventForTheInstanceLeavesTheTitleAlone() {
         #expect(NotificationContent.choose(Self.latest, instance: "orrin") == nil)
         #expect(NotificationContent.choose(PushLatest(events: [], badge: 0), instance: nil) == nil)

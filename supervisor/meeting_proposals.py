@@ -43,7 +43,7 @@ def _notify(row, metadata):
     try:
         webpush.notify({"title": f"{row['instance']}: name a speaker in {title}",
                         "body": f"Speaker {row['speaker']} is {row['name']}? {row['why']}"[:300],
-                        "url": f"/meetings/{metadata['id']}", "tag": f"meeting-proposal-{row['id']}", "cid": None})
+                        "url": webpush.meeting_url(metadata["id"]), "tag": f"meeting-proposal-{row['id']}", "cid": None})
     except Exception as e:
         core.log(f"meeting proposal {row['id']}: push to the operator failed ({type(e).__name__}: {e})")
 

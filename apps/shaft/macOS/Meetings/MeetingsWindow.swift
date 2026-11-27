@@ -10,7 +10,7 @@ struct MeetingsWindow: View {
 
     var body: some View {
         MeetingsBrowser(client: client, refreshID: recorder.phase, requested: model.openMeeting,
-                        opened: { model.openMeeting = nil }) {
+                        opened: { id in if model.openMeeting == id { model.openMeeting = nil } }) {
             MeetingRecordControls(recorder: recorder)
         }
         .frame(minWidth: 700, minHeight: 460)

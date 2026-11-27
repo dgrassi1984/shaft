@@ -240,7 +240,7 @@ class OperatorPushTest(SpeakerBase):
         self.assertEqual(len(self.pushed), 1, self.pushed)
         event = self.pushed[0]
         self.assertEqual(event["title"], "Meeting ready: Example")
-        self.assertEqual(event["url"], f"/meetings/{second}")
+        self.assertEqual(event["url"], f"/overview?meeting={second}")
         self.assertIn("Example Person", event["body"])
         self.assertIn("1 voice to name", event["body"])
         self.assertIn("unfiled", event["body"])
@@ -252,7 +252,7 @@ class OperatorPushTest(SpeakerBase):
         meetings.set_state(meeting_id, "failed", error="Audio decode failed: moov atom not found")
         self.assertEqual(self.pushed, [{"title": "Meeting failed: Example",
                                         "body": "Audio decode failed: moov atom not found",
-                                        "url": f"/meetings/{meeting_id}", "tag": f"meeting-{meeting_id}", "cid": None}])
+                                        "url": f"/overview?meeting={meeting_id}", "tag": f"meeting-{meeting_id}", "cid": None}])
 
     def test_a_worker_that_stops_twice_pushes_the_failure(self):
         meeting_id = meetings.import_audio(self.source, title="Example", mode="inperson")["id"]
@@ -275,7 +275,7 @@ class OperatorPushTest(SpeakerBase):
         metadata = json.loads((self.folder(meeting_id) / "meeting.json").read_text())
         meeting_proposals.create("example", metadata, "M1", "Example Person", "The invite lists them.")
         self.assertEqual(len(self.pushed), 1)
-        self.assertEqual(self.pushed[0]["url"], f"/meetings/{meeting_id}")
+        self.assertEqual(self.pushed[0]["url"], f"/overview?meeting={meeting_id}")
         self.assertIn("Example Person", self.pushed[0]["body"])
         rows = self.get("/app/v1/meetings/proposals")["proposals"]
         self.assertEqual([(r["speaker"], r["name"]) for r in rows], [("M1", "Example Person")])

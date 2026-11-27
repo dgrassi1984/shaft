@@ -45,7 +45,8 @@ account `google` signed in, as the app's local `shaft google login` would), `mes
 single- and multiple-choice options), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
 window), `rich <instance> [turns]` (Main grows by turns with answers the size of real ones, for timing the chat
-screen). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
+screen), `meeting ready|failed [title]` (Listen finishes or fails a meeting, with its push) and `meeting proposal
+<instance> [name]` (that instance proposes a name for the newest ready meeting's unnamed speaker, with its push). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
 `services drain-end` finishes a pending scheduler drain and changes its fake pid. `version <api> [server]` makes
 GET /app/v1/version answer as a server of that API version, `version missing` as one older than the route (404), and
 `version` alone the real answer again (docs/app-api.md §19).
@@ -1151,8 +1152,51 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
         google._save_account("google", {"address": address, "client": "google", "refresh_token": "fixture",
                                         "scope": " ".join(google.SCOPES), "created": now})
         print(f"Google account google is {address} (fixture: every scope, a fake token)")
+    elif what == "meeting":                            # Listen finishing a meeting (or failing it), or a speaker proposal
+        _act_meeting(base, args)
     else:
-        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long, rich")
+        raise SystemExit(f"unknown act {what!r}: google, message, question, state, doc, long, rich, meeting")
+
+
+def _act_meeting(base: Path, args: list[str]) -> None:
+    """`meeting ready [title]`: a two-speaker meeting through the real worker (fake engines, no audio decoded), which
+    pushes "Meeting ready"; `meeting failed [title]`: one the worker fails, pushing "Meeting failed"; `meeting proposal
+    <instance> [name]`: that instance proposes a name for the newest ready meeting's first unnamed speaker."""
+    from supervisor import listen_pipeline, listen_worker, meeting_proposals, meetings
+    from supervisor.tests.test_listen import FakeEngines, spoken
+    kind = args[0] if args else "ready"
+    source = base / "meeting.wav"
+    source.write_bytes(b"fixture placeholder")
+    if kind in ("ready", "failed"):
+        title = " ".join(args[1:]) or ("Quarterly planning" if kind == "ready" else "Supplier call")
+        row = meetings.import_audio(source, title=title, mode="online")
+        if kind == "failed":
+            meetings.set_state(row["id"], "processing")
+            meetings.set_state(row["id"], "failed", error="Audio decode failed (ffmpeg exit 183): moov atom not found")
+        else:
+            turns = {"ch1": [(0, 6, "A")], "ch2": [(8, 14, "A"), (16, 20, "B")]}
+            results = {("ch1", 0, 6): spoken("Shall we start with the budget?", 0),
+                       ("ch2", 8, 14): spoken("Yes, the numbers are in the deck.", 8),
+                       ("ch2", 16, 20): spoken("I will send it after the call.", 16)}
+            vectors = {"ch1": {"A": (1, 0)}, "ch2": {"A": (0, 1), "B": (1, 1)}}
+            with mock.patch.object(listen_pipeline, "decode", return_value=[Path("ch1.wav"), Path("ch2.wav")]):
+                listen_worker.process_next(FakeEngines(turns, results, vectors))
+        print(f"meeting {row['id']}: {meetings.detail(row['id'], 1)['state']}")
+    elif kind == "proposal":
+        instance = args[1] if len(args) > 1 else "tundra"
+        ready = [m for m in meetings.list_meetings() if m["state"] == "ready"]
+        if not ready:
+            raise SystemExit("no ready meeting: run `act meeting ready` first")
+        detail = meetings.detail(ready[0]["id"], 1)
+        label = next((label for label, speaker in sorted(detail["transcript"]["speakers"].items())
+                      if not speaker.get("name")), None)
+        if label is None:
+            raise SystemExit("every speaker of the newest ready meeting has a name")
+        name = " ".join(args[2:]) or "Ada Lovelace"
+        print(meeting_proposals.create(instance, detail, label, name, "The calendar invite lists her and she "
+                                       "presented the deck."))
+    else:
+        raise SystemExit("meeting needs ready [title], failed [title] or proposal <instance> [name]")
 
 
 def main() -> int:

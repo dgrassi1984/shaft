@@ -6,9 +6,10 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     let client: APIClient
     let refreshID: RefreshID
     let clipPlaybackAllowed: Bool
-    /// A meeting to open (a tapped notification about it): selected once the list has it, then `opened` is called.
+    /// A meeting to open (a tapped notification about it): selected once the list has it, then `opened(id)` is called
+    /// (also when the list answered without it: deleted since). A list that failed to load keeps it pending.
     let requested: String?
-    private let opened: (() -> Void)?
+    private let opened: ((String) -> Void)?
     private let close: (() -> Void)?
     private let controls: () -> Controls
     @State private var store: MeetingsStore
@@ -19,7 +20,7 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
     @State private var accountError: String?
 
     init(client: APIClient, refreshID: RefreshID, clipPlaybackAllowed: Bool = true, requested: String? = nil,
-         opened: (() -> Void)? = nil, close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
+         opened: ((String) -> Void)? = nil, close: (() -> Void)? = nil, @ViewBuilder controls: @escaping () -> Controls) {
         self.client = client
         self.refreshID = refreshID
         self.clipPlaybackAllowed = clipPlaybackAllowed
@@ -73,6 +74,7 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
                             if let selection, store.meetings.contains(where: { $0.id == selection }) {
                                 await store.load(selection)
                             }
+                            await store.loadProposals()
                             await loadAccounts()
                         }
                     } label: {
@@ -101,11 +103,13 @@ struct MeetingsBrowser<RefreshID: Equatable, Controls: View>: View {
         .task(id: requested) {
             guard let requested else { return }
             await store.refresh()
+            guard !Task.isCancelled, store.listError == nil else { return }
             if store.meetings.contains(where: { $0.id == requested }) {
                 selection = requested
                 compactColumn = .detail
+                await store.loadProposals()          // a proposal's tap: the meeting may already be on screen
             }
-            opened?()
+            opened?(requested)
         }
         .onChange(of: store.meetings.map(\.id)) { _, ids in
             if let selection, !ids.contains(selection) {
@@ -292,7 +296,12 @@ private struct MeetingDetail: View {
             if let error = store.peopleError {
                 HStack {
                     Text(error).foregroundStyle(Color.danger)
-                    Button("Retry") { Task { await store.loadPeople() } }
+                    Button("Retry") {
+                        Task {
+                            await store.loadPeople()
+                            await store.loadProposals()
+                        }
+                    }
                 }
             }
             if let playbackError { Text(playbackError).foregroundStyle(Color.danger) }

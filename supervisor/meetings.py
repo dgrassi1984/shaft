@@ -394,7 +394,7 @@ def tell_operator(metadata: dict, speakers: dict | None = None) -> None:
         error = " ".join(str(metadata.get("error") or "no reason recorded").split())
         event = {"title": f"Meeting failed: {title}", "body": error[:300]}
     try:
-        webpush.notify({**event, "url": f"/meetings/{metadata['id']}", "tag": f"meeting-{metadata['id']}", "cid": None})
+        webpush.notify({**event, "url": webpush.meeting_url(metadata["id"]), "tag": f"meeting-{metadata['id']}", "cid": None})
     except Exception as e:
         core.log(f"meetings: {metadata['id']}: push to the operator failed ({type(e).__name__}: {e})")
 

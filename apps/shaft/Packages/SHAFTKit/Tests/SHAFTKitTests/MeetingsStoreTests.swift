@@ -256,7 +256,7 @@ struct MeetingsStoreTests {
                 decided.withLock { $0 = true }
                 return .json(200, proposal.replacingOccurrences(of: "pending", with: "confirmed"))
             case ("GET", Self.detail):
-                return .json(200, Self.metadata("ready", transcript: Self.transcript(named: true)))
+                return .json(200, Self.metadata("ready", transcript: Self.transcript(named: decided.withLock { $0 })))
             case ("GET", Self.gallery):
                 return .json(200, "{\"people\":[\(Self.person)]}")
             default:
@@ -265,6 +265,7 @@ struct MeetingsStoreTests {
         }
         let store = MeetingsStore(client: server.client)
         await store.load(Self.id)
+        #expect(store.detail?.transcript?.speakers["S2"]?.name == nil)
         await store.loadProposals()
         let pending = try #require(store.proposals.first)
         #expect((pending.instance, pending.speaker, pending.name) == ("wisp", "S2", "Ada"))

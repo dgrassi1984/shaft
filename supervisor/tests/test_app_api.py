@@ -1367,10 +1367,11 @@ class PushTest(AppTest):
 
     def test_latest_names_the_meeting_a_meeting_push_opens(self):
         webpush._save_queue({self.device: {"pending": [
-            {"title": "Meeting ready: Example", "body": "Example Person", "url": "/meetings/m-20260101-1200-abcd",
+            {"title": "Meeting ready: Example", "body": "Example Person", "url": webpush.meeting_url("m-20260101-1200-abcd"),
              "tag": "meeting-m-20260101-1200-abcd", "cid": None, "at": time.time()}]}})
-        event = self.get("/app/v1/push/latest")["events"][0]
+        event = self.get("/app/v1/push/latest?meeting=m-20260101-1200-abcd")["events"][0]
         self.assertEqual((event["meeting"], event["instance"]), ("m-20260101-1200-abcd", None))
+        self.error(self.api("/app/v1/push/latest?meeting=../x"), 400, "bad_request")
 
     def test_latest_takes_only_the_requested_instance_and_keeps_its_own_fallback(self):
         webpush._save_queue({self.device: {"pending": [

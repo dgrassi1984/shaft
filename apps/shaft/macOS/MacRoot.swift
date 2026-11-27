@@ -178,7 +178,11 @@ struct MacRoot: View {
         .frame(minWidth: Self.minimumWidth, minHeight: 480)
         // The reading surface behind everything, the title bar's area too.
         .containerBackground(Color.canvas, for: .window)
-        .onAppear { state.openWindow = openWindow }
+        .onAppear {
+            state.openWindow = openWindow
+            // A meeting notification clicked at launch, before the window could open Meetings: open it now.
+            if model.openMeeting != nil { state.bringMeetingsForward() }
+        }
         // shaft://chat/<instance>[/<cid>]: the chat a notification click opens, from a link too.
         .onOpenURL { url in
             let target = AppLinks.target(in: url)

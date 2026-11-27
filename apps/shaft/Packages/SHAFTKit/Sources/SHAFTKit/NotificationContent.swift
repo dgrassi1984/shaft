@@ -39,7 +39,7 @@ public enum NotificationContent {
         }() : nil
         defer { own?.finishTasksAndInvalidate() }
         let client = APIClient(credential: credential, session: session ?? own!)
-        guard let latest = try? await client.pushLatest(instance: instance) else { return nil }
+        guard let latest = try? await client.pushLatest(instance: instance, meeting: meeting) else { return nil }
         return choose(latest, instance: instance, cid: cid, meeting: meeting)
     }
 

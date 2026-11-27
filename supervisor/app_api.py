@@ -929,10 +929,13 @@ def _latest(req: Request) -> Response:
     instance = query.get("instance", [None])[0]
     if instance is not None and not NAME_RE.fullmatch(instance):
         raise Refusal(400, "bad_request", "instance must be an instance name.")
+    meeting = query.get("meeting", [None])[0]
+    if meeting is not None and not re.fullmatch(webpush.MEETING_ID, meeting):
+        raise Refusal(400, "bad_request", "meeting must be a meeting id.")
     events = [{**e, "instance": m[1] if (m := re.fullmatch(r"/i/([A-Za-z0-9_-]+)/(?:chat|from)",
                                                        urllib.parse.urlsplit(e.get("url", "")).path)) else None,
-               **({"meeting": meeting} if (meeting := webpush.meeting_of(e)) else {})}
-              for e in webpush.take(req.device, instance=instance)]
+               **({"meeting": mid} if (mid := webpush.meeting_of(e)) else {})}
+              for e in webpush.take(req.device, instance=instance, meeting=meeting)]
     return _json(200, {"events": events, "badge": web_seen.badge(req.device)})
 
 
