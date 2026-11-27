@@ -59,9 +59,15 @@ final class MeetingRecorder {
     @ObservationIgnored let folder: URL
 
     var isRecording: Bool { if case .recording = phase { true } else { false } }
+    /// The microphone's level while recording, 0 (−60 dBFS or less) to 1, polled by the meter.
+    var level: Float {
+        guard let capture else { return 0 }
+        let rms = Float(bitPattern: capture.micLevel.load(ordering: .relaxed))
+        return rms > 0 ? max(0, min(1, (20 * log10(rms) + 60) / 60)) : 0
+    }
     /// Set before the permission prompt's await, so a second Record click cannot start a second capture over the first
     /// (review 2026-11-25).
-    @ObservationIgnored private var starting = false
+    @ObservationIgnored private(set) var starting = false
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -110,8 +116,15 @@ final class MeetingRecorder {
     /// Start recording: online (the microphone and every other app's sound) or in person (the microphone).
     func start(online: Bool) async {
         guard !isRecording, !starting else { return }
+        guard IOSAudioUse.shared.claim(.meeting) else {
+            phase = .failed("End voice mode before recording a meeting: its replies would be recorded too.")
+            return
+        }
         starting = true
-        defer { starting = false }
+        defer {
+            starting = false
+            if !isRecording { IOSAudioUse.shared.release(.meeting) }
+        }
         liveWarnings = [:]
         stopWarning = nil
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
@@ -160,6 +173,7 @@ final class MeetingRecorder {
         self.capture = nil
         self.file = nil
         holdSleep(false)
+        IOSAudioUse.shared.release(.meeting)
         recordingFrom = nil
         inputNotice = nil
         phase = .idle

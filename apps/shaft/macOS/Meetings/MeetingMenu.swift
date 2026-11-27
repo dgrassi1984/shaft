@@ -71,8 +71,19 @@ struct MeetingMenuLabel: View {
     let recorder: MeetingRecorder
 
     var body: some View {
-        Image(systemName: recorder.isRecording ? "record.circle.fill" : "waveform.circle")
-            .accessibilityLabel(recorder.isRecording ? "SHAFT is recording a meeting" : "SHAFT meetings")
+        if case .recording(let started, _) = recorder.phase {
+            // The time recorded, in the menu bar (review 2026-11-27: only a dot said a recording ran).
+            TimelineView(.periodic(from: started, by: 1)) { context in
+                Label(Duration.seconds(context.date.timeIntervalSince(started)).formatted(.time(pattern: .minuteSecond)),
+                      systemImage: "record.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .monospacedDigit()
+            }
+            .accessibilityLabel("SHAFT is recording a meeting")
+        } else {
+            Image(systemName: "waveform.circle")
+                .accessibilityLabel("SHAFT meetings")
+        }
     }
 }
 

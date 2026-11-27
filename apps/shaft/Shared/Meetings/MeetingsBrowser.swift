@@ -250,6 +250,10 @@ private struct MeetingDetail: View {
                     .font(.callout)
                     .foregroundStyle(Color.warning)
             }
+            // A failed meeting says why at the top of its page, not only in the list (review 2026-11-27).
+            if meeting.state == "failed", let error = meeting.error, transcript == nil {
+                Text(error).font(.callout).foregroundStyle(Color.danger).textSelection(.enabled)
+            }
             filingFields
             if let transcript {
                 if meeting.state != "ready" {

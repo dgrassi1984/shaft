@@ -9,6 +9,7 @@ struct IOSMeetingRecorderTests {
         var onEvent: ((IOSMeetingAudioEvent) -> Void)?
         var canResume = true
         var currentTime: TimeInterval = 0
+        var level: Float = 0
         private var file: URL?
         private var paused = false
 

@@ -15,6 +15,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `macOS/` | the Mac app: its entry point, window, menu commands and Settings, and the AppKit text views of Shared's seams (a message's text selects in place with ↩ Reply; the composer's field) ([macOS/README.md](macOS/README.md)) |
 | `macOSTests/` | `SHAFTMacTests`: the Mac's Markdown text (`MarkdownAttributed`) and its text views' menu items, with no window |
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
+| `MeetingWidgets/` | the iOS extension for the meeting Live Activity and recording controls |
 | `watchOS/` | the Apple Watch app: talk to an instance from the wrist, through the iPhone app (below) |
 | `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
 | `ScreenshotTests/` | `SHAFTScreenshots`: a UI test that drives the iOS demo and writes the App Store screenshots ([AppStore/README.md](AppStore/README.md)) |
@@ -26,6 +27,7 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `SHAFT-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft` |
 | `NotificationService-iOS` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
 | `NotificationService-macOS` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.NotificationService` |
+| `MeetingWidgets-iOS` | iOS 26+, embedded in `SHAFT-iOS` | `$(SHAFT_BUNDLE_PREFIX).shaft.MeetingWidgets` |
 | `SHAFT-watchOS` | watchOS 26+, embedded in `SHAFT-iOS` | `$(SHAFT_BUNDLE_PREFIX).shaft.watchkitapp` |
 | `SHAFTMacTests` | macOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
 | `SHAFTScreenshots` | iOS 26+ | `$(SHAFT_BUNDLE_PREFIX).shaft.Screenshots` (UI test, the `SHAFT-Screenshots` scheme's test action) |
@@ -81,6 +83,15 @@ The nearest reachable `v[0-9]*` tag supplies the plain release version. The buil
 plus 100, preserving the offset needed after a history rewrite. No version override is needed.
 Settings shows the git description with `+changes` when tracked files differ from HEAD.
 Building requires git and a reachable release tag; missing tags fail the build.
+
+## Meeting shortcuts
+
+Say "Record a meeting with SHAFT" or "Stop recording my meeting with SHAFT" to Siri, or run
+**Record Meeting** or **Stop Meeting Recording** in Shortcuts. On Mac, **Record Meeting** defaults to
+**Online** and also offers **In Person**. On iPhone and iPad, add either recording control to Control Center
+or choose one for the Action button on supported iPhones. Starting on iOS opens SHAFT to use the microphone.
+The Live Activity shows elapsed time and **Stop** on the Lock Screen and in the expanded Dynamic Island.
+See [Meetings](../../docs/meetings.md) for recording and upload behavior.
 
 ## The demo
 

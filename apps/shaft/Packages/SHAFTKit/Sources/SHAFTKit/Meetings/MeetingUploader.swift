@@ -227,6 +227,15 @@ public final class MeetingUploader {
         try JSONEncoder().encode(record).write(to: url, options: .atomic)
     }
 
+    /// A recording whose sidecar lists problems is the one worth keeping on the device (review 2026-11-27): never
+    /// pruned, only deleted by the operator.
+    nonisolated static func hasProblems(_ audio: URL) -> Bool {
+        guard let data = try? Data(contentsOf: audio.deletingPathExtension().appendingPathExtension("json")),
+              let fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let problems = fields["problems"] as? [Any] else { return false }
+        return !problems.isEmpty
+    }
+
     /// Remove finished audio files and their upload records from this directory. The default cutoff is seven days ago.
     public static func pruneUploaded(in directory: URL,
                                      olderThan cutoff: Date = Date().addingTimeInterval(-7 * 24 * 60 * 60)) throws {
@@ -236,7 +245,7 @@ public final class MeetingUploader {
             guard let record = try loadRecord(at: url),
                   let finishedAt = record.finishedAt, finishedAt < cutoff else { continue }
             let audio = url.deletingPathExtension().standardizedFileURL
-            guard !activeRecordings.contains(audio) else { continue }
+            guard !activeRecordings.contains(audio), !hasProblems(audio) else { continue }
             do {
                 let current = try digest(of: audio)
                 guard current.size == record.size, current.sha256 == record.sha256 else { continue }
