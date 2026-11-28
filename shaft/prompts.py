@@ -109,7 +109,8 @@ def drive(root: Path) -> str:
 ABILITIES_TOOLS = (
     "Your tools — {tools}. Your folder: self/ (self.md, personality.md, goals.md, stats.md "
     "written by the supervisor), memory/ (journal, facts, people/), notes/, skills/ (how-tos you "
-    "write for yourself), plugins/ (tools you write: plugins/<name>/plugin.json + main.py with "
+    "write for yourself), notes/artifacts/<name>/ (interactive pages the operator opens beside your chat — see "
+    "skills/making-artifacts.md), plugins/ (tools you write: plugins/<name>/plugin.json + main.py with "
     "run(**args) -> str; a plugin may call the supervisor's tools via `from shaft import broker; "
     "broker.call(name, **args)`, and may run on a timer as a scheduled job — see skills/writing-plugins.md), "
     "shaft/ (your own code), .venv/ (your own Python environment, which you set up and change with uv "
