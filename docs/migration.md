@@ -53,7 +53,8 @@ Assistant stay manual (below).
 | Capability battery's held-out backup | `~/Library/Application Support/SHAFT/` | **copy separately** |
 | Push guard for `instance/*` | `.git/hooks/pre-push` | copied; `bin/shaft setup` reinstalls it |
 | launchd services | `~/Library/LaunchAgents/com.shaft.*.plist` | **reinstall** with each service's `on` command |
-| Tailnet exposure of the API and web UI | Tailscale's `serve` configuration on the old Mac | **reinstall** with `api on` and `web on` |
+| Mac app's Python and uv | `.runtime/` | copied with the folder |
+| API and web exposure | Tailscale Serve and SHAFT's local settings on the old Mac | **restore** each service in its recorded mode |
 | Terminal client, Bonsai, and fine-tuning environments | `.venv-ui`, `.venv-bonsai`, `.venv-ft` | **recreate** |
 | Local model packs | `.models/` | copy, or download again |
 | Grok CLI | `~/.grok/bin/grok` (`SHAFT_GROK_BIN`) | **install** the CLI if any instance uses a `grok/*` model; its login in `.supervisor/grok-home/` (`SHAFT_GROK_HOME`) is copied with the folder |
@@ -72,25 +73,37 @@ so do that instead.
 - Use the same macOS user name if you can, and the same folder path
   (`~/Development/shaft` here). Every step then works unchanged. If a path
   changes, follow [the path changed](#if-the-project-path-changed).
-- Install the requirements from the [README](../README.md#requirements):
-  Python 3.12 or later as `python3`, git, and `uv`.
-  `uv` and `git` must be in `/opt/homebrew/bin` or `/usr/local/bin`.
-  Homebrew does this. Services run under launchd with
-  `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`. Installing `uv` in
-  `~/.local/bin` works in a terminal but fails under launchd.
+- Install git on the new Mac. Apple's Command Line Tools provide it at
+  `/usr/bin/git`.
+- If the old Mac runs on the Mac app's Python, migration copies that Python
+  and uv from `.runtime`. Use a new Mac with the same processor architecture.
+  The copied runtime works even if the new Mac's `python3` is older.
+  For a terminal install without that runtime, install Python 3.12 or later
+  as `python3.12` or `python3`, and install uv in `/opt/homebrew/bin` or
+  `/usr/local/bin` so launchd can find it.
   Unless you set `SHAFT_PYTHON`, `bin/shaft` runs the newest app-installed
   Python 3.12, then `python3.12` on your PATH, then `python3` if it is 3.12 or
   later. The `on` commands record that interpreter in the plists.
-- On the old Mac, run `brew bundle dump --file=Brewfile` in the project
+- Guided migration accepts a missing or empty destination folder, a folder
+  containing only a real `.runtime/` directory, or a partial copy from
+  this migration. The copy replaces any preinstalled runtime with the source's
+  files. If you already ran the app's setup on the new Mac, stop its services
+  from that checkout (see [step 2](#2-stop-the-old-mac)), quit the app, and
+  move that folder aside. Guided migration refuses installed target services
+  and leaves their shutdown to the operator.
+- If you use Homebrew, run `brew bundle dump --file=Brewfile` in the old project
   folder to record your Homebrew packages. The file travels with the copy.
   On the new Mac, `brew bundle --file=Brewfile` installs them. This matters
   when instances use tools such as ffmpeg or pandoc.
 - Set git `user.name` and `user.email`. The supervisor commits as itself, but
   `new` and your own commits need an identity.
-- Install Tailscale and log in to the **same tailnet**. `SHAFT_API_LOGINS` in
-  `.env` lists the tailnet logins allowed to use the API and web UI, so those
-  logins must keep working. Install it at `/Applications/Tailscale.app`, or
-  put `tailscale` on the same launchd PATH above.
+- If either the API or web service uses Tailscale, install Tailscale and log
+  in to the **same tailnet**. Add your login to `SHAFT_API_LOGINS` if needed.
+  Install Tailscale in `/Applications` or `~/Applications`, or use the
+  command-line installation in `/opt/homebrew/bin` or `/usr/local/bin`.
+  For local-only services, use a LAN hostname or IP address for SSH.
+  If the old Mac has both local and tailnet settings for a service, migration
+  needs to read its Tailscale Serve status to tell which mode to restore.
 - If any instance uses a `codex/*` model, the migration check looks for ChatGPT in `/Applications` and
   `~/Applications` or for `codex` on the new Mac's login shell. See the
   [runtime search order and `SHAFT_CODEX_BIN` override](local-model.md#codex-plan-routing).
@@ -114,9 +127,10 @@ The nightly sleep catches up only later on the same day. Its time is 04:00
 (`SLEEP_AT` in `supervisor/autonomy.py`). If the Mac sleeps through that time
 and wakes after midnight, the next nightly sleep runs at that day's 04:00.
 
-Keep it on power, with `sudo pmset -c sleep 0`. Closing the lid still sleeps
-it unless it is in clamshell mode, with power and an external display.
-On battery it sleeps as normal.
+If you have administrator rights, you can run `sudo pmset -c sleep 0` to
+keep the Mac awake on power. This setting is optional. Closing the lid
+still sleeps it unless it is in clamshell mode, with power and an external
+display. On battery it sleeps as normal.
 
 ## 2. Stop the old Mac
 
@@ -237,11 +251,12 @@ the project path stayed the same. Their branches stay in `.git/`:
 git worktree prune
 ```
 
-Recreate the terminal client's environment. Use `--clear`, because a copied
-environment keeps links to the old Mac's Python:
+Recreate the terminal client's environment. Set `python` to the absolute
+path of the Python that `bin/shaft` uses on this Mac. Use `--clear`, because
+a copied environment keeps links to the old Mac's Python:
 
 ```bash
-python3 -m venv --clear .venv-ui
+"$python" -m venv --clear .venv-ui
 .venv-ui/bin/python -m pip install -r requirements-ui.txt
 ```
 
@@ -255,7 +270,7 @@ If you used local models, the shared browser, or memory search, rebuild them too
 See [local models](local-model.md) and [the browser](integrations.md#a-real-browser-shaft-browser-).
 
 ```bash
-python3 -m venv --clear .venv-bonsai
+"$python" -m venv --clear .venv-bonsai
 .venv-bonsai/bin/python -m pip install -r venv-bonsai.txt
 bin/shaft browser install
 ```
@@ -268,7 +283,7 @@ exists, so do not rely on it.
 If you fine-tune, recreate `.venv-ft` from its freeze too:
 
 ```bash
-python3 -m venv --clear .venv-ft
+"$python" -m venv --clear .venv-ft
 .venv-ft/bin/python -m pip install -r venv-ft.txt
 ```
 
@@ -312,7 +327,11 @@ bin/shaft web on
 bin/shaft telegram on
 ```
 
-`api on` and `web on` expose the services with `tailscale serve`. `web on` also
+Add `--local` to `api on` or `web on` if that service was local-only on the
+old Mac. Guided migration records each mode before it stops the services
+and uses it on the new Mac. Local-only installs need no Tailscale login.
+
+`api on` and `web on` without `--local` expose the services with `tailscale serve`. `web on` also
 records this Mac's tailnet name. `web on` refuses without `SHAFT_API_LOGINS`
 in `.env`. That setting is copied with `.env`, but if your tailnet login
 changed, fix it there first. `api on` records it only when it is empty.
@@ -351,6 +370,9 @@ bin/shaft autonomy status
 ```
 
 ## 6. Reconnect your devices
+
+For local-only web service, pair the Mac app on the new Mac with
+`bin/shaft web pair --local --name <name>`.
 
 The web UI's address uses the Mac's tailnet name
 (`https://<mac>.<tailnet>.ts.net:8444`). `bin/shaft web on` prints it.
