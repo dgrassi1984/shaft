@@ -20,9 +20,7 @@ from pathlib import Path
 scenario = json.loads(Path(__file__).with_suffix('.json').read_text())
 log = Path(__file__).with_suffix('.jsonl')
 lock = threading.Lock()
-cancel = threading.Event()
-replies = queue.Queue()
-worker = None
+replies = {}
 turn = 0
 args = sys.argv[1:]
 config = json.loads(Path(args[args.index('--mcp-config')+1]).read_text())
@@ -38,7 +36,11 @@ record({'argv':args, 'pid':os.getpid(), 'env':dict(os.environ), 'server':server}
 if scenario.get('bridge'):
  bridge = subprocess.Popen([server['command'],*server['args']],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
  def read():
-  for raw in bridge.stdout: replies.put(json.loads(raw))
+  for raw in bridge.stdout:
+   value = json.loads(raw)
+   with lock:
+    reply = replies.pop(value['id'])
+   reply.put(value)
  threading.Thread(target=read,daemon=True).start()
 def usage():
  return {'input_tokens':7,'cache_read_input_tokens':3,'cache_creation_input_tokens':2,'output_tokens':5}
@@ -77,13 +79,16 @@ def prompt(number):
    assistant([{'type':'tool_use','id':str(n),'name':'mcp__shaft__echo','input':{'n':n}}],'a'+str(number))
   delta()
   for n in range(count):
-   bridge.stdin.write(json.dumps({'id':n+10,'method':'tools/call','params':{'name':'echo','arguments':{'n':n}}})+'\n')
-   bridge.stdin.flush()
-   while not cancel.is_set():
-    try: value = replies.get(timeout=.02); break
-    except queue.Empty: pass
-   if cancel.is_set(): return
+   request_id = f'{number}:{n}'
+   reply = queue.Queue()
+   with lock:
+    replies[request_id] = reply
+    bridge.stdin.write(json.dumps({'id':request_id,'method':'tools/call','params':{'name':'echo','arguments':{'n':n}}})+'\n')
+    bridge.stdin.flush()
+   value = reply.get()
    record({'bridge_result':value})
+   if value.get('result') == {'isError': True, 'content': [{'type':'text','text':'Interrupted'}]}:
+    finish(True,'interrupted'); return
    if mode == 'cycle_end': return  # the cycle ends on this call: no later response, no result
   assistant([{'type':'text','text':'answered'}],'b'+str(number)); delta()
  else:
@@ -94,13 +99,10 @@ def prompt(number):
 for raw in sys.stdin:
  value = json.loads(raw); record(value)
  if value['type']=='user':
-  cancel.clear(); turn += 1
-  worker=threading.Thread(target=prompt,args=(turn,),daemon=True); worker.start()
+  turn += 1
+  threading.Thread(target=prompt,args=(turn,),daemon=True).start()
  elif value['type']=='control_request':
-  cancel.set()
-  if worker: worker.join(1)
   send({'type':'control_response','response':{'subtype':'success','request_id':value['request_id']}})
-  finish(True,'interrupted')
 '''
 
 
@@ -431,10 +433,12 @@ class ChannelTest(unittest.TestCase):
             self.channel._cancel_turn(self.channel._step.turn)
             self.assertTrue(self.channel._step.turn_ended)
             self.assertIsNone(self.channel._fatal)
-            self.channel._step = planchannel.Step(body()['model'], 'next')
+            step = self.channel._step = planchannel.Step(body()['model'], 'next')
             self.channel._start_turn('next', [], None)
-        self.assertTrue(self.channel._step.event.wait(2))
-        self.assertEqual(len(self.channel._step.calls), 1)
+        self.assertTrue(step.event.wait(2))
+        self.assertIsNone(step.error, step.error)
+        self.assertEqual(step.finish, 'tool_calls')
+        self.assertEqual(len(step.calls), 1)
         self.assertEqual(self.channel._process.pid, pid)
         self.assertTrue(any(r.get('type') == 'control_request' for r in self.wire()))
 
