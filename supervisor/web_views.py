@@ -137,37 +137,40 @@ def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_nu
     return instance_frame(name, "files", "Files", section("Files", body), names, csrf)
 
 
-def artifacts_live(name: str, listing: list[dict], chosen: str) -> Html:
-    """The artifacts tab's polled part: the list, and the chosen one in a sandboxed frame whose address carries its
-    version, so a refresh that changed nothing leaves the frame alone and a new version reloads it (web.js data-poll
-    replaces the content only when it differs)."""
+def artifacts_list(name: str, listing: list[dict], chosen: str) -> Html:
+    """The artifacts tab's list, polled on its own: a change to any artifact redraws it, never the frame beside it."""
+    if not listing:
+        return h('<p class="dim">No artifacts yet. An instance makes one by writing '
+                 '<code>notes/artifacts/&lt;name&gt;/index.html</code>.</p>')
     base = f"/i/{q(name)}/artifacts?a="
     rows = [[link(base + q(a["slug"]), a["title"]) if a["slug"] != chosen else h("<strong>{t}</strong>", t=a["title"]),
              a["slug"], when_label(a["mtime"]), size_label(a["bytes"]),
              h('<span class="bad">{n} problem(s)</span>', n=len(a["problems"])) if a["problems"] else "—"]
             for a in listing]
-    if not listing:
-        return h('<p class="dim">No artifacts yet. An instance makes one by writing '
-                 '<code>notes/artifacts/&lt;name&gt;/index.html</code>.</p>')
-    shown = next((a for a in listing if a["slug"] == chosen), None)
-    view = Html("")
-    if shown:
-        problems = (h('<div class="artprob" role="status"><p class="bad">{t} has problems:</p>{list}</div>', t=shown["title"],
-                      list=lines(shown["problems"])) if shown["problems"] else Html(""))
-        view = h('{problems}<iframe class="artifact" title="{t}" sandbox="allow-scripts" referrerpolicy="no-referrer" '
-                 'src="/i/{n}/artifact?a={s}&amp;v={v}"></iframe>',
-                 problems=problems, t=shown["title"], n=q(name), s=q(shown["slug"]), v=shown["version"])
-    elif chosen:
-        view = h('<p class="bad">No artifact {s} (any more).</p>', s=chosen)
-    return join([table(["Artifact", "Folder", "Changed", "Size", "Problems"], rows), view])
+    return table(["Artifact", "Folder", "Changed", "Size", "Problems"], rows)
 
 
-def artifacts_page(name: str, live: Html, chosen: str, names: list[str], csrf: str) -> Html:
-    # Stamped with the fragment's own ETag: the first refresh is a 304, so the frame is not loaded twice on opening
-    url = f"/fragment/artifacts/{q(name)}?a={q(chosen)}"
-    body = h('<div data-poll="{u}" data-every="2000" data-etag="{tag}" data-etag-url="{u}">{live}</div>',
-             u=url, tag=etag(str(live).encode()), live=live)
-    return instance_frame(name, "artifacts", "Artifacts", section("Artifacts", body), names, csrf)
+def artifact_frame(name: str, shown: dict | None, chosen: str) -> Html:
+    """The chosen artifact, polled on its own: its problems and a sandboxed frame whose address carries its version.
+    It changes only when that artifact does, so the page in the frame keeps what the operator did in it until then
+    (web.js data-poll replaces the content only when it differs)."""
+    if not shown:
+        return h('<p class="bad">No artifact {s} (any more).</p>', s=chosen) if chosen else Html("")
+    problems = (h('<div class="artprob" role="status"><p class="bad">{t} has problems:</p>{list}</div>',
+                  t=shown["title"], list=lines(shown["problems"])) if shown["problems"] else Html(""))
+    return h('{problems}<iframe class="artifact" title="{t}" sandbox="allow-scripts" referrerpolicy="no-referrer" '
+             'src="/i/{n}/artifact?a={s}&amp;v={v}"></iframe>',
+             problems=problems, t=shown["title"], n=q(name), s=q(shown["slug"]), v=shown["version"])
+
+
+def artifacts_page(name: str, parts: dict[str, Html], chosen: str, names: list[str], csrf: str) -> Html:
+    """Each part stamped with its fragment's own ETag: the first refresh is a 304, so the frame loads once on opening."""
+    polled = []
+    for part, live in parts.items():
+        url = f"/fragment/artifacts/{q(name)}?a={q(chosen)}&part={part}"
+        polled.append(h('<div data-poll="{u}" data-every="2000" data-etag="{tag}" data-etag-url="{u}">{live}</div>',
+                        u=url, tag=etag(str(live).encode()), live=live))
+    return instance_frame(name, "artifacts", "Artifacts", section("Artifacts", join(polled)), names, csrf)
 
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str,

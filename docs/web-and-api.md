@@ -550,17 +550,23 @@ and chat design. The native chat apps talk to the same service through a JSON AP
   beside them. The supervisor (`supervisor/artifacts.py`) makes one self-contained page of it: each
   `<script src="x.js">` and `<link rel="stylesheet" href="x.css">` naming a file in the folder is inlined, and
   `data.json` becomes `window.SHAFT_DATA` (null when there is none; `window.SHAFT_ARTIFACT` holds `slug`, `version` and
-  `problems`). Limits: `index.html` and `data.json` 1 MB each, each `.js` or `.css` 2 MB, the page 4 MB, 16 files.
-  The tab lists them, the last changed first, and shows the chosen one (the newest by default, `?a=<slug>`) in a
-  frame. The page is the instance's code, so it runs with nothing of the operator's: it is served with its own
+  `problems`). Each named file is put in once; inlined, a script runs where its tag stands (`defer` and `async` mean
+  nothing there, and are listed as problems). Limits: `index.html` and `data.json` 1 MB each, each `.js` or `.css`
+  2 MB, the page 4 MB, 16 files; the 100 most recently changed folders are read.
+  The tab lists them, the last changed first, and shows the chosen one (the newest when the tab opened, `?a=<slug>`)
+  in a frame. The page is the instance's code, so it runs with nothing of the operator's: it is served with its own
   Content-Security-Policy, `sandbox allow-scripts` (an opaque origin: no cookie, no storage, no access to the page
-  around it) and `default-src 'none'`, so it loads nothing from the network and sends nothing (no fetch, no remote
-  script, image or font, no form); only this site may frame it. The list refreshes every 2 s and the frame reloads
-  only when the artifact's `version` moves, which happens whenever any of its files changes. A scheduled plugin job
+  around it) and `default-src 'none'`, so it loads nothing from the network (no fetch, no remote script, image or
+  font, no form). It is served only as that frame (`Sec-Fetch-Dest: iframe`, framed by this site alone): opened as a
+  tab of its own it is refused, since there it could navigate the tab anywhere; a link it follows opens inside its
+  frame. The list and the frame refresh every 2 s each on their own: the frame reloads only when the shown artifact's
+  `version` moves (whenever any of its files changes), never because another one changed. A scheduled plugin job
   can keep `data.json` current without a cycle, with `"publishes": {"notes/artifacts/<slug>/data.json": "data.json"}`.
   What a page names but does not have, or asks of the network, and a `data.json` that is not valid JSON, are listed
-  above it as problems, never dropped silently. The apps show the same page (`/app/v1/artifacts`, app-api.md §10.7)
-  in a web view with no persistent storage that blocks every load. Instances learn the format from the template's
+  above it as problems, never dropped silently, and one artifact that cannot be shown is listed with why, never
+  emptying the list. The apps show the same page (`/app/v1/artifacts`, app-api.md §10.7) in a web view with no
+  persistent storage that blocks every load; a link it follows opens in the browser only after the operator confirms
+  the address. Instances learn the format from the template's
   `skills/making-artifacts.md`.
 - **Cycles** keeps `/i/<name>/transcripts`. Next shows the current state, next check, the instance's next action
   and unfinished work, commitments, task queue, and collapsed projects, goals and improvement plan. Next refreshes through
@@ -836,7 +842,7 @@ families from `supervisor/web.py`; `/app/v1` is specified separately.
 | GET | `/` | Redirect to the last chat, first instance, or overview |
 | GET | `/overview`, `/i/<n>[/<tab>]`, `/costs`, `/messages`, `/messages/<file>` | Operator pages and instance tabs |
 | GET | `/i/<n>/files`, `/i/<n>/file`, `/i/<n>/transcript` | File browser, file download, and transcript detail |
-| GET | `/i/<n>/artifacts[?a=<slug>]`, `/i/<n>/artifact?a=<slug>`, `/fragment/artifacts/<n>` | Artifacts tab, one artifact's sandboxed page (its own CSP, framed by this site only), and the tab's polled list and frame |
+| GET | `/i/<n>/artifacts[?a=<slug>]`, `/i/<n>/artifact?a=<slug>`, `/fragment/artifacts/<n>?a=<slug>&part=list\|frame` | Artifacts tab, one artifact's sandboxed page (its own CSP; only as a frame of this site, `Sec-Fetch-Dest: iframe`), and the tab's two polled parts |
 | GET | `/calendar/proposals` | Pending approval queue |
 | GET | `/experiments`, `/trials`, `/trials/<n>/<id>` | Experiment and trial pages |
 | GET | `/settings`, `/services` | Settings and service status |

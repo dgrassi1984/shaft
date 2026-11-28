@@ -48,14 +48,20 @@ POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inl
 # The header: `sandbox` (an opaque origin even when opened on its own) and who may frame it, which a <meta> cannot say.
 HEADER_POLICY = f"sandbox allow-scripts; frame-ancestors 'self'; {POLICY}"
 
-_SCRIPT_SRC = re.compile(r"<script\b(?P<attrs>[^>]*?)\bsrc\s*=\s*(?P<q>[\"']?)(?P<src>[^\"'\s>]+)(?P=q)(?P<rest>[^>]*)>"
-                         r"\s*</script\s*>", re.I)
-_STYLE_LINK = re.compile(r"<link\b(?P<attrs>[^>]*)>", re.I)
+_SCRIPT_SRC = (r"<script\b(?P<attrs>[^>]*?)\bsrc\s*=\s*(?P<q>[\"']?)(?P<src>[^\"'\s>]+)(?P=q)(?P<rest>[^>]*)>"
+               r"\s*</script\s*>")
+_STYLE_LINK = r"<link\b(?P<lattrs>[^>]*)>"
+# One pass over the page as written: an inlined file's text is never read again as HTML
+_NAMED = re.compile(f"{_SCRIPT_SRC}|{_STYLE_LINK}", re.I)
+_MEDIA = re.compile(r"\bmedia\s*=\s*(?P<q>[\"'])(?P<media>[^\"']*)(?P=q)", re.I)
+_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_ELEMENT_SRC = re.compile(r"<(?:img|audio|video|source|track|iframe|embed|input|object)\b[^>]*?\b(?:src|data)\s*=\s*"
+                          r"[\"']?(?P<src>[^\"'\s>]+)", re.I)
+_CSS_URL = re.compile(r"url\(\s*[\"']?(?P<src>[^\"')\s]+)", re.I)
 _HREF = re.compile(r"\bhref\s*=\s*(?P<q>[\"']?)(?P<href>[^\"'\s>]+)(?P=q)", re.I)
 _STYLESHEET = re.compile(r"\brel\s*=\s*[\"']?stylesheet\b", re.I)
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title\s*>", re.I | re.S)
-_DOCTYPE = re.compile(r"\s*<!doctype[^>]*>", re.I)
-_REMOTE = re.compile(r"\bsrc\s*=\s*[\"']?(?:https?:)?//|url\(\s*[\"']?(?:https?:)?//", re.I)
+_DOCTYPE = re.compile(r"(?:\ufeff|\s)*<!doctype[^>]*>", re.I)
 
 
 class Refused(Exception):
@@ -103,7 +109,8 @@ _cache: dict[tuple[str, str], tuple[tuple, dict]] = {}     # (instance, slug) ->
 
 
 def _stamp(files: dict[str, os.stat_result]) -> tuple:
-    return tuple(sorted((n, st.st_ino, st.st_mtime_ns, st.st_size) for n, st in files.items()))
+    # ctime too: any write moves it, and no one can set it back (a same-size edit with its mtime restored)
+    return tuple(sorted((n, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size) for n, st in files.items()))
 
 
 def summary(name: str, s: str) -> dict | None:
@@ -129,6 +136,9 @@ def summary(name: str, s: str) -> dict | None:
         size = len(doc)
     except Refused as e:
         title, version, problems, size = s, "refused-" + hashlib.sha256(str(stamp).encode()).hexdigest()[:16], [str(e)], 0
+    except Exception as e:                      # noqa: BLE001 — one artifact's fault never empties the whole list
+        title, version, problems, size = (s, "failed-" + hashlib.sha256(str(stamp).encode()).hexdigest()[:16],
+                                          [f"cannot be shown: {type(e).__name__}: {e}"], 0)
     out = {"slug": s, "title": title, "mtime": max(st.st_mtime for st in files.values()), "bytes": size,
            "version": version, "problems": problems}
     _cache[(name, s)] = (stamp, out)
@@ -136,16 +146,23 @@ def summary(name: str, s: str) -> dict | None:
 
 
 def listing(name: str) -> list[dict]:
-    """Every artifact, the last changed first (at most MAX_ARTIFACTS)."""
+    """Every artifact, the last changed first (at most MAX_ARTIFACTS folders, the last changed, are read). No folder yet
+    is no artifact; one that cannot be read raises (an empty list would read as "none yet")."""
     try:
         fd = open_beneath(instance_root(name), Path(DIR).parts, os.O_RDONLY | os.O_DIRECTORY)
-    except (UnsafePath, OSError):
+    except FileNotFoundError:
         return []
+    except UnsafePath as e:
+        if "No such file" in str(e):
+            return []
+        raise
     try:
         with os.scandir(fd) as scan:
-            slugs = [e.name for e in scan if SLUG.match(e.name) and not e.is_symlink() and e.is_dir(follow_symlinks=False)]
+            dirs = [(e.stat(follow_symlinks=False).st_mtime, e.name) for e in scan
+                    if SLUG.match(e.name) and not e.is_symlink() and e.is_dir(follow_symlinks=False)]
     finally:
         os.close(fd)
+    slugs = [x for _, x in sorted(dirs, reverse=True)[:MAX_ARTIFACTS]]
     out = [a for x in slugs if (a := summary(name, x))]
     found = {(name, a["slug"]) for a in out}
     for key in [k for k in _cache if k[0] == name and k not in found]:
@@ -187,7 +204,8 @@ def _assemble(name: str, s: str, files: dict[str, os.stat_result]) -> tuple[byte
         raise Refused(f"{DIR}/{s}/{PAGE} cannot be read ({e})") from None
     text = raw.decode("utf-8", errors="replace")
     digest = hashlib.sha256(raw)
-    inlined: list[str] = []
+    inlined: set[str] = set()
+    size = [len(raw)]                             # what the page will be, kept under MAX_TOTAL as it is built
 
     def asset(file: str, kind: str) -> str | None:
         if not ASSET.match(file) or not file.endswith("." + kind):
@@ -197,7 +215,10 @@ def _assemble(name: str, s: str, files: dict[str, os.stat_result]) -> tuple[byte
         if file not in files:
             problems.append(f"{file} is named in {PAGE} but is not in {DIR}/{s}/")
             return None
-        if file not in inlined and len(inlined) >= MAX_ASSETS:
+        if file in inlined:
+            problems.append(f"{file} is named more than once in {PAGE}: it is put in the page once, where first named")
+            return ""
+        if len(inlined) >= MAX_ASSETS:
             problems.append(f"{file}: at most {MAX_ASSETS} .js and .css files are put in a page")
             return None
         try:
@@ -208,41 +229,51 @@ def _assemble(name: str, s: str, files: dict[str, os.stat_result]) -> tuple[byte
         except (UnsafePath, OSError) as e:
             problems.append(f"{file} cannot be read ({e})")
             return None
-        if file not in inlined:
-            inlined.append(file)
-            digest.update(b"\0" + file.encode() + b"\0" + data)
+        size[0] += len(data)
+        if size[0] > MAX_TOTAL:
+            raise Refused(f"{DIR}/{s}/ makes a page of more than {_kb(MAX_TOTAL)} with its files")
+        inlined.add(file)
+        digest.update(b"\0" + file.encode() + b"\0" + data)
         return data.decode("utf-8", errors="replace")
 
-    def script(m: re.Match) -> str:
-        body = asset(m["src"], "js")
-        if body is None:
-            return m[0]
-        attrs = (m["attrs"] + " " + m["rest"]).strip()
-        attrs = re.sub(r"\b(?:async|defer)\b", "", attrs, flags=re.I).strip()    # inline: neither means anything
-        return f"<script{' ' + attrs if attrs else ''}>{_inline_text(body, 'script')}</script>"
-
-    def style(m: re.Match) -> str:
-        if not _STYLESHEET.search(m["attrs"]) or not (href := _HREF.search(m["attrs"])):
+    def named(m: re.Match) -> str:
+        if m["src"] is not None:                  # <script src="x.js"></script>
+            attrs = (m["attrs"] + " " + m["rest"]).strip()
+            if re.search(r"\b(?:async|defer)\b", attrs, re.I):
+                problems.append(f"{m['src']} is marked async or defer: put in the page, it runs where its tag stands "
+                                "(put the tag at the end of <body> to run it after the page)")
+                attrs = re.sub(r"\b(?:async|defer)\b", "", attrs, flags=re.I).strip()
+            body = asset(m["src"], "js")
+            if body is None:
+                return m[0]
+            return f"<script{' ' + attrs if attrs else ''}>{_inline_text(body, 'script')}</script>" if body else ""
+        if not _STYLESHEET.search(m["lattrs"]) or not (href := _HREF.search(m["lattrs"])):
             return m[0]
         body = asset(href["href"], "css")
-        return m[0] if body is None else f"<style>{_inline_text(body, 'style')}</style>"
+        if body is None:
+            return m[0]
+        media = _MEDIA.search(m["lattrs"])
+        return (f"<style{f' media={json.dumps(media[2])}' if media else ''}>{_inline_text(body, 'style')}</style>"
+                if body else "")
 
-    own = _STYLE_LINK.sub("", _SCRIPT_SRC.sub("", text))     # the page's own words: what it names is said below
+    own = _COMMENT.sub("", _NAMED.sub("", text))      # the page's own words: what it names is said below
     found = _TITLE.search(own)
     title = html.unescape(re.sub(r"\s+", " ", found[1])).strip()[:TITLE_MAX] if found else ""
-    left = _REMOTE.findall(own)
-    text = _SCRIPT_SRC.sub(script, text)
-    text = _STYLE_LINK.sub(style, text)
-    if left:
-        problems.append(f"{PAGE} names {len(left)} address(es) on the network: a page loads nothing from it (put a "
-                        "library beside it; draw images as SVG or data: URLs)")
+    elsewhere = sorted({m["src"] for rx in (_ELEMENT_SRC, _CSS_URL) for m in rx.finditer(own)
+                        if not m["src"].lower().startswith(("data:", "blob:", "#"))})
+    text = _NAMED.sub(named, text)
+    if elsewhere:
+        problems.append(f"{PAGE} loads {', '.join(elsewhere[:5])}{' …' if len(elsewhere) > 5 else ''}: a page loads "
+                        "nothing from the network or from files (draw images as SVG or data: URLs; put scripts and "
+                        "styles beside it)")
 
     data_js = "null"
     if DATA in files:
         try:
             data = _read(name, s, DATA, MAX_DATA)
             digest.update(b"\0" + DATA.encode() + b"\0" + data)
-            data_js = json.dumps(json.loads(data), ensure_ascii=False, separators=(",", ":"))
+            # ASCII: any string JSON allows (a lone surrogate too) is written as an escape, never as bytes
+            data_js = json.dumps(json.loads(data), ensure_ascii=True, separators=(",", ":"))
         except TooBig:
             problems.append(f"{DATA} is {_kb(files[DATA].st_size)}: at most {_kb(MAX_DATA)}")
         except ValueError as e:
@@ -253,9 +284,8 @@ def _assemble(name: str, s: str, files: dict[str, os.stat_result]) -> tuple[byte
     meta = {"slug": s, "version": version, "problems": problems}
     head = (f'<meta http-equiv="Content-Security-Policy" content="{POLICY}">'
             f'<script>window.SHAFT_DATA={_safe_js(data_js)};'
-            f'window.SHAFT_ARTIFACT={_safe_js(json.dumps(meta, ensure_ascii=False))};</script>')
-    text = _insert_head(text, head)
-    doc = text.encode()
+            f'window.SHAFT_ARTIFACT={_safe_js(json.dumps(meta, ensure_ascii=True))};</script>')
+    doc = _insert_head(text, head).encode("utf-8", errors="replace")
     if len(doc) > MAX_TOTAL:
         raise Refused(f"{DIR}/{s}/ makes a page of {_kb(len(doc))} with its files: at most {_kb(MAX_TOTAL)}")
     return doc, title or s, version, problems
@@ -267,8 +297,9 @@ def _safe_js(js: str) -> str:
 
 
 def _insert_head(text: str, head: str) -> str:
-    """`head` before anything the page says (after its doctype): a CSP <meta> governs only what follows it, and the
-    parser puts a <meta> met before <html> in the <head> it opens (the page's own <head> tag then adds nothing)."""
+    """`head` first in the document, after a doctype of the supervisor's own: a CSP <meta> governs only what follows
+    it, and the parser puts a <meta> met before <html> in the <head> it opens. The page's own doctype goes, and with it
+    anything before it (a no-break space there would start the body before the policy)."""
     if m := _DOCTYPE.match(text):
-        return text[:m.end()] + head + text[m.end():]
+        text = text[m.end():]
     return "<!doctype html>" + head + text

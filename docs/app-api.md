@@ -1112,7 +1112,8 @@ The instance's artifacts: interactive pages it writes under `notes/artifacts/<sl
 | `version` | str | changes whenever anything the page shows does (its files, its data): poll this list and load the page again only when the shown one's version moved |
 | `problems` | list of str | what the page lacks or wants from the network, an invalid `data.json`, a size over the limits: shown above the page |
 
-`500 internal` "artifacts not readable: …" when the folder cannot be read.
+`500 internal` "artifacts not readable: …" when the folder cannot be read (no folder yet is an empty list). One
+artifact that cannot be assembled is listed with why in `problems`, never dropping the others.
 
 ### 10.8 `GET /app/v1/artifacts/<n>/page?slug=<slug>`
 
@@ -1120,8 +1121,9 @@ One artifact as a single self-contained document: `{slug, title, version, proble
 are inlined, `data.json` is `window.SHAFT_DATA`, and its first element is a Content-Security-Policy `<meta>` that
 lets it load nothing (no network, no forms, no frames). It is the instance's code: the app shows it in a web view
 with no persistent storage and a rule list that blocks every load, loads it as a string with no base URL (never from
-this server's address, never with the bearer), adds no script handler, and opens a link the operator taps in the
-browser. `404 not_found` when there is no such artifact; `409 refused` for a bad slug or a page over the size limits;
+this server's address, never with the bearer), adds no script handler, and opens a link the page follows in the
+browser only after the operator confirms the address (a script can make a navigation look like a tap). A refresh
+that fails, or an open artifact gone from the list, is said above the page, which stays. `404 not_found` when there is no such artifact; `409 refused` for a bad slug or a page over the size limits;
 `400 bad_request` without `slug`.
 
 ## 11. Push

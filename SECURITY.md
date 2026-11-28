@@ -94,8 +94,11 @@ or Tailscale Funnel.
 - An instance's artifacts (interactive pages it writes under `notes/artifacts/`) are its own code, which may come
   from what it read on the web. They run with nothing of yours: the web UI serves each with its own
   Content-Security-Policy, `sandbox allow-scripts` (an opaque origin with no cookie or storage) and `default-src
-  'none'` (nothing loaded or sent), framed by the web UI alone; the apps load it as a string in a web view with no
-  persistent storage, a rule list that blocks every load and no script handler, never with the bearer.
+  'none'` (nothing loaded), served only as a frame of the web UI (opened on its own it is refused); the apps load it
+  as a string in a web view with no persistent storage, a rule list that blocks every load and no script handler,
+  never with the bearer, and open a link it follows only after you confirm the address. A page can still follow a
+  link inside its own frame, so it can show you another site there; what it holds is its instance's, which the
+  instance could send anywhere itself.
 
 ### The loopback path for the Mac app
 

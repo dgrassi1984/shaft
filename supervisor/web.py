@@ -888,7 +888,8 @@ def _get(req: Request, csrf: str) -> Response | None:
         name, tab = m["name"], m["tab"] or ""
         if name not in names:
             return None
-        return _instance_page(name, tab, qs, names, csrf, doc_sort=_doc_sort(req))
+        return _instance_page(name, tab, qs, names, csrf, doc_sort=_doc_sort(req),
+                              req_dest=req.headers.get("sec-fetch-dest", ""))
     if m := re.match(r"^/fragment/from/([A-Za-z0-9_-]+)(/header)?$", path):
         if m[1] not in names:
             return None
@@ -959,7 +960,7 @@ def _get(req: Request, csrf: str) -> Response | None:
     if m := re.match(r"^/fragment/artifacts/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
-        return _html(200, _artifacts_live(m[1], qs.get("a", "")))
+        return _html(200, _artifacts_part(m[1], qs.get("a", ""), "list" if qs.get("part") == "list" else "frame"))
     if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -1316,22 +1317,28 @@ def _live(name: str) -> dict:
     return next((i for i in overview()["instances"] if i["name"] == name), {})
 
 
-def _artifacts_live(name: str, chosen: str) -> Html:
+def _artifacts_part(name: str, chosen: str, part: str) -> Html:
+    """One polled part of the artifacts tab: "list", or "frame" (the chosen one, `chosen` resolved by the page)."""
     from . import artifacts, web_views as v
     try:
         listing = artifacts.listing(name)
     except (Exception, SystemExit) as e:          # say what failed: an empty list would read as "none yet"
         log(f"web: {name}'s artifacts: {type(e).__name__}: {e}")
         return web_pages.h('<p class="bad">Artifacts not readable: {e}</p>', e=f"{type(e).__name__}: {e}")
-    if not chosen and listing:
-        chosen = listing[0]["slug"]
-    return v.artifacts_live(name, listing, chosen)
+    if part == "list":
+        return v.artifacts_list(name, listing, chosen)
+    return v.artifact_frame(name, next((a for a in listing if a["slug"] == chosen), None), chosen)
 
 
-def _artifact(name: str, slug: str) -> Response:
+def _artifact(name: str, slug: str, dest: str) -> Response:
     """An artifact's page, for the sandboxed frame of the artifacts tab: the instance's code, so it carries its own
-    policy (artifacts.HEADER_POLICY, kept by _secured) — an opaque origin that loads and sends nothing."""
+    policy (artifacts.HEADER_POLICY, kept by _secured) — an opaque origin that loads and sends nothing. Only as a frame
+    (Sec-Fetch-Dest): opened as a tab of its own it could navigate that tab anywhere; in the tab's frame, without
+    allow-top-navigation, it cannot reach the page around it."""
     from . import artifacts
+    if dest != "iframe":
+        return Response(403, b"An artifact opens in the Artifacts tab of its instance, never on its own.",
+                        {"Content-Type": "text/plain; charset=utf-8"})
     try:
         page = artifacts.page(name, slug)
     except artifacts.Refused as e:
@@ -1341,16 +1348,23 @@ def _artifact(name: str, slug: str) -> Response:
 
 
 def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
-                   doc_sort: str = "") -> Response | None:
+                   doc_sort: str = "", req_dest: str = "") -> Response | None:
     from . import dashboard, panel, web_views as v
     from .core import instance_root, journal_entries
     if tab in ("files", "file"):
         return _instance_files(name, tab, qs, names, csrf)
     if tab == "artifacts":
+        from . import artifacts
         chosen = qs.get("a", "")
-        return _html(200, v.artifacts_page(name, _artifacts_live(name, chosen), chosen, names, csrf))
+        if not chosen:                            # the newest, named in both parts' addresses: it stays the one shown
+            try:
+                chosen = next((a["slug"] for a in artifacts.listing(name)), "")
+            except (Exception, SystemExit):       # noqa: BLE001 — the list part says what failed
+                chosen = ""
+        return _html(200, v.artifacts_page(name, {"list": _artifacts_part(name, chosen, "list"),
+                                                  "frame": _artifacts_part(name, chosen, "frame")}, chosen, names, csrf))
     if tab == "artifact":
-        return _artifact(name, qs.get("a", ""))
+        return _artifact(name, qs.get("a", ""), req_dest)
     if tab == "":
         return _html(200, v.instance_summary(name, panel.instance_detail(name), _live(name), names, csrf))
     if tab == "judge":

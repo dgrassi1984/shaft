@@ -6,6 +6,9 @@ public final class ArtifactsStore {
     public private(set) var list: ArtifactsList?
     public private(set) var open: ArtifactPage?
     public private(set) var error: APIError?
+    /// Why what shows may be out of date: a refresh that failed, or the open artifact gone from the list. Never
+    /// silent: the open page stays, with this above it.
+    public private(set) var stale: String?
 
     private let client: APIClient
     private let instance: String
@@ -44,6 +47,7 @@ public final class ArtifactsStore {
     }
 
     public func close() {
+        stale = nil
         requestedSlug = nil
         open = nil
         error = nil
@@ -57,12 +61,19 @@ public final class ArtifactsStore {
         do {
             try await refreshList()
         } catch {
+            if !Task.isCancelled, let apiError = APIError.from(error) { stale = "Not refreshed: \(apiError.message)" }
             return
         }
-        guard let page = open,
-              let entry = list?.artifacts.first(where: { $0.slug == page.slug }),
-              entry.version != page.version else { return }
-        await load(page.slug)
+        guard let page = open else {
+            stale = nil
+            return
+        }
+        guard let entry = list?.artifacts.first(where: { $0.slug == page.slug }) else {
+            stale = "This artifact is not there any more: what shows is its last version."
+            return
+        }
+        stale = nil
+        if entry.version != page.version { await load(page.slug) }
     }
 
     private func refreshList() async throws {

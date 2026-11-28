@@ -80,6 +80,8 @@ private struct ArtifactDetail: View {
     @Environment(\.dismiss) private var dismiss
     @State private var rules: WKContentRuleList?
     @State private var rulesFailed = false
+    @State private var link: URL?
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let page = artifacts.open.flatMap { $0.slug == slug ? $0 : nil }
@@ -87,6 +89,13 @@ private struct ArtifactDetail: View {
         VStack(spacing: 0) {
             if let error = artifacts.error {
                 Text(error.message).foregroundStyle(Color.danger).padding()
+            }
+            if let stale = artifacts.stale {
+                Label(stale, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(Color.warning)
+                    .padding(Design.Space.s12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let page, !page.problems.isEmpty {
                 VStack(alignment: .leading, spacing: Design.Space.s4) {
@@ -105,7 +114,7 @@ private struct ArtifactDetail: View {
                     .foregroundStyle(Color.danger)
                     .padding()
             } else if let page, let rules {
-                ArtifactWebView(page: page, rules: rules)
+                ArtifactWebView(page: page, rules: rules, openLink: { link = $0 })
             } else if artifacts.error == nil {
                 ProgressView()
             }
@@ -122,6 +131,13 @@ private struct ArtifactDetail: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .confirmationDialog("Open this link in the browser?", isPresented: Binding(
+            get: { link != nil }, set: { if !$0 { link = nil } }), titleVisibility: .visible, presenting: link) { url in
+            Button("Open \(url.host() ?? "link")") { openURL(url) }
+            Button("Cancel", role: .cancel) {}
+        } message: { url in
+            Text(url.absoluteString)
+        }
         .task { await artifacts.load(slug) }
         .task {
             rules = try? await ArtifactWebView.compileRules()
