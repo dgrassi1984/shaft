@@ -18,7 +18,7 @@ the whole page 4 MB, 16 .js/.css files.
 
 ## What a page can and cannot do
 
-The page runs sandboxed: it loads **nothing** from the network and talks to nothing — no `fetch`, no CDN `<script
+The page runs sandboxed: it loads **nothing** from the network or from other files and talks to nothing — no `fetch`, no CDN `<script
 src="https://…">`, no remote images or fonts, no forms, no storage, no cookies. So:
 
 - Put every library in the folder: download it once in `run` (I reach the public internet there), e.g.
@@ -27,6 +27,9 @@ src="https://…">`, no remote images or fonts, no forms, no storage, no cookies
 - Images: inline SVG or `data:` URLs.
 - Everything it needs is in `window.SHAFT_DATA`; `window.SHAFT_ARTIFACT` has its `slug`, `version` and `problems`.
 - Interaction (filters, sorting, tabs, tooltips) is plain script on that data.
+- A script file is put into the page where its tag stands and runs there: `defer` and `async` mean nothing, so put
+  the tags at the end of `<body>` (after the elements they draw into). Name each file once.
+- A link (`<a href="https://…">`) is fine: in the apps the operator confirms it before it opens in the browser.
 - Make it readable in light and dark (`@media (prefers-color-scheme: dark)`) and on a phone (narrow side panel).
 
 If the page names a file it does not have, or anything on the network, or data.json is not valid JSON, the
