@@ -1,6 +1,7 @@
 """The self-modification gate restores failing code changes byte-for-byte."""
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -45,6 +46,31 @@ class GateTest(unittest.TestCase):
         gate.restore(self.root, before, touched)
         self.assertEqual(gate.snapshot(self.root), before)
         self.assertFalse((self.root / "shaft" / "new.py").exists())
+
+    def test_shared_part_keeps_each_traceback_ahead_of_noisy_output(self):
+        class Broken(unittest.TestCase):
+            def test_assertion(self):
+                """Unittest adds this description below the test name."""
+                self.assertEqual(1, 2)
+
+            def test_error(self):
+                raise ValueError("bad input")
+
+        report = io.StringIO()
+        unittest.TextTestRunner(stream=report, verbosity=0).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Broken))
+        stderr = report.getvalue() + "background server noise\n" * 200
+        process = subprocess.CompletedProcess([], 1, "", stderr)
+        with mock.patch.object(gate, "_stage", return_value=process), mock.patch.object(gate, "_log_part"):
+            ok, section, full, _, _ = gate._part("shared", self.root, {}, 10, "test")
+        self.assertFalse(ok)
+        self.assertIn("FAIL: test_assertion (", section)
+        self.assertIn("    self.assertEqual(1, 2)\nAssertionError: 1 != 2", section)
+        self.assertIn("ERROR: test_error (", section)
+        self.assertIn('    raise ValueError("bad input")\nValueError: bad input', section)
+        self.assertEqual(section.count("Traceback (most recent call last):"), 2)
+        self.assertTrue(section.endswith("background server noise\n"))
+        self.assertEqual(full, stderr)
 
 
 class InstanceTestsTest(unittest.TestCase):

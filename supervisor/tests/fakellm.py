@@ -26,6 +26,12 @@ class FakeLLM:
                 fake.requests.append(body)
                 if fake.on_request:
                     fake.on_request(body)
+                try:
+                    self._reply(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # Interrupt tests can close the connection during a reply.
+
+            def _reply(self, body):
                 r = fake.replies.pop(0) if fake.replies else {"content": "(fake: out of replies)"}
                 content, reasoning = r.get("content", ""), r.get("reasoning", "")
                 calls = [{"id": f"call_{i}", "type": "function",
