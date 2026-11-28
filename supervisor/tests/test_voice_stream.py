@@ -246,17 +246,19 @@ class VoiceFlagTest(VoiceTest):
 
 
 # -- C4: the stream ----------------------------------------------------------------------------------------------------
-def read_events(stream, until: str = "end", timeout: float = 10) -> list[dict]:
-    """The events a stream generator yields (comments skipped) until one of type `until`."""
+def read_events(stream, until: str = "end", timeout: float = 20, *, count: int = 1) -> list[dict]:
+    """Read whole batches until the expected events arrive, or report what arrived instead."""
     out, end = [], time.monotonic() + timeout
     for piece in stream:
         for block in piece.decode().split("\n\n"):
             data = [line[6:] for line in block.split("\n") if line.startswith("data: ")]
             if data:
                 out.append(json.loads(data[0]))
-        if out and out[-1]["type"] == until or time.monotonic() > end:
+        if sum(e["type"] == until for e in out) >= count:
             return out
-    return out
+        if time.monotonic() >= end:
+            break
+    raise AssertionError(f"expected {count} {until} event(s), got {out}")
 
 
 class StreamTest(VoiceTest):
@@ -267,21 +269,24 @@ class StreamTest(VoiceTest):
         self.addCleanup(r.stream.close)
         return r.stream
 
+    def reply_push_skip(self, body: str) -> set[str]:
+        """Wait for this reply's push, which can come after the relay goes idle."""
+        def matching_calls():
+            return [call for call in webpush.notify.call_args_list
+                    if call.args[0].get("tag") == "wisp" and call.args[0].get("body") == body]
+
+        self.wait_for(matching_calls, timeout=20, what=f"the push for {body!r}")
+        return matching_calls()[0].kwargs["skip"]
+
     def test_events_arrive_in_order_as_the_api_writes_them_not_with_the_chat_file(self):
         """The bug: a piece of the spoken reply reached the app only through the chat file, written
-        every SAVE_EVERY_S (1 s) and polled every 0.5 s — up to 1.5 s added before each piece. With the file write
-        pushed to a minute, a draft still reaches the stream within a fraction of a second, while the API holds."""
+        every SAVE_EVERY_S. Both drafts must arrive while the API holds and periodic saves are disabled."""
         hold = threading.Event()
         self.fake.script = voice_turn(hold)
-        with mock.patch.object(web_chat, "SAVE_EVERY_S", 60.0):
+        with mock.patch.object(web_chat, "SAVE_EVERY_S", float("inf")):
             cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
             stream = self.stream()
-            got, deadline = read_events(stream, until="draft", timeout=3), time.monotonic() + 3
-            while sum(e["type"] == "draft" for e in got) < 2 and time.monotonic() < deadline:
-                got += read_events(stream, until="draft", timeout=1)
-            self.assertEqual(sum(e["type"] == "draft" for e in got), 2, f"both drafts while the API holds: {got}")
-            arrived = time.monotonic()
-            self.assertLess(arrived - self.fake.written[3], 0.5)          # the second draft: written, then here
+            got = read_events(stream, until="draft", count=2)
             self.assertEqual(web_chat.load(cid)["state"], "replying")      # the API still holds the reply
             self.assertEqual(web_chat.load(cid)["reply"]["answer"], "")    # and the chat file never had it
             hold.set()
@@ -347,37 +352,34 @@ class StreamTest(VoiceTest):
 
     def test_holding_the_stream_is_watching_and_no_push_goes_to_that_device(self):
         """The bug: the operator listening to the reply also got a push for it on the same phone."""
-        cid = self.sent(self.send(text="typed", mid="t-1"))
-        self.wait_idle(cid)
-        self.assertNotIn(self.device, webpush.notify.call_args.kwargs["skip"])     # nobody watching: pushed
-        web_chat._watched.clear()
+        self.sent(self.send(text="typed", mid="t-1"))
+        self.assertNotIn(self.device, self.reply_push_skip("Typed answer."))
         hold = threading.Event()
         self.fake.script = voice_turn(hold)
         self.sent(self.send(text="weather?", mid="v-1", voice="1"))
-        stream = self.stream()
-        read_events(stream, until="draft")
-        self.assertIn(self.device, web_chat.watchers("wisp"))
-        hold.set()
-        read_events(stream)
-        self.wait_idle(cid)
-        self.assertIn(self.device, webpush.notify.call_args.kwargs["skip"])
+        # This test drives the stream inline. Its watcher must not expire while the test thread is paused.
+        with mock.patch.object(web_chat, "WATCH_S", float("inf")):
+            stream = self.stream()
+            read_events(stream, until="draft", count=2)
+            self.assertIn(self.device, web_chat.watchers("wisp"))
+            hold.set()
+            read_events(stream)
+            self.assertIn(self.device, self.reply_push_skip("It is sunny."))
 
     def test_a_stream_with_watch_0_never_marks_watching_so_the_push_still_comes(self):
         """The bug (review, 2026-11-14): the iPhone following a reply for the Apple Watch counted as listening, so the
         reply's push skipped it, and the notification the watch mirrors never came when the relay could not finish."""
         hold = threading.Event()
         self.fake.script = voice_turn(hold)
-        cid = self.sent(self.send(text="weather?", mid="v-1", voice="1"))
-        web_chat._watched.clear()
-        stream = self.stream("?watch=0")
-        read_events(stream, until="draft")
-        with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0):
-            next(stream)                                              # a keepalive: the refresh would come here
-        self.assertNotIn(self.device, web_chat.watchers("wisp"))
-        hold.set()
-        read_events(stream)
-        self.wait_idle(cid)
-        self.assertNotIn(self.device, webpush.notify.call_args.kwargs["skip"])
+        self.sent(self.send(text="weather?", mid="v-1", voice="1"))
+        with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0), mock.patch.object(web_chat, "WATCH_S", float("inf")):
+            stream = self.stream("?watch=0")
+            read_events(stream, until="draft", count=2)
+            self.assertEqual(next(stream), b": keepalive\n\n")
+            self.assertNotIn(self.device, web_chat.watchers("wisp"))
+            hold.set()
+            read_events(stream)
+            self.assertNotIn(self.device, self.reply_push_skip("It is sunny."))
 
     def test_the_stream_keeps_marking_watching_while_held(self):
         """The bug: a long reply outlived the first watching mark (WATCH_S, 6 s), and its end was pushed to the
@@ -386,12 +388,14 @@ class StreamTest(VoiceTest):
         self.fake.script = voice_turn(hold)
         self.sent(self.send(text="weather?", mid="v-1", voice="1"))
         stream = self.stream()
-        read_events(stream, until="draft")
-        with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0):
+        read_events(stream, until="draft", count=2)
+        with mock.patch.object(app_api, "WATCH_EVERY_S", 0.0), mock.patch.object(web_chat, "WATCH_S", float("inf")):
             web_chat._watched.clear()
-            next(stream)                                              # a keepalive, KEEPALIVE_S later
+            self.assertEqual(next(stream), b": keepalive\n\n")
             self.assertIn(self.device, web_chat.watchers("wisp"))
         hold.set()
+        read_events(stream)
+        self.reply_push_skip("It is sunny.")
 
 
 def sse_events(sock: socket.socket, n: int) -> tuple[bytes, list[dict]]:

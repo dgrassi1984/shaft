@@ -464,7 +464,7 @@ def stop_stages_on_signal() -> None:
 def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None,
            **kw) -> subprocess.CompletedProcess:
     """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
-    STOP_GRACE_S, and raises StageTimedOut with the tail of what the stage printed. On a normal exit whatever it left
+    STOP_GRACE_S, and raises StageTimedOut with any test failures and the output tail. On a normal exit whatever it left
     running in the group is killed too: a failed gate is followed by a revert that a leftover could undo. A process
     that starts its own session (setsid) leaves the group and is not reached. `input`: written to its stdin, which is
     then closed (otherwise stdin is inherited)."""
@@ -496,7 +496,7 @@ def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None
         _end_group(p)
         _STAGES.discard(p)
     if timed_out:
-        raise StageTimedOut(stage, timeout_s, (out + err)[-2000:])   # what it printed before it was stopped
+        raise StageTimedOut(stage, timeout_s, _test_output(out + err, tail_size=2000))
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
@@ -681,7 +681,7 @@ def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple
             f"-- {part} part: no report from its runner (exit {p.returncode}), counted as failed --\n")
     # The cut section is for the failures: the timings line (kilobytes of test names) stays in the full log only.
     err = "".join(l for l in p.stderr.splitlines(keepends=True) if not l.startswith(gate_suite.TIMES))
-    section = head + "".join(f"{t}\n" for t in failing_tests(err)) + err[-3000:]
+    section = head + _test_output(err)
     return ok, section, p.stderr, (r["tests_run"] if r is not None else None), seconds
 
 
@@ -733,15 +733,17 @@ def warm(timeout_s: int = GATE_TIMEOUT_S) -> int:
         if not (tree / SPLIT_RUNNER).is_file():
             raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}")
         env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}   # the key gates compute
-        ok, _, full, ran = _shared_part(tree, label, env, shared_limit(timeout_s)[0], WARM_REFRESH_S)
+        ok, section, full, _ = _shared_part(tree, label, env, shared_limit(timeout_s)[0], WARM_REFRESH_S)
     except StageTimedOut as t:
         _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {t}")
+        print(f"{t}\n{t.tail}", file=sys.stderr)
         return WARM_TIMED_OUT
     except Exception as e:
         _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {type(e).__name__}: {e}")
         return WARM_FAILED
     if ok:
         return 0
+    print(section, file=sys.stderr, end="")
     names = failing_tests(full)
     try:
         kept = f"; full log {keep_log(Path('gate-warm'), [f'== shared part ({label}) ==', full])}"
@@ -819,7 +821,7 @@ def _supervisor_tests(instance_root: Path, tree: Path, label: str,
     except StageTimedOut as t:
         _log(f"gate: {instance_root}: {t} (its limit: {how})")
         late, shared_ok, shared_full = t, True, t.tail
-        shared = f"-- shared part: {t}; its limit: {how} --\n" + (t.tail[-3000:] + "\n" if t.tail else "")
+        shared = f"-- shared part: {t}; its limit: {how} --\n" + (t.tail + "\n" if t.tail else "")
     inst_ok, inst, inst_full, _, _ = _part("instance", tree, env, timeout_s, label)
     return (shared + inst, shared_full + inst_full, None if shared_ok else failing_tests(shared_full),
             None if inst_ok else failing_tests(inst_full), late)
@@ -1067,9 +1069,26 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
 GATE_LOGS_KEPT = 50
 
 
+def _test_output(output: str, tail_size: int = 3000, blocks_size: int = 12000) -> str:
+    """What a stage's section shows of a unittest run: the FAIL:/ERROR: header of every failed test, then their whole
+    blocks (traceback down to the `AssertionError: …` line) up to `blocks_size`, then the output's tail. Cut to its
+    tail alone, a failure followed by server-thread noise (a fake LLM's BrokenPipeError) lost its assertion (issue
+    #55, v0.79.0's gate), and on 2026-10-29 a cut named 2 of tundra's 11 failures. The kept log has everything."""
+    header = r"^={70}\n(?:FAIL|ERROR): [^\n]+\n(?:[^\n]+\n)?-{70}\n"
+    end = rf"(?={header}|^-{{70}}\nRan \d+ tests?\b|\Z)"
+    parts = re.split(rf"({header}.*?{end})", output, flags=re.M | re.S)
+    blocks, rest, kept = parts[1::2], "".join(parts[::2]), []
+    for block in blocks:
+        if sum(map(len, kept)) + len(block) > blocks_size:
+            kept.append(f"[{len(blocks) - len(kept)} more failure block(s) in the full log]\n")
+            break
+        kept.append(block)
+    return "".join(f"{t}\n" for t in failing_tests(output)) + "".join(kept) + rest[-tail_size:]
+
+
 def failing_tests(output: str) -> list[str]:
-    """The FAIL:/ERROR: header of every test a unittest run names as failed, in order, each once. The gate puts them
-    ahead of each stage's cut output, so they survive any later cut."""
+    """The FAIL:/ERROR: header of every test a unittest run names as failed, in order, each once. _test_output puts
+    them ahead of each stage's cut output, so they survive any later cut."""
     return list(dict.fromkeys(m.group(0) for m in re.finditer(r"^(?:FAIL|ERROR): .+$", output, re.M)))
 
 
@@ -1099,13 +1118,11 @@ def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, time
 
 
 def _instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int) -> tuple[bool, str, str]:
-    """run_instance_tests, with the whole stderr for the kept log: (passed, section, whole). The section names every
-    failed test ahead of its cut, as the supervisor stage's does: cut alone, on 2026-10-29 it named 2 of tundra's 11
-    failures and 3 of its 6 errors, in the note and in the "full" log alike."""
+    """run_instance_tests, with the whole stderr for the kept log: (passed, section, whole)."""
     top = ["-t", "."] if (instance_root / "tests" / "__init__.py").exists() else []
     agent = _stage("instance tests", sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests",
                                                          *top]), timeout_s, cwd=instance_root, env=env)
-    section = "".join(f"{t}\n" for t in failing_tests(agent.stderr)) + agent.stderr[-3000:]
+    section = _test_output(agent.stderr)
     if agent.returncode == NO_TESTS_RAN:
         # A tests/ folder with nothing in it (kiln's held only a stale __pycache__) is not a failing suite: read as
         # one, it rolled back every update and self-change. A test file that fails to import still fails (exit 1).

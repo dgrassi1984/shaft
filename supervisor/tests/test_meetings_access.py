@@ -11,7 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, core, google, jobs, listen_pipeline, listen_worker, meetings, meetings_access, speakers, web_config, webpush
+from supervisor import broker, core, google, jobs, listen_pipeline, listen_setup, listen_worker, meetings, meetings_access, speakers, web_config, webpush
 from supervisor.__main__ import main
 from supervisor.tests import test_app_api
 from supervisor.tests.test_listen import FakeEngines, spoken
@@ -467,6 +467,7 @@ class ReviewFixesTest(unittest.TestCase):
         patcher = mock.patch.object(core, "SUP_DIR", Path(self.tmp.name))
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.enterContext(mock.patch.object(listen_setup, "missing", return_value=None))   # Listen is set up
 
     def test_a_stale_finish_naming_fewer_chunks_keeps_every_chunk(self):
         made = meetings.create({"mode": "inperson", "started": "2026-11-25T10:00:00+01:00", "device": "x",

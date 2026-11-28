@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import apns, app_api, autonomy, commitments, core, dashboard, docs, feedback, messages, panel, projects, web
-from supervisor import web_chat, web_seen, webpush, reply_links, outcomes
+from supervisor import listen_setup, web_chat, web_seen, webpush, reply_links, outcomes
 from supervisor.tests.test_web import HOST, ME, WebTest, live_snap, snap
 
 FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
@@ -101,6 +101,7 @@ class AppTest(WebTest):
                   mock.patch.object(autonomy, "next_cycle", lambda n: NEXT),
                   mock.patch.object(autonomy, "event_wake", lambda *a, **k: None),
                   mock.patch.object(webpush, "notify"),
+                  mock.patch.object(listen_setup, "missing", return_value=None),   # a server with Listen set up
                   *(mock.patch.object(apns, name, getattr(self.apns, name))
                     for name in ("configured", "register", "unregister", "status", "devices"))):
             p.start()

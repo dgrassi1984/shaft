@@ -30,10 +30,13 @@ from . import core
 
 # Launchd labels are global: a worktree run must not stop the live services, so the live-checkout check (step 1)
 # refuses a checkout whose plists point elsewhere. The order matches docs/migration.md §2 step 4.
-SERVICE_STOP_ORDER = ("scheduler", "telegram", "web", "api", "embed", "model")
-SERVICE_START_ORDER = ("model", "embed", "api", "web", "telegram")
+# listen: the meeting worker; its .venv-listen is not copied (absolute paths), `listen on` rebuilds it on the new Mac.
+SERVICE_STOP_ORDER = ("scheduler", "telegram", "listen", "web", "api", "embed", "model")
+SERVICE_START_ORDER = ("model", "embed", "api", "web", "telegram", "listen")
 VERB = {"scheduler": "autonomy"}              # the scheduler's launchd service is `autonomy`
-FORCE_OK = {"autonomy", "api", "embed", "model"}   # the four verbs whose `off` accepts --force
+FORCE_OK = {"autonomy", "api", "embed", "model", "listen"}   # the verbs whose `off` accepts --force
+NETWORK_SERVICES = ("api", "web")
+UI_PYTHON_CHECK = "import sys; sys.exit(sys.version_info < (3, 12))"
 SUP_RE = re.compile(r"(?:^|\s)-m\s+(?:supervisor(?:\.[\w.]+)?|shaft(?:\.plugin_runner)?)(?:\s|$)")
 TAILSCALE_PATHS = ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",
                    "~/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -258,7 +261,7 @@ def _check_no_shaft_local(mig: _Mig) -> None:
 
 # -- launchd services -------------------------------------------------------------
 def _installed_services() -> list[str]:
-    """The installed services, as verbs, in stop order (autonomy, telegram, web, api, embed, model)."""
+    """The installed services, as verbs, in stop order (autonomy, telegram, listen, web, api, embed, model)."""
     agents = core.HOME / "Library" / "LaunchAgents"
     return [VERB.get(name, name) for name in SERVICE_STOP_ORDER
             if (agents / f"com.shaft.{name}.plist").exists()]
@@ -358,6 +361,10 @@ def _tailscale_json(runner: Runner, *, remote: bool = False, host: str | None = 
         if not exe:
             return None
         r = runner.run([exe, "status", "--json"])
+    return _json_output(r)
+
+
+def _json_output(r: subprocess.CompletedProcess) -> dict | None:
     if r.returncode:
         return None
     try:
@@ -365,6 +372,52 @@ def _tailscale_json(runner: Runner, *, remote: bool = False, host: str | None = 
         return data if isinstance(data, dict) else None
     except ValueError:
         return None
+
+
+def _source_service_modes(runner: Runner, services: list[str]) -> dict[str, str]:
+    network = set(services).intersection(NETWORK_SERVICES)
+    if not network:
+        return {}
+    from . import api, web
+    exe = _tailscale_exe_local()
+    serve = _json_output(runner.run([exe, "serve", "status", "--json"])) if exe else None
+    logins = api.allowed_logins()
+    local = {"api": api.LOCAL_LOGIN in logins, "web": web.LOCAL}
+    if serve is None:
+        # Local settings can survive a later tailnet install, and tailnet settings can survive `off`.
+        if (("api" in network and local["api"] and logins - {api.LOCAL_LOGIN})
+                or ("web" in network and local["web"] and web._read("hosts.json").get("hosts"))):
+            raise Stop("the old Mac has both local and tailnet settings. Make Tailscale Serve status readable "
+                       "before migrating so SHAFT can preserve which services are exposed.")
+        return {verb: "local" if local[verb] else "tailnet" for verb in network}
+
+    modes = {}
+    for service, port, https_port in (("api", api.PORT, api.HTTPS_PORT), ("web", web.PORT, web.HTTPS_PORT)):
+        if service not in network:
+            continue
+        exposed = any(
+            host.endswith(f":{https_port}")
+            and config.get("Handlers", {}).get("/", {}).get("Proxy") == f"http://127.0.0.1:{port}"
+            for host, config in (serve.get("Web") or {}).items()
+        )
+        modes[service] = "local" if local[service] and not exposed else "tailnet"
+    return modes
+
+
+def _needs_tailnet(manifest: dict) -> bool:
+    return any(_tailnet_service(manifest, verb) for verb in NETWORK_SERVICES)
+
+
+def _tailnet_service(manifest: dict, verb: str) -> bool:
+    modes = manifest.get("service_modes", {})
+    return verb in manifest.get("services", []) and modes.get(verb) != "local"
+
+
+def _on_args(verb: str, manifest: dict) -> list[str]:
+    argv = [verb, "on"]
+    if manifest.get("service_modes", {}).get(verb) == "local":
+        argv.append("--local")
+    return argv
 
 
 def _folder_kb(runner: Runner, path: Path) -> int | None:
@@ -394,10 +447,18 @@ def _target_folder_status(runner: Runner, host: str, dest: str) -> dict:
     d = shlex.quote(dest)
     exists = _remote_test(runner, host, f"-d {d}")
     empty = True
+    runtime_only = False
+    if _remote_test(runner, host, f"-L {d}") or (not exists and _remote_test(runner, host, f"-e {d}")):
+        raise Stop(f"{dest} must be a directory on {host}")
     if exists:
-        r = runner.ssh(f"ls -A {d}", host=host)
-        empty = not (r.stdout or "").strip()
-    return {"exists": exists, "empty": empty,
+        r = runner.ssh(f"/bin/ls -A {d}", host=host)
+        if r.returncode:
+            raise Stop(f"cannot list {dest} on {host}: {_out(r)}")
+        entries = (r.stdout or "").removesuffix("\n")
+        empty = not entries
+        runtime_only = (entries == ".runtime" and _remote_test(runner, host, f"-d {d}/.runtime")
+                        and not _remote_test(runner, host, f"-L {d}/.runtime"))
+    return {"exists": exists, "empty": empty, "runtime_only": runtime_only,
             "marker": _remote_test(runner, host, f"-e {d}/.supervisor/migration/incoming"),
             "manifest": _remote_test(runner, host, f"-e {d}/.supervisor/migration/manifest.json"),
             "target_state": _remote_test(runner, host, f"-e {d}/.supervisor/migration/target-state.json")}
@@ -408,14 +469,15 @@ def _check_target_folder(runner: Runner, host: str, dest: str) -> None:
     if st["target_state"]:
         raise Stop(f"{dest} has already started there: `migrate target` is running on that Mac, so another copy "
                    f"would overwrite it")
-    if st["exists"] and not st["empty"] and not st["marker"]:
-        raise Stop(f"{dest} is not empty and was not left by this migration; the folder must be moved aside or emptied")
+    if st["exists"] and not (st["empty"] or st.get("runtime_only") or st["marker"]):
+        raise Stop(f"{dest} must be empty, contain only a .runtime directory, or be left by this migration")
 
 
 def _require_remote_no_shaft(mig: _Mig, host: str) -> None:
     plists = _remote_plists(mig.runner, host)
     if plists:
-        raise Stop(f"SHAFT services are installed on {host}: {', '.join(plists)}")
+        raise Stop(f"SHAFT services are installed on {host}: {', '.join(plists)}. Stop them from their own "
+                   "checkout with the service off commands before moving that checkout aside.")
     while True:
         procs = _remote_shaft_processes(mig.runner, host)
         if not procs:
@@ -431,20 +493,43 @@ def _check_new_mac(mig: _Mig) -> None:
     def bad(msg: str) -> None:
         problems.append(msg)
 
-    r = _remote(runner, host, ["python3", "--version"])
-    versions = list(re.finditer(r"Python\s+(\d+)\.(\d+)", r.stdout or ""))
-    m = versions[-1] if versions else None
-    if r.returncode or not m:
-        bad(f"python3 not usable on {host}: {_out(r)}")
-    elif (int(m[1]), int(m[2])) < (3, 12):
-        bad(f"python3 {m[1]}.{m[2]} on {host} is older than 3.12")
+    copied_runtime = (core.RUNTIME == core.PROJECT / ".runtime"
+                      and Path(core.PYTHON).is_relative_to(core.RUNTIME / "python"))
+    if copied_runtime:
+        # The project rsync replaces any target runtime with these executables.
+        python = core.PYTHON
+        r = runner.run([python, "--version"])
+        try:
+            runtime_bin = core.runtime_dir("bin")
+        except core.RuntimeLayoutError as e:
+            raise Stop(str(e)) from None
+        uv_path = runtime_bin / "uv" if runtime_bin else None
+        uv = str(uv_path) if uv_path and uv_path.is_file() and os.access(uv_path, os.X_OK) else None
+        here = runner.run(["/usr/bin/uname", "-m"])
+        there = runner.ssh("/usr/bin/uname -m", host=host)
+        if here.returncode or there.returncode or not _out(here).strip() or _out(here).strip() != _out(there).strip():
+            bad(f"the copied .runtime needs the same architecture on both Macs (this Mac: "
+                f"{_out(here).strip() or 'unknown'}, {host}: {_out(there).strip() or 'unknown'})")
     else:
-        print(f"ok   python3 {m[1]}.{m[2]} on {host}")
+        python = "python3.12"
+        r = _remote(runner, host, [python, "--version"])
+        if r.returncode or not re.search(r"^Python\s+\d+\.\d+", r.stdout or "", re.MULTILINE):
+            python = "python3"
+            r = _remote(runner, host, [python, "--version"])
+        uv = _remote_which_file(runner, host, ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"])
+    versions = re.findall(r"^Python\s+(\d+)\.(\d+)", r.stdout or "", re.MULTILINE)
+    version = versions[-1] if versions else None
+    if r.returncode or not version:
+        bad(f"{python} not usable for {host}: {_out(r)}")
+    elif tuple(map(int, version)) < (3, 12):
+        bad(f"{python} {'.'.join(version)} is older than 3.12")
+    else:
+        print(f"ok   {python} {'.'.join(version)} for {host}")
 
-    uv = _remote_which_file(runner, host, ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"])
     gitp = _remote_which_file(runner, host, ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"])
     if not uv:
-        bad(f"uv not found on {host} (looked in /opt/homebrew/bin and /usr/local/bin)")
+        bad("uv not found in the copied .runtime/bin" if copied_runtime
+            else f"uv not found on {host} (looked in /opt/homebrew/bin and /usr/local/bin)")
     else:
         print(f"ok   uv {uv}")
     if not gitp:
@@ -452,20 +537,25 @@ def _check_new_mac(mig: _Mig) -> None:
     else:
         print(f"ok   git {gitp}")
 
-    local = _tailscale_json(runner)
-    remote = _tailscale_json(runner, remote=True, host=host)
-    local_suffix = (local or {}).get("MagicDNSSuffix")
-    remote_suffix = (remote or {}).get("MagicDNSSuffix")
-    if local is None:
-        bad(f"Tailscale not usable on this Mac (looked for {', '.join(TAILSCALE_PATHS)})")
-    elif remote is None:
-        bad(f"Tailscale not usable on {host} (looked for {', '.join(TAILSCALE_PATHS)})")
-    elif not local_suffix or not remote_suffix:
-        bad(f"cannot read the tailnet name: this Mac {local_suffix or 'unknown'}, {host} {remote_suffix or 'unknown'}")
-    elif local_suffix != remote_suffix:
-        bad(f"tailnets differ: this Mac {local_suffix!r}, {host} {remote_suffix!r}")
-    else:
-        print(f"ok   tailnet {local_suffix}")
+    exposure = mig.state
+    if "services" not in exposure:
+        services = _installed_services()
+        exposure = {"services": services, "service_modes": _source_service_modes(runner, services)}
+    if _needs_tailnet(exposure):
+        local = _tailscale_json(runner)
+        remote = _tailscale_json(runner, remote=True, host=host)
+        local_suffix = (local or {}).get("MagicDNSSuffix")
+        remote_suffix = (remote or {}).get("MagicDNSSuffix")
+        if local is None:
+            bad(f"Tailscale not usable on this Mac (looked for {', '.join(TAILSCALE_PATHS)})")
+        elif remote is None:
+            bad(f"Tailscale not usable on {host} (looked for {', '.join(TAILSCALE_PATHS)})")
+        elif not local_suffix or not remote_suffix:
+            bad(f"cannot read the tailnet name: this Mac {local_suffix or 'unknown'}, {host} {remote_suffix or 'unknown'}")
+        elif local_suffix != remote_suffix:
+            bad(f"tailnets differ: this Mac {local_suffix!r}, {host} {remote_suffix!r}")
+        else:
+            print(f"ok   tailnet {local_suffix}")
 
     dest = _dest(runner, host)
     folders = [core.PROJECT]
@@ -503,7 +593,7 @@ def _check_new_mac(mig: _Mig) -> None:
         raise Stop("\n".join(problems))
 
     _require_remote_no_shaft(mig, host)
-    print("ok   no SHAFT on " + host)
+    print("ok   no SHAFT services on " + host)
     _check_target_folder(runner, host, dest)
     print(f"ok   target folder {dest}")
 
@@ -691,7 +781,9 @@ def _stop_service(mig: _Mig, verb: str) -> None:
 
 def _stop_services(mig: _Mig) -> None:
     if "services" not in mig.state:
-        mig.state["services"] = _installed_services()
+        services = _installed_services()
+        modes = _source_service_modes(mig.runner, services)
+        mig.state.update(services=services, service_modes=modes)
         mig.save()
     for verb in mig.state["services"]:
         if verb in _installed_services():
@@ -712,14 +804,15 @@ def _manifest(mig: _Mig, services: list[str]) -> dict:
             branches[ref] = sha
     minds = {n: mind_mod.head(n) for n in core.instance_names()}
     shared = {n: str(core.shared_folder(n)) for n in core.instance_names() if core.shared_folder(n)}
-    tail = _tailscale_json(mig.runner) or {}
+    exposure = {"services": services, "service_modes": mig.state.get("service_modes", {})}
+    tail = (_tailscale_json(mig.runner) or {}) if _needs_tailnet(exposure) else {}
     return {
         "source_host": socket.gethostname(),
         "project": str(core.PROJECT),
         "home": str(core.HOME),
         "tailnet": {"suffix": tail.get("MagicDNSSuffix", ""),
                     "dns": (tail.get("Self", {}) or {}).get("DNSName", "")},
-        "services": services,
+        **exposure,
         "was_paused": mig.state.get("was_paused", False),
         "shared": shared,
         "branches": branches,
@@ -776,7 +869,7 @@ def _copy(mig: _Mig) -> None:
     r = runner.ssh(f"mkdir -p {shlex.quote(dest + '/.supervisor/migration/incoming')}", host=host)
     if r.returncode:
         raise Stop(f"cannot create the incoming marker on {host}: {_out(r)}")
-    excludes = ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.browsers", "/.browsers.new", "/.browsers.old",
+    excludes = ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.venv-listen", "/.browsers", "/.browsers.new", "/.browsers.old",
                 "/.supervisor/migration/incoming", "/.supervisor/migration/source-state.json"]
     r = runner.rsync(["-a", "--delete", "--stats", *[f"--exclude={e}" for e in excludes]],
                      str(core.PROJECT) + "/", _remote_spec(host, dest + "/"))
@@ -836,7 +929,7 @@ def _print_target_command(mig: _Mig) -> None:
     dest = _dest(mig.runner, mig.host)
     print("on the new Mac, log in at its screen (not over SSH) and run in Terminal:")
     print(f"  cd {dest} && bin/shaft migrate target")
-    print("(`on` loads the services into the logged-in session and records that terminal's python3.)")
+    print("(`on` loads the services into the logged-in session and records the Python that bin/shaft runs.)")
 
 
 def _stop_commands(mig: _Mig) -> list[str]:
@@ -847,7 +940,7 @@ def _copy_commands(mig: _Mig) -> list[str]:
     dest = _dest(mig.runner, mig.host)
     host = mig.host
     excludes = " ".join(f"--exclude={e}" for e in
-                        ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.browsers", "/.browsers.new", "/.browsers.old",
+                        ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.venv-listen", "/.browsers", "/.browsers.new", "/.browsers.old",
                          "/.supervisor/migration/incoming", "/.supervisor/migration/source-state.json"])
     lines = [f"rsync -a --delete --stats {excludes} {core.PROJECT}/ {host}:{dest}/"]
     if (core.HOME / "Library" / "Application Support" / "SHAFT").is_dir():
@@ -866,8 +959,8 @@ def _source_steps(mig: _Mig) -> list[Step]:
              "each com.shaft.* plist must point at this folder, or this run would stop the live services", [],
              _check_live_checkout),
         Step("2", "Check the new Mac over SSH",
-             "python3 3.12+, uv and git as files, the same tailnet, free disk, Codex if a codex/ instance, "
-             "no SHAFT there, target folder absent or left by this migration — before anything stops", [],
+             "Python 3.12+, uv, git, free disk, Codex if a codex/ instance, the same tailnet if exposed there, "
+             "no installed SHAFT services, and a safe destination folder", [],
              lambda: _check_new_mac(mig)),
         Step("3", "List dirty worktrees and unpushed work",
              "uncommitted work in worktrees outside the folder (../shaft-*) is not copied", [],
@@ -883,7 +976,7 @@ def _source_steps(mig: _Mig) -> list[Step]:
               "brew bundle dump --force --file=.supervisor/migration/Brewfile"],
              lambda: _freeze(mig)),
         Step("6", "Stop the installed services",
-             "in the doc's order: autonomy, telegram, web, api, embed, model; `off` deletes each plist",
+             "in the doc's order: autonomy, telegram, listen, web, api, embed, model; `off` deletes each plist",
              lambda: _stop_commands(mig),
              lambda: _stop_services(mig)),
         Step("7", "Write the manifest",
@@ -904,7 +997,7 @@ def _bring_back(mig: _Mig) -> list[str]:
         return []
     services = mig.state.get("services", [])
     was_paused = mig.state.get("was_paused", False)
-    cmds = [f"bin/shaft {verb} on" for verb in SERVICE_START_ORDER if verb in services]
+    cmds = [shlex.join(["bin/shaft", *_on_args(verb, mig.state)]) for verb in SERVICE_START_ORDER if verb in services]
     if not was_paused:
         cmds.append("bin/shaft resume")
     if "autonomy" in services:
@@ -972,7 +1065,7 @@ def _laptop(mig: _Mig) -> None:
         print(_out(r), end="")
         if "FileVault is On" not in (r.stdout or ""):
             raise Stop("FileVault is not on — turn it on (System Settings → Privacy & Security → FileVault)")
-        print("sudo pmset -c sleep 0 — run this yourself in another terminal, then continue")
+        print("Optional with administrator rights: sudo pmset -c sleep 0 keeps the Mac awake on power.")
     else:
         print("not a laptop; skipping FileVault and sleep settings")
     if (core.PROJECT / ".models" / "bonsai2-27b-mlx").is_dir():
@@ -1064,15 +1157,16 @@ def _setup(mig: _Mig) -> None:
 def _rebuild(mig: _Mig) -> None:
     def build(env: str, req: Path, ui: bool = False) -> None:
         py = core.PROJECT / env / "bin" / "python"
-        r = mig.runner.run(["python3", "-m", "venv", "--clear", str(core.PROJECT / env)], cwd=core.PROJECT)
+        r = mig.runner.run([core.PYTHON, "-m", "venv", "--clear", str(core.PROJECT / env)], cwd=core.PROJECT)
         if r.returncode:
-            raise Stop(f"python3 -m venv --clear {env} failed: {_out(r)}")
+            raise Stop(f"{core.PYTHON} -m venv --clear {env} failed: {_out(r)}")
+        r = mig.runner.run([str(py), "-c", UI_PYTHON_CHECK if ui else "import sys"], cwd=core.PROJECT)
+        if r.returncode:
+            requirement = "Python 3.12 or later" if ui else "a working Python"
+            raise Stop(f"{env} needs {requirement}: {_out(r)}")
         r = mig.runner.run([str(py), "-m", "pip", "install", "-r", str(req)], cwd=core.PROJECT, live=True)
         if r.returncode:
             raise Stop(f"pip install into {env} failed")
-        r = mig.runner.run([str(py), "-c", "import sys"], cwd=core.PROJECT)
-        if r.returncode:
-            raise Stop(f"{env} cannot run python: {_out(r)}")
         if ui:
             r = mig.runner.run([str(py), "-c", "import prompt_toolkit, rich"], cwd=core.PROJECT)
             if r.returncode:
@@ -1117,6 +1211,8 @@ def _settings_step(mig: _Mig) -> None:
     for f in fields:
         if f["name"] == "SHAFT_WEB_HOSTS" and f["value"]:
             print(f"SHAFT_WEB_HOSTS={f['value']}")
+    if not _needs_tailnet(mig.manifest):
+        return
     from . import api
     allowed = api.allowed_logins()
     tail = _tailscale_json(mig.runner) or {}
@@ -1161,10 +1257,11 @@ def _start_services(mig: _Mig) -> None:
         if verb == "model" and not (core.PROJECT / ".models" / "bonsai2-27b-mlx").is_dir():
             print("note: model service skipped — .models/bonsai2-27b-mlx/ is not present")
             continue
-        r = mig.runner.shaft(verb, "on")
+        argv = _on_args(verb, mig.manifest)
+        r = mig.runner.shaft(*argv)
         print(_out(r), end="")
         if r.returncode:
-            raise Stop(f"bin/shaft {verb} on failed: {_out(r)}")
+            raise Stop(f"bin/shaft {shlex.join(argv)} failed: {_out(r)}")
         r = mig.runner.shaft(verb, "status")
         print(_out(r), end="")
         if r.returncode:
@@ -1252,6 +1349,10 @@ def _resume_and_autonomy(mig: _Mig) -> None:
 
 
 def _tailnet_compare(mig: _Mig) -> None:
+    if mig.manifest.get("service_modes", {}).get("web") == "local":
+        print("pair the Mac app on this Mac: `bin/shaft web pair --local --name <this mac>`")
+    if not _needs_tailnet(mig.manifest):
+        return
     old_dns = (mig.manifest.get("tailnet", {}).get("dns") or "").rstrip(".")
     new_dns = (((_tailscale_json(mig.runner) or {}).get("Self", {}) or {}).get("DNSName") or "").rstrip(".")
     if not old_dns or not new_dns:
@@ -1259,13 +1360,15 @@ def _tailnet_compare(mig: _Mig) -> None:
         return
     if old_dns != new_dns:
         print("the tailnet name changed: " + old_dns + " -> " + new_dns)
-        print("  - run `bin/shaft web on`: it prints the new address")
-        print("  - pair the Home Screen app again: `bin/shaft web pair --name phone-app`")
-        print("  - pair each native app again: `bin/shaft web pair --name <app>`")
-        print("  - point API clients at the new endpoint (`bin/shaft api status` prints it)")
-        print("  - update inbox doorbell callers")
-        print("  - if a web OAuth client is set (GMAIL_*_WEB_CLIENT_ID), register the new redirect URI: "
-              "https://<mac>.<tailnet>.ts.net:8444/google/callback")
+        if _tailnet_service(mig.manifest, "web"):
+            print("  - see the new address with `bin/shaft web status`")
+            print("  - pair the Home Screen app again: `bin/shaft web pair --name phone-app`")
+            print("  - pair each native app again: `bin/shaft web pair --name <app>`")
+            print("  - if a web OAuth client is set (GMAIL_*_WEB_CLIENT_ID), register the new redirect URI: "
+                  "https://<mac>.<tailnet>.ts.net:8444/google/callback")
+        if _tailnet_service(mig.manifest, "api"):
+            print("  - point API clients at the new endpoint (`bin/shaft api status` prints it)")
+            print("  - update inbox doorbell callers")
     else:
         print("nothing to do: the tailnet name is unchanged")
 
@@ -1282,14 +1385,16 @@ def _repair_commands(mig: _Mig) -> list[str]:
 
 
 def _rebuild_commands(mig: _Mig) -> list[str]:
-    cmds = ["python3 -m venv --clear .venv-ui",
+    python = shlex.quote(core.PYTHON)
+    cmds = [f"{python} -m venv --clear .venv-ui",
+            shlex.join([".venv-ui/bin/python", "-c", UI_PYTHON_CHECK]),
             ".venv-ui/bin/python -m pip install -r requirements-ui.txt",
             ".venv-ui/bin/python -c 'import prompt_toolkit, rich'"]
     if (mig.state_dir / "venv-bonsai.txt").exists():
-        cmds += ["python3 -m venv --clear .venv-bonsai",
+        cmds += [f"{python} -m venv --clear .venv-bonsai",
                  ".venv-bonsai/bin/python -m pip install -r .supervisor/migration/venv-bonsai.txt"]
     if (mig.state_dir / "venv-ft.txt").exists():
-        cmds += ["python3 -m venv --clear .venv-ft",
+        cmds += [f"{python} -m venv --clear .venv-ft",
                  ".venv-ft/bin/python -m pip install -r .supervisor/migration/venv-ft.txt"]
     if (mig.state_dir / "Brewfile").exists():
         cmds.append("brew bundle --file=.supervisor/migration/Brewfile")
@@ -1299,8 +1404,9 @@ def _rebuild_commands(mig: _Mig) -> list[str]:
 
 
 def _start_commands(mig: _Mig) -> list[str]:
-    installed = set((mig.manifest or {}).get("services", []))
-    return [f"bin/shaft {verb} on" for verb in SERVICE_START_ORDER if verb in installed]
+    manifest = mig.manifest or {}
+    return [shlex.join(["bin/shaft", *_on_args(verb, manifest)])
+            for verb in SERVICE_START_ORDER if verb in manifest.get("services", [])]
 
 
 def _check_commands(mig: _Mig) -> list[str]:
@@ -1322,7 +1428,7 @@ def _target_steps(mig: _Mig) -> list[Step]:
         Step("1", "Check prerequisites and the copy",
              "git identity, no com.shaft.* running, refs against the manifest", [], lambda: _prereqs(mig)),
         Step("2", "FileVault, power, and memory",
-             "the folder holds .env, Google tokens and instance keys unencrypted; the command never runs sudo",
+             "the folder holds .env, Google tokens and instance keys unencrypted. Sleep settings are optional.",
              [], lambda: _laptop(mig)),
         Step("3", "Repair paths and remove instance environments",
              "repair moved worktrees and shared folders; always delete instance .venv/.uv/.tmp for this Mac",
@@ -1335,10 +1441,11 @@ def _target_steps(mig: _Mig) -> list[Step]:
              ".venv-ui always; .venv-bonsai and .venv-ft from their freezes; brew bundle; browser install if "
              ".browsers existed", lambda: _rebuild_commands(mig), lambda: _rebuild(mig)),
         Step("6", "Check saved paths, hostnames and allowed logins",
-             "missing absolute paths, SHAFT_WEB_HOSTS and this Mac's login against SHAFT_API_LOGINS", ["bin/shaft settings"],
+             "missing absolute paths, SHAFT_WEB_HOSTS, and the allowed login if a service uses Tailscale",
+             ["bin/shaft settings"],
              lambda: _settings_step(mig)),
         Step("7", "Start the services",
-             "model, embed, api, web, telegram — only those installed; model on skipped if the pack is absent",
+             "model, embed, api, web, telegram, listen — only those installed (listen on rebuilds .venv-listen); model on skipped if the pack is absent",
              lambda: _start_commands(mig), lambda: _start_services(mig)),
         Step("8", "Check the Codex login",
              "only if an instance uses a codex/* model; `missing` runs codex login", ["bin/shaft codex status"],
@@ -1431,6 +1538,7 @@ def _source(to: str | None, mig: _Mig) -> int:
         _require_source_quiet(mig)
     _check_live_checkout()
     if mig.check:
+        mig.state = state
         mig.runner.connect(host)
         _check_new_mac(mig)
         print("checks passed")

@@ -3,12 +3,34 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
 import struct
 import subprocess
 from collections import defaultdict
 from pathlib import Path
 
 SAMPLE_RATE = 16_000
+# `shaft listen on` links the ffmpeg its pinned imageio-ffmpeg wheel carries here (listen_setup.py): a Mac without admin
+# rights has no Homebrew, so no other ffmpeg (issue #58).
+VENV_FFMPEG = Path(__file__).resolve().parent.parent / ".venv-listen" / "bin" / "ffmpeg"
+# Where a Homebrew ffmpeg lives, in case the process's PATH (a terminal's, a launchd job's) leaves it out.
+PATH_EXTRA = ("/opt/homebrew/bin", "/usr/local/bin")
+NO_FFMPEG = "ffmpeg is not installed: run `shaft listen on` on the SHAFT server (it installs one with Listen)."
+
+
+class FfmpegMissing(ValueError):
+    """No ffmpeg to decode with; the message says how to get one."""
+
+
+def ffmpeg() -> str:
+    """The one ffmpeg the worker and the speaker clips run: the one Listen's setup installed, else one on PATH or in
+    Homebrew's folders. None: FfmpegMissing, never a bare "No such file" further down."""
+    if VENV_FFMPEG.is_file() and os.access(VENV_FFMPEG, os.X_OK):   # is_file follows the link: a dangling one is none
+        return str(VENV_FFMPEG)
+    path = os.pathsep.join([os.environ.get("PATH", ""), *PATH_EXTRA])
+    if found := shutil.which("ffmpeg", path=path):
+        return found
+    raise FfmpegMissing(NO_FFMPEG)
 
 
 class DiarisationTurns(list):
@@ -65,7 +87,11 @@ def normalize_caf(path: Path) -> bool:
 def decode(audio: Path, work: Path, mode: str) -> list[Path]:
     """Decode the first audio stream to 16 kHz mono PCM for each meeting channel."""
     normalize_caf(audio)
-    command = ["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-abort_on", "empty_output_stream", "-i", str(audio)]
+    try:
+        binary = ffmpeg()
+    except FfmpegMissing as e:
+        raise FfmpegMissing(f"Audio decode failed: {e}") from None
+    command = [binary, "-nostdin", "-v", "error", "-xerror", "-abort_on", "empty_output_stream", "-i", str(audio)]
     paths = []
     for index in range(2 if mode == "online" else 1):
         path = work / f"ch{index + 1}.wav"
@@ -76,8 +102,8 @@ def decode(audio: Path, work: Path, mode: str) -> list[Path]:
         command += ["-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(path)]
     try:
         result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except FileNotFoundError:
-        raise ValueError("Audio decode failed: ffmpeg is not installed.") from None
+    except FileNotFoundError:   # removed since ffmpeg() found it
+        raise FfmpegMissing(f"Audio decode failed: {NO_FFMPEG}") from None
     if result.returncode:
         tail = result.stderr[-2000:].decode(errors="replace").strip()
         raise ValueError(f"Audio decode failed (ffmpeg exit {result.returncode}): {tail}")

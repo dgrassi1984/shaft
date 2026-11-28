@@ -147,6 +147,15 @@ class InstalledServicesTest(MigCase):
     def test_none(self):
         self.assertEqual(migrate._installed_services(), [])
 
+    def test_listen_is_stopped_before_the_copy_and_its_environment_never_copied(self):
+        # Before this the meeting worker was not in the orders: it kept running through the copy, never came back,
+        # and .venv-listen (absolute paths) went to the new Mac.
+        self.plist("listen")
+        self.plist("scheduler")
+        self.assertEqual(migrate._installed_services(), ["autonomy", "listen"])
+        self.assertEqual(migrate.SERVICE_START_ORDER[-1], "listen")
+        self.assertIn("listen", migrate.FORCE_OK)
+
 
 class SchedulerIdleTest(MigCase):
     def test_no_scheduler_returns_empty(self):
@@ -240,8 +249,8 @@ class StopServiceTest(MigCase):
             self.assertEqual([c.args[1:] for c in shaft.call_args_list],
                              [("web", "off"), ("web", "off")])
 
-    def test_force_flag_set_is_exactly_the_four_verbs(self):
-        self.assertEqual(migrate.FORCE_OK, {"autonomy", "api", "embed", "model"})
+    def test_force_flag_set_is_exactly_the_verbs_whose_off_takes_it(self):
+        self.assertEqual(migrate.FORCE_OK, {"autonomy", "api", "embed", "model", "listen"})
 
 
 class ManifestTest(MigCase):
@@ -278,7 +287,8 @@ class CopyTest(MigCase):
         project_rsync = next(c for c in self.runner.calls if c[0] == "rsync" and "--delete" in c)
         self.assertIn("--delete", project_rsync)
         self.assertIn("--stats", project_rsync)
-        for e in ("--exclude=/.venv-ui", "--exclude=/.venv-bonsai", "--exclude=/.venv-ft", "--exclude=/.browsers",
+        for e in ("--exclude=/.venv-ui", "--exclude=/.venv-bonsai", "--exclude=/.venv-ft", "--exclude=/.venv-listen",
+                  "--exclude=/.browsers",
                   "--exclude=/.browsers.new", "--exclude=/.browsers.old",
                   "--exclude=/.supervisor/migration/incoming",
                   "--exclude=/.supervisor/migration/source-state.json"):
@@ -363,7 +373,7 @@ class SetupTest(MigCase):
         self.assertIn(mock.call("worktree", "prune", check=False), git.call_args_list)
 
 
-class RebuildTest(MigCase):
+class RebuildConditionsTest(MigCase):
     def test_conditions(self):
         (self.sup / "migration").mkdir(parents=True)
         (self.sup / "migration" / "venv-bonsai.txt").write_text("pkg==1\n")
@@ -380,6 +390,53 @@ class RebuildTest(MigCase):
 
 
 class StartServicesTest(MigCase):
+    def test_local_services_need_no_tailnet_login_and_restore_local(self):
+        m = self.mig(stdin=["yes"])
+        m.manifest = {"services": ["api", "web"], "service_modes": {"api": "local", "web": "local"}}
+        with mock.patch("supervisor.settings.listing", return_value=[]), \
+                mock.patch("supervisor.api.allowed_logins") as logins, \
+                mock.patch.object(migrate, "_tailscale_json") as tailnet:
+            migrate._settings_step(m)
+            migrate._start_services(m)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                migrate._tailnet_compare(m)
+            logins.assert_not_called()
+            tailnet.assert_not_called()
+        self.assertEqual([call[1:] for call in self.runner.calls if call[2:3] == ["on"]],
+                         [["api", "on", "--local"], ["web", "on", "--local"]])
+        self.assertEqual(migrate._start_commands(m), ["bin/shaft api on --local", "bin/shaft web on --local"])
+        self.assertIn("web pair --local", out.getvalue())
+        m.state = {**m.manifest, "was_paused": True}
+        self.assertEqual(migrate._bring_back(m), migrate._start_commands(m))
+
+    def test_mixed_source_serve_modes_are_recorded_before_stop(self):
+        self.plist("api")
+        self.plist("web")
+        self.runner.script = {"serve status --json": cp(1)}
+        m = self.mig()
+        m.state_path = m.state_dir / "source-state.json"
+
+        def stop_service(mig, verb):
+            saved = json.loads(mig.state_path.read_text())
+            self.assertEqual(saved["service_modes"], {"api": "local", "web": "tailnet"})
+            (self.home / "Library" / "LaunchAgents" / f"com.shaft.{verb}.plist").unlink()
+
+        with mock.patch.object(migrate, "_tailscale_exe_local", return_value="/some/tailscale"), \
+                mock.patch("supervisor.api.allowed_logins", return_value={"operator@local", "me@example.com"}), \
+                mock.patch("supervisor.api.PORT", 8781), mock.patch("supervisor.api.HTTPS_PORT", 8443), \
+                mock.patch("supervisor.web.PORT", 8785), mock.patch("supervisor.web.HTTPS_PORT", 8444), \
+                mock.patch("supervisor.web.LOCAL", True), \
+                mock.patch.object(migrate, "_stop_service", side_effect=stop_service):
+            with self.assertRaisesRegex(migrate.Stop, "both local and tailnet settings"):
+                migrate._stop_services(m)
+            self.assertFalse(m.state_path.exists())
+            self.runner.script["serve status --json"] = cp(0, json.dumps({"Web": {
+                "old.example.ts.net:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8785"}}}
+            }}))
+            migrate._stop_services(m)
+        m.manifest = m.state
+        self.assertEqual(migrate._start_commands(m), ["bin/shaft api on --local", "bin/shaft web on"])
+
     def test_order_and_model_skip(self):
         m = self.mig(stdin=["yes", "yes"])
         m.manifest = {"services": ["autonomy", "telegram", "web", "api", "embed", "model"]}
@@ -467,7 +524,7 @@ class ResumeAndAutonomyTest(MigCase):
 class TailnetCompareTest(MigCase):
     def test_changed(self):
         m = self.mig()
-        m.manifest = {"tailnet": {"dns": "old.ts.net."}}
+        m.manifest = {"services": ["api", "web"], "tailnet": {"dns": "old.ts.net."}}
         with mock.patch.object(migrate, "_tailscale_json", return_value={"Self": {"DNSName": "new.ts.net."}}):
             import contextlib
             import io
@@ -477,7 +534,7 @@ class TailnetCompareTest(MigCase):
 
     def test_unchanged(self):
         m = self.mig()
-        m.manifest = {"tailnet": {"dns": "same.ts.net."}}
+        m.manifest = {"services": ["api", "web"], "tailnet": {"dns": "same.ts.net."}}
         with mock.patch.object(migrate, "_tailscale_json", return_value={"Self": {"DNSName": "same.ts.net."}}):
             import contextlib
             import io
@@ -885,6 +942,30 @@ class RebuildTest(MigCase):
         self.assertTrue(any("import sys" in a and ".venv-ui" in a for a in argv))
         self.assertTrue(any("import prompt_toolkit, rich" in a for a in argv))
 
+    def test_runtime_python_rebuilds_each_environment_and_is_in_preview(self):
+        m = self.mig()
+        m.manifest = {}
+        m.state_dir.mkdir()
+        for requirements in ("venv-bonsai.txt", "venv-ft.txt"):
+            (m.state_dir / requirements).touch()
+        python = str(self.project / ".runtime" / "a b" / "bin" / "python3.12")
+        with mock.patch.object(core, "PYTHON", python):
+            migrate._rebuild(m)
+            preview = migrate._rebuild_commands(m)
+        envs = [".venv-ui", ".venv-bonsai", ".venv-ft"]
+        self.assertEqual([call for call in self.runner.calls if call[1:4] == ["-m", "venv", "--clear"]],
+                         [[python, "-m", "venv", "--clear", str(self.project / env)] for env in envs])
+        self.assertEqual([line for line in preview if "-m venv --clear" in line],
+                         [f"'{python}' -m venv --clear {env}" for env in envs])
+
+    def test_ui_rejects_old_python_before_installing_packages(self):
+        m = self.mig()
+        m.manifest = {}
+        self.runner.script = {"sys.version_info < (3, 12)": cp(1)}
+        with self.assertRaisesRegex(migrate.Stop, r"\.venv-ui needs Python 3.12 or later"):
+            migrate._rebuild(m)
+        self.assertFalse(any("pip" in call for call in self.runner.calls))
+
 
 class CodexRegexTest(MigCase):
     def test_missing_elsewhere_does_not_trigger_login(self):
@@ -912,7 +993,7 @@ class TalkEachTest(MigCase):
 class TailnetUnknownTest(MigCase):
     def test_unknown_says_so(self):
         m = self.mig()
-        m.manifest = {"tailnet": {"dns": ""}}
+        m.manifest = {"services": ["web"], "tailnet": {"dns": ""}}
         with mock.patch.object(migrate, "_tailscale_json", return_value=None):
             import contextlib
             import io
@@ -959,6 +1040,30 @@ class FreezeTest(MigCase):
 
 
 class CheckTargetFolderTest(MigCase):
+    def test_only_a_real_runtime_directory_is_allowed_in_a_fresh_destination(self):
+        dest = "/dest"
+        for entries, link, allowed in ((".runtime\n", False, True), (".runtime\n", True, False),
+                                       (".runtime\n.git\n", False, False)):
+            with self.subTest(entries=entries, link=link):
+                self.runner.script = {
+                    f"/bin/ls -A {dest}": cp(0, entries),
+                    f"test -d {dest}": cp(0),
+                    f"test -L {dest}/.runtime": cp(0 if link else 1),
+                    "test -L": cp(1),
+                    "test -e": cp(1),
+                }
+                if allowed:
+                    migrate._check_target_folder(self.runner, "new", dest)
+                else:
+                    with self.assertRaisesRegex(migrate.Stop, "must be empty"):
+                        migrate._check_target_folder(self.runner, "new", dest)
+
+    def test_installed_target_services_require_manual_shutdown(self):
+        self.runner.script = {"ls -1 ~/Library/LaunchAgents": cp(0, "com.shaft.api.plist\n")}
+        with self.assertRaisesRegex(migrate.Stop, "Stop them from their own checkout"):
+            migrate._require_remote_no_shaft(self.mig(host="new"), "new")
+        self.assertEqual(len(self.runner.calls), 1)
+
     def test_target_state_message_says_overwrite(self):
         with mock.patch.object(migrate, "_target_folder_status", return_value={
                 "exists": True, "empty": False, "marker": True, "manifest": True, "target_state": True}):
@@ -1011,7 +1116,7 @@ class SourceLiveCheckoutTest(MigCase):
 
 
 class LaptopRunYourselfTest(MigCase):
-    def test_laptop_prints_run_yourself(self):
+    def test_laptop_sleep_settings_are_optional_and_sudo_never_runs(self):
         m = self.mig()
         self.runner.script = {
             "pmset -g batt": cp(0, "Now drawing from 'AC Power'\n -InternalBattery-0 (id=12345)\t100%\n"),
@@ -1020,8 +1125,8 @@ class LaptopRunYourselfTest(MigCase):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             migrate._laptop(m)
-        self.assertIn("run this yourself", buf.getvalue())
-        self.assertIn("sudo pmset -c sleep 0", buf.getvalue())
+        self.assertIn("Optional with administrator rights: sudo pmset -c sleep 0", buf.getvalue())
+        self.assertEqual(self.runner.calls, [["pmset", "-g", "batt"], ["fdesetup", "status"]])
 
 
 class RebuildBrewFailureTest(MigCase):
@@ -1133,7 +1238,7 @@ exit 0
             for p in patchers:
                 p.stop()
 
-    def _build(self, pre_paused=False):
+    def _build(self, pre_paused=False, managed_runtime=False):
         tmp = self._tmp
         old_home = tmp / "oldhome"
         new_home = tmp / "newhome"
@@ -1222,19 +1327,48 @@ exit 0
                          "#!/bin/sh\necho '{\"MagicDNSSuffix\":\"example.ts.net\",\"Self\":{\"DNSName\":\"mac.example.ts.net.\",\"UserID\":42},\"User\":{\"42\":{\"LoginName\":\"me@example.com\"}}}'\nexit 0\n")
         self._write_exec(bindir / "python3", self._PY3)
         self._write_exec(bindir / "ssh", self._SSH.replace("__NEWHOME__", str(new_home)))
+        if managed_runtime:
+            self._write_exec(bindir / "brew", "#!/bin/sh\nexit 127\n")
+            self._write_exec(bindir / "python3", '#!/bin/sh\necho "Python 3.9.6"\n')
+            self._write_exec(bindir / "python3.12", "#!/bin/sh\nexit 127\n")
+            self._write_exec(bindir / "tailscale", "#!/bin/sh\nexit 127\n")
+            self._write_exec(bindir / "ssh", self._SSH.replace("__NEWHOME__", str(new_home)).replace(
+                '"test -x /opt/homebrew/bin/uv"|"test -x /usr/local/bin/uv"|"test -x /usr/bin/git") exit 0 ;;',
+                '"test -x /opt/homebrew/bin/uv"|"test -x /usr/local/bin/uv") exit 1 ;;'))
+            relative_python = Path(".runtime/python/cpython-3.12.1-macos/bin/python3.12")
+            (old_project / relative_python).parent.mkdir(parents=True)
+            self._write_exec(old_project / relative_python, self._PY3)
+            (old_project / ".runtime/bin").mkdir()
+            self._write_exec(old_project / ".runtime/bin/uv", "#!/bin/sh\necho 'uv 0.9.0'\n")
+            (new_project / ".runtime").mkdir(parents=True)
+            (new_project / ".runtime/preinstalled").touch()
+        else:
+            relative_python = None
 
         return {
             "old_home": old_home, "new_home": new_home,
             "old_project": old_project, "new_project": new_project,
-            "bindir": bindir, "log": log,
+            "bindir": bindir, "log": log, "runtime_python": relative_python,
         }
+
+    @contextlib.contextmanager
+    def _runtime(self, ctx, project):
+        runtime_python = ctx["runtime_python"]
+        python = project / runtime_python if runtime_python else ctx["bindir"] / "python3"
+        logins = {"operator@local"} if runtime_python else {"me@example.com"}
+        with mock.patch.object(core, "PYTHON", str(python)), \
+                mock.patch.object(core, "RUNTIME", project / ".runtime"), \
+                mock.patch("supervisor.api.allowed_logins", return_value=logins), \
+                mock.patch("supervisor.web.LOCAL", bool(runtime_python)), \
+                mock.patch("supervisor.web._read", return_value={}):
+            yield
 
     def _run_source(self, ctx):
         with self._core_paths(ctx["old_project"], ctx["old_home"]), \
+                self._runtime(ctx, ctx["old_project"]), \
                 mock.patch.dict(os.environ, {"PATH": str(ctx["bindir"]) + os.pathsep + os.environ.get("PATH", "")}), \
                 mock.patch.object(migrate, "TAILSCALE_PATHS", (str(ctx["bindir"] / "tailscale"),)), \
                 mock.patch.object(migrate, "_waiting_on", return_value=[]), \
-                mock.patch("supervisor.api.allowed_logins", return_value={"me@example.com"}), \
                 mock.patch.object(migrate, "_service_running", return_value=True, create=True), \
                 mock.patch("supervisor.settings.listing", return_value=[]):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1243,10 +1377,10 @@ exit 0
 
     def _run_target(self, ctx):
         with self._core_paths(ctx["new_project"], ctx["new_home"]), \
+                self._runtime(ctx, ctx["new_project"]), \
                 mock.patch.dict(os.environ, {"PATH": str(ctx["bindir"]) + os.pathsep + os.environ.get("PATH", "")}), \
                 mock.patch.object(migrate, "TAILSCALE_PATHS", (str(ctx["bindir"] / "tailscale"),)), \
                 mock.patch.object(migrate, "_waiting_on", return_value=[]), \
-                mock.patch("supervisor.api.allowed_logins", return_value={"me@example.com"}), \
                 mock.patch.object(migrate, "_service_running", return_value=True, create=True), \
                 mock.patch("supervisor.settings.listing", return_value=[]):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1307,14 +1441,22 @@ exit 0
             self.assertEqual(rc, 1)
             self.assertIn("old Mac", err.getvalue())
 
-    def test_was_paused_skips_resume(self):
-        ctx = self._build(pre_paused=True)
+    def test_managed_local_install_migrates_with_python39_on_path_and_no_tailscale(self):
+        ctx = self._build(pre_paused=True, managed_runtime=True)
         self._run_source(ctx)
-        self._run_target(ctx)
         self.assertEqual(ctx["source_rc"], 0)
+        project = ctx["new_project"]
+        self.assertTrue((project / ctx["runtime_python"]).is_file())
+        self.assertTrue((project / ".runtime/bin/uv").is_file())
+        self.assertFalse((project / ".runtime/preinstalled").exists())
+        manifest = json.loads((project / ".supervisor/migration/manifest.json").read_text())
+        self.assertEqual(manifest["service_modes"], {"api": "local", "web": "local"})
+        self._run_target(ctx)
         self.assertEqual(ctx["target_rc"], 0)
         log_lines = ctx["log"].read_text().splitlines()
         tgt = log_lines[log_lines.index("setup"):]
+        self.assertIn("api on --local", tgt)
+        self.assertIn("web on --local", tgt)
         self.assertNotIn("resume", tgt)
 
 
@@ -1429,7 +1571,7 @@ class FourthPassRegressionTest(MigCase):
     def test_manifest_is_not_permission_to_delete_backup(self):
         with mock.patch.object(migrate, "_target_folder_status", return_value={
                 "exists": True, "empty": False, "marker": False, "manifest": True, "target_state": False}):
-            with self.assertRaisesRegex(migrate.Stop, "moved aside or emptied"):
+            with self.assertRaisesRegex(migrate.Stop, "must be empty"):
                 migrate._check_target_folder(self.runner, "old", "/backup")
 
     def test_finished_target_without_manifest_is_successful_noop(self):
@@ -1602,6 +1744,7 @@ class FourthPassRegressionTest(MigCase):
 
     def test_settings_report_hostnames_and_refuse_unknown_or_disallowed_login(self):
         m = self.mig()
+        m.manifest = {"services": ["web"]}
         for login in (None, "wrong@example.com", "me@example.com"):
             tail = {"Self": {"UserID": 42}, "User": {"42": {"LoginName": login}}}
             with self.subTest(login=login), \
