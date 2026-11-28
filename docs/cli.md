@@ -618,5 +618,7 @@ unfinished deploy from the step it stopped at. The Mac app's Update server runs 
 
 `shaft migrate source --to HOST` guides migration to another Mac over SSH. Enter runs each step, `q` stops,
 and completed steps resume later. There is no `--yes`. On the new Mac, `migrate target` repairs paths,
-rebuilds environments, starts services, and checks instances. It requires the source manifest. Both `--check`
-modes run read-only checks. See [migration](migration.md).
+rebuilds environments with the Python that runs `bin/shaft`, restores services in their recorded exposure
+modes, and checks instances. The Mac app's `.runtime` moves with the checkout. Local-only services need no
+Tailscale login. The target requires the source manifest. Both `--check` modes run read-only checks.
+See [migration](migration.md).
