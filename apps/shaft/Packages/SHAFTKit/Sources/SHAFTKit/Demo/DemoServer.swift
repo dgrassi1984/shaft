@@ -421,6 +421,17 @@ private final class DemoState: @unchecked Sendable {
                 guard action == "doc" else { return .unavailable }
                 return .json(["path": "field-notes.md", "text": DemoData.document, "sha": DemoData.documentSHA,
                               "in_chat": true, "threads": []])
+            case ("GET", "artifacts") where parts.count == 2:
+                var entry = Self.artifact
+                entry["html"] = nil
+                entry["mtime"] = DemoData.stamp(now)
+                entry["bytes"] = Self.artifactHTML.utf8.count
+                return .json(["dir": "notes/artifacts", "artifacts": name == "tundra" ? [entry] : []])
+            case ("GET", "artifacts") where parts.count == 3 && action == "page":
+                guard name == "tundra", value("slug") == Self.artifact["slug"] as? String else {
+                    return .error(404, code: "not_found", message: "Artifact not found.")
+                }
+                return .json(Self.artifact)
             case ("GET", "plan") where parts.count == 2: return .json(DemoData.plan())
             case ("GET", "cycles"):
                 let goals = ["Benchmark three build changes", "Draft the cache change", "Write this week's field notes"]
@@ -448,6 +459,35 @@ private final class DemoState: @unchecked Sendable {
             }
         }
     }
+
+    private static var artifact: [String: Any] {
+        ["slug": "build-times", "title": "Build times", "version": "a1b2c3d4e5f60718",
+         "problems": [String](), "html": artifactHTML]
+    }
+
+    private static let artifactHTML = """
+    <!doctype html>
+    <html lang="en"><head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>:root { color-scheme: light dark; } body { font: 1rem system-ui; } svg { width: 100%; max-width: 24rem; }</style>
+    </head><body>
+    <div>Uncached</div>
+    <svg viewBox="0 0 240 32" role="img" aria-label="Uncached build time, 400 seconds">
+      <rect width="240" height="32" rx="4" fill="#7a858f"/>
+    </svg>
+    <div>Cached</div>
+    <svg viewBox="0 0 240 32" role="img" aria-label="Cached build time, 175 seconds">
+      <rect width="105" height="32" rx="4" fill="#2b906e"/>
+    </svg>
+    <p id="result"></p>
+    <script>
+      window.SHAFT_DATA = {uncached: 400, cached: 175};
+      const {uncached, cached} = window.SHAFT_DATA;
+      document.getElementById("result").textContent = Math.round(100 * (1 - cached / uncached)) + "% faster with caching";
+    </script>
+    </body></html>
+    """
 
     private static func fields(_ body: Data, contentType: String) -> [String: String] {
         guard let boundary = contentType.components(separatedBy: "boundary=").last else { return [:] }

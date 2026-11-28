@@ -1,0 +1,7 @@
+{
+  "slug": "ledger-board",
+  "title": "Ledger board",
+  "version": "f6dd107703c46bee",
+  "problems": [],
+  "html": "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'\"><script>window.SHAFT_DATA={\"total\":1234.5,\"days\":[[\"2026-11-02\",600],[\"2026-11-03\",634.5]]};window.SHAFT_ARTIFACT={\"slug\": \"ledger-board\", \"version\": \"f6dd107703c46bee\", \"problems\": []};</script><html><head><title>Ledger board</title><script>document.title += ' · ' + window.SHAFT_DATA.total;</script></head><body><svg id=\"c\"></svg></body></html>"
+}

@@ -837,6 +837,35 @@ def _thread(t: dict, sha: str) -> dict:
                        "turn": p.get("turn") or None, "seen": p.get("seen") or None} for p in t["posts"]]}
 
 
+def _artifacts(req: Request, n: str) -> Response:
+    """§10.7: the instance's artifacts, the last changed first; `version` moves whenever what one shows does."""
+    from . import artifacts
+    try:
+        listing = artifacts.listing(n)
+    except (Exception, SystemExit) as e:          # never an empty list for one that could not be read: say what failed
+        log(f"app api: {n}'s artifacts: {type(e).__name__}: {e}")
+        raise Refusal(500, "internal", f"artifacts not readable: {e}") from None
+    return _json(200, {"dir": artifacts.DIR, "artifacts": [
+        {"slug": a["slug"], "title": a["title"], "mtime": stamp(a["mtime"]), "bytes": a["bytes"],
+         "version": a["version"], "problems": a["problems"]} for a in listing]})
+
+
+def _artifact_page(req: Request, n: str) -> Response:
+    """§10.8: one artifact as a single document, for a web view that loads it as a string (never from this address,
+    never with the bearer: artifacts.py). JSON, so it is never rendered as a page of this origin."""
+    from . import artifacts
+    s = req.query.get("slug", "")
+    if not s:
+        raise Refusal(400, "bad_request", "Name the artifact: ?slug=<folder in notes/artifacts/>.")
+    try:
+        page = artifacts.page(n, s)
+    except artifacts.Refused as e:
+        if artifacts.SLUG.match(s) and artifacts.summary(n, s) is None:
+            raise Refusal(404, "not_found", str(e)) from None
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, page)
+
+
 def _raw(req: Request, n: str) -> Response:
     from . import docs
     rel = _doc_path(req)
@@ -1817,6 +1846,8 @@ ROUTES: list[tuple[str, dict]] = [
     (rf"/docs/{N}/save", {"POST": _save}),
     (rf"/docs/{N}/delete", {"POST": _delete}),
     (rf"/docs/{N}/comment(?:/(?P<act>edit|delete|send|state))?", {"POST": _comment}),
+    (rf"/artifacts/{N}", {"GET": _artifacts}),
+    (rf"/artifacts/{N}/page", {"GET": _artifact_page}),
     (r"/push/register", {"POST": _register, "DELETE": _unregister}),
     (r"/push/status", {"GET": _push_status}),
     (r"/push/latest", {"GET": _latest}),

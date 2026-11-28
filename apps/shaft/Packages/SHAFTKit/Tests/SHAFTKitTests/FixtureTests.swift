@@ -9,6 +9,19 @@ import Testing
 /// A fixture is matched to its model by its shape (its top-level keys), so a new one needs no code here. A fixture
 /// that matches no model fails: either the contract grew or the fixture is not an /app/v1 answer.
 struct FixtureTests {
+    @Test func artifactsAndPageDecodeFromServerFixtures() throws {
+        let decoder = SHAFTJSON.decoder()
+        let list = try decoder.decode(ArtifactsList.self, from: DecodingTests.fixture("artifacts"))
+        let page = try decoder.decode(ArtifactPage.self, from: DecodingTests.fixture("artifact-page"))
+        let entry = try #require(list.artifacts.first)
+        #expect(list.dir == "notes/artifacts")
+        #expect(entry.id == "ledger-board")
+        #expect(entry.mtime == SHAFTJSON.parseStamp("2026-11-03T14:00:00+01:00"))
+        #expect(page.slug == entry.slug)
+        #expect(page.version == entry.version)
+        #expect(page.html.contains("window.SHAFT_DATA"))
+    }
+
     @Test func aClearedFeedStartsWithTheClearMarker() throws {
         let feed = try SHAFTJSON.decoder().decode(Feed.self, from: DecodingTests.fixture("cleared"))
         let content = try #require(feed.content)
@@ -307,6 +320,8 @@ enum FixtureShape {
         if has("id", "at", "did") { return roundTrip(CycleDetail.self) }
         if has("chats") { return roundTrip(ChatsResponse.self) }
         if has("dir", "max_bytes", "docs") { return roundTrip(DocsList.self) }
+        if has("dir", "artifacts") { return roundTrip(ArtifactsList.self) }
+        if has("slug", "version", "html", "problems") { return roundTrip(ArtifactPage.self) }
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }
         if has("events", "badge") { return roundTrip(PushLatest.self) }
         if has("instance", "done", "paused") { return roundTrip(SetupInstanceResponse.self) }

@@ -1167,3 +1167,8 @@ details.pendingnotes > summary { display: inline-flex; padding: 0; border: 0; ba
 .question-other input { width: 100%; min-width: 0; }
 .question-card > button { justify-self: start; }
 .question-answer { overflow-wrap: anywhere; }
+
+/* An instance's artifact (artifacts.py): its page in a sandboxed frame, as tall as the window allows */
+iframe.artifact { display: block; width: 100%; height: calc(100dvh - 16rem); min-height: 24rem; margin-top: 1rem;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.artprob { margin-top: 1rem; }

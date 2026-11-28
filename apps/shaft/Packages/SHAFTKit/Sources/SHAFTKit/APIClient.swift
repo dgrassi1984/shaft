@@ -331,6 +331,16 @@ public final class APIClient: Sendable {
         try await post("/app/v1/feedback/\(instance)", json: body)
     }
 
+    // MARK: Artifacts
+
+    public func artifacts(_ instance: String) async throws -> ArtifactsList {
+        try await get("/app/v1/artifacts/\(instance)")
+    }
+
+    public func artifactPage(_ instance: String, slug: String) async throws -> ArtifactPage {
+        try await get("/app/v1/artifacts/\(instance)/page", query: [URLQueryItem(name: "slug", value: slug)])
+    }
+
     // MARK: Documents and comments (§10)
 
     public func docs(_ instance: String, cid: String? = nil) async throws -> DocsList {

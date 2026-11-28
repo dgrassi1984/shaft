@@ -2,7 +2,7 @@ import SHAFTKit
 import SwiftUI
 
 enum SidePanelKind: Hashable {
-    case documents, cycles
+    case documents, artifacts, cycles
 }
 
 struct SidePanel: View {
@@ -15,6 +15,7 @@ struct SidePanel: View {
         VStack(spacing: 0) {
             Picker("Panel", selection: Bindable(screen).sidePanel) {
                 Text("Documents").tag(SidePanelKind.documents)
+                Text("Artifacts").tag(SidePanelKind.artifacts)
                 Text("Cycles").tag(SidePanelKind.cycles)
             }
             .pickerStyle(.segmented)
@@ -23,6 +24,9 @@ struct SidePanel: View {
             case .documents:
                 DocumentsPanel(store: store, instance: instance, cid: cid)
                     .id("\(instance)-\(cid ?? "")")
+            case .artifacts:
+                ArtifactsPanel(store: store, instance: instance)
+                    .id(instance)
             case .cycles:
                 CyclesPanel(store: store, instance: instance)
                     .id(instance)
