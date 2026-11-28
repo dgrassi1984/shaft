@@ -147,6 +147,15 @@ class InstalledServicesTest(MigCase):
     def test_none(self):
         self.assertEqual(migrate._installed_services(), [])
 
+    def test_listen_is_stopped_before_the_copy_and_its_environment_never_copied(self):
+        # Before this the meeting worker was not in the orders: it kept running through the copy, never came back,
+        # and .venv-listen (absolute paths) went to the new Mac.
+        self.plist("listen")
+        self.plist("scheduler")
+        self.assertEqual(migrate._installed_services(), ["autonomy", "listen"])
+        self.assertEqual(migrate.SERVICE_START_ORDER[-1], "listen")
+        self.assertIn("listen", migrate.FORCE_OK)
+
 
 class SchedulerIdleTest(MigCase):
     def test_no_scheduler_returns_empty(self):
@@ -240,8 +249,8 @@ class StopServiceTest(MigCase):
             self.assertEqual([c.args[1:] for c in shaft.call_args_list],
                              [("web", "off"), ("web", "off")])
 
-    def test_force_flag_set_is_exactly_the_four_verbs(self):
-        self.assertEqual(migrate.FORCE_OK, {"autonomy", "api", "embed", "model"})
+    def test_force_flag_set_is_exactly_the_verbs_whose_off_takes_it(self):
+        self.assertEqual(migrate.FORCE_OK, {"autonomy", "api", "embed", "model", "listen"})
 
 
 class ManifestTest(MigCase):
@@ -278,7 +287,8 @@ class CopyTest(MigCase):
         project_rsync = next(c for c in self.runner.calls if c[0] == "rsync" and "--delete" in c)
         self.assertIn("--delete", project_rsync)
         self.assertIn("--stats", project_rsync)
-        for e in ("--exclude=/.venv-ui", "--exclude=/.venv-bonsai", "--exclude=/.venv-ft", "--exclude=/.browsers",
+        for e in ("--exclude=/.venv-ui", "--exclude=/.venv-bonsai", "--exclude=/.venv-ft", "--exclude=/.venv-listen",
+                  "--exclude=/.browsers",
                   "--exclude=/.browsers.new", "--exclude=/.browsers.old",
                   "--exclude=/.supervisor/migration/incoming",
                   "--exclude=/.supervisor/migration/source-state.json"):
