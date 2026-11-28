@@ -91,6 +91,11 @@ or Tailscale Funnel.
 - The native apps' API (`/app/v1`) needs the same login and host and a paired device's bearer token. It reads no
   cookie, and the web pages accept no bearer, so a browser can never send an app credential on its own.
   `shaft web unpair` revokes a device.
+- An instance's artifacts (interactive pages it writes under `notes/artifacts/`) are its own code, which may come
+  from what it read on the web. They run with nothing of yours: the web UI serves each with its own
+  Content-Security-Policy, `sandbox allow-scripts` (an opaque origin with no cookie or storage) and `default-src
+  'none'` (nothing loaded or sent), framed by the web UI alone; the apps load it as a string in a web view with no
+  persistent storage, a rule list that blocks every load and no script handler, never with the bearer.
 
 ### The loopback path for the Mac app
 

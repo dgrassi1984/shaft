@@ -1570,6 +1570,16 @@ class FixturesTest(AppTest):
         (self.sup / "web" / "comments" / "wisp.json").write_text(json.dumps(store))
         self.keep("docs", self.get(f"/app/v1/docs/wisp?cid={CID}"))
         self.keep("doc-comments", self.get(f"/app/v1/docs/wisp/doc?path=ledger.md&cid={CID}"))
+        art = self.inst / "wisp" / "notes" / "artifacts" / "ledger-board"
+        art.mkdir(parents=True)
+        (art / "index.html").write_text('<!doctype html><html><head><title>Ledger board</title>'
+                                        '<script src="draw.js"></script></head><body><svg id="c"></svg></body></html>')
+        (art / "draw.js").write_text("document.title += ' · ' + window.SHAFT_DATA.total;")
+        (art / "data.json").write_text('{"total": 1234.5, "days": [["2026-11-02", 600], ["2026-11-03", 634.5]]}')
+        for f in art.iterdir():
+            os.utime(f, (1793710800.0, 1793710800.0))
+        self.keep("artifacts", self.get("/app/v1/artifacts/wisp"))
+        self.keep("artifact-page", self.get("/app/v1/artifacts/wisp/page?slug=ledger-board"))
         webpush._save_queue({self.device: {"pending": [
             {"title": "wisp replied", "body": "Done.", "url": "/i/wisp/chat", "tag": "wisp", "at": time.time()},
             {"title": "wisp asks", "body": "Should the nightly report keep the per-account lines?",
@@ -1652,7 +1662,7 @@ class FixturesTest(AppTest):
 
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
-                 "earlier", "ended", "cleared", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
+                 "earlier", "ended", "cleared", "instances", "docs", "doc-comments", "artifacts", "artifact-page", "push-latest", "errors", "pair", "chats",
                  "send", "feedback-response", "retried", "plan", "cycles", "cycle", "stream", "from"}
         self.assertEqual(set(self.out), names)
         write_or_check_fixtures(self, self.out)

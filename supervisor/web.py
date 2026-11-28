@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from . import apns, web_icons, web_pages
+from .artifacts import HEADER_POLICY as ARTIFACT_CSP    # an artifact page's own policy (_secured, _artifact)
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, on_off, port, log, read_beneath
@@ -375,8 +376,11 @@ def _launch(name: str, versioned: bool) -> Response:
 
 
 def _secured(r: Response) -> Response:
-    r.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
-                      "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+    # An artifact's page (_artifact) keeps its own policy, a sandbox that lets it reach nothing, and is framed by the
+    # artifacts tab of this origin; every other answer is this site's own page under CSP, framed by no one.
+    own = r.headers.get("Content-Security-Policy") == ARTIFACT_CSP
+    r.headers.update({"Content-Security-Policy": ARTIFACT_CSP if own else CSP, "X-Content-Type-Options": "nosniff",
+                      "Referrer-Policy": "no-referrer", "X-Frame-Options": "SAMEORIGIN" if own else "DENY",
                       # a page open since before an update compares this with its own scripts' version
                       "X-Shaft-Static": web_pages.STATIC_VERSION})
     r.headers.setdefault("Cache-Control", "no-store")
@@ -952,6 +956,10 @@ def _get(req: Request, csrf: str) -> Response | None:
         except webpush.PushError as e:
             return Response(503, json.dumps({"error": str(e)}).encode(), {"Content-Type": "application/json"})
         return Response(200, json.dumps(data).encode(), {"Content-Type": "application/json"})
+    if m := re.match(r"^/fragment/artifacts/([A-Za-z0-9_-]+)$", path):
+        if m[1] not in names:
+            return None
+        return _html(200, _artifacts_live(m[1], qs.get("a", "")))
     if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -1308,12 +1316,41 @@ def _live(name: str) -> dict:
     return next((i for i in overview()["instances"] if i["name"] == name), {})
 
 
+def _artifacts_live(name: str, chosen: str) -> Html:
+    from . import artifacts, web_views as v
+    try:
+        listing = artifacts.listing(name)
+    except (Exception, SystemExit) as e:          # say what failed: an empty list would read as "none yet"
+        log(f"web: {name}'s artifacts: {type(e).__name__}: {e}")
+        return web_pages.h('<p class="bad">Artifacts not readable: {e}</p>', e=f"{type(e).__name__}: {e}")
+    if not chosen and listing:
+        chosen = listing[0]["slug"]
+    return v.artifacts_live(name, listing, chosen)
+
+
+def _artifact(name: str, slug: str) -> Response:
+    """An artifact's page, for the sandboxed frame of the artifacts tab: the instance's code, so it carries its own
+    policy (artifacts.HEADER_POLICY, kept by _secured) — an opaque origin that loads and sends nothing."""
+    from . import artifacts
+    try:
+        page = artifacts.page(name, slug)
+    except artifacts.Refused as e:
+        return Response(404, str(e).encode(), {"Content-Type": "text/plain; charset=utf-8"})
+    return Response(200, page["html"].encode(), {"Content-Type": "text/html; charset=utf-8",
+                                                 "Content-Security-Policy": ARTIFACT_CSP})
+
+
 def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
                    doc_sort: str = "") -> Response | None:
     from . import dashboard, panel, web_views as v
     from .core import instance_root, journal_entries
     if tab in ("files", "file"):
         return _instance_files(name, tab, qs, names, csrf)
+    if tab == "artifacts":
+        chosen = qs.get("a", "")
+        return _html(200, v.artifacts_page(name, _artifacts_live(name, chosen), chosen, names, csrf))
+    if tab == "artifact":
+        return _artifact(name, qs.get("a", ""))
     if tab == "":
         return _html(200, v.instance_summary(name, panel.instance_detail(name), _live(name), names, csrf))
     if tab == "judge":

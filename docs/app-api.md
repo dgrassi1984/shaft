@@ -1096,6 +1096,34 @@ app reads the document again (§10.2).
 - `pid` is made by the app (§1.3); posting the same `pid` again returns the thread that already holds it.
 - `text` at most 20000 characters; `anchor.exact` at most 2000, `prefix`/`suffix` at most 32, `start` ≥ 0.
 
+### 10.7 `GET /app/v1/artifacts/<n>`
+
+The instance's artifacts: interactive pages it writes under `notes/artifacts/<slug>/` (`index.html`, an optional
+`data.json`, `.js` and `.css` files beside them; web-and-api.md, "Artifacts"). The last changed first, at most 100.
+
+| Field | Type | |
+|---|---|---|
+| `dir` | str | `"notes/artifacts"` |
+| `artifacts` | list | `{slug, title, mtime, bytes, version, problems}` |
+| `slug` | str | its folder: lowercase letters, digits, `-`, `_` |
+| `title` | str | the page's `<title>`, else the slug |
+| `mtime` | timestamp | its newest file |
+| `bytes` | int | the assembled page's size (0 when it cannot be assembled) |
+| `version` | str | changes whenever anything the page shows does (its files, its data): poll this list and load the page again only when the shown one's version moved |
+| `problems` | list of str | what the page lacks or wants from the network, an invalid `data.json`, a size over the limits: shown above the page |
+
+`500 internal` "artifacts not readable: …" when the folder cannot be read.
+
+### 10.8 `GET /app/v1/artifacts/<n>/page?slug=<slug>`
+
+One artifact as a single self-contained document: `{slug, title, version, problems, html}`. Its scripts and styles
+are inlined, `data.json` is `window.SHAFT_DATA`, and its first element is a Content-Security-Policy `<meta>` that
+lets it load nothing (no network, no forms, no frames). It is the instance's code: the app shows it in a web view
+with no persistent storage and a rule list that blocks every load, loads it as a string with no base URL (never from
+this server's address, never with the bearer), adds no script handler, and opens a link the operator taps in the
+browser. `404 not_found` when there is no such artifact; `409 refused` for a bad slug or a page over the size limits;
+`400 bad_request` without `slug`.
+
 ## 11. Push
 
 Native push goes through APNs (`supervisor/apns.py`). The notification carries only the title ("example

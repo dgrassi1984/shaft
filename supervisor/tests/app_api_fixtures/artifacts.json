@@ -1,0 +1,13 @@
+{
+  "dir": "notes/artifacts",
+  "artifacts": [
+    {
+      "slug": "ledger-board",
+      "title": "Ledger board",
+      "mtime": "2026-11-03T14:00:00+01:00",
+      "bytes": 683,
+      "version": "f6dd107703c46bee",
+      "problems": []
+    }
+  ]
+}

@@ -700,6 +700,30 @@ public struct DocsList: Codable, Sendable, Equatable {
     public var docs: [DocEntry]
 }
 
+public struct ArtifactsList: Codable, Sendable, Equatable {
+    public var dir: String
+    public var artifacts: [ArtifactEntry]
+}
+
+public struct ArtifactEntry: Codable, Sendable, Equatable, Identifiable {
+    public var slug: String
+    public var title: String
+    public var mtime: Date
+    public var bytes: Int
+    public var version: String
+    public var problems: [String]
+
+    public var id: String { slug }
+}
+
+public struct ArtifactPage: Codable, Sendable, Equatable {
+    public var slug: String
+    public var title: String
+    public var version: String
+    public var problems: [String]
+    public var html: String
+}
+
 public struct DocEntry: Codable, Sendable, Equatable, Identifiable {
     public var path: String
     public var bytes: Int

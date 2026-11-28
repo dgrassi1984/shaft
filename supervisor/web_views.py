@@ -21,7 +21,7 @@ _DOT = Html('<span class="mark" title="changed in this chat">●</span> ')
 # The documents drawer's full-screen toggle: both glyphs, CSS shows the one aria-pressed calls for (web.js flips it).
 FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc aria-pressed="false" title="Full screen" '
                'aria-label="Full screen">{on}{off}</button>', on=ICONS["expand"], off=ICONS["collapse"])
-INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
+INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("artifacts", "Artifacts"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Cycles"), ("journal", "Journal"), ("activity", "Activity")]
 BUSY_ICONS = {"in a cycle": "busy", "working": "busy", "sleeping": "sleep", "paused by you": "pause",
@@ -135,6 +135,39 @@ def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_nu
                    crumbs=join(crumbs), noun="entry" if total == 1 else "entries", total=total, page=page_number),
                  table(["Name", "Size", "Modified", "Actions"], rows), h('<p>{links}</p>', links=join(paging))])
     return instance_frame(name, "files", "Files", section("Files", body), names, csrf)
+
+
+def artifacts_live(name: str, listing: list[dict], chosen: str) -> Html:
+    """The artifacts tab's polled part: the list, and the chosen one in a sandboxed frame whose address carries its
+    version, so a refresh that changed nothing leaves the frame alone and a new version reloads it (web.js data-poll
+    replaces the content only when it differs)."""
+    base = f"/i/{q(name)}/artifacts?a="
+    rows = [[link(base + q(a["slug"]), a["title"]) if a["slug"] != chosen else h("<strong>{t}</strong>", t=a["title"]),
+             a["slug"], when_label(a["mtime"]), size_label(a["bytes"]),
+             h('<span class="bad">{n} problem(s)</span>', n=len(a["problems"])) if a["problems"] else "—"]
+            for a in listing]
+    if not listing:
+        return h('<p class="dim">No artifacts yet. An instance makes one by writing '
+                 '<code>notes/artifacts/&lt;name&gt;/index.html</code>.</p>')
+    shown = next((a for a in listing if a["slug"] == chosen), None)
+    view = Html("")
+    if shown:
+        problems = (h('<div class="artprob" role="status"><p class="bad">{t} has problems:</p>{list}</div>', t=shown["title"],
+                      list=lines(shown["problems"])) if shown["problems"] else Html(""))
+        view = h('{problems}<iframe class="artifact" title="{t}" sandbox="allow-scripts" referrerpolicy="no-referrer" '
+                 'src="/i/{n}/artifact?a={s}&amp;v={v}"></iframe>',
+                 problems=problems, t=shown["title"], n=q(name), s=q(shown["slug"]), v=shown["version"])
+    elif chosen:
+        view = h('<p class="bad">No artifact {s} (any more).</p>', s=chosen)
+    return join([table(["Artifact", "Folder", "Changed", "Size", "Problems"], rows), view])
+
+
+def artifacts_page(name: str, live: Html, chosen: str, names: list[str], csrf: str) -> Html:
+    # Stamped with the fragment's own ETag: the first refresh is a 304, so the frame is not loaded twice on opening
+    url = f"/fragment/artifacts/{q(name)}?a={q(chosen)}"
+    body = h('<div data-poll="{u}" data-every="2000" data-etag="{tag}" data-etag-url="{u}">{live}</div>',
+             u=url, tag=etag(str(live).encode()), live=live)
+    return instance_frame(name, "artifacts", "Artifacts", section("Artifacts", body), names, csrf)
 
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str,
