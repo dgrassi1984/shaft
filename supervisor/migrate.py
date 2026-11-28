@@ -30,10 +30,11 @@ from . import core
 
 # Launchd labels are global: a worktree run must not stop the live services, so the live-checkout check (step 1)
 # refuses a checkout whose plists point elsewhere. The order matches docs/migration.md §2 step 4.
-SERVICE_STOP_ORDER = ("scheduler", "telegram", "web", "api", "embed", "model")
-SERVICE_START_ORDER = ("model", "embed", "api", "web", "telegram")
+# listen: the meeting worker; its .venv-listen is not copied (absolute paths), `listen on` rebuilds it on the new Mac.
+SERVICE_STOP_ORDER = ("scheduler", "telegram", "listen", "web", "api", "embed", "model")
+SERVICE_START_ORDER = ("model", "embed", "api", "web", "telegram", "listen")
 VERB = {"scheduler": "autonomy"}              # the scheduler's launchd service is `autonomy`
-FORCE_OK = {"autonomy", "api", "embed", "model"}   # the four verbs whose `off` accepts --force
+FORCE_OK = {"autonomy", "api", "embed", "model", "listen"}   # the verbs whose `off` accepts --force
 NETWORK_SERVICES = ("api", "web")
 UI_PYTHON_CHECK = "import sys; sys.exit(sys.version_info < (3, 12))"
 SUP_RE = re.compile(r"(?:^|\s)-m\s+(?:supervisor(?:\.[\w.]+)?|shaft(?:\.plugin_runner)?)(?:\s|$)")
@@ -260,7 +261,7 @@ def _check_no_shaft_local(mig: _Mig) -> None:
 
 # -- launchd services -------------------------------------------------------------
 def _installed_services() -> list[str]:
-    """The installed services, as verbs, in stop order (autonomy, telegram, web, api, embed, model)."""
+    """The installed services, as verbs, in stop order (autonomy, telegram, listen, web, api, embed, model)."""
     agents = core.HOME / "Library" / "LaunchAgents"
     return [VERB.get(name, name) for name in SERVICE_STOP_ORDER
             if (agents / f"com.shaft.{name}.plist").exists()]
@@ -868,7 +869,7 @@ def _copy(mig: _Mig) -> None:
     r = runner.ssh(f"mkdir -p {shlex.quote(dest + '/.supervisor/migration/incoming')}", host=host)
     if r.returncode:
         raise Stop(f"cannot create the incoming marker on {host}: {_out(r)}")
-    excludes = ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.browsers", "/.browsers.new", "/.browsers.old",
+    excludes = ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.venv-listen", "/.browsers", "/.browsers.new", "/.browsers.old",
                 "/.supervisor/migration/incoming", "/.supervisor/migration/source-state.json"]
     r = runner.rsync(["-a", "--delete", "--stats", *[f"--exclude={e}" for e in excludes]],
                      str(core.PROJECT) + "/", _remote_spec(host, dest + "/"))
@@ -939,7 +940,7 @@ def _copy_commands(mig: _Mig) -> list[str]:
     dest = _dest(mig.runner, mig.host)
     host = mig.host
     excludes = " ".join(f"--exclude={e}" for e in
-                        ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.browsers", "/.browsers.new", "/.browsers.old",
+                        ["/.venv-ui", "/.venv-bonsai", "/.venv-ft", "/.venv-listen", "/.browsers", "/.browsers.new", "/.browsers.old",
                          "/.supervisor/migration/incoming", "/.supervisor/migration/source-state.json"])
     lines = [f"rsync -a --delete --stats {excludes} {core.PROJECT}/ {host}:{dest}/"]
     if (core.HOME / "Library" / "Application Support" / "SHAFT").is_dir():
@@ -975,7 +976,7 @@ def _source_steps(mig: _Mig) -> list[Step]:
               "brew bundle dump --force --file=.supervisor/migration/Brewfile"],
              lambda: _freeze(mig)),
         Step("6", "Stop the installed services",
-             "in the doc's order: autonomy, telegram, web, api, embed, model; `off` deletes each plist",
+             "in the doc's order: autonomy, telegram, listen, web, api, embed, model; `off` deletes each plist",
              lambda: _stop_commands(mig),
              lambda: _stop_services(mig)),
         Step("7", "Write the manifest",
@@ -1444,7 +1445,7 @@ def _target_steps(mig: _Mig) -> list[Step]:
              ["bin/shaft settings"],
              lambda: _settings_step(mig)),
         Step("7", "Start the services",
-             "model, embed, api, web, telegram — only those installed; model on skipped if the pack is absent",
+             "model, embed, api, web, telegram, listen — only those installed (listen on rebuilds .venv-listen); model on skipped if the pack is absent",
              lambda: _start_commands(mig), lambda: _start_services(mig)),
         Step("8", "Check the Codex login",
              "only if an instance uses a codex/* model; `missing` runs codex login", ["bin/shaft codex status"],

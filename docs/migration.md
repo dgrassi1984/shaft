@@ -56,6 +56,7 @@ Assistant stay manual (below).
 | Mac app's Python and uv | `.runtime/` | copied with the folder |
 | API and web exposure | Tailscale Serve and SHAFT's local settings on the old Mac | **restore** each service in its recorded mode |
 | Terminal client, Bonsai, and fine-tuning environments | `.venv-ui`, `.venv-bonsai`, `.venv-ft` | **recreate** |
+| Meeting worker's environment | `.venv-listen` | **recreate**: `listen on` rebuilds it, with its ffmpeg |
 | Local model packs | `.models/` | copy, or download again |
 | Grok CLI | `~/.grok/bin/grok` (`SHAFT_GROK_BIN`) | **install** the CLI if any instance uses a `grok/*` model; its login in `.supervisor/grok-home/` (`SHAFT_GROK_HOME`) is copied with the folder |
 | Codex | ChatGPT for Mac or the Codex CLI | **install** either if any instance uses a `codex/*` model; its login in `.supervisor/codex-home/` is copied with the folder |
@@ -168,6 +169,7 @@ From the project folder on the old Mac:
    ```bash
    bin/shaft autonomy off
    bin/shaft telegram off
+   bin/shaft listen off
    bin/shaft web off
    bin/shaft api off
    bin/shaft embed off
@@ -176,7 +178,8 @@ From the project folder on the old Mac:
 
    `off` stops the service and deletes its plist, so nothing starts again at
    login. `autonomy off`, `api off`, `embed off` and `model off` refuse while
-   a run needs them: they print `not now: …`, exit 1, and stop nothing.
+   a run needs them, and `listen off` while a meeting is processing: they print `not now: …`, exit 1,
+   and stop nothing.
    Adding `--force` stops the service anyway and leaves the runs unfinished.
    A service you never installed is not an error to worry about, but a
    `not now:` line is. That service is still running. Do not continue until
@@ -219,7 +222,7 @@ external disk, run the same `rsync -a` commands through the disk. The trailing
 To save time and space, skip the parts the new Mac rebuilds:
 
 ```bash
-rsync -a --exclude /.venv-ui --exclude /.venv-bonsai --exclude /.venv-ft --exclude /.browsers \
+rsync -a --exclude /.venv-ui --exclude /.venv-bonsai --exclude /.venv-ft --exclude /.venv-listen --exclude /.browsers \
   old-mac.local:Development/shaft/ ~/Development/shaft/
 ```
 
@@ -325,6 +328,7 @@ bin/shaft embed on
 bin/shaft api on
 bin/shaft web on
 bin/shaft telegram on
+bin/shaft listen on   # only if Listen ran on the old Mac
 ```
 
 Add `--local` to `api on` or `web on` if that service was local-only on the
