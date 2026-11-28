@@ -765,7 +765,7 @@ class ListenSetupTest(unittest.TestCase):
 
         def run(command, **kwargs):
             ran.append(command)
-            if command[1:3] == ["venv", "--python"]:
+            if command[1:3] == ["venv", "--clear"]:
                 self.executable(self.venv / "bin" / "python")
             out = str(wheel) if "-c" in command else "ffmpeg version 9.0" if command[-1] == "-version" else ""
             return subprocess.CompletedProcess(command, 0, out, "")
@@ -776,7 +776,7 @@ class ListenSetupTest(unittest.TestCase):
                 mock.patch.object(listen_setup.platform, "system", return_value="Darwin"), \
                 mock.patch.object(listen_setup.platform, "machine", return_value="arm64"):
             done = listen_setup.setup()
-            self.assertEqual(ran[0], [uv, "venv", "--python", core.PYTHON, str(self.venv)])
+            self.assertEqual(ran[0], [uv, "venv", "--clear", "--python", core.PYTHON, str(self.venv)])
             self.assertEqual(ran[1], [uv, "pip", "install", "--python", str(self.venv / "bin" / "python"),
                                       *listen_setup.PACKAGES])
             self.assertIn("imageio-ffmpeg==0.8.2", listen_setup.PACKAGES)

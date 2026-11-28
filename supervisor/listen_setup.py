@@ -55,8 +55,8 @@ def setup() -> list[str]:
         raise SetupFailed("Listen runs only on an Apple Silicon Mac (its speech recognition uses MLX).")
     uv = pyenv.uv_binary()
     done = []
-    if not python().exists():
-        _run([uv, "venv", "--python", core.PYTHON, str(VENV)])
+    if not python().exists():   # none, or one copied from another Mac whose interpreter link points nowhere
+        _run([uv, "venv", "--clear", "--python", core.PYTHON, str(VENV)])
         done.append(f"made {VENV} on {core.PYTHON}")
     _run([uv, "pip", "install", "--python", str(python()), *PACKAGES])
     done.append("engines: " + ", ".join(PACKAGES))
