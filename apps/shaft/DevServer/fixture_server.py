@@ -111,6 +111,8 @@ def setup(base: Path, port: int):
         if hasattr(module, "SUP_DIR"):
             mock.patch.object(module, "SUP_DIR", base / "sup").start()
 
+    from supervisor import listen_setup
+    mock.patch.object(listen_setup, "missing", return_value=None).start()   # its fake Listen worker is set up
     mock.patch.object(version, "SERVICES", base / "sup" / "services").start()
     mock.patch.object(core, "SETTINGS_FILE", base / "sup" / "settings.env").start()
 

@@ -127,7 +127,8 @@ def _publish(metadata: dict, sidecar: bytes, source: Path | None = None) -> dict
             (folder / "upload").mkdir()
         else:
             size, digest = _assemble(folder / f"audio.{metadata['ext']}", (source,))
-            metadata.update(state="queued", size=size, sha256=digest)
+            metadata.update(size=size, sha256=digest)
+            _queue(metadata)
         while True:
             metadata["id"] = prefix + secrets.token_hex(2)
             _save(folder, metadata)
@@ -380,8 +381,11 @@ def finish(meeting_id: str, *, size=None, sha256=None, chunks=None) -> dict:
                 raise Conflict(f"Chunk {chunks} and later were sent, but finish names {chunks} chunk(s).")
             parts = (upload / str(index) for index in range(chunks))
             _assemble(folder / f"audio.{metadata['ext']}", parts, expected=(size, sha256))
-            metadata.update(state="queued", size=size, sha256=sha256, chunks_received=received[:chunks])
+            metadata.update(size=size, sha256=sha256, chunks_received=received[:chunks])
+            _queue(metadata)
             _save(folder, metadata)
+            if metadata["state"] == "failed":
+                tell_operator(metadata)
         elif (metadata["size"], metadata["sha256"], len(metadata["chunks_received"])) != (size, sha256, chunks):
             raise Conflict("This meeting is no longer uploading.")
         if upload.exists():
@@ -463,9 +467,42 @@ def reprocess(meeting_id: str) -> dict:
             metadata.setdefault("notified", [])  # Already ready before watches were introduced.
             metadata["published"] = True  # Preserve access for older meetings once they leave ready.
         metadata.pop("worker_crashes", None)
-        metadata.update(state="queued", error=None, processed_with=None)
+        metadata.update(processed_with=None)
+        _queue(metadata)
         _save(folder, metadata)
         return metadata
+
+
+def _queue(metadata: dict) -> None:
+    """Queue a meeting for Listen, or, when this server has no Listen worker set up, fail it saying so: queued with
+    no worker it would wait forever with no word (issue #58). Its audio is kept; `shaft listen on` queues it again
+    (requeue_waiting)."""
+    from . import listen_setup
+    reason = listen_setup.missing()
+    if reason is None:
+        metadata.pop("waiting_for_listen", None)
+        metadata.update(state="queued", error=None)
+    else:
+        metadata.update(state="failed", error=reason, waiting_for_listen=True)
+
+
+def requeue_waiting() -> list[str]:
+    """Queue again every meeting failed only because no Listen worker was set up (`shaft listen on` calls it once the
+    worker runs); returns their ids."""
+    done = []
+    for row in list_meetings():
+        if row["state"] != "failed" or not row.get("waiting_for_listen"):
+            continue
+        try:
+            with _locked(row["id"]) as (folder, metadata):
+                if metadata["state"] == "failed" and metadata.get("waiting_for_listen"):
+                    _queue(metadata)
+                    if metadata["state"] == "queued":   # still not set up: left as it was
+                        _save(folder, metadata)
+                        done.append(metadata["id"])
+        except Missing:   # deleted since it was listed: the others are still queued (review 2026-11-28)
+            continue
+    return done
 
 
 def recover_processing(meeting_id: str) -> None:
@@ -666,7 +703,9 @@ def command(args) -> int:
             result = (get(args.id) if args.action == "show"
                       else reprocess(args.id) if args.action == "reprocess"
                       else import_audio(Path(args.file), title=args.title, mode=args.mode))
-            line = json.dumps(result, indent=2) if args.action == "show" else f"Queued {result['id']}."
+            line = (json.dumps(result, indent=2) if args.action == "show"
+                    else f"Queued {result['id']}." if result["state"] == "queued"
+                    else f"Kept {result['id']}, not queued: {result['error']}")
     except (Error, OSError) as e:
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))
