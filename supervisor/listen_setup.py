@@ -19,6 +19,8 @@ PACKAGES = ("pyannote.audio==4.1.1", "mlx-whisper==0.4.3", "soundfile==0.14.0", 
             "imageio-ffmpeg==0.8.2")
 VENV = listen_pipeline.VENV_FFMPEG.parent.parent
 NOT_SET_UP = "Listen is not set up on the SHAFT server: run `shaft listen on` there, then Process Again."
+NO_TOKEN = ("Listen has no HF_TOKEN on the SHAFT server: accept the diarisation model's conditions, run "
+            "`shaft secrets set HF_TOKEN` and `shaft listen on` there.")
 
 
 class SetupFailed(RuntimeError):
@@ -30,11 +32,15 @@ def python() -> Path:
 
 
 def missing() -> str | None:
-    """Why no Listen worker can take a meeting now (NOT_SET_UP), or None. A worker that is installed but stopped or
-    restarting still takes it later, so only a missing environment or service counts."""
+    """Why no Listen worker can take a meeting now (NOT_SET_UP, NO_TOKEN), or None. Set up means the environment, the
+    service loaded in launchd (a plist whose bootstrap failed is not one) and the token the diarisation model needs:
+    queued without one of them, a meeting would wait with no word or fail anyway. A worker that is loaded but between
+    restarts still takes it later."""
     from . import autonomy
-    if not python().exists() or not autonomy.installed("listen"):
+    if not python().exists() or not autonomy.installed("listen") or not autonomy.loaded("listen"):
         return NOT_SET_UP
+    if not core.secrets_env().get("HF_TOKEN"):
+        return NO_TOKEN
     return None
 
 
@@ -64,7 +70,7 @@ def setup() -> list[str]:
                capture_output=True, text=True).stdout.strip()
     link = listen_pipeline.VENV_FFMPEG
     if not (link.is_symlink() and os.readlink(link) == exe):
-        staged = link.with_name(".ffmpeg-link")
+        staged = link.with_name(f".ffmpeg-link-{os.getpid()}")   # two setups at once never share it
         staged.unlink(missing_ok=True)
         staged.symlink_to(exe)
         os.replace(staged, link)   # never a moment without one for a running worker

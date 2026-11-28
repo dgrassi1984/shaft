@@ -491,13 +491,17 @@ def requeue_waiting() -> list[str]:
     worker runs); returns their ids."""
     done = []
     for row in list_meetings():
-        if row["state"] == "failed" and row.get("waiting_for_listen"):
+        if row["state"] != "failed" or not row.get("waiting_for_listen"):
+            continue
+        try:
             with _locked(row["id"]) as (folder, metadata):
                 if metadata["state"] == "failed" and metadata.get("waiting_for_listen"):
                     _queue(metadata)
-                    if metadata["state"] == "queued":   # still no worker: left as it was
+                    if metadata["state"] == "queued":   # still not set up: left as it was
                         _save(folder, metadata)
                         done.append(metadata["id"])
+        except Missing:   # deleted since it was listed: the others are still queued (review 2026-11-28)
+            continue
     return done
 
 
@@ -699,7 +703,9 @@ def command(args) -> int:
             result = (get(args.id) if args.action == "show"
                       else reprocess(args.id) if args.action == "reprocess"
                       else import_audio(Path(args.file), title=args.title, mode=args.mode))
-            line = json.dumps(result, indent=2) if args.action == "show" else f"Queued {result['id']}."
+            line = (json.dumps(result, indent=2) if args.action == "show"
+                    else f"Queued {result['id']}." if result["state"] == "queued"
+                    else f"Kept {result['id']}, not queued: {result['error']}")
     except (Error, OSError) as e:
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))

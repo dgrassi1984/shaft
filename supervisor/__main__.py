@@ -541,7 +541,7 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
-def cmd_listen(action: str) -> int:
+def cmd_listen(action: str, force: bool = False) -> int:
     """`shaft listen on` makes or updates the worker's environment first (listen_setup: the app's uv, pinned engines,
     an ffmpeg of its own), then installs the service and queues again the meetings that failed only for want of it.
     A plist pointing at a missing .venv-listen used to leave every meeting queued with no word (issue #58)."""
@@ -553,9 +553,15 @@ def cmd_listen(action: str) -> int:
         except RuntimeError as e:   # SetupFailed, or no uv (pyenv.uv_binary says which install it is and the fix)
             print(f"shaft listen on: {e}", file=sys.stderr)
             return 1
+        # The guard ran before setup; a worker idle then may have taken a meeting while uv worked (review 2026-11-28).
+        if refused := actions.cli_guard("listen", "on", force):
+            print(f"{refused}\nThe environment is ready; run `shaft listen on` again to restart the worker.",
+                  file=sys.stderr)
+            return 1
         if not core.secrets_env().get("HF_TOKEN"):
-            print("HF_TOKEN is not set: meetings fail until you accept the diarisation model's conditions and run "
-                  "`shaft secrets set HF_TOKEN` (docs/meetings.md)", file=sys.stderr)
+            print("HF_TOKEN is not set: uploaded meetings wait, marked failed with that reason, until you accept the "
+                  "diarisation model's conditions, run `shaft secrets set HF_TOKEN` and `shaft listen on` again "
+                  "(docs/meetings.md)", file=sys.stderr)
     code = autonomy.service("listen", action)
     if action == "status":
         try:
@@ -2363,7 +2369,7 @@ def _dispatch(args, parser) -> int:
     if args.cmd == "model":
         return autonomy.service("model", args.action)
     if args.cmd == "listen":
-        return cmd_listen(args.action)
+        return cmd_listen(args.action, args.force)
     if args.cmd == "embed":
         return autonomy.service(args.cmd, args.action)
     if args.cmd == "top":

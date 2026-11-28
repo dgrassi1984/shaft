@@ -94,9 +94,11 @@ Run `shaft listen on` again after setting `HF_TOKEN`, or at any time: it says wh
 `shaft listen status` to check the job, the environment and the ffmpeg it uses, and `shaft listen off` to stop it.
 The log is `.supervisor/com.shaft.listen.log`.
 
-A recording uploaded to a server where Listen is not set up (no `.venv-listen` or no launchd job) is kept but marked
-`failed` with that reason, and the operator gets the push, rather than waiting `queued` with no word. `shaft listen
-on` queues those meetings again once the job runs; **Process Again** in the apps does the same.
+A recording uploaded to a server where Listen is not set up (no `.venv-listen`, no loaded launchd job, or no
+`HF_TOKEN`) is kept but marked `failed` with that reason, and the operator gets the push, rather than waiting `queued`
+with no word. `shaft listen on` queues those meetings again once all three are there; **Process Again** in the apps
+does the same. If a meeting starts processing while `listen on` installs, it does not restart the worker: run it again
+when the meeting ends.
 
 ## Processing and transcripts
 

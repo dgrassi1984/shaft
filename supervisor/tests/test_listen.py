@@ -751,13 +751,47 @@ class ListenSetupTest(unittest.TestCase):
                 speakers.clip("example", "M1", 0)
         self.assertEqual(str(e.exception), "Could not read speaker clip: no ffmpeg: run `shaft listen on`")
 
-    def test_missing_until_both_the_environment_and_the_service_exist(self):
+    def test_missing_until_the_environment_the_loaded_job_and_the_token_exist(self):
+        # Review 2026-11-28: a plist whose bootstrap failed, or no HF_TOKEN, left uploads queued with no word too.
+        token = self.enterContext(mock.patch.object(core, "secrets_env", return_value={}))
+        loaded = self.enterContext(mock.patch.object(autonomy, "loaded", return_value=False))
         self.assertEqual(listen_setup.missing(), listen_setup.NOT_SET_UP)
         self.executable(self.venv / "bin" / "python")
         self.assertEqual(listen_setup.missing(), listen_setup.NOT_SET_UP)    # no plist yet
         (self.root / "LaunchAgents").mkdir()
         (self.root / "LaunchAgents" / "com.shaft.listen.plist").write_bytes(b"")
+        self.assertEqual(listen_setup.missing(), listen_setup.NOT_SET_UP)    # written, but launchd never loaded it
+        loaded.return_value = True
+        self.assertEqual(listen_setup.missing(), listen_setup.NO_TOKEN)
+        token.return_value = {"HF_TOKEN": "x"}
         self.assertIsNone(listen_setup.missing())
+
+    def test_import_with_no_listen_says_it_was_kept_not_queued(self):
+        # Review 2026-11-28: the CLI printed "Queued <id>." for a meeting it had just failed.
+        from supervisor.__main__ import main
+        audio = self.root / "call.wav"
+        audio.write_bytes(b"x")
+        with mock.patch.object(core, "SUP_DIR", self.root), \
+                mock.patch.object(listen_setup, "missing", return_value=listen_setup.NOT_SET_UP), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["meetings", "import", str(audio)]), 0)
+        self.assertRegex(out.getvalue(), r"^Kept m-\S+, not queued: Listen is not set up")
+
+    def test_requeue_goes_on_past_a_meeting_deleted_meanwhile(self):
+        rows = [{"id": "m-gone", "state": "failed", "waiting_for_listen": True},
+                {"id": "m-kept", "state": "failed", "waiting_for_listen": True}]
+        kept = {"id": "m-kept", "state": "failed", "waiting_for_listen": True, "error": listen_setup.NOT_SET_UP}
+
+        def locked(meeting_id):
+            if meeting_id == "m-gone":
+                raise meetings.Missing("No such meeting.")
+            return contextlib.nullcontext((self.root, kept))
+
+        with mock.patch.object(meetings, "list_meetings", return_value=rows), \
+                mock.patch.object(meetings, "_locked", side_effect=locked), mock.patch.object(meetings, "_save"), \
+                mock.patch.object(listen_setup, "missing", return_value=None):
+            self.assertEqual(meetings.requeue_waiting(), ["m-kept"])
+        self.assertEqual((kept["state"], kept["error"]), ("queued", None))
 
     def test_setup_uses_the_apps_uv_and_python_pins_the_engines_and_links_the_wheels_ffmpeg(self):
         wheel = self.executable(self.root / "site" / "imageio_ffmpeg" / "binaries" / "ffmpeg-macos-aarch64-v9.0")
@@ -798,7 +832,16 @@ class ListenSetupTest(unittest.TestCase):
             self.assertEqual(cli.cmd_listen("on"), 1)
         service.assert_not_called()
         self.assertIn("shaft listen on: uv pip install … failed", err.getvalue())
+        from supervisor import actions
         with mock.patch.object(listen_setup, "setup", return_value=["engines: …"]), \
+                mock.patch.object(actions, "cli_guard", return_value="not now: meetings are processing: m-2."), \
+                mock.patch.object(autonomy, "service") as service, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(cli.cmd_listen("on"), 1)        # one taken while uv worked: not cut off
+        service.assert_not_called()
+        self.assertIn("meetings are processing: m-2", err.getvalue())
+        with mock.patch.object(listen_setup, "setup", return_value=["engines: …"]), \
+                mock.patch.object(actions, "cli_guard", return_value=""), \
                 mock.patch.object(autonomy, "service", return_value=0) as service, \
                 mock.patch.object(core, "secrets_env", return_value={"HF_TOKEN": "x"}), \
                 mock.patch.object(meetings, "requeue_waiting", return_value=["m-1"]) as requeue, \

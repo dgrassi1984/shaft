@@ -92,6 +92,12 @@ def installed(name: str) -> bool:
     return (AGENTS / f"{SERVICES[name]['label']}.plist").exists()
 
 
+def loaded(name: str) -> bool:
+    """Whether launchd has the service's job loaded (bootstrapped), running or not: `on` writes the plist first, so a
+    failed bootstrap leaves one installed but never loaded."""
+    return _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}").returncode == 0
+
+
 def service_problem(name: str) -> str:
     """Why a service is not up, in launchd's words: not installed, not loaded, or its state and last exit code."""
     label = SERVICES[name]["label"]
