@@ -541,6 +541,35 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
+def cmd_listen(action: str) -> int:
+    """`shaft listen on` makes or updates the worker's environment first (listen_setup: the app's uv, pinned engines,
+    an ffmpeg of its own), then installs the service and queues again the meetings that failed only for want of it.
+    A plist pointing at a missing .venv-listen used to leave every meeting queued with no word (issue #58)."""
+    from . import listen_pipeline, listen_setup, meetings
+    if action == "on":
+        try:
+            for line in listen_setup.setup():
+                print(line)
+        except RuntimeError as e:   # SetupFailed, or no uv (pyenv.uv_binary says which install it is and the fix)
+            print(f"shaft listen on: {e}", file=sys.stderr)
+            return 1
+        if not core.secrets_env().get("HF_TOKEN"):
+            print("HF_TOKEN is not set: meetings fail until you accept the diarisation model's conditions and run "
+                  "`shaft secrets set HF_TOKEN` (docs/meetings.md)", file=sys.stderr)
+    code = autonomy.service("listen", action)
+    if action == "status":
+        try:
+            ffmpeg = listen_pipeline.ffmpeg()
+        except listen_pipeline.FfmpegMissing as e:
+            ffmpeg = str(e)
+        print(f"environment      {listen_setup.VENV} · "
+              + ("ready" if listen_setup.python().exists() else "missing (`shaft listen on` makes it)"))
+        print(f"ffmpeg           {ffmpeg}")
+    if action == "on" and code == 0 and (ids := meetings.requeue_waiting()):
+        print(f"queued again: {', '.join(ids)}")
+    return code
+
+
 def cmd_alerts(action: str | None, ids: list[str]) -> int:
     """The control panel's open alerts (panel.extras, as shaft top and the web UI show them), or dismiss some."""
     from . import dashboard, panel
@@ -2333,7 +2362,9 @@ def _dispatch(args, parser) -> int:
         return telegram.command(args.action, args.name, args.json, force=args.force)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
-    if args.cmd in ("embed", "listen"):
+    if args.cmd == "listen":
+        return cmd_listen(args.action)
+    if args.cmd == "embed":
         return autonomy.service(args.cmd, args.action)
     if args.cmd == "top":
         ui_python = PROJECT / ".venv-ui" / "bin" / "python"

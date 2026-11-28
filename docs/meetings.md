@@ -75,14 +75,13 @@ invitees' names join the prompt (below).
 
 ## Set up the Listen worker
 
-On an Apple Silicon Mac with `uv`, run these commands from the SHAFT checkout.
-
-```sh
-brew install ffmpeg
-uv venv --python 3.12 .venv-listen
-uv pip install --python .venv-listen/bin/python \
-  'pyannote.audio==4.1.1' 'mlx-whisper==0.4.3' 'soundfile==0.14.0' 'numpy==2.5.5'
-```
+On an Apple Silicon Mac, run `shaft listen on` from the SHAFT checkout. It needs no admin rights and no Homebrew: it
+makes `.venv-listen` with the uv and the Python SHAFT runs on (the Mac app's own, in `.runtime/`, when the app
+installed SHAFT), installs the pinned engines (`pyannote.audio` 4.1.1, `mlx-whisper` 0.4.3, `soundfile` 0.14.0,
+`numpy` 2.5.5) and `imageio-ffmpeg` 0.8.2, whose wheel carries a self-contained ffmpeg, linked as
+`.venv-listen/bin/ffmpeg`, then installs and starts the launchd job. The first run downloads a few GB; a rerun
+installs nothing new. The worker and the speaker clips use that ffmpeg, or one on PATH or in Homebrew's folders
+when there is none.
 
 Accept the conditions for the gated model, then set the supervisor's `HF_TOKEN` with
 `shaft secrets set HF_TOKEN`. Listen uses pyannote's [Community-1 speaker diarization
@@ -91,8 +90,13 @@ model](https://huggingface.co/pyannote/speaker-diarization-community-1) under CC
 [converted by MLX Community](https://huggingface.co/mlx-community/whisper-large-v3-turbo).
 The engines download their models and run on the Mac.
 
-Run `shaft listen on` to install and start the launchd job. Use `shaft listen status` to check it and
-`shaft listen off` to stop it. The log is `.supervisor/com.shaft.listen.log`.
+Run `shaft listen on` again after setting `HF_TOKEN`, or at any time: it says when the token is missing. Use
+`shaft listen status` to check the job, the environment and the ffmpeg it uses, and `shaft listen off` to stop it.
+The log is `.supervisor/com.shaft.listen.log`.
+
+A recording uploaded to a server where Listen is not set up (no `.venv-listen` or no launchd job) is kept but marked
+`failed` with that reason, and the operator gets the push, rather than waiting `queued` with no word. `shaft listen
+on` queues those meetings again once the job runs; **Process Again** in the apps does the same.
 
 ## Processing and transcripts
 

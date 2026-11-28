@@ -8,7 +8,7 @@ import json
 from email.message import Message
 from unittest import mock
 
-from supervisor import meetings, messages, web
+from supervisor import meetings, messages, web, webpush
 from supervisor.tests.test_app_api import AppTest
 from supervisor.tests.test_web import HOST, ME
 
@@ -66,6 +66,30 @@ class MeetingTest(AppTest):
         self.assertFalse((folder / "upload").exists())
         self.assertEqual(self.finish(path, first + second, 2).status, 200)
         self.assert_error(self.chunk(path, 1, second), 409, "refused")
+
+    def test_an_upload_with_no_listen_worker_fails_saying_so_and_listen_on_queues_it_issue_58(self):
+        # Bug #58 (a Mac without admin rights): the recording was marked queued, and with no Listen worker it stayed
+        # queued with no word. Now it fails with the fix, keeps its audio, and `shaft listen on` queues it again.
+        from supervisor import listen_setup
+        with mock.patch.object(listen_setup, "missing", return_value=listen_setup.NOT_SET_UP):
+            path, folder = self.create(title="Example")
+            self.assertEqual(self.chunk(path, 0, b"tail").status, 200)
+            response = self.finish(path, b"tail", 1)
+            self.assertEqual(response.status, 200, response.body)
+            row = json.loads(response.body)
+            self.assertEqual((row["state"], row["error"]), ("failed", listen_setup.NOT_SET_UP))
+            self.assertIn("shaft listen on", row["error"])
+            self.assertEqual((folder / "audio.caf").read_bytes(), b"tail")
+            pushed = webpush.notify.call_args.args[0]
+            self.assertEqual((pushed["title"], pushed["body"]), ("Meeting failed: Example", listen_setup.NOT_SET_UP))
+            self.assertEqual(self.finish(path, b"tail", 1).status, 200)   # the app's retry of finish changes nothing
+            self.assertEqual(meetings.requeue_waiting(), [])               # still no worker: nothing to queue
+        self.assertEqual(meetings.requeue_waiting(), [row["id"]])
+        row = self.get(path)
+        self.assertEqual((row["state"], row["error"], row.get("waiting_for_listen")), ("queued", None, None))
+        meetings.set_state(row["id"], "processing")
+        meetings.set_state(row["id"], "failed", error="Audio decode failed: moov atom not found")
+        self.assertEqual(meetings.requeue_waiting(), [])                   # a real failure is never requeued
 
     def test_repeat_create_recovers_the_same_meeting_and_chunk_receipt(self):
         client_id = "8f5ab4c1-f51f-4f5e-bac7-5a732202c2b0"

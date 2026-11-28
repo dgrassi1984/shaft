@@ -4,15 +4,17 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 import wave
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, core, listen_pipeline, listen_worker, meetings, speakers
+from supervisor import autonomy, core, listen_pipeline, listen_setup, listen_worker, meetings, speakers
 from supervisor.tests import test_app_api
 
 
@@ -89,6 +91,7 @@ class ListenTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.enterContext(mock.patch.object(core, "SUP_DIR", self.root))
+        self.enterContext(mock.patch.object(listen_setup, "missing", return_value=None))   # Listen is set up
         self.audio = self.root / "example.wav"
         self.audio.write_bytes(b"invalid audio")
 
@@ -156,7 +159,8 @@ class ListenTest(unittest.TestCase):
             self.assertEqual(audio.read_bytes()[0x4C:0x50], b"free")
             return mock.Mock(returncode=0, stdout=bytes(2))
 
-        with mock.patch.object(listen_pipeline.subprocess, "run", side_effect=ffmpeg) as run:
+        with mock.patch.object(listen_pipeline.subprocess, "run", side_effect=ffmpeg) as run, \
+                mock.patch.object(listen_pipeline, "ffmpeg", return_value="ffmpeg"):
             audio.write_bytes(mac_ima4_caf())
             listen_pipeline.decode(audio, self.root, "online")
             audio.write_bytes(mac_ima4_caf())
@@ -316,8 +320,10 @@ class ListenTest(unittest.TestCase):
                 self.assertEqual(main(["listen", "off"]), 1)
             self.assertIn(f"meetings are processing: {meeting_id}", error.getvalue())
             service.assert_not_called()
-            self.assertEqual(main(["listen", "status"]), 0)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(main(["listen", "status"]), 0)
             service.assert_called_once_with("listen", "status")
+            self.assertIn("ffmpeg ", out.getvalue())
         plist = autonomy._plist("listen")
         self.assertEqual(plist["Label"], "com.shaft.listen")
         self.assertEqual(plist["ProgramArguments"][-2:], ["-m", "supervisor.listen_worker"])
@@ -568,6 +574,7 @@ class CalendarTitleTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.enterContext(mock.patch.object(core, "SUP_DIR", self.root))
+        self.enterContext(mock.patch.object(listen_setup, "missing", return_value=None))   # Listen is set up
         self.audio = self.root / "call.wav"
         self.audio.write_bytes(b"x")
 
@@ -693,3 +700,110 @@ class CalendarTitleTest(unittest.TestCase):
         self.assertEqual(meetings.get(meeting_id)["title"], "Update MKT")
         # Whisper's special-token marks never reach its prompt (tiktoken refuses them and the meeting would fail).
         self.assertEqual(engines.prompts, ["Foresight, Patricia Navi, startoftranscript Mallory."])
+
+
+class ListenSetupTest(unittest.TestCase):
+    """Issue #58: on a Mac without admin rights (no Homebrew) Listen had no environment, no uv on PATH and no ffmpeg;
+    `shaft listen on` installed a plist pointing at a missing .venv-listen and every meeting stayed queued."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.venv = self.root / ".venv-listen"
+        self.enterContext(mock.patch.object(listen_setup, "VENV", self.venv))
+        self.enterContext(mock.patch.object(listen_pipeline, "VENV_FFMPEG", self.venv / "bin" / "ffmpeg"))
+        self.enterContext(mock.patch.object(autonomy, "AGENTS", self.root / "LaunchAgents"))
+
+    def executable(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n")
+        path.chmod(0o755)
+        return path
+
+    def test_ffmpeg_is_listens_own_first_then_path_and_homebrew_else_says_how_to_get_one(self):
+        on_path = self.executable(self.root / "path" / "ffmpeg")
+        with mock.patch.dict(os.environ, {"PATH": str(on_path.parent)}):
+            self.assertEqual(listen_pipeline.ffmpeg(), str(on_path))
+            target = self.executable(self.root / "wheel" / "ffmpeg-macos-aarch64")
+            (self.venv / "bin").mkdir(parents=True)
+            (self.venv / "bin" / "ffmpeg").symlink_to(target)
+            self.assertEqual(listen_pipeline.ffmpeg(), str(self.venv / "bin" / "ffmpeg"))
+            target.unlink()                                       # a dangling link is no ffmpeg
+            self.assertEqual(listen_pipeline.ffmpeg(), str(on_path))
+        with mock.patch.dict(os.environ, {"PATH": str(self.root / "empty")}), \
+                mock.patch.object(listen_pipeline, "PATH_EXTRA", ()):
+            with self.assertRaises(listen_pipeline.FfmpegMissing) as missing:
+                listen_pipeline.ffmpeg()
+            self.assertIn("shaft listen on", str(missing.exception))
+            with self.assertRaises(listen_pipeline.FfmpegMissing) as decode:
+                listen_pipeline.decode(self.root / "a.wav", self.root, "inperson")
+            self.assertTrue(str(decode.exception).startswith("Audio decode failed: ffmpeg is not installed"))
+
+    def test_a_speaker_clip_with_no_ffmpeg_says_so_not_only_could_not_read(self):
+        # Bug #58: "Could not read speaker clip." hid the missing ffmpeg.
+        metadata = {"state": "ready", "ext": "wav", "mode": "inperson"}
+        (self.root / "transcript.json").write_text(json.dumps({"speakers": {"M1": {"channel": 1, "clips": [[0, 1]]}}}))
+        (self.root / "audio.wav").write_bytes(b"x")
+        with mock.patch.object(meetings, "_locked", return_value=contextlib.nullcontext((self.root, metadata))), \
+                mock.patch.object(listen_pipeline, "ffmpeg", side_effect=listen_pipeline.FfmpegMissing("no ffmpeg: run `shaft listen on`")):
+            with self.assertRaises(meetings.Conflict) as e:
+                speakers.clip("example", "M1", 0)
+        self.assertEqual(str(e.exception), "Could not read speaker clip: no ffmpeg: run `shaft listen on`")
+
+    def test_missing_until_both_the_environment_and_the_service_exist(self):
+        self.assertEqual(listen_setup.missing(), listen_setup.NOT_SET_UP)
+        self.executable(self.venv / "bin" / "python")
+        self.assertEqual(listen_setup.missing(), listen_setup.NOT_SET_UP)    # no plist yet
+        (self.root / "LaunchAgents").mkdir()
+        (self.root / "LaunchAgents" / "com.shaft.listen.plist").write_bytes(b"")
+        self.assertIsNone(listen_setup.missing())
+
+    def test_setup_uses_the_apps_uv_and_python_pins_the_engines_and_links_the_wheels_ffmpeg(self):
+        wheel = self.executable(self.root / "site" / "imageio_ffmpeg" / "binaries" / "ffmpeg-macos-aarch64-v9.0")
+        ran = []
+
+        def run(command, **kwargs):
+            ran.append(command)
+            if command[1:3] == ["venv", "--python"]:
+                self.executable(self.venv / "bin" / "python")
+            out = str(wheel) if "-c" in command else "ffmpeg version 9.0" if command[-1] == "-version" else ""
+            return subprocess.CompletedProcess(command, 0, out, "")
+
+        uv = "/Users/x/SHAFT/.runtime/bin/uv"
+        with mock.patch.object(listen_setup.subprocess, "run", side_effect=run), \
+                mock.patch.object(listen_setup.pyenv, "uv_binary", return_value=uv), \
+                mock.patch.object(listen_setup.platform, "system", return_value="Darwin"), \
+                mock.patch.object(listen_setup.platform, "machine", return_value="arm64"):
+            done = listen_setup.setup()
+            self.assertEqual(ran[0], [uv, "venv", "--python", core.PYTHON, str(self.venv)])
+            self.assertEqual(ran[1], [uv, "pip", "install", "--python", str(self.venv / "bin" / "python"),
+                                      *listen_setup.PACKAGES])
+            self.assertIn("imageio-ffmpeg==0.8.2", listen_setup.PACKAGES)
+            self.assertEqual(os.readlink(self.venv / "bin" / "ffmpeg"), str(wheel))
+            self.assertEqual(listen_pipeline.ffmpeg(), str(self.venv / "bin" / "ffmpeg"))
+            self.assertIn("ffmpeg version 9.0", done[-1])
+            ran.clear()
+            listen_setup.setup()                                  # a rerun never remakes the environment
+            self.assertNotIn("venv", [c[1] for c in ran if c[0] == uv])
+        with mock.patch.object(listen_setup.platform, "machine", return_value="x86_64"):
+            with self.assertRaisesRegex(listen_setup.SetupFailed, "Apple Silicon"):
+                listen_setup.setup()
+
+    def test_listen_on_sets_up_first_and_queues_the_waiting_meetings_a_failed_setup_installs_nothing(self):
+        from supervisor import __main__ as cli
+        with mock.patch.object(listen_setup, "setup", side_effect=listen_setup.SetupFailed("uv pip install … failed")), \
+                mock.patch.object(autonomy, "service") as service, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(cli.cmd_listen("on"), 1)
+        service.assert_not_called()
+        self.assertIn("shaft listen on: uv pip install … failed", err.getvalue())
+        with mock.patch.object(listen_setup, "setup", return_value=["engines: …"]), \
+                mock.patch.object(autonomy, "service", return_value=0) as service, \
+                mock.patch.object(core, "secrets_env", return_value={"HF_TOKEN": "x"}), \
+                mock.patch.object(meetings, "requeue_waiting", return_value=["m-1"]) as requeue, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(cli.cmd_listen("on"), 0)
+        service.assert_called_once_with("listen", "on")
+        requeue.assert_called_once_with()
+        self.assertIn("queued again: m-1", out.getvalue())

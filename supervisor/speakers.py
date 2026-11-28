@@ -279,7 +279,11 @@ def clip(meeting_id: str, label, index: int) -> bytes:
         start, end = ranges[index]
         audio = folder / f"audio.{metadata['ext']}"
         listen_pipeline.normalize_caf(audio)
-        command = ["ffmpeg", "-nostdin", "-v", "error", "-ss", str(start), "-i", str(audio), "-map", "0:a:0"]
+        try:
+            binary = listen_pipeline.ffmpeg()
+        except listen_pipeline.FfmpegMissing as e:   # the cause, not "Could not read speaker clip." (issue #58)
+            raise meetings.Conflict(f"Could not read speaker clip: {e}") from None
+        command = [binary, "-nostdin", "-v", "error", "-ss", str(start), "-i", str(audio), "-map", "0:a:0"]
         if metadata["mode"] == "online":
             command += ["-af", f"channelmap=map={speaker['channel'] - 1}:channel_layout=mono"]
         rate = listen_pipeline.SAMPLE_RATE
